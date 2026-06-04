@@ -1,0 +1,11 @@
+{
+  "path": "internal_pool_registry",
+  "resource_type": "model_registry",
+  "display_name": "Internal Model Registry (dev)",
+  "config": {
+    "router_resource": "internal_pool_router",
+    "approved_models": [
+      { "model_id": "qwen3.5:9b", "provider": "openai" }
+    ]
+  }
+}

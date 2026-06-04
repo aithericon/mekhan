@@ -1152,6 +1152,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/models` — the loaded-set projection (the editor model picker's
+         *     data source). Every `model_states` row in the workspace, AND-gated against the
+         *     live runner interface catalog. Session/human authed, workspace-scoped,
+         *     fail-soft on the live half.
+         */
+        get: operations["list_loaded_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/models/{model_id}` — one model + its state/replica/serving facts.
+         *     404 when the workspace has no `model_states` row for that id.
+         */
+        get: operations["get_model"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/{model_id}/transition` — the operator state-machine step.
+         *     Validated against [`ModelState::legal_transitions`]; an illegal edge → 409.
+         *     Session/human authed, workspace-scoped. Returns the projected view after the
+         *     move (with the live-runner AND-gate recomputed).
+         */
+        post: operations["transition_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-types": {
         parameters: {
             query?: never;
@@ -5594,6 +5658,39 @@ export interface components {
             };
         };
         /**
+         * @description One model a runner advertises in its interface catalog — the live half of the
+         *     loaded-set AND-gate (docs/29). The canonical P2-superset shape: P1 only reads
+         *     `model_id` (to confirm a `loaded` `model_states` row is actually served by a
+         *     live runner); `kind`/`max_num_seqs`/`base` are carried now so P2's node-agent
+         *     can populate them without a DTO churn. Grows the existing `catalog` JSONB
+         *     column — NO migration.
+         */
+        ModelEntry: {
+            /** @description For a `Lora` entry, the base model id it layers on. `None` for `Base`. */
+            base?: string | null;
+            /** @description Whether this is a base model or a LoRA adapter. */
+            kind: components["schemas"]["ModelInterfaceKind"];
+            /**
+             * Format: int32
+             * @description Configured presence concurrency for this model on this runner — the `C`
+             *     units the node-agent admits per replica (vLLM `max_num_seqs`).
+             */
+            max_num_seqs: number;
+            /**
+             * @description The model id the router routes on (e.g. `llama3`). Joins to
+             *     `model_states.model_id` + `ApprovedModelConfig.model_id`.
+             */
+            model_id: string;
+        };
+        /**
+         * @description The kind of model an advertised [`ModelEntry`] is — a base model or a LoRA
+         *     adapter (multi-LoRA serving rides one base). The canonical P2-superset shape
+         *     (docs/29): P1 INTRODUCES it so the loaded-set projection has a typed entry to
+         *     read; P2's node-agent populates it from the vLLM model surface.
+         * @enum {string}
+         */
+        ModelInterfaceKind: "base" | "lora";
+        /**
          * @description LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
          *     the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
          *     editor authors directly (provider, model, optional creds / sampling
@@ -5626,6 +5723,48 @@ export interface components {
             /** Format: double */
             temperature?: number | null;
         };
+        /**
+         * @description One row of the loaded-set projection (`GET /api/v1/models` and
+         *     `GET /api/v1/models/{model_id}`).
+         *
+         *     `state` is the operator-curated `model_states` position; `available` is the
+         *     AND-gate — `true` only when `state == Loaded` AND at least one LIVE runner's
+         *     interface catalog advertises `model_id`. `serving_runners` is the count of
+         *     live runners advertising it (the live half), surfaced so an operator can see
+         *     a `loaded`-but-unserved model.
+         */
+        ModelSetView: {
+            /**
+             * @description AND-gate: `state == Loaded` AND a live runner advertises `model_id`. This
+             *     is the flag the editor model picker filters on.
+             */
+            available: boolean;
+            /** @description For a LoRA model, the base model id it layers on. */
+            base?: string | null;
+            /** @description The model id (router routes on this). */
+            model_id: string;
+            /** @description Optional operator note from the last transition. */
+            note?: string | null;
+            /**
+             * Format: int32
+             * @description Operator-tracked replica count (rides the Nomad job-template; P1 manual).
+             */
+            replicas: number;
+            /**
+             * Format: int32
+             * @description Count of LIVE runners whose interface catalog advertises `model_id`.
+             */
+            serving_runners: number;
+            /** @description The operator-curated lifecycle state. */
+            state: components["schemas"]["ModelState"];
+        };
+        /**
+         * @description The operator-curated lifecycle position of a model in the pool. Persisted as
+         *     the free-text `model_states.state` column; validated against this enum on
+         *     every read/write (no DB CHECK).
+         * @enum {string}
+         */
+        ModelState: "approved" | "loading" | "loaded" | "draining" | "unloaded";
         MoveConfig: {
             compress?: null | components["schemas"]["Compression"];
             decompress?: null | components["schemas"]["Compression"];
@@ -6994,6 +7133,12 @@ export interface components {
          */
         RunnerInterfaceCatalog: {
             actions?: components["schemas"]["InterfaceEntry"][];
+            /**
+             * @description Self-hosted LLM models this runner's node-agent currently serves (docs/29).
+             *     The live half of the loaded-set AND-gate. Additive JSONB field — a runner
+             *     that serves no models simply reports an empty list.
+             */
+            models?: components["schemas"]["ModelEntry"][];
             services?: components["schemas"]["InterfaceEntry"][];
             topics?: components["schemas"]["InterfaceEntry"][];
         };
@@ -7842,6 +7987,17 @@ export interface components {
             /** @description JSON Schema object describing the tool's expected arguments. */
             input_schema: unknown;
             name: string;
+        };
+        /**
+         * @description Request body for `POST /api/v1/models/{model_id}/transition` — the operator
+         *     state-machine step. Validated against [`ModelState::legal_transitions`]; an
+         *     illegal edge → 409.
+         */
+        TransitionRequest: {
+            /** @description Optional operator note recorded with the transition. */
+            note?: string | null;
+            /** @description The state to move the model to. */
+            target: components["schemas"]["ModelState"];
         };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
@@ -11389,6 +11545,103 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_loaded_models: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace model-pool state, loaded-set AND-gated against live runners */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"][];
+                };
+            };
+        };
+    };
+    get_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id (router routes on this) */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One model's loaded-set view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    transition_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Transition applied; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Illegal state-machine edge */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };

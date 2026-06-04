@@ -820,6 +820,121 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
     }
 }
 
+/// One `model_states` seed fixture (`demos/model_states/*.json`): pins a
+/// curated model into the loaded-state machine so `GET /api/v1/models` reports
+/// it `loaded` after a fresh seed (model-pool P1, docs/29 §3). `state` is the
+/// operator-curated lifecycle position; `registry_resource` (optional) names
+/// the `model_registry` resource this model belongs to — resolved to its
+/// `resources.id` at seed time, best-effort.
+#[derive(serde::Deserialize)]
+struct ModelStateFixture {
+    model_id: String,
+    /// Free-text lifecycle position; validated against [`crate::models::model_pool::ModelState`].
+    state: String,
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    replicas: i32,
+    #[serde(default)]
+    note: Option<String>,
+    /// Optional `path` of the `model_registry` resource backing this model.
+    #[serde(default)]
+    registry_resource: Option<String>,
+}
+
+/// Seed the `model_states` projection rows that the model-pool demos rely on
+/// (model-pool P1, docs/29 §3), from `demos/model_states/*.json`, into the demo
+/// workspace. Mirrors [`seed_demo_resources`]: runs BEFORE the demo loop so a
+/// model-pool demo's loaded model id is curated by the time its Agent step
+/// compiles. Idempotent via `ON CONFLICT (workspace_id, model_id) DO UPDATE` —
+/// re-asserts the fixture's state on every boot (the in-memory dev stack is
+/// reset on `just dev reset`, but the row otherwise survives; re-asserting keeps
+/// the fixture the source of truth, same spirit as the resource-secret
+/// reprovision). The seeded `state` is NOT re-validated through the Rust state
+/// machine (that gates operator-driven `POST .../transition` edges, not the
+/// seed); a fixture with an unknown `state` string fails CLOSED to `unloaded`
+/// at read time (`ModelStateRow::into_view`). Best-effort: a fixture failure is
+/// logged, never fatal.
+async fn seed_model_states(state: &crate::AppState, root: &Path) {
+    let dir = root.join("model_states");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no fixtures directory — nothing to seed
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "model_states fixture: read failed");
+                continue;
+            }
+        };
+        let fx: ModelStateFixture = match serde_json::from_str(&raw) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "model_states fixture: parse failed");
+                continue;
+            }
+        };
+        // Resolve the optional backing registry resource → its row id (the
+        // projection's `registry_resource_id`). Absent / unresolved → NULL.
+        let registry_resource_id: Option<uuid::Uuid> = match &fx.registry_resource {
+            Some(alias) => {
+                let row: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+                    "SELECT id FROM resources \
+                     WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
+                )
+                .bind(DEMO_WORKSPACE_ID)
+                .bind(alias)
+                .fetch_optional(&state.db)
+                .await;
+                match row {
+                    Ok(r) => r.map(|(id,)| id),
+                    Err(e) => {
+                        tracing::warn!(model_id = %fx.model_id, registry = %alias, error = %e, "model_states fixture: registry lookup failed");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        let res = sqlx::query(
+            "INSERT INTO model_states \
+                 (workspace_id, registry_resource_id, model_id, state, base, replicas, note) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
+                 registry_resource_id = EXCLUDED.registry_resource_id, \
+                 state = EXCLUDED.state, \
+                 base = EXCLUDED.base, \
+                 replicas = EXCLUDED.replicas, \
+                 note = EXCLUDED.note, \
+                 last_transition_at = NOW()",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(registry_resource_id)
+        .bind(&fx.model_id)
+        .bind(&fx.state)
+        .bind(&fx.base)
+        .bind(fx.replicas)
+        .bind(&fx.note)
+        .execute(&state.db)
+        .await;
+        match res {
+            Ok(_) => {
+                tracing::info!(model_id = %fx.model_id, state = %fx.state, "model_states fixture seeded")
+            }
+            Err(e) => {
+                tracing::warn!(model_id = %fx.model_id, "model_states fixture seed failed: {e:?}")
+            }
+        }
+    }
+}
+
 /// Best-effort content-type from a bundled file's extension, for the asset
 /// File-field seed upload. Falls back to `application/octet-stream`.
 fn guess_content_type(filename: &str) -> &'static str {
@@ -1076,6 +1191,9 @@ pub async fn seed_all(
         tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
     }
     seed_demo_resources(state, root).await;
+    // After resources: the model_states projection's `registry_resource_id`
+    // resolves a `model_registry` resource alias to its row id (model-pool P1).
+    seed_model_states(state, root).await;
     seed_demo_capability_types(state, root).await;
     seed_demo_assets(state, root).await;
     // A SubWorkflow demo can reference a CHILD demo whose directory sorts

@@ -1,0 +1,65 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Internal pool prompt",
+        "initial": {
+          "id": "in",
+          "label": "Prompt",
+          "fields": [
+            {
+              "name": "question",
+              "label": "Question",
+              "kind": "textarea",
+              "required": true,
+              "placeholder": "e.g. \"In one sentence, what is a Petri net?\""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent",
+      "type": "agent",
+      "position": { "x": 360, "y": 120 },
+      "width": 440,
+      "height": 320,
+      "data": {
+        "type": "agent",
+        "label": "Internal Pool Agent",
+        "description": "A single-shot (degenerate, no-tools, maxTurns 1) Agent bound to a self-hosted model served through the in-cluster inference router. The wire `provider` is `openai` (OpenAI-compatible router path), `model` is the loaded model id curated in the `internal_pool_registry`, and `resourceAlias` binds the `internal_pool_router` (`internal_llm`) resource whose `base_url` overlays the router endpoint at fire time — so the inference HTTP call goes base_url→router and is NEVER net-admitted. In the editor this surfaces as provider `internal` with a loaded-set Model picker and locked base_url/api_key overrides (GDPR — an internal binding cannot silently escape off-router).",
+        "model": {
+          "provider": "openai",
+          "model": "qwen3.5:9b",
+          "resourceAlias": "internal_pool_router",
+          "temperature": 0
+        },
+        "systemPrompt": "You are a concise assistant. Answer in a single sentence.",
+        "userPrompt": "{{ start.question }}",
+        "maxTurns": 1,
+        "onToolError": "feedback"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 880, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "reply", "expression": "agent.response" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_end",   "source": "agent", "sourceHandle": "out", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

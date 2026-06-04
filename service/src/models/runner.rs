@@ -294,6 +294,40 @@ pub struct InterfaceEntry {
     pub typedefs: Option<serde_json::Value>,
 }
 
+/// The kind of model an advertised [`ModelEntry`] is — a base model or a LoRA
+/// adapter (multi-LoRA serving rides one base). The canonical P2-superset shape
+/// (docs/29): P1 INTRODUCES it so the loaded-set projection has a typed entry to
+/// read; P2's node-agent populates it from the vLLM model surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInterfaceKind {
+    /// A full base model served directly.
+    Base,
+    /// A LoRA adapter layered on a `base` model.
+    Lora,
+}
+
+/// One model a runner advertises in its interface catalog — the live half of the
+/// loaded-set AND-gate (docs/29). The canonical P2-superset shape: P1 only reads
+/// `model_id` (to confirm a `loaded` `model_states` row is actually served by a
+/// live runner); `kind`/`max_num_seqs`/`base` are carried now so P2's node-agent
+/// can populate them without a DTO churn. Grows the existing `catalog` JSONB
+/// column — NO migration.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ModelEntry {
+    /// The model id the router routes on (e.g. `llama3`). Joins to
+    /// `model_states.model_id` + `ApprovedModelConfig.model_id`.
+    pub model_id: String,
+    /// Whether this is a base model or a LoRA adapter.
+    pub kind: ModelInterfaceKind,
+    /// Configured presence concurrency for this model on this runner — the `C`
+    /// units the node-agent admits per replica (vLLM `max_num_seqs`).
+    pub max_num_seqs: u32,
+    /// For a `Lora` entry, the base model id it layers on. `None` for `Base`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+}
+
 /// The agreed topics/services/actions catalog a runner self-reports. Stored
 /// verbatim as the `catalog` JSONB column on `runner_interfaces`. Each list
 /// defaults to empty so a runner can report a partial surface.
@@ -305,6 +339,11 @@ pub struct RunnerInterfaceCatalog {
     pub services: Vec<InterfaceEntry>,
     #[serde(default)]
     pub actions: Vec<InterfaceEntry>,
+    /// Self-hosted LLM models this runner's node-agent currently serves (docs/29).
+    /// The live half of the loaded-set AND-gate. Additive JSONB field — a runner
+    /// that serves no models simply reports an empty list.
+    #[serde(default)]
+    pub models: Vec<ModelEntry>,
 }
 
 /// Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,
