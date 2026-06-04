@@ -1,7 +1,6 @@
 <script lang="ts">
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import Tag from '@lucide/svelte/icons/tag';
-	import X from '@lucide/svelte/icons/x';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import { Button } from '$lib/components/ui/button';
 	import { listProjects, listWorkspaceTags, type Project } from '$lib/api/client';
@@ -53,29 +52,10 @@
 	function selectTag(t: string | null) {
 		onChange({ projectId, tag: t });
 	}
-
-	function clearFilters() {
-		onChange({ projectId: null, tag: null });
-	}
-
-	const hasFilters = $derived(projectId !== null || tag !== null);
 </script>
 
 <aside class="w-60 shrink-0 border-r border-border bg-card/30" data-testid="templates-filters-sidebar">
 	<div class="space-y-6 p-4">
-		{#if hasFilters}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="w-full justify-start text-muted-foreground"
-				onclick={clearFilters}
-				data-testid="btn-clear-filters"
-			>
-				<X class="size-3.5" />
-				Clear filters
-			</Button>
-		{/if}
-
 		<section>
 			<div class="mb-2 flex items-center justify-between gap-2">
 				<div class="flex items-center gap-2 text-sm font-medium text-foreground">
