@@ -1281,6 +1281,12 @@
       "type": "signal"
     },
     {
+      "id": "p_producer_words_close",
+      "name": "Producer - Data Channel 'words' Close (producer status)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_reducer_ctrl",
       "name": "Reducer - Control Token",
       "token_schema": "#/definitions/Ctrl__reducer",
@@ -4981,6 +4987,9 @@
     },
     {
       "effect_config": {
+        "channel_close_routes": {
+          "words": "p_producer_words_close"
+        },
         "channel_routes": {
           "words": "p_producer_words"
         }
@@ -5010,6 +5019,9 @@
       ],
       "logic": {
         "config": {
+          "channel_close_routes": {
+            "words": "p_producer_words_close"
+          },
           "channel_routes": {
             "words": "p_producer_words"
           }
@@ -5022,6 +5034,11 @@
         {
           "cardinality": "single",
           "name": "p_producer_words",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "p_producer_words_close",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5037,6 +5054,11 @@
         {
           "place": "p_producer_words",
           "port": "p_producer_words",
+          "weight": 1
+        },
+        {
+          "place": "p_producer_words_close",
+          "port": "p_producer_words_close",
           "weight": 1
         }
       ]

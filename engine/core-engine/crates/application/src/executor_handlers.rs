@@ -458,9 +458,31 @@ impl EffectHandler for ControlEmitHandler {
                 )
             })?;
 
-        let place_id = channel_routes.get(channel).ok_or_else(|| {
+        // Data-plane `close` brackets (docs/25 §6) route to a SEPARATE
+        // producer-status place, NOT the consumer-facing one. The `open` token
+        // is what the downstream consumer reads + fires on; depositing `close`
+        // onto the same place spawns a phantom second consumer firing (with no
+        // transport subject), which races the real `open` job and can win with an
+        // empty result. Routing `close` to its own sink means the consumer fires
+        // ONLY on `open` and drains the transport to its own `is_eof`. Absent
+        // (control channels, or pre-fix AIR) → fall back to `channel_routes`.
+        let channel_close_routes = input
+            .config
+            .as_ref()
+            .and_then(|c| c.get("channel_close_routes"))
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
+            .unwrap_or_default();
+
+        let place_id = if kind == "close" {
+            channel_close_routes
+                .get(channel)
+                .or_else(|| channel_routes.get(channel))
+        } else {
+            channel_routes.get(channel)
+        }
+        .ok_or_else(|| {
             EffectError::Fatal(format!(
-                "control_emit channel '{channel}' has no route in channel_routes"
+                "control_emit channel '{channel}' (kind '{kind}') has no route in channel_routes"
             ))
         })?;
 

@@ -1362,6 +1362,12 @@
       "type": "signal"
     },
     {
+      "id": "p_producer_lower_close",
+      "name": "Producer - Data Channel 'lower' Close (producer status)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_producer_output",
       "name": "Producer - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -1450,6 +1456,12 @@
       "name": "Uppercase Transform - Data Channel 'upper'",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
+    },
+    {
+      "id": "p_transform_upper_close",
+      "name": "Uppercase Transform - Data Channel 'upper' Close (producer status)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
     },
     {
       "group_id": "group_3",
@@ -5329,6 +5341,9 @@
     },
     {
       "effect_config": {
+        "channel_close_routes": {
+          "lower": "p_producer_lower_close"
+        },
         "channel_routes": {
           "lower": "p_producer_lower"
         }
@@ -5358,6 +5373,9 @@
       ],
       "logic": {
         "config": {
+          "channel_close_routes": {
+            "lower": "p_producer_lower_close"
+          },
           "channel_routes": {
             "lower": "p_producer_lower"
           }
@@ -5370,6 +5388,11 @@
         {
           "cardinality": "single",
           "name": "p_producer_lower",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "p_producer_lower_close",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5385,6 +5408,11 @@
         {
           "place": "p_producer_lower",
           "port": "p_producer_lower",
+          "weight": 1
+        },
+        {
+          "place": "p_producer_lower_close",
+          "port": "p_producer_lower_close",
           "weight": 1
         }
       ]
@@ -5869,6 +5897,9 @@
     },
     {
       "effect_config": {
+        "channel_close_routes": {
+          "upper": "p_transform_upper_close"
+        },
         "channel_routes": {
           "upper": "p_transform_upper"
         }
@@ -5898,6 +5929,9 @@
       ],
       "logic": {
         "config": {
+          "channel_close_routes": {
+            "upper": "p_transform_upper_close"
+          },
           "channel_routes": {
             "upper": "p_transform_upper"
           }
@@ -5910,6 +5944,11 @@
         {
           "cardinality": "single",
           "name": "p_transform_upper",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "p_transform_upper_close",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5925,6 +5964,11 @@
         {
           "place": "p_transform_upper",
           "port": "p_transform_upper",
+          "weight": 1
+        },
+        {
+          "place": "p_transform_upper_close",
+          "port": "p_transform_upper_close",
           "weight": 1
         }
       ]
