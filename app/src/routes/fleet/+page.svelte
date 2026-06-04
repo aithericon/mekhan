@@ -31,8 +31,10 @@
 	let error = $state<string | null>(null);
 	let lastUpdated = $state<Date | null>(null);
 
-	// "New capacity" → the dedicated kind-switcher modal.
+	// "New capacity" → the dedicated kind-switcher modal. `editing` non-null ⇒ the
+	// same modal in edit mode (kind + name locked, fields prefilled).
 	let createOpen = $state(false);
+	let editing = $state<CapacitySummary | null>(null);
 	// "Enroll runner" → EnrollSheet. `enrollGroup` null ⇒ global (picker); a path
 	// ⇒ scoped to that presence group (per-card "Enroll here").
 	let enrollOpen = $state(false);
@@ -71,11 +73,13 @@
 	});
 
 	function openCreate() {
+		editing = null;
 		createOpen = true;
 	}
 
 	function onCreated() {
 		createOpen = false;
+		editing = null;
 		void poll();
 	}
 
@@ -91,10 +95,10 @@
 		enrollOpen = true;
 	}
 
-	// Edit stays a light affordance — opens the create modal (no id-prefill yet);
-	// a dedicated edit mode is a later pass. Delete + cluster reconnect/drain are
-	// wired to the real resource/cluster mutations.
-	function onEditCapacity(_id: string) {
+	// Edit opens the same modal in edit mode, prefilled from the summary the page
+	// already holds (kind + name locked; count / cluster fields editable).
+	function onEditCapacity(id: string) {
+		editing = capacities.find((c) => c.id === id) ?? null;
 		createOpen = true;
 	}
 
@@ -234,8 +238,9 @@
 	</div>
 </div>
 
-<!-- New-capacity create flow: the dedicated kind-switcher modal. -->
-<NewCapacityModal bind:open={createOpen} oncreated={onCreated} />
+<!-- Capacity create/edit flow: the dedicated kind-switcher modal. `editing`
+	 null ⇒ create; a summary ⇒ edit (kind + name locked, fields prefilled). -->
+<NewCapacityModal bind:open={createOpen} {editing} onsaved={onCreated} />
 
 <!-- Enroll flow: global (group picker) or scoped to a presence group's path. -->
 <EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void poll()} />
