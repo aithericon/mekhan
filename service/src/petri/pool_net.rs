@@ -1,10 +1,40 @@
-//! Parameterized **token-pool net** builder (R3, tokens backend).
+//! Parameterized **admission-pool net** builder (R3 tokens backend + Phase-3
+//! presence backend, ONE net topology).
 //!
-//! A `token_pool` *resource* (R1) of capacity N is realized as a long-lived
-//! Petri net of N clean capacity tokens. This is the mekhan-side port of
+//! Two pool *kinds* — the **seeded token pool** (`token_pool` /
+//! `concurrency_limit` resource of capacity N) and the **presence pool**
+//! (`runner_group` resource, capacity driven by live-runner presence) — are
+//! ~90% the same admission net: a `pool` / `in_use` / `done` triple, the shared
+//! claim/register/release inbox contract, and a grant/register/release skeleton.
+//! [`build_pool_net`] emits that shared scaffolding once and BRANCHES the rest
+//! on [`CapacitySource`]:
+//!
+//! - [`CapacitySource::Seeded`] seeds N clean `{ unit_id }` tokens, an UNGUARDED
+//!   `t_grant`, a `lease_expired` signal + single `t_reap`, and grant/hold/release
+//!   payloads of `{ grant_id, unit_id }`. No fail channel.
+//! - [`CapacitySource::Presence`] seeds NOTHING (a `presence_acquire` bridge +
+//!   `t_presence_acquire` injects one `{ unit_id: runner_id, executor_namespace,
+//!   caps }` unit per live runner), a `t_grant` GUARDED by
+//!   `satisfies(claim.requirements, unit.caps)`, a `presence_expired` signal that
+//!   splits into `t_reap_free` (drop a free unit) + `t_reap_held` (drop the hold
+//!   AND fail the holder over a `fail_outbox`), a `reset_reply_routing_on("unit")`
+//!   on `t_release`, and grant/hold/release payloads carrying
+//!   `{ ..., executor_namespace, caps }`.
+//!
+//! The seeded variant is the mekhan-side port of
 //! `engine/sdk/examples/resource_pool_net.rs`, generalized so the net id and
 //! capacity are parameters and so the grant reply matches the **typed lease**
-//! R2's compiled instances expect.
+//! R2's compiled instances expect. The presence variant keeps the typed
+//! `Lease__presence_pool` grant shape. **Both share `well_known::pool_net_id`,
+//! the same inbox names, and the same `"grant"` reply channel** so R2's claim
+//! handshake is identical regardless of which kind the alias resolved to — only
+//! the grant *payload* (and the admission/reap machinery) differs per kind.
+//!
+//! The third, effect-driven backend — the datacenter scheduler lease adapter
+//! ([`build_datacenter_lease_adapter_net`]) — is intentionally a SEPARATE
+//! builder: its admission fires engine `resource_lease_*` effects rather than
+//! moving in-net capacity tokens, so it shares the inbox contract but not the
+//! claim→grant→release token machinery these two do.
 //!
 //! ## The contract this net implements (must line up with R1 + R2)
 //!
@@ -45,28 +75,92 @@ use uuid::Uuid;
 
 use crate::compiler::well_known;
 
-/// Build the AIR `ScenarioDefinition` for a `token_pool` resource's backing
-/// net. Net id at deploy time is [`well_known::pool_net_id`]; the scenario
-/// `name` is set to that id for log/inspection clarity.
-///
-/// Seeds `capacity` clean capacity tokens labelled `unit-0 .. unit-{N-1}`.
-pub fn build_token_pool_net(resource_id: Uuid, capacity: u32) -> ScenarioDefinition {
-    let net_id = well_known::pool_net_id(resource_id);
-    let mut ctx = Context::new(net_id).description(format!(
-        "Token pool for resource {resource_id} (capacity {capacity}). Claim/grant/register/\
-         release/reap on the event-sourced Petri substrate; grant reply is the typed \
-         Lease__token_pool {{ unit_id }} R2's compiled steps consume."
-    ));
+/// What drives a pool net's capacity — the one axis [`build_pool_net`] branches
+/// on. Everything else (net id, the `pool`/`in_use`/`done` places, the
+/// claim/register/release inbox contract, the `"grant"` reply channel, and the
+/// `t_grant`/`t_register`/`t_release` skeleton) is shared.
+#[derive(Debug, Clone, Copy)]
+pub enum CapacitySource {
+    /// **Seeded token pool** (`token_pool` / `concurrency_limit`): capacity is N
+    /// clean `{ unit_id: "unit-{i}" }` tokens seeded up front. `t_grant` is
+    /// UNGUARDED; a single `lease_expired` signal + `t_reap` reclaims a crashed
+    /// holder (correlated on `grant_id`). No fail channel — grant/hold/release
+    /// carry just `{ grant_id, unit_id }`.
+    Seeded { capacity: u32 },
+    /// **Presence pool** (`runner_group`): capacity-less; `t_presence_acquire`
+    /// injects one `{ unit_id: runner_id, executor_namespace, caps }` unit per
+    /// live runner via the `presence_acquire` bridge, and a `presence_expired`
+    /// signal reaps it (free → `t_reap_free`; held → `t_reap_held`, which fails
+    /// the holder over the `fail_outbox`). `t_grant` is GUARDED by
+    /// `satisfies(claim.requirements, unit.caps)`; grant/hold/release carry
+    /// `{ ..., executor_namespace, caps }`.
+    Presence,
+}
 
-    // Shared capacity + observable hold + terminal record. All DynamicToken
-    // (schemaless) — the pool net only routes; schema enforcement lives on the
-    // instance side (R2 typed the grant inbox as Lease__token_pool).
+impl CapacitySource {
+    fn is_presence(self) -> bool {
+        matches!(self, CapacitySource::Presence)
+    }
+}
+
+/// Build the AIR `ScenarioDefinition` for a pool resource's backing admission
+/// net, parameterized by [`CapacitySource`]. Net id at deploy time is
+/// [`well_known::pool_net_id`]; the scenario `name` is set to that id for
+/// log/inspection clarity.
+///
+/// The SHARED scaffolding (emitted for both kinds): the `pool` / `in_use` /
+/// `done` places, the `claim_inbox` / `register_inbox` / `release_inbox`
+/// bridge-ins, the `"grant"` reply channel `grant_outbox`, and the
+/// `t_grant` → `t_register` → `t_release` skeleton. The DIFFERENCES are branched
+/// on `source` per [`CapacitySource`]'s variant docs.
+///
+/// ## Reply-routing taint avoidance (docs/14) — preserved EXACTLY (both kinds)
+///
+/// `t_grant` consumes the routed claim, so it emits ONLY the bridge grant reply
+/// (no internal hold) — otherwise the hold would carry the claim's stale "grant"
+/// reply routing and wedge the pool when recycled. The holder registers its hold
+/// separately over a PLAIN/`"fail"`-only register bridge (`t_register`), and
+/// `t_release` / `t_reap*` recycle that CLEAN hold. The presence variant's
+/// `t_release` additionally `reset_reply_routing_on("unit")`s the recycled unit
+/// (its hold carries the `"fail"` channel R2 stamps on the register bridge so
+/// `t_reap_held` can fail a crashed holder) — see the load-bearing comment on
+/// that transition. The seeded variant sidesteps that by keeping its hold
+/// routing-less.
+pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefinition {
+    let net_id = well_known::pool_net_id(resource_id);
+    let description = match source {
+        CapacitySource::Seeded { capacity } => format!(
+            "Token pool for resource {resource_id} (capacity {capacity}). Claim/grant/register/\
+             release/reap on the event-sourced Petri substrate; grant reply is the typed \
+             Lease__token_pool {{ unit_id }} R2's compiled steps consume."
+        ),
+        CapacitySource::Presence => format!(
+            "Presence pool for resource {resource_id} (capacity-less; presence-driven). \
+             Runners are admitted as pool units via the presence_acquire bridge and reaped \
+             on presence-lease expiry via the presence_expired signal. Claim/grant/register/\
+             release on the SAME cross-net contract as the token pool; grant reply is the \
+             typed Lease__presence_pool {{ unit_id, executor_namespace, caps }} R2's compiled \
+             steps consume."
+        ),
+    };
+    let mut ctx = Context::new(net_id).description(description);
+
+    // --- SHARED: capacity + observable hold + terminal record ---------------
+    // All DynamicToken (schemaless) — the pool net only routes; schema
+    // enforcement lives on the instance side (R2 typed the grant inbox as
+    // Lease__token_pool / Lease__presence_pool).
     let pool: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("pool", "Capacity Pool");
     let in_use: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("in_use", "In Use");
-    let done: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("done", "Freed Units");
+    let done: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state(
+        "done",
+        if source.is_presence() {
+            "Freed / Reaped Units"
+        } else {
+            "Freed Units"
+        },
+    );
 
-    // Cross-net inboxes — names are the shared `well_known::POOL_*_INBOX`
-    // constants the R2 instance bridges target.
+    // --- SHARED: cross-net inboxes (the R2 instance bridge targets) ----------
     let claim_inbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_in(well_known::POOL_CLAIM_INBOX, "Claim Inbox");
     let register_inbox: aithericon_sdk::PlaceHandle<DynamicToken> =
@@ -74,79 +168,294 @@ pub fn build_token_pool_net(resource_id: Uuid, capacity: u32) -> ScenarioDefinit
     let release_inbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_in(well_known::POOL_RELEASE_INBOX, "Release Inbox");
 
-    // Grant reply channel: routes the grant back to the claiming instance's
-    // `p_<id>_grant_inbox` via the "grant" channel carried on the claim token.
+    // --- SHARED: grant reply channel ----------------------------------------
+    // Routes the grant back to the claiming instance's `p_<id>_grant_inbox` via
+    // the "grant" channel carried on the claim token.
     let grant_outbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_reply_channel("grant_outbox", "Grant Outbox", "grant");
 
-    // Lease-expiry signal: a journaled token here (injected externally, or by a
-    // durable timer in a later milestone) reaps a crashed holder. Replay-safe —
-    // never a wall clock.
-    let lease_expired: aithericon_sdk::PlaceHandle<DynamicToken> =
-        ctx.signal("lease_expired", "Lease Expired");
+    // ========================================================================
+    // BRANCH on capacity source. The two kinds diverge on: the admission +
+    // expiry machinery, the t_grant guard, and the grant/hold/release payload
+    // shapes.
+    // ========================================================================
+    match source {
+        // --------------------------------------------------------------------
+        // SEEDED (token pool): N clean `{ unit_id }` tokens, UNGUARDED grant,
+        // single lease_expired/t_reap, no fail channel.
+        // --------------------------------------------------------------------
+        CapacitySource::Seeded { capacity } => {
+            // Lease-expiry signal: a journaled token here (injected externally,
+            // or by a durable timer in a later milestone) reaps a crashed
+            // holder. Replay-safe — never a wall clock.
+            let lease_expired: aithericon_sdk::PlaceHandle<DynamicToken> =
+                ctx.signal("lease_expired", "Lease Expired");
 
-    // t_grant — admission. Fires only when a claim AND free capacity both
-    // exist; an empty pool leaves it disabled so claims queue (backpressure).
-    // Emits ONLY the grant reply. The grant is the typed lease `{ unit_id }`
-    // plus `grant_id` for correlation.
-    //
-    // v1: one unit per claim. `claim.request` (the {units?} the R2 step carries)
-    // is intentionally NOT read here — weighted/multi-unit grants are a
-    // follow-up; a present `request` field is simply ignored, never a fault.
-    ctx.scope("Grant", |ctx| {
-        ctx.transition("t_grant", "Grant Capacity")
-            .auto_input("claim", &claim_inbox)
-            .auto_input("cap", &pool)
-            .auto_output("grant", &grant_outbox)
-            .logic(r#"#{ grant: #{ grant_id: claim.grant_id, unit_id: cap.unit_id } }"#);
-    });
+            // t_grant — admission. Fires only when a claim AND free capacity
+            // both exist; an empty pool leaves it disabled so claims queue
+            // (backpressure). Emits ONLY the grant reply. The grant is the typed
+            // lease `{ unit_id }` plus `grant_id` for correlation.
+            //
+            // v1: one unit per claim. `claim.request` (the {units?} the R2 step
+            // carries) is intentionally NOT read here — weighted/multi-unit
+            // grants are a follow-up; a present `request` field is simply
+            // ignored, never a fault. UNGUARDED (the presence pool guards on
+            // satisfies()).
+            ctx.scope("Grant", |ctx| {
+                ctx.transition("t_grant", "Grant Capacity")
+                    .auto_input("claim", &claim_inbox)
+                    .auto_input("cap", &pool)
+                    .auto_output("grant", &grant_outbox)
+                    .logic(r#"#{ grant: #{ grant_id: claim.grant_id, unit_id: cap.unit_id } }"#);
+            });
 
-    // t_register — record the hold over the PLAIN register bridge, so the
-    // `in_use` hold carries no reply routing and recycling stays clean.
-    ctx.transition("t_register", "Register Hold")
-        .auto_input("reg", &register_inbox)
-        .auto_output("hold", &in_use)
-        .logic(r#"#{ hold: #{ grant_id: reg.grant_id, unit_id: reg.unit_id } }"#);
+            // t_register — record the hold over the PLAIN register bridge, so
+            // the `in_use` hold carries no reply routing and recycling stays
+            // clean.
+            ctx.transition("t_register", "Register Hold")
+                .auto_input("reg", &register_inbox)
+                .auto_output("hold", &in_use)
+                .logic(r#"#{ hold: #{ grant_id: reg.grant_id, unit_id: reg.unit_id } }"#);
 
-    ctx.scope("Release", |ctx| {
-        // t_release — body finished: return the (clean) unit, matched by grant_id.
-        ctx.transition("t_release", "Release Capacity")
-            .auto_input("req", &release_inbox)
-            .auto_input("held", &in_use)
-            .correlate("req", "held", "grant_id")
-            .auto_output("cap", &pool)
-            .auto_output("done", &done)
-            .logic(
-                r#"#{
-                    cap:  #{ unit_id: held.unit_id },
-                    done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "released" }
-                }"#,
+            ctx.scope("Release", |ctx| {
+                // t_release — body finished: return the (clean) unit, matched by
+                // grant_id.
+                ctx.transition("t_release", "Release Capacity")
+                    .auto_input("req", &release_inbox)
+                    .auto_input("held", &in_use)
+                    .correlate("req", "held", "grant_id")
+                    .auto_output("cap", &pool)
+                    .auto_output("done", &done)
+                    .logic(
+                        r#"#{
+                            cap:  #{ unit_id: held.unit_id },
+                            done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "released" }
+                        }"#,
+                    );
+
+                // t_reap — holder crashed (lease expired): reclaim the unit, by
+                // grant_id.
+                ctx.transition("t_reap", "Reap Expired Lease")
+                    .auto_input("exp", &lease_expired)
+                    .auto_input("held", &in_use)
+                    .correlate("exp", "held", "grant_id")
+                    .auto_output("cap", &pool)
+                    .auto_output("done", &done)
+                    .logic(
+                        r#"#{
+                            cap:  #{ unit_id: held.unit_id },
+                            done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped" }
+                        }"#,
+                    );
+            });
+
+            // Seed N clean capacity tokens.
+            for i in 0..capacity {
+                ctx.seed_one(&pool, DynamicToken(json!({ "unit_id": format!("unit-{i}") })));
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // PRESENCE (runner_group): capacity-less; presence-driven admission,
+        // GUARDED grant, presence_expired → reap_free/reap_held(+fail).
+        // --------------------------------------------------------------------
+        CapacitySource::Presence => {
+            // NEW presence-admit inbox — mekhan's presence controller deposits a
+            // `{ runner_id, executor_namespace, caps }` here when a runner
+            // checks in (cross-net subject
+            // `petri.bridge.pool-<rid>.presence_acquire`).
+            let presence_acquire: aithericon_sdk::PlaceHandle<DynamicToken> =
+                ctx.bridge_in(well_known::POOL_PRESENCE_ACQUIRE_INBOX, "Presence Acquire");
+
+            // Fail reply channel — `t_reap_held` routes a `{ runner_id, unit_id }`
+            // failure token back to the holding instance's lease-failed inbox
+            // over the "fail" channel. The routing is resolved from the HELD
+            // unit's carried reply_routing — and the hold carries ONLY "fail"
+            // because R2 registers it over a bridge whose
+            // bridge_out_reply_channels is limited to
+            // `&[("fail", <lease-failed place>)]` (never "grant"). This is the
+            // presence-pool analog of the datacenter adapter's fail_outbox +
+            // t_lease_died.
+            let fail_outbox: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+                "fail_outbox",
+                "Lease-Failed Outbox",
+                well_known::POOL_FAIL_CHANNEL,
             );
 
-        // t_reap — holder crashed (lease expired): reclaim the unit, by grant_id.
-        ctx.transition("t_reap", "Reap Expired Lease")
-            .auto_input("exp", &lease_expired)
-            .auto_input("held", &in_use)
-            .correlate("exp", "held", "grant_id")
-            .auto_output("cap", &pool)
-            .auto_output("done", &done)
-            .logic(
-                r#"#{
-                    cap:  #{ unit_id: held.unit_id },
-                    done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped" }
-                }"#,
-            );
-    });
+            // NEW presence-expiry SIGNAL place. mekhan injects a BARE
+            // `{ runner_id }` here (signal subject
+            // `petri.signal.pool-<rid>.presence_expired`) when a runner's
+            // presence lease lapses. Journaled → replay-safe; carries NO reply
+            // routing (signals are injected routing-less — the fail routing for
+            // a held unit rides the HOLD, not this signal).
+            let presence_expired: aithericon_sdk::PlaceHandle<DynamicToken> =
+                ctx.signal(well_known::POOL_PRESENCE_EXPIRED_SIGNAL, "Presence Expired");
 
-    // Seed N clean capacity tokens.
-    for i in 0..capacity {
-        ctx.seed_one(
-            &pool,
-            DynamicToken(json!({ "unit_id": format!("unit-{i}") })),
-        );
+            // t_presence_acquire — admit one runner as ONE free pool unit.
+            // `unit_id` IS the runner_id (one unit per runner). Carries
+            // executor_namespace + caps so the grant (and thus the body-visible
+            // lease) can route work to the runner's drain namespace and expose
+            // its caps.
+            ctx.scope("Acquire", |ctx| {
+                ctx.transition("t_presence_acquire", "Admit Runner Unit")
+                    .auto_input("presence", &presence_acquire)
+                    .auto_output("unit", &pool)
+                    .logic(
+                        r#"#{ unit: #{
+                            unit_id: presence.runner_id,
+                            executor_namespace: presence.executor_namespace,
+                            caps: presence.caps
+                        } }"#,
+                    );
+            });
+
+            // t_grant — admission. Fires only when a claim AND a free unit both
+            // exist; an empty pool (no live runners) leaves it disabled so claims
+            // queue (backpressure). Emits ONLY the grant reply — the typed lease
+            // `{ unit_id, executor_namespace, caps }` plus `grant_id` for
+            // correlation.
+            //
+            // v1: one unit per claim. `claim.request` is intentionally NOT read
+            // here.
+            ctx.scope("Grant", |ctx| {
+                ctx.transition("t_grant", "Grant Capacity")
+                    .auto_input("claim", &claim_inbox)
+                    .auto_input("unit", &pool)
+                    // Phase 4 — placement matching. `satisfies(requirements,
+                    // caps)` is a custom fn registered in the engine's guard Rhai
+                    // engine (`petri-application` `register_satisfies`): it AND-s
+                    // every constraint in `claim.requirements.constraints`
+                    // against the unit's advertised `unit.caps`, short-circuiting
+                    // to `true` on empty/absent constraints (so an unconstrained
+                    // step matches any runner). A claim whose requirements no
+                    // unit satisfies leaves `t_grant` disabled against that unit
+                    // and the claim queues (backpressure) until a satisfying
+                    // runner checks in. `guard_rhai` (NOT `guard`) is used so the
+                    // SDK's build-time `validate_script_inline` — which only
+                    // knows input PORT names, not registered fns — doesn't reject
+                    // `satisfies` at net-build time. token_pool's `t_grant` stays
+                    // UNGUARDED.
+                    .guard_rhai("satisfies(claim.requirements, unit.caps)")
+                    .auto_output("grant", &grant_outbox)
+                    .logic(
+                        r#"#{ grant: #{
+                            grant_id: claim.grant_id,
+                            unit_id: unit.unit_id,
+                            executor_namespace: unit.executor_namespace,
+                            caps: unit.caps
+                        } }"#,
+                    );
+            });
+
+            // t_register — record the hold over the register bridge. R2 registers
+            // the hold over a bridge whose reply channels are limited to "fail",
+            // so the `in_use` hold carries the "fail" routing (and only that) —
+            // `t_reap_held` resolves it. Keep `unit_id` + `executor_namespace` +
+            // `caps` on the hold so a reap can identify the unit by runner
+            // (unit_id == runner_id).
+            ctx.transition("t_register", "Register Hold")
+                .auto_input("reg", &register_inbox)
+                .auto_output("hold", &in_use)
+                .logic(
+                    r#"#{ hold: #{
+                        grant_id: reg.grant_id,
+                        unit_id: reg.unit_id,
+                        executor_namespace: reg.executor_namespace,
+                        caps: reg.caps
+                    } }"#,
+                );
+
+            ctx.scope("Release", |ctx| {
+                // t_release — body finished: return a FRESH clean unit to the
+                // pool, matched by grant_id. The returned unit re-exposes
+                // executor_namespace + caps so it can be re-granted to the next
+                // claimant (the runner is still present — only this hold ended).
+                //
+                // `reset_reply_routing_on("unit")` is LOAD-BEARING: the consumed
+                // `held` token carries the holder's "fail" reply channel (R2
+                // registers the hold over a fail-channel bridge so `t_reap_held`
+                // can fail a crashed holder). Without the reset, the recycled
+                // unit inherits that stale "fail" routing; the NEXT claim carries
+                // its own "fail" channel, and `t_grant` binding then hits a
+                // reply-routing merge conflict and is silently skipped — so the
+                // freed unit can never be re-granted (the pool wedges after one
+                // grant). Resetting makes the recycled unit routing-less, like a
+                // freshly presence-acquired one. (token_pool sidesteps this by
+                // keeping its hold routing-less; the presence pool's reap-fail
+                // channel can't.)
+                ctx.transition("t_release", "Release Capacity")
+                    .auto_input("req", &release_inbox)
+                    .auto_input("held", &in_use)
+                    .correlate("req", "held", "grant_id")
+                    .auto_output("unit", &pool)
+                    .reset_reply_routing_on("unit")
+                    .auto_output("done", &done)
+                    .logic(
+                        r#"#{
+                            unit: #{
+                                unit_id: held.unit_id,
+                                executor_namespace: held.executor_namespace,
+                                caps: held.caps
+                            },
+                            done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "released" }
+                        }"#,
+                    );
+
+                // t_reap_free — the expiring runner's unit is currently FREE in
+                // the pool. Correlate the bare `{ runner_id }` signal to a free
+                // unit on `runner_id == unit_id`, DROP it (capacity shrinks),
+                // record the reap. No instance is affected (the unit was not
+                // held).
+                ctx.transition("t_reap_free", "Reap Free Unit")
+                    .auto_input("exp", &presence_expired)
+                    .auto_input("unit", &pool)
+                    // The signal carries `runner_id`; the unit carries `unit_id`
+                    // (== runner_id). `correlate` only matches a single shared
+                    // field name, so the cross-field match is an explicit guard.
+                    .guard("exp.runner_id == unit.unit_id")
+                    .auto_output("done", &done)
+                    .logic(
+                        r#"#{ done: #{ runner_id: exp.runner_id, unit_id: unit.unit_id, outcome: "reaped_free" } }"#,
+                    );
+
+                // t_reap_held — the expiring runner's unit is currently HELD by
+                // an instance. Correlate the bare `{ runner_id }` signal to the
+                // in_use hold on `runner_id == unit_id`, DROP the hold (the runner
+                // is gone — no release call), AND route a `{ runner_id, unit_id }`
+                // failure token over the "fail" reply channel back to the holding
+                // instance so it fails fast instead of running against a dead
+                // runner namespace. The fail token carries the HOLD's reply
+                // routing (the "fail" channel R2 stamped onto the register
+                // bridge), NOT the (routing-less) signal's.
+                ctx.transition("t_reap_held", "Reap Held Unit (fail holder)")
+                    .auto_input("exp", &presence_expired)
+                    .auto_input("held", &in_use)
+                    // Cross-field correlation: signal `runner_id` == hold
+                    // `unit_id`.
+                    .guard("exp.runner_id == held.unit_id")
+                    .auto_output("notify", &fail_outbox)
+                    .auto_output("done", &done)
+                    .logic(
+                        r#"#{
+                            notify: #{ runner_id: held.unit_id, unit_id: held.unit_id },
+                            done:   #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped_held" }
+                        }"#,
+                    );
+            });
+
+            // SEED NOTHING — capacity is presence-driven.
+        }
     }
 
     ctx.build()
+}
+
+/// Build the AIR `ScenarioDefinition` for a `token_pool` resource's backing net
+/// — thin wrapper over [`build_pool_net`] with [`CapacitySource::Seeded`].
+///
+/// Seeds `capacity` clean capacity tokens labelled `unit-0 .. unit-{N-1}`.
+pub fn build_token_pool_net(resource_id: Uuid, capacity: u32) -> ScenarioDefinition {
+    build_pool_net(resource_id, CapacitySource::Seeded { capacity })
 }
 
 /// Idempotently ensure a `token_pool` resource's backing net is deployed +
@@ -826,6 +1135,99 @@ mod tests {
         let a = air(id, 1);
         assert_eq!(a["name"], format!("pool-{id}"));
         assert_eq!(a["name"], well_known::pool_net_id(id));
+    }
+
+    /// The unified [`build_pool_net`] branches the admission/reap machinery and
+    /// the `t_grant` guard on [`CapacitySource`] while sharing the
+    /// claim/register/release scaffolding: the SEEDED variant has `t_reap` + N
+    /// seeded `{ unit_id }` tokens + an UNGUARDED `t_grant` and NO fail channel;
+    /// the PRESENCE variant has `t_presence_acquire` + `t_reap_free` +
+    /// `t_reap_held` + a `fail_outbox` + a `satisfies`-GUARDED `t_grant` and
+    /// seeds NOTHING.
+    #[test]
+    fn build_pool_net_branches_on_capacity_source() {
+        // ---- Seeded ----
+        let seeded =
+            serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Seeded { capacity: 2 }))
+                .expect("seeded pool serializes");
+
+        // Seeded-only transition; presence-only transitions absent.
+        assert!(transition(&seeded, "t_reap").is_some(), "seeded has t_reap");
+        for absent in ["t_presence_acquire", "t_reap_free", "t_reap_held"] {
+            assert!(
+                transition(&seeded, absent).is_none(),
+                "seeded must NOT have {absent}"
+            );
+        }
+        // N seeded pool tokens.
+        let seeded_pool = place(&seeded, "pool").expect("pool place");
+        assert_eq!(
+            seeded_pool["initial_tokens"].as_array().map(|a| a.len()),
+            Some(2),
+            "seeded must seed N capacity tokens"
+        );
+        // No fail channel.
+        assert!(
+            place(&seeded, "fail_outbox").is_none(),
+            "seeded pool has NO fail_outbox"
+        );
+        // Unguarded grant (no guard key on t_grant).
+        let seeded_grant = transition(&seeded, "t_grant").expect("seeded t_grant");
+        assert!(
+            seeded_grant.get("guard").is_none()
+                || seeded_grant["guard"].is_null(),
+            "seeded t_grant must be UNGUARDED: {seeded_grant}"
+        );
+
+        // ---- Presence ----
+        let presence = serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Presence))
+            .expect("presence pool serializes");
+
+        // Presence-only transitions present; seeded-only `t_reap` absent.
+        for t in ["t_presence_acquire", "t_reap_free", "t_reap_held"] {
+            assert!(transition(&presence, t).is_some(), "presence has {t}");
+        }
+        assert!(
+            transition(&presence, "t_reap").is_none(),
+            "presence must NOT have the seeded t_reap"
+        );
+        // fail_outbox present, on the POOL_FAIL_CHANNEL.
+        let fail = place(&presence, "fail_outbox").expect("presence fail_outbox");
+        assert_eq!(fail["bridge_reply"], true);
+        assert_eq!(fail["bridge_reply_channel"], well_known::POOL_FAIL_CHANNEL);
+        // Seeds nothing.
+        let presence_pool = place(&presence, "pool").expect("pool place");
+        assert!(
+            presence_pool["initial_tokens"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true),
+            "presence pool must seed NOTHING"
+        );
+        // Guarded grant.
+        let presence_grant = transition(&presence, "t_grant").expect("presence t_grant");
+        let guard_src = presence_grant["guard"]["source"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| presence_grant["guard"].to_string());
+        assert!(
+            guard_src.contains("satisfies(claim.requirements, unit.caps)"),
+            "presence t_grant must be guarded by satisfies(): {guard_src}"
+        );
+
+        // Both share the net id + the cross-net claim contract.
+        for a in [&seeded, &presence] {
+            assert_eq!(a["name"], well_known::pool_net_id(Uuid::nil()));
+            for name in [
+                well_known::POOL_CLAIM_INBOX,
+                well_known::POOL_REGISTER_INBOX,
+                well_known::POOL_RELEASE_INBOX,
+            ] {
+                assert!(place(a, name).is_some(), "shared inbox {name} present");
+            }
+            let grant = place(a, "grant_outbox").expect("grant_outbox");
+            assert_eq!(grant["bridge_reply_channel"], "grant");
+        }
     }
 
     // -----------------------------------------------------------------------
