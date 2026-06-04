@@ -45,12 +45,12 @@
 	--node-timeout: oklch(0.64 0.14 215);
 	--node-sub-workflow: oklch(0.70 0.13 185);
 	--node-agent: oklch(0.66 0.15 50);
-	--border: oklch(0.86 0.004 270);
-	--input: oklch(0.992 0.002 270);
+	--border: oklch(0.80 0.005 270);
+	--input: oklch(0.972 0.003 270);
 	--ring: oklch(0.50 0.075 264);
 	--sidebar: oklch(0.975 0.002 270);
 	--sidebar-foreground: oklch(0.22 0.006 270);
-	--sidebar-border: oklch(0.86 0.004 270);
+	--sidebar-border: oklch(0.80 0.005 270);
 	--heading: oklch(0.16 0.008 270);
 	--paper-grain: none;
 }
@@ -77,12 +77,12 @@
 	--warning-foreground: oklch(0.18 0.04 75);
 	--info: oklch(0.635 0.072 264);
 	--info-foreground: oklch(0.16 0.04 240);
-	--border: oklch(0.298 0.006 270);
-	--input: oklch(0.225 0.005 270);
+	--border: oklch(0.315 0.006 270);
+	--input: oklch(0.282 0.006 270);
 	--ring: oklch(0.635 0.072 264);
 	--sidebar: oklch(0.175 0.004 270);
 	--sidebar-foreground: oklch(0.925 0.004 270);
-	--sidebar-border: oklch(0.298 0.006 270);
+	--sidebar-border: oklch(0.315 0.006 270);
 	--heading: oklch(0.965 0.004 270);
 	--paper-grain: none;
 	--shadow-2xs: 0 1px 1px 0 oklch(0 0 0 / 0.30);
@@ -221,7 +221,7 @@
 }
 
 :root .svelte-flow.dark {
-	--xy-background-pattern-dots-color-default: oklch(0.32 0.005 270);
+	--xy-background-pattern-dots-color-default: oklch(0.34 0.006 270);
 }
 
 @layer utilities {
