@@ -24,7 +24,6 @@
 	import BoardHeader from '$lib/components/fleet/BoardHeader.svelte';
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
-	import WorkerCoverageStrip from '$lib/components/fleet/WorkerCoverageStrip.svelte';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -215,35 +214,32 @@
 				{/snippet}
 			</CapacitySection>
 
-			<!-- QUEUE — worker pools -->
-			<div class="space-y-3">
-				<!-- Fleet-wide backend coverage — workers are a GLOBAL fleet, so this stays
-					 visible above the now per-group queue cards. -->
-				<WorkerCoverageStrip />
-				<CapacitySection
-					title="Queue"
-					backend="queue"
-					capacities={queue}
-					emptyMessage="No worker pools."
-					onedit={onEditCapacity}
-					ondelete={onDeleteCapacity}
-					onenroll={onEnrollWorkerCapacity}
-				>
-					{#snippet emptyIcon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
-					{#snippet action()}
-						<Button
-							variant="outline"
-							size="sm"
-							class="gap-1.5"
-							onclick={openEnrollWorker}
-							data-testid="enroll-worker-button"
-						>
-							<UserPlus class="size-4" />
-							Enroll worker
-						</Button>
-					{/snippet}
-				</CapacitySection>
-			</div>
+			<!-- QUEUE — worker groups. Backend coverage is a PER-GROUP attribute
+				 (each card shows its group's served backends), so there is no
+				 fleet-wide coverage blob here. -->
+			<CapacitySection
+				title="Queue"
+				backend="queue"
+				capacities={queue}
+				emptyMessage="No worker groups."
+				onedit={onEditCapacity}
+				ondelete={onDeleteCapacity}
+				onenroll={onEnrollWorkerCapacity}
+			>
+				{#snippet emptyIcon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
+				{#snippet action()}
+					<Button
+						variant="outline"
+						size="sm"
+						class="gap-1.5"
+						onclick={openEnrollWorker}
+						data-testid="enroll-worker-button"
+					>
+						<UserPlus class="size-4" />
+						Enroll worker
+					</Button>
+				{/snippet}
+			</CapacitySection>
 
 			<!-- TOKENS — concurrency limits -->
 			<CapacitySection
