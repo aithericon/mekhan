@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use aithericon_secrets::SecretStore;
 
-use crate::evaluation::{self, get_marking_cached, EvaluateResult, TransitionStatusDetail};
+use crate::evaluation::{self, EvaluateResult, TransitionStatusDetail};
 use crate::firing;
 use crate::pre_dispatch::PreDispatchRuntime;
 use crate::schema_registry::SchemaRegistry;
@@ -62,6 +62,11 @@ where
     effect_handlers: RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
     /// Cached marking state: (sequence_number, marking).
     cached_state: RwLock<Option<(u64, Marking)>>,
+    /// Negative-binding memo: transitions proven to have no valid binding at
+    /// the current marking, so the eval loop can skip re-running their
+    /// (possibly `m^k`) binding search until one of their input places changes.
+    /// Reconciled in lockstep with `cached_state` from the same event delta.
+    binding_memo: RwLock<crate::binding_memo::BindingMemo>,
     /// Monotonic cursor into the effect event log for deterministic replay.
     replay_cursor: RwLock<usize>,
     /// Schema registry for token data validation.
@@ -108,6 +113,7 @@ where
             execution_mode: RwLock::new(ExecutionMode::Live),
             effect_handlers: RwLock::new(HashMap::new()),
             cached_state: RwLock::new(None),
+            binding_memo: RwLock::new(crate::binding_memo::BindingMemo::default()),
             replay_cursor: RwLock::new(0),
             schema_registry: RwLock::new(None),
             execution_config: RwLock::new(ExecutionConfig::default()),
@@ -628,6 +634,7 @@ where
             self.topology.as_ref(),
             &marking,
             registry.as_deref(),
+            None,
         )
     }
 
@@ -681,6 +688,7 @@ where
             &self.replay_cursor,
             &self.workflow_id,
             &self.cached_state,
+            &self.binding_memo,
             max_steps,
             registry_ref,
             secrets_ref,
@@ -718,13 +726,20 @@ where
     }
 
     /// Get the current marking, using a cache to avoid full event replay.
+    ///
+    /// Reconciles the negative-binding memo from the same advance, so that a
+    /// marking read between two eval passes (the test harness does exactly this)
+    /// can't silently absorb firing events into the marking cache and leave the
+    /// memo stale — the memo always moves with the marking cursor.
     async fn get_marking_cached(&self) -> Marking {
-        get_marking_cached(
+        let (marking, delta) = evaluation::advance_marking(
             self.events.as_ref(),
             self.projection.as_ref(),
             &self.cached_state,
         )
-        .await
+        .await;
+        evaluation::reconcile_binding_memo(&self.binding_memo, self.topology.as_ref(), &delta);
+        marking
     }
 
     /// Invalidate the cached marking state.
