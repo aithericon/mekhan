@@ -910,6 +910,159 @@ ros-down:
     just dev::_kill ros-runner || true
     echo "  ✓ ROS layer down (rest of stack untouched)"
 
+# ── xArm 6 fleet (fake-hardware xArm sim + rosbridge + xarm runner) ───────────
+#
+# OPTIONAL dev layer, sibling of `ros-up`: a SIMULATED UFACTORY xArm 6 (ROS 2
+# Jazzy, ros2_control fake hardware + MoveIt + the xarm_planner services)
+# reachable over rosbridge, plus ONE `xarm_fleet` presence-pool runner whose
+# executor points its ROS backend at that bridge — so the xarm demo
+# (30-xarm-joint-move) can be granted a unit and run live. Identical mechanism
+# to `ros-up`, differing only in image / group / capability values, so it can
+# run ALONGSIDE the turtle layer (distinct ports, container, runner, group).
+#
+# The rosbridge :9090 maps to MEKHAN_SERVICE_PORT + 42 (the turtle uses +40/+41)
+# so both fleets coexist in one worktree's port block. Same `ros` capability
+# type as the turtle — the xArm just advertises `robot_model=xarm6`.
+#
+# Heavy first run: `xarm-up` builds aithericon-xarm:jazzy if missing, which
+# colcon-builds xarm_ros2 + MoveIt (multi-GB, several minutes; cached after).
+xarm-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+
+    # Slot-aware rosbridge host port (+42; turtle owns +40/+41).
+    bridge_port=$(( {{service_port}} + 42 ))
+    proj="${COMPOSE_PROJECT_NAME:-mekhan-s0}"
+    cname="${proj}-xarm"
+
+    # 1) Build the xArm fake-mode image if missing (heavy — see header).
+    if ! docker image inspect aithericon-xarm:jazzy >/dev/null 2>&1; then
+      echo "▶ building xArm image (aithericon-xarm:jazzy) — colcon-builds xarm_ros2 + MoveIt, several minutes…"
+      docker build -t aithericon-xarm:jazzy deploy/dev/xarm
+    fi
+
+    # 2) (Re)start the xArm container on the slot-aware rosbridge port. No noVNC
+    #    viewer — fake mode runs headless (RViz disabled).
+    docker rm -f "$cname" >/dev/null 2>&1 || true
+    echo "▶ starting xArm 6 (fake hw) + rosbridge ($cname) → ws://localhost:$bridge_port"
+    echo "  (the planner stack — move_group + controllers — takes ~20-40s to come up)"
+    docker run -d --name "$cname" -p "$bridge_port:9090" aithericon-xarm:jazzy >/dev/null
+
+    # 3) Wait for mekhan + the `ros` capability-type seed (shared with the turtle).
+    echo "▶ waiting for mekhan + ros capability seed…"
+    ready=""
+    for _ in $(seq 1 60); do
+      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+           | jq -e '.items[]? | select(.name=="ros")' >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    if [ -z "$ready" ]; then
+      echo "  ⚠ mekhan/ros seed not ready after 60s — xArm container is up, but skipping xarm runner" >&2
+      echo "    (demo 30-xarm-joint-move has no capacity until 'just dev xarm-up' enrolls a runner)" >&2
+      exit 0
+    fi
+
+    # Reuse the executor binary the worker-pool / ros daemons built (same features
+    # — `ros` is in {{executor_features}}). Build if absent.
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    if [ ! -x "$bin" ]; then
+      echo "▶ building executor (features: {{executor_features}})…"
+      (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
+    fi
+
+    # Keep exactly one heartbeating unit: stop a previous xarm runner.
+    if [ -s "{{pid_dir}}/xarm-runner.pid" ] && kill -0 "$(cat {{pid_dir}}/xarm-runner.pid)" 2>/dev/null; then
+      echo "  stopping previous xarm runner (pid $(cat {{pid_dir}}/xarm-runner.pid))"
+      just dev::_kill xarm-runner || true
+    fi
+
+    runner_base="$PWD/{{work_dir}}/xarm-fleet"
+    mkdir -p "$runner_base"
+    # Runner-mode executor.toml. The ROS backend is runner-local: `[ros] ws_url`
+    # points at the xArm container's host port. Flat `mekhan_url` is the
+    # EXECUTOR_MEKHAN_URL knob the catalog publish reads. `namespace` LEFT UNSET
+    # so config normalize() rewrites it to the shared `runner-jobs` partition.
+    cat > "$runner_base/executor.toml" <<EOF
+    name        = "dev-xarm-runner"
+    nats_url    = "{{nats_url}}"
+    base_dir    = "$runner_base"
+    concurrency = 2
+    mekhan_url  = "{{service_url}}"
+
+    [storage]
+    backend  = "s3"
+    endpoint = "{{s3_endpoint}}"
+    bucket   = "mekhan-artifacts"
+    region   = "us-east-1"
+
+    [storage.credentials]
+    access_key = "rustfsadmin"
+    secret_key = "rustfsadmin"
+
+    [logs]
+    enabled = true
+    sinks   = [{ type = "file" }, { type = "nats", min_level = "info" }]
+
+    [python]
+    enabled    = true
+    prefer_uv  = true
+
+    [ros]
+    ws_url = "ws://localhost:$bridge_port"
+    EOF
+
+    # Reuse a STABLE runner identity across restarts (see ros-up / up-runner for
+    # the rationale). Reuse when the local identity exists AND its row is live.
+    identity="$runner_base/runner/identity.json"
+    reuse=""
+    if [ -f "$identity" ]; then
+      rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+        echo "▶ reusing enrolled xarm runner $rid (row still live)"
+        reuse=1
+      fi
+    fi
+
+    if [ -z "$reuse" ]; then
+      rm -rf "$runner_base/runner"   # drop any stale identity (e.g. post-reset)
+      echo "▶ minting registration token (pool=xarm_fleet)…"
+      rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
+          -H 'content-type: application/json' -d '{"group":"xarm_fleet"}' | jq -r '.token')
+      if [ -z "$rt" ] || [ "$rt" = "null" ]; then
+        echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
+        exit 1
+      fi
+      name="dev-xarm-$(date +%s)"
+      echo "▶ enrolling runner '$name' (caps: ros.robot_model=xarm6, ros.ros_distro=jazzy)…"
+      ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
+          --token "$rt" --name "$name" --pool xarm_fleet \
+          --capabilities '{"ros":{"robot_model":"xarm6","ros_distro":"jazzy"}}' )
+    fi
+
+    echo "▶ starting xarm runner daemon…"
+    pid=$(just/scripts/spawn-daemon.sh xarm-runner "{{pid_dir}}/xarm-runner.pid" "{{log_dir}}/xarm-runner.log" \
+      -- env RUST_LOG="info,aithericon_executor=debug" \
+        VAULT_ADDR="{{vault_addr}}" \
+        bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
+    echo "  ✓ xarm runner (pid $pid)  log: {{log_dir}}/xarm-runner.log"
+    echo "  xArm 6 (fake): ws://localhost:$bridge_port  ($cname)"
+    echo "  ros-backed demo now grantable: 30-xarm-joint-move"
+
+# Tear down the xArm layer: stop+rm the xArm container, stop the xarm runner
+# daemon. Leaves the rest of the dev stack (and the turtle layer) untouched.
+xarm-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    proj="${COMPOSE_PROJECT_NAME:-mekhan-s0}"
+    cname="${proj}-xarm"
+    echo "▶ stopping xArm container ($cname)…"
+    docker rm -f "$cname" >/dev/null 2>&1 || true
+    just dev::_kill xarm-runner || true
+    echo "  ✓ xArm layer down (rest of stack untouched)"
+
 # ── Engine (engine/core-engine) ──────────────────────────────────────────────
 
 # scheduler="nomad" additionally wires the engine to a Nomad scheduler
