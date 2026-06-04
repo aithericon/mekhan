@@ -140,6 +140,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
                     source_handle: get_str("sourceHandle"),
                     target_handle: get_str("targetHandle"),
                     label: get_str("label"),
+                    join: None,
                     edge_type: get_str("type").unwrap_or_else(|| "sequence".to_string()),
                 });
             }

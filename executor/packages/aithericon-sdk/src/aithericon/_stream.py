@@ -166,7 +166,7 @@ def stream(name):
     / multi-input ``select`` stay additive (read ``_astream`` directly) later.
     """
     # Validate eagerly so an undeclared/control channel raises at the call site,
-    # before any iteration begins (parity with emit()/open_output()).
+    # before any iteration begins (parity with out()/open_output()).
     resolve_data_channel(name)
 
     if get_stub() is None:

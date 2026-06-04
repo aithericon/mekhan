@@ -1,7 +1,8 @@
 # Fold — reduce the trajectory action's gathered feedback collection (docs/25).
 #
-# The `move` node's Control/Scatter channel "feedback" parks its gathered
-# collection as the envelope `{ output: [<FollowJointTrajectory_Feedback>, ...] }`
+# The `move` node's Control channel "feedback" is consumed by this edge with
+# `join: gather`, so the gather barrier parks its gathered collection as the
+# envelope `{ output: [<FollowJointTrajectory_Feedback>, ...] }`
 # on the channel's gathered place. The graph wires that place (sourceHandle
 # "feedback") straight into this node, so the gathered envelope IS this step's
 # input token — read the list off `input.output`.

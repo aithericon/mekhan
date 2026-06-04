@@ -689,6 +689,7 @@ mod tests {
                 source_handle: None,
                 target_handle: Some("in".into()),
                 label: None,
+                join: None,
                 edge_type: "default".into(),
             }],
             viewport: None,

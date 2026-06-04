@@ -240,6 +240,7 @@ fn container_leased_loop_graph(
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -249,6 +250,7 @@ fn container_leased_loop_graph(
                 source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -258,6 +260,7 @@ fn container_leased_loop_graph(
                 source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -267,6 +270,7 @@ fn container_leased_loop_graph(
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -276,6 +280,7 @@ fn container_leased_loop_graph(
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -285,6 +290,7 @@ fn container_leased_loop_graph(
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
         ],

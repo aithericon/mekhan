@@ -350,44 +350,40 @@ impl EffectHandler for ExecutorStreamFeedHandler {
 ///
 /// ## Input token shape (the emit, as routed in by the watcher)
 ///
-/// The emit token carries:
+/// The emit token carries (docs/25 consumer-join — exactly three kinds):
 /// - `channel` (string, required): the declared channel name to route into.
-/// - `kind` (string, required): one of `"signal"`, `"scatter_item"`,
-///   `"scatter_close"`.
-/// - `payload` (any, optional): the emitted element value (absent for
-///   `scatter_close`).
-/// - `__map_id` (string, optional): scatter correlation id — the per-emit
-///   instance coloring identity. Present for `scatter_item` / `scatter_close`.
-/// - `__map_idx` (integer, optional): scatter element index within the run.
-///   Present for `scatter_item`.
-/// - `count` (integer, optional): the total number of `scatter_item`s emitted
-///   for this `__map_id`. Present ONLY on `scatter_close`.
+/// - `kind` (string, required): one of `"open"`, `"item"`, `"close"`.
+/// - `payload` (any, optional): the emitted element value (for `item`; the
+///   transport descriptor for a data `open`; `{count, status}` for a data
+///   `close`).
+/// - `__map_id` (string, optional): episode correlation id — the per-emit
+///   instance coloring identity. Present for control-plane `item` / `close`.
+/// - `__map_idx` (integer, optional): element index within the episode.
+///   Present for `item`.
+/// - `count` (integer, optional): the total number of `item`s emitted for this
+///   `__map_id`. Present on a control-plane `close`.
 ///
 /// ## Output token shape (deposited into `p_{node}_{channel}`)
 ///
 /// The handler emits the token verbatim onto the resolved place via the
 /// dynamic output port keyed by the resolved place id. The deposited JSON is:
 ///
-/// **signal:**
+/// **item** (absorbs the old one-shot `signal`):
 /// ```json
-/// { "kind": "signal", "payload": <value> }
-/// ```
-///
-/// **scatter_item:**
-/// ```json
-/// { "kind": "scatter_item", "payload": <value>,
+/// { "kind": "item", "payload": <value>,
 ///   "__map_id": "<id>", "__map_idx": <n> }
 /// ```
 /// The `__map_id` / `__map_idx` coloring fields are the gather barrier's
 /// correlation key (the service-side `emit_gather_barrier` correlates on
 /// `__map_id` and counts items per id).
 ///
-/// **scatter_close:**
+/// **close** (control-plane gather barrier):
 /// ```json
-/// { "kind": "scatter_close", "__map_id": "<id>", "count": <n> }
+/// { "kind": "close", "__map_id": "<id>", "count": <n> }
 /// ```
 /// The `count` is the per-`__map_id` item total the downstream gather uses to
-/// fire its counted barrier.
+/// fire its counted barrier. A control-plane close is disambiguated from the
+/// data-plane close by the presence of `__map_id`.
 ///
 /// ## Data-plane brackets (`open` / `close`, docs/25 §6)
 ///
@@ -458,9 +454,31 @@ impl EffectHandler for ControlEmitHandler {
                 )
             })?;
 
-        let place_id = channel_routes.get(channel).ok_or_else(|| {
+        // Data-plane `close` brackets (docs/25 §6) route to a SEPARATE
+        // producer-status place, NOT the consumer-facing one. The `open` token
+        // is what the downstream consumer reads + fires on; depositing `close`
+        // onto the same place spawns a phantom second consumer firing (with no
+        // transport subject), which races the real `open` job and can win with an
+        // empty result. Routing `close` to its own sink means the consumer fires
+        // ONLY on `open` and drains the transport to its own `is_eof`. Absent
+        // (control channels, or pre-fix AIR) → fall back to `channel_routes`.
+        let channel_close_routes = input
+            .config
+            .as_ref()
+            .and_then(|c| c.get("channel_close_routes"))
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
+            .unwrap_or_default();
+
+        let place_id = if kind == "close" {
+            channel_close_routes
+                .get(channel)
+                .or_else(|| channel_routes.get(channel))
+        } else {
+            channel_routes.get(channel)
+        }
+        .ok_or_else(|| {
             EffectError::Fatal(format!(
-                "control_emit channel '{channel}' has no route in channel_routes"
+                "control_emit channel '{channel}' (kind '{kind}') has no route in channel_routes"
             ))
         })?;
 
@@ -468,34 +486,28 @@ impl EffectHandler for ControlEmitHandler {
         // downstream consumer/gather needs, fire-and-forget.
         let payload = data.get("payload").cloned().unwrap_or(JsonValue::Null);
         let token = match kind {
-            "signal" => serde_json::json!({
-                "kind": "signal",
-                "payload": payload,
-            }),
-            "scatter_item" => {
+            // ITEM (docs/25 consumer-join): one element of the episode. Carries
+            // the payload + the coloring leaves (`__map_id`/`__map_idx`). Absorbs
+            // the old `signal` (a one-shot alert is one item with no scatter
+            // partner). The CONSUMER edge's join decides the fold: an `each` join
+            // projects `payload` per item; a `gather` join re-orders on
+            // `__map_idx` and sizes on the matching close `count`.
+            "item" => {
                 let map_id = data.get("__map_id").cloned().unwrap_or(JsonValue::Null);
                 let map_idx = data.get("__map_idx").cloned().unwrap_or(JsonValue::Null);
                 serde_json::json!({
-                    "kind": "scatter_item",
+                    "kind": "item",
                     "payload": payload,
                     "__map_id": map_id,
                     "__map_idx": map_idx,
                 })
             }
-            "scatter_close" => {
-                let map_id = data.get("__map_id").cloned().unwrap_or(JsonValue::Null);
-                let count = data.get("count").cloned().unwrap_or(JsonValue::Null);
-                serde_json::json!({
-                    "kind": "scatter_close",
-                    "__map_id": map_id,
-                    "count": count,
-                })
-            }
-            // DATA-plane OPEN (docs/25 §6): `payload` IS the transport descriptor
-            // the consumer connects to. Deposit it as `descriptor` so the
-            // downstream consumer edge reads `p_{node}_{channel}.descriptor` to
-            // resolve the subject EARLY (before the producer job finishes). The
-            // bytes themselves never enter the marking.
+            // OPEN: episode lifecycle marker. On the DATA plane `payload` IS the
+            // transport descriptor the consumer connects to — deposit it as
+            // `descriptor` so the downstream consumer edge reads
+            // `p_{node}_{channel}.descriptor` to resolve the subject EARLY (before
+            // the producer job finishes). On the CONTROL plane it is a harmless
+            // uniformity marker (gather state is driven by the close coordinator).
             "open" => {
                 serde_json::json!({
                     "kind": "open",
@@ -503,23 +515,33 @@ impl EffectHandler for ControlEmitHandler {
                     "descriptor": payload,
                 })
             }
-            // DATA-plane CLOSE (docs/25 §6): producer is done. `payload` carries
-            // `{count, status}`; surface those at the top level so a downstream
-            // sink / status reader sees them as plain fields. The consumer keeps
-            // draining the transport until its own `is_eof`; close only updates
-            // producer status.
+            // CLOSE: end of the episode. The CONTROL-plane close (gather barrier)
+            // carries `__map_id` + `count`; deposit those for the gather
+            // coordinator. The DATA-plane close carries `{count, status}` inside
+            // `payload`; surface those at the top level so a downstream sink /
+            // status reader sees them as plain fields. We disambiguate on the
+            // presence of `__map_id`.
             "close" => {
-                let count = payload.get("count").cloned().unwrap_or(JsonValue::Null);
-                let status = payload.get("status").cloned().unwrap_or(JsonValue::Null);
-                serde_json::json!({
-                    "kind": "close",
-                    "count": count,
-                    "status": status,
-                })
+                if let Some(map_id) = data.get("__map_id").filter(|v| !v.is_null()).cloned() {
+                    let count = data.get("count").cloned().unwrap_or(JsonValue::Null);
+                    serde_json::json!({
+                        "kind": "close",
+                        "__map_id": map_id,
+                        "count": count,
+                    })
+                } else {
+                    let count = payload.get("count").cloned().unwrap_or(JsonValue::Null);
+                    let status = payload.get("status").cloned().unwrap_or(JsonValue::Null);
+                    serde_json::json!({
+                        "kind": "close",
+                        "count": count,
+                        "status": status,
+                    })
+                }
             }
             other => {
                 return Err(EffectError::Fatal(format!(
-                    "Unknown control_emit kind '{other}' (expected signal|scatter_item|scatter_close|open|close)"
+                    "Unknown control_emit kind '{other}' (expected open|item|close)"
                 )));
             }
         };
@@ -793,26 +815,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_control_emit_signal_deposits_into_place() {
+    async fn test_control_emit_item_absorbs_signal() {
+        // A one-shot "signal"/alert is just one `item`.
         let handler = ControlEmitHandler::new();
         let input = make_emit_input(
-            json!({ "channel": "items", "kind": "signal", "payload": { "x": 1 } }),
+            json!({ "channel": "items", "kind": "item", "payload": { "x": 1 },
+                    "__map_id": "m0", "__map_idx": 0 }),
             json!({ "items": "p_node_items" }),
         );
 
         let out = handler.execute(input).await.unwrap();
         let token = out.tokens.get("p_node_items").expect("deposited token");
-        assert_eq!(token["kind"], "signal");
+        assert_eq!(token["kind"], "item");
         assert_eq!(token["payload"]["x"], 1);
     }
 
     #[tokio::test]
-    async fn test_control_emit_scatter_item_carries_coloring() {
+    async fn test_control_emit_item_carries_coloring() {
         let handler = ControlEmitHandler::new();
         let input = make_emit_input(
             json!({
                 "channel": "items",
-                "kind": "scatter_item",
+                "kind": "item",
                 "payload": "a",
                 "__map_id": "m1",
                 "__map_idx": 2
@@ -822,19 +846,19 @@ mod tests {
 
         let out = handler.execute(input).await.unwrap();
         let token = out.tokens.get("p_node_items").unwrap();
-        assert_eq!(token["kind"], "scatter_item");
+        assert_eq!(token["kind"], "item");
         assert_eq!(token["payload"], "a");
         assert_eq!(token["__map_id"], "m1");
         assert_eq!(token["__map_idx"], 2);
     }
 
     #[tokio::test]
-    async fn test_control_emit_scatter_close_carries_count() {
+    async fn test_control_emit_close_carries_count() {
         let handler = ControlEmitHandler::new();
         let input = make_emit_input(
             json!({
                 "channel": "items",
-                "kind": "scatter_close",
+                "kind": "close",
                 "__map_id": "m1",
                 "count": 3
             }),
@@ -843,10 +867,10 @@ mod tests {
 
         let out = handler.execute(input).await.unwrap();
         let token = out.tokens.get("p_node_items").unwrap();
-        assert_eq!(token["kind"], "scatter_close");
+        assert_eq!(token["kind"], "close");
         assert_eq!(token["__map_id"], "m1");
         assert_eq!(token["count"], 3);
-        // scatter_close carries no payload.
+        // a control-plane close carries no payload.
         assert!(token.get("payload").is_none());
     }
 
@@ -908,7 +932,7 @@ mod tests {
     async fn test_control_emit_unmapped_channel_is_fatal() {
         let handler = ControlEmitHandler::new();
         let input = make_emit_input(
-            json!({ "channel": "missing", "kind": "signal", "payload": 1 }),
+            json!({ "channel": "missing", "kind": "item", "payload": 1 }),
             json!({ "items": "p_node_items" }),
         );
 
@@ -922,7 +946,7 @@ mod tests {
         let mut inputs = HashMap::new();
         inputs.insert(
             "emit".to_string(),
-            json!({ "channel": "items", "kind": "signal" }),
+            json!({ "channel": "items", "kind": "item" }),
         );
         let input = EffectInput {
             transition_id: TransitionId::new(),

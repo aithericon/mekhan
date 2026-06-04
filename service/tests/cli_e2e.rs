@@ -554,6 +554,7 @@ async fn graph_topology_roundtrip() {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -563,6 +564,7 @@ async fn graph_topology_roundtrip() {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
         ],
@@ -811,6 +813,7 @@ async fn yaml_format_roundtrip() {
                     source_handle: None,
                     target_handle: Some("in".to_string()),
                     label: None,
+                    join: None,
                     edge_type: "sequence".to_string(),
                 },
                 WorkflowEdge {
@@ -820,6 +823,7 @@ async fn yaml_format_roundtrip() {
                     source_handle: None,
                     target_handle: Some("in".to_string()),
                     label: None,
+                    join: None,
                     edge_type: "sequence".to_string(),
                 },
             ],

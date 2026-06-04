@@ -1706,6 +1706,7 @@ mod tests {
             source_handle: None,
             target_handle: Some("in".to_string()),
             label: None,
+            join: None,
             edge_type: "sequence".to_string(),
         }
     }
@@ -2223,6 +2224,7 @@ mod tests {
             source_handle: Some(handle.to_string()),
             target_handle: Some("in".to_string()),
             label: None,
+            join: None,
             edge_type: "sequence".to_string(),
         }
     }
@@ -4642,6 +4644,7 @@ mod tests {
                     source_handle: Some("hi".to_string()),
                     target_handle: Some("in".to_string()),
                     label: None,
+                    join: None,
                     edge_type: "conditional".to_string(),
                 },
                 WorkflowEdge {
@@ -4651,6 +4654,7 @@ mod tests {
                     source_handle: Some("default".to_string()),
                     target_handle: Some("in".to_string()),
                     label: None,
+                    join: None,
                     edge_type: "conditional".to_string(),
                 },
             ],

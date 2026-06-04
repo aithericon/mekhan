@@ -64,6 +64,7 @@ fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
         source_handle: None,
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     }
 }
@@ -76,6 +77,7 @@ fn edge_with_handle(id: &str, source: &str, target: &str, handle: &str) -> Workf
         source_handle: Some(handle.to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     }
 }
@@ -924,6 +926,7 @@ fn loop_produces_enter_continue_exit() {
         source_handle: Some("body_in".to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     };
     // body → loop is a back-edge in the DAG: it closes the cycle through the
@@ -936,6 +939,7 @@ fn loop_produces_enter_continue_exit() {
         source_handle: None,
         target_handle: Some("body_out".to_string()),
         label: None,
+        join: None,
         edge_type: "loop_back".to_string(),
     };
     let graph = WorkflowGraph {
@@ -2094,6 +2098,7 @@ fn edge_missing_target_handle_fails() {
         source_handle: None,
         target_handle: None,
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     };
     let graph = WorkflowGraph {
@@ -2644,6 +2649,7 @@ fn loop_condition_can_reference_iteration_local() {
         source_handle: Some("body_in".to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     };
     // body → loop is a back-edge in the DAG: it closes the cycle through the
@@ -2656,6 +2662,7 @@ fn loop_condition_can_reference_iteration_local() {
         source_handle: None,
         target_handle: Some("body_out".to_string()),
         label: None,
+        join: None,
         edge_type: "loop_back".to_string(),
     };
     let graph = WorkflowGraph {
@@ -2761,6 +2768,7 @@ fn loop_with_accumulators_graph(
         source_handle: Some("body_in".to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     };
     let body_out_edge = WorkflowEdge {
@@ -2770,6 +2778,7 @@ fn loop_with_accumulators_graph(
         source_handle: None,
         target_handle: Some("body_out".to_string()),
         label: None,
+        join: None,
         edge_type: "loop_back".to_string(),
     };
     WorkflowGraph {
@@ -3463,6 +3472,7 @@ fn trigger_cannot_be_edge_target() {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             edge_with_handle("te", "t", "e", "in"),
@@ -5134,6 +5144,7 @@ fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
                 label: None,
                 // loop_back so the DAG cycle check excludes this edge,
                 // matching Loop's convention for body completion edges.
+                join: None,
                 edge_type: "loop_back".to_string(),
             },
             // Outer outputs: done + timeout.
@@ -5233,6 +5244,7 @@ fn timeout_body_out_sequence_edge_is_not_a_cycle() {
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             edge("e_done", "t", "e_done"),
@@ -5472,6 +5484,7 @@ fn map_body_edges(map_id: &str, body_id: &str) -> (WorkflowEdge, WorkflowEdge) {
         source_handle: Some("body_in".to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     };
     let body_out = WorkflowEdge {
@@ -5481,6 +5494,7 @@ fn map_body_edges(map_id: &str, body_id: &str) -> (WorkflowEdge, WorkflowEdge) {
         source_handle: None,
         target_handle: Some("body_out".to_string()),
         label: None,
+        join: None,
         edge_type: "loop_back".to_string(),
     };
     (body_in, body_out)

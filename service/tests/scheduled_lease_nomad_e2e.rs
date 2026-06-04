@@ -215,6 +215,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -224,6 +225,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -233,6 +235,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -242,6 +245,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -251,6 +255,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("body_out".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -260,6 +265,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
         ],

@@ -569,20 +569,20 @@ impl ExecutorWatcher {
 /// shape the engine's `control_emit` effect reads — the ONE place the rename
 /// happens. Returns `(token_payload, dedup_id)`.
 ///
-/// Field mapping:
+/// Field mapping (docs/25 consumer-join contract — exactly three kinds):
 ///   - `channel`   ← `channel`
-///   - `kind`      ← `kind` (`signal` | `scatter_item` | `scatter_close`)
+///   - `kind`      ← `kind` (`open` | `item` | `close`)
 ///   - `payload`   ← `payload_json` parsed as JSON when non-empty (else `null`)
-///   - `__map_idx` ← `scatter_id`   (scatter_item only)
-///   - `count`     ← `scatter_count` (scatter_close only)
-///   - `__map_id`  ← `"{execution_id}:{scatter_uid}"` — namespaced so concurrent
-///     template instances AND multiple scatters into the same channel never
+///   - `__map_idx` ← `item_idx`   (item only)
+///   - `count`     ← `count`       (control-plane close only)
+///   - `__map_id`  ← `"{execution_id}:{episode_uid}"` — namespaced so concurrent
+///     template instances AND multiple episodes into the same channel never
 ///     collide; this is the correlation key the gather barrier correlates on.
 ///
-/// The `dedup_id` mirrors the worker's `msg_id()` keying (per-channel signal,
-/// per-`scatter_uid` item/close) so an apalis redelivery is idempotent at the
-/// engine's `(PlaceId, dedup_id)` DedupIndex while two distinct fan-outs stay
-/// independent.
+/// The `dedup_id` mirrors the worker's `msg_id()` keying (per-`episode_uid`
+/// item/close for the control plane, per-channel for the data plane) so an apalis
+/// redelivery is idempotent at the engine's `(PlaceId, dedup_id)` DedupIndex while
+/// two distinct episodes stay independent.
 fn control_emit_token(emit: &ControlEmitEvent) -> (serde_json::Value, String) {
     let payload = if emit.payload_json.is_empty() {
         serde_json::Value::Null
@@ -590,64 +590,79 @@ fn control_emit_token(emit: &ControlEmitEvent) -> (serde_json::Value, String) {
         serde_json::from_str(&emit.payload_json).unwrap_or(serde_json::Value::Null)
     };
 
-    // Namespaced correlation id: instance + per-invocation scatter uid.
-    let map_id = format!("{}:{}", emit.execution_id, emit.scatter_uid);
+    // Namespaced correlation id: instance + per-episode uid.
+    let map_id = format!("{}:{}", emit.execution_id, emit.episode_uid);
 
     let (token, dedup_id) = match emit.kind {
-        ControlKind::Signal => (
+        // ITEM — one element of the episode. Carries the payload + coloring leaves
+        // (`__map_idx`/`__map_id`). Absorbs the old `signal` (one item is a
+        // one-shot alert). The consumer's `each` join projects the payload; a
+        // `gather` join re-orders on `__map_idx` and sizes on the close `count`.
+        ControlKind::Item => (
             serde_json::json!({
                 "channel": emit.channel,
-                "kind": "signal",
-                "payload": payload,
-            }),
-            format!("{}-control-{}-signal", emit.execution_id, emit.channel),
-        ),
-        ControlKind::ScatterItem => (
-            serde_json::json!({
-                "channel": emit.channel,
-                "kind": "scatter_item",
+                "kind": "item",
                 "payload": payload,
                 "__map_id": map_id,
-                "__map_idx": emit.scatter_id,
+                "__map_idx": emit.item_idx,
             }),
             format!(
                 "{}-control-{}-{}-item-{}",
-                emit.execution_id, emit.channel, emit.scatter_uid, emit.scatter_id
+                emit.execution_id, emit.channel, emit.episode_uid, emit.item_idx
             ),
         ),
-        ControlKind::ScatterClose => (
-            serde_json::json!({
-                "channel": emit.channel,
-                "kind": "scatter_close",
-                "__map_id": map_id,
-                "count": emit.scatter_count,
-            }),
-            format!(
-                "{}-control-{}-{}-close",
-                emit.execution_id, emit.channel, emit.scatter_uid
-            ),
-        ),
-        // DATA-plane brackets (docs/25 §6). `open` carries the transport
-        // DESCRIPTOR (so the consumer can connect EARLY); `close` carries
-        // `{count, status}`. Both deposit a control token into the data channel's
-        // place; the bulk bytes never enter the marking. Dedup is once-per-channel
-        // per execution (one open, one close).
-        ControlKind::Open => (
-            serde_json::json!({
-                "channel": emit.channel,
-                "kind": "open",
-                "payload": payload,
-            }),
-            format!("{}-data-{}-open", emit.execution_id, emit.channel),
-        ),
-        ControlKind::Close => (
-            serde_json::json!({
-                "channel": emit.channel,
-                "kind": "close",
-                "payload": payload,
-            }),
-            format!("{}-data-{}-close", emit.execution_id, emit.channel),
-        ),
+        // OPEN — episode lifecycle marker. On the DATA plane it carries the
+        // transport DESCRIPTOR (so the consumer can connect EARLY); on the CONTROL
+        // plane it is a harmless uniformity marker. Dedup folds on `episode_uid`
+        // presence (control episode vs. data bracket).
+        ControlKind::Open => {
+            let dedup = if emit.episode_uid.is_empty() {
+                format!("{}-data-{}-open", emit.execution_id, emit.channel)
+            } else {
+                format!(
+                    "{}-control-{}-{}-open",
+                    emit.execution_id, emit.channel, emit.episode_uid
+                )
+            };
+            (
+                serde_json::json!({
+                    "channel": emit.channel,
+                    "kind": "open",
+                    "payload": payload,
+                }),
+                dedup,
+            )
+        }
+        // CLOSE — end of the episode. On the CONTROL plane carries the item `count`
+        // (+ `__map_id`) the gather coordinator sizes on. On the DATA plane carries
+        // `{count, status}` in `payload`. Dedup folds on `episode_uid` presence.
+        ControlKind::Close => {
+            if emit.episode_uid.is_empty() {
+                // Data-plane close: `payload` carries `{count, status}`.
+                (
+                    serde_json::json!({
+                        "channel": emit.channel,
+                        "kind": "close",
+                        "payload": payload,
+                    }),
+                    format!("{}-data-{}-close", emit.execution_id, emit.channel),
+                )
+            } else {
+                // Control-plane close: stamp the item count + correlation id.
+                (
+                    serde_json::json!({
+                        "channel": emit.channel,
+                        "kind": "close",
+                        "__map_id": map_id,
+                        "count": emit.count,
+                    }),
+                    format!(
+                        "{}-control-{}-{}-close",
+                        emit.execution_id, emit.channel, emit.episode_uid
+                    ),
+                )
+            }
+        }
     };
 
     (token, dedup_id)
@@ -658,89 +673,113 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn item_emit(exec: &str, channel: &str, scatter_uid: &str, idx: u64) -> ControlEmitEvent {
+    fn item_emit(exec: &str, channel: &str, episode_uid: &str, idx: u64) -> ControlEmitEvent {
         ControlEmitEvent {
             execution_id: exec.to_string(),
             channel: channel.to_string(),
-            kind: ControlKind::ScatterItem,
+            kind: ControlKind::Item,
             payload_json: format!(r#"{{"v":{idx}}}"#),
-            scatter_id: idx,
-            scatter_count: 0,
-            scatter_uid: scatter_uid.to_string(),
+            item_idx: idx,
+            count: 0,
+            episode_uid: episode_uid.to_string(),
             metadata: HashMap::new(),
         }
     }
 
-    /// The bridge translates a REAL wire `ControlEmitEvent` (scatter_id /
-    /// scatter_count / scatter_uid, NO pre-shaped `__map_id`) into the
+    /// The bridge translates a REAL wire `ControlEmitEvent` (item_idx /
+    /// count / episode_uid, NO pre-shaped `__map_id`) into the
     /// `{__map_id, __map_idx, count}`-shaped inbox token the engine's
     /// `control_emit` effect reads. This tests the TRANSLATION, not a token
     /// that already arrived in the right shape.
     #[test]
-    fn translates_scatter_item_into_inbox_token() {
+    fn translates_item_into_inbox_token() {
         let emit = item_emit("exec-1", "items", "uid-abc", 3);
         let (token, dedup) = control_emit_token(&emit);
 
         assert_eq!(token["channel"], "items");
-        assert_eq!(token["kind"], "scatter_item");
+        assert_eq!(token["kind"], "item");
         assert_eq!(token["payload"], serde_json::json!({ "v": 3 }));
-        // scatter_id → __map_idx
+        // item_idx → __map_idx
         assert_eq!(token["__map_idx"], 3);
-        // namespaced correlation id: execution_id:scatter_uid
+        // namespaced correlation id: execution_id:episode_uid
         assert_eq!(token["__map_id"], "exec-1:uid-abc");
         assert_eq!(dedup, "exec-1-control-items-uid-abc-item-3");
     }
 
     #[test]
-    fn translates_scatter_close_count_and_map_id() {
+    fn translates_close_count_and_map_id() {
         let emit = ControlEmitEvent {
             execution_id: "exec-1".into(),
             channel: "items".into(),
-            kind: ControlKind::ScatterClose,
+            kind: ControlKind::Close,
             payload_json: String::new(),
-            scatter_id: 0,
-            scatter_count: 7,
-            scatter_uid: "uid-abc".into(),
+            item_idx: 0,
+            count: 7,
+            episode_uid: "uid-abc".into(),
             metadata: HashMap::new(),
         };
         let (token, dedup) = control_emit_token(&emit);
 
-        assert_eq!(token["kind"], "scatter_close");
-        // scatter_count → count
+        assert_eq!(token["kind"], "close");
+        // count → count
         assert_eq!(token["count"], 7);
         assert_eq!(token["__map_id"], "exec-1:uid-abc");
-        // close carries no payload field
+        // control-plane close carries no payload field
         assert!(token.get("payload").is_none());
         assert_eq!(dedup, "exec-1-control-items-uid-abc-close");
     }
 
+    /// A single `item` with an empty payload behaves as the old one-shot signal:
+    /// payload nulls out, but the item still carries its coloring leaves.
     #[test]
-    fn translates_signal_with_empty_payload_to_null() {
+    fn translates_item_with_empty_payload_to_null() {
         let emit = ControlEmitEvent {
             execution_id: "exec-1".into(),
             channel: "events".into(),
-            kind: ControlKind::Signal,
+            kind: ControlKind::Item,
             payload_json: String::new(),
-            scatter_id: 0,
-            scatter_count: 0,
-            scatter_uid: String::new(),
+            item_idx: 0,
+            count: 0,
+            episode_uid: "uid-x".into(),
             metadata: HashMap::new(),
         };
         let (token, dedup) = control_emit_token(&emit);
 
-        assert_eq!(token["kind"], "signal");
+        assert_eq!(token["kind"], "item");
         assert_eq!(token["payload"], serde_json::Value::Null);
-        // a signal carries no scatter correlation leaves
-        assert!(token.get("__map_id").is_none());
-        assert!(token.get("__map_idx").is_none());
-        assert_eq!(dedup, "exec-1-control-events-signal");
+        assert_eq!(token["__map_id"], "exec-1:uid-x");
+        assert_eq!(token["__map_idx"], 0);
+        assert_eq!(dedup, "exec-1-control-events-uid-x-item-0");
     }
 
-    /// Two concurrent scatters into the SAME channel of the SAME execution but
-    /// with DIFFERENT `scatter_uid` must produce DIFFERENT `__map_id`s, so the
-    /// gather barrier never cross-correlates one fan-out's items into another's.
+    /// A data-plane close (empty `episode_uid`) keeps its `payload` (`{count,
+    /// status}`) and keys dedup by channel, NOT by uid.
     #[test]
-    fn concurrent_scatters_do_not_cross_correlate() {
+    fn translates_data_plane_close_keeps_payload() {
+        let emit = ControlEmitEvent {
+            execution_id: "exec-1".into(),
+            channel: "frames".into(),
+            kind: ControlKind::Close,
+            payload_json: r#"{"count":12,"status":"ok"}"#.into(),
+            item_idx: 0,
+            count: 0,
+            episode_uid: String::new(),
+            metadata: HashMap::new(),
+        };
+        let (token, dedup) = control_emit_token(&emit);
+
+        assert_eq!(token["kind"], "close");
+        assert_eq!(token["payload"]["count"], 12);
+        assert_eq!(token["payload"]["status"], "ok");
+        assert!(token.get("__map_id").is_none());
+        assert_eq!(dedup, "exec-1-data-frames-close");
+    }
+
+    /// Two concurrent episodes into the SAME channel of the SAME execution but
+    /// with DIFFERENT `episode_uid` must produce DIFFERENT `__map_id`s, so the
+    /// gather barrier never cross-correlates one episode's items into another's.
+    #[test]
+    fn concurrent_episodes_do_not_cross_correlate() {
         let a = item_emit("exec-1", "items", "uid-A", 0);
         let b = item_emit("exec-1", "items", "uid-B", 0);
 
@@ -749,7 +788,7 @@ mod tests {
 
         assert_ne!(
             tok_a["__map_id"], tok_b["__map_id"],
-            "distinct scatter_uids must yield distinct correlation ids"
+            "distinct episode_uids must yield distinct correlation ids"
         );
         assert_eq!(tok_a["__map_id"], "exec-1:uid-A");
         assert_eq!(tok_b["__map_id"], "exec-1:uid-B");
