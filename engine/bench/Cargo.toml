@@ -1,0 +1,19 @@
+[package]
+name = "petri-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+petri-simulator   = { path = "../simulator" }
+petri-domain      = { path = "../core-engine/crates/domain" }
+petri-application = { path = "../core-engine/crates/application" }
+aithericon-sdk    = { path = "../sdk" }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tokio             = { workspace = true }
+clap              = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "sweep"
+path = "src/bin/sweep.rs"
