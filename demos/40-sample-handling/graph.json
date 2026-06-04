@@ -1,0 +1,322 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 40, "y": 320 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Sample Handling",
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
+      }
+    },
+    {
+      "id": "lease",
+      "type": "lease_scope",
+      "slug": "cell",
+      "position": { "x": 280, "y": 80 },
+      "width": 1500,
+      "height": 560,
+      "data": {
+        "type": "lease_scope",
+        "label": "xArm Cell Lease",
+        "description": "Acquires ONE `xarm_fleet` runner for the whole sample-handling run and releases it on exit. Everything inside — scene seeding and every job's plan/execute/grasp — runs on the same held runner by CONTAINMENT, so the persistent move_group planning scene seeded in (A) is the same scene the jobs in (B) plan against. The lease is parked write-once so the runner stays warm across both Maps.",
+        "lease": { "scheduler": "xarm_fleet" }
+      }
+    },
+    {
+      "id": "seed_inv",
+      "type": "map",
+      "slug": "seed_inventory",
+      "parentId": "lease",
+      "position": { "x": 40, "y": 120 },
+      "width": 520,
+      "height": 220,
+      "data": {
+        "type": "map",
+        "label": "Seed Inventory into Scene",
+        "description": "Maps over the bound `run_inventory` asset collection (alias `inv`), scattering one body token per sample. Each body token carries the inventory row as `item` (token-resident itemVar). The body pushes that sample into move_group's persistent planning scene as a box CollisionObject. The gathered per-element value (named by resultVar `seeded`) is the body's `{seeded}` output. Runs under the enclosing cell lease so every add_object hits the SAME held move_group scene.",
+        "assetBindings": [
+          { "alias": "inv", "refKey": "run_inventory" }
+        ],
+        "itemsRef": "inv",
+        "itemVar": "item",
+        "resultVar": "seeded",
+        "output": {
+          "id": "out",
+          "label": "Seeded",
+          "fields": [
+            { "name": "seeded", "label": "Seeded", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "add_sample",
+      "type": "automated_step",
+      "slug": "add_sample",
+      "parentId": "seed_inv",
+      "position": { "x": 40, "y": 60 },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Sample to Scene",
+        "description": "Map body. ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) — pushes ONE inventory sample into move_group's persistent planning scene as a box CollisionObject. `object_id` is the sample id (`{{ item.sample_id }}`), `dimensions` is the inventory row's box dims spliced as the BARE whole-object placeholder (`{{ item.dimensions }}`), and `pose` is a geometry_msgs/PoseStamped whose inner `pose` is the inventory row's geometry_msgs/Pose spliced verbatim (`{{ item.pose }}`). The embedded interface_typedefs shape the request live for this non-bundled service.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "{{ item.sample_id }}",
+              "primitive": "box",
+              "dimensions": "{{ item.dimensions }}",
+              "pose": {
+                "header": { "frame_id": "link_base" },
+                "pose": "{{ item.pose }}"
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": ["object_id", "primitive", "dimensions", "pose"],
+                "fieldtypes": ["string", "string", "float64", "geometry_msgs/PoseStamped"],
+                "fieldarraylen": [-1, -1, 0, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": ["success", "error_message"],
+                "fieldtypes": ["boolean", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "seeded", "label": "Seeded", "kind": "bool", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "handle_jobs",
+      "type": "map",
+      "slug": "handle_jobs",
+      "parentId": "lease",
+      "position": { "x": 620, "y": 120 },
+      "width": 820,
+      "height": 380,
+      "data": {
+        "type": "map",
+        "label": "Handle Jobs",
+        "description": "Maps over the bound `run_job` asset collection (alias `job`), one body token per job row. Each body token carries the job row as `job` (token-resident itemVar: `job.sample_id`, `job.from_slot`, `job.to_port`, `job.op`). The body resolves the job's poses from the rack/port assets, then a Decision dispatches on `job.op` into the pick / place / swap SubWorkflows. The gathered per-element value (resultVar `done`) is each branch's result envelope.",
+        "assetBindings": [
+          { "alias": "job", "refKey": "run_job" }
+        ],
+        "itemsRef": "job",
+        "itemVar": "job",
+        "resultVar": "done",
+        "output": {
+          "id": "out",
+          "label": "Done",
+          "fields": [
+            { "name": "done", "label": "Done", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resolve_poses",
+      "type": "automated_step",
+      "slug": "resolve_poses",
+      "parentId": "handle_jobs",
+      "position": { "x": 40, "y": 60 },
+      "data": {
+        "type": "automated_step",
+        "label": "Resolve Job Poses",
+        "description": "Map body head. Python step: reads the bound `sample_rack` (alias `racks`) and `instrument_ports` (alias `ports`) asset collections plus the token-resident `job.from_slot` / `job.to_port`, looks up the matching rack slot + instrument port, and emits the four poses as geometry_msgs/Pose JSON (`grasp_pose`, `grasp_approach`, `insert_pose`, `insert_approach`) so they splice straight into the child SubWorkflows' plan targets via the bare-placeholder whole-object path. Outputs are implicit (the runner sweeps globals matching the declared output port).",
+        "assetBindings": [
+          { "alias": "racks", "refKey": "sample_rack" },
+          { "alias": "ports", "refKey": "instrument_ports" }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Resolved Poses",
+          "fields": [
+            { "name": "grasp_pose", "label": "Grasp Pose", "kind": "json", "required": true },
+            { "name": "grasp_approach", "label": "Grasp Approach Pose", "kind": "json", "required": true },
+            { "name": "insert_pose", "label": "Insert Pose", "kind": "json", "required": true },
+            { "name": "insert_approach", "label": "Insert Approach Pose", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "op_gate",
+      "type": "decision",
+      "slug": "op_gate",
+      "parentId": "handle_jobs",
+      "position": { "x": 320, "y": 60 },
+      "data": {
+        "type": "decision",
+        "label": "Dispatch on op",
+        "description": "Compiler-checked gate on the token-resident `job.op`. `pick` → the 37-pick SubWorkflow; `place` → the 38-place SubWorkflow; anything else (`swap`) falls through to the default 39-swap SubWorkflow. Each guard resolves `job.op` against the Map itemVar at compile time.",
+        "conditions": [
+          {
+            "edgeId": "is_pick",
+            "label": "Pick",
+            "guard": "job.op == \"pick\""
+          },
+          {
+            "edgeId": "is_place",
+            "label": "Place",
+            "guard": "job.op == \"place\""
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "do_pick",
+      "type": "sub_workflow",
+      "slug": "do_pick",
+      "parentId": "handle_jobs",
+      "position": { "x": 600, "y": 40 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Pick (37)",
+        "description": "Embeds the 37-pick child template. Plans to the resolved approach pose, gates the plan, executes (Path B), then grasps the sample. inputMapping wires the resolved grasp pose, approach pose, and the job's sample id into the child's Start.initial fields.",
+        "templateId": "00000000-0000-0000-0000-000000000370",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "grasp_pose", "expression": "resolve_poses.grasp_pose" },
+          { "targetField": "approach_pose", "expression": "resolve_poses.grasp_approach" },
+          { "targetField": "object_id", "expression": "job.sample_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Pick Result",
+          "fields": [
+            { "name": "picked", "label": "Picked", "kind": "bool", "required": true },
+            { "name": "object_id", "label": "Object Id", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "do_place",
+      "type": "sub_workflow",
+      "slug": "do_place",
+      "parentId": "handle_jobs",
+      "position": { "x": 600, "y": 160 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Place (38)",
+        "description": "Embeds the 38-place child template. Plans to the resolved insert approach pose, gates, executes (Path B), then releases the sample at the instrument port. inputMapping wires the resolved insert pose, insert approach pose, and the job's sample id into the child's Start.initial fields.",
+        "templateId": "00000000-0000-0000-0000-000000000380",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "insert_pose", "expression": "resolve_poses.insert_pose" },
+          { "targetField": "approach_pose", "expression": "resolve_poses.insert_approach" },
+          { "targetField": "object_id", "expression": "job.sample_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Place Result",
+          "fields": [
+            { "name": "placed", "label": "Placed", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "do_swap",
+      "type": "sub_workflow",
+      "slug": "do_swap",
+      "parentId": "handle_jobs",
+      "position": { "x": 600, "y": 280 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Swap (39)",
+        "description": "Default branch. Embeds the 39-swap child template (pick occupant from port → place to temp → pick new from rack → place to port). The eight swap inputs are mapped from the resolved poses and job fields as best the asset shapes allow: the port grasp/approach come from the resolved insert poses, and the rack grasp/approach come from the resolved grasp poses; the occupant/new ids both default to the job's sample id (the asset model carries one sample per job, so a real distinct occupant id would need a second asset lookup — recorded in notes for live verification). The temp poses reuse the rack poses.",
+        "templateId": "00000000-0000-0000-0000-000000000390",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "occupant_id", "expression": "job.sample_id" },
+          { "targetField": "new_id", "expression": "job.sample_id" },
+          { "targetField": "port_grasp_pose", "expression": "resolve_poses.insert_pose" },
+          { "targetField": "port_approach_pose", "expression": "resolve_poses.insert_approach" },
+          { "targetField": "temp_grasp_pose", "expression": "resolve_poses.grasp_pose" },
+          { "targetField": "temp_approach_pose", "expression": "resolve_poses.grasp_approach" },
+          { "targetField": "rack_grasp_pose", "expression": "resolve_poses.grasp_pose" },
+          { "targetField": "rack_approach_pose", "expression": "resolve_poses.grasp_approach" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Swap Result",
+          "fields": [
+            { "name": "swapped", "label": "Swapped", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1840, "y": 320 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "jobs_done", "expression": "handle_jobs.done.len()" },
+          { "targetField": "seeded", "expression": "seed_inventory.seeded.len()" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_lease", "source": "start", "target": "lease", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_lease_seed", "source": "lease", "target": "seed_inv", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_seed_add", "source": "seed_inv", "target": "add_sample", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_add_seed", "source": "add_sample", "target": "seed_inv", "targetHandle": "body_out", "type": "loop_back" },
+
+    { "id": "e_seed_handle", "source": "seed_inv", "target": "handle_jobs", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_handle_resolve", "source": "handle_jobs", "target": "resolve_poses", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_resolve_gate", "source": "resolve_poses", "target": "op_gate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_gate_pick", "source": "op_gate", "target": "do_pick", "sourceHandle": "is_pick", "targetHandle": "in", "label": "Pick", "type": "conditional" },
+    { "id": "e_gate_place", "source": "op_gate", "target": "do_place", "sourceHandle": "is_place", "targetHandle": "in", "label": "Place", "type": "conditional" },
+    { "id": "e_gate_swap", "source": "op_gate", "target": "do_swap", "sourceHandle": "default", "targetHandle": "in", "label": "Swap", "type": "conditional" },
+    { "id": "e_pick_handle", "source": "do_pick", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_place_handle", "source": "do_place", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_swap_handle", "source": "do_swap", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
+
+    { "id": "e_handle_lease", "source": "handle_jobs", "target": "lease", "targetHandle": "body_out", "type": "sequence" },
+    { "id": "e_lease_end", "source": "lease", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

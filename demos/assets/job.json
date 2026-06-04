@@ -1,0 +1,30 @@
+{
+  "asset_type": {
+    "name": "run_job",
+    "display_name": "Run Job",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "sample_id", "label": "Sample ID", "kind": "text", "required": true },
+      { "name": "from_slot", "label": "From Slot", "kind": "text", "required": true },
+      { "name": "to_port", "label": "To Port", "kind": "text", "required": true },
+      { "name": "temp_slot", "label": "Temp Slot", "kind": "text", "required": false },
+      {
+        "name": "op",
+        "label": "Operation",
+        "kind": "select",
+        "required": true,
+        "options": [
+          { "value": "pick", "label": "Pick" },
+          { "value": "place", "label": "Place" },
+          { "value": "swap", "label": "Swap" }
+        ]
+      }
+    ]
+  },
+  "ref_key": "run_job",
+  "display_name": "Run Job",
+  "records": [
+    { "sample_id": "S1", "from_slot": "A1", "to_port": "P1", "temp_slot": "A2", "op": "pick" },
+    { "sample_id": "S1", "from_slot": "A1", "to_port": "P1", "temp_slot": "A2", "op": "place" }
+  ]
+}

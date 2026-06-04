@@ -1,0 +1,11 @@
+{
+  "name": "runs-a-job",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.jobs_done", "op": "gte", "value": 1 }
+  ]
+}

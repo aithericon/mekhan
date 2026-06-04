@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000400",
+  "name": "40 · Sample Handling (xArm 6, MoveIt Path C capstone)",
+  "description": "The Path C capstone on the SIMULATED xArm 6: a full sample-handling cell driven from curated asset collections. A single LeaseScope holds one `xarm_fleet` runner for the whole run. Inside it: (A) `seed_inventory` Maps over the `run_inventory` asset and pushes each sample into move_group's persistent planning scene via `/add_object` (CollisionObject ADD); (B) `handle_jobs` Maps over the `run_job` asset — each job runs a `resolve_poses` python step (reads the bound `sample_rack` + `instrument_ports` collections, looks up the job's from_slot/to_port, emits the matching grasp/insert/approach poses as geometry_msgs/Pose JSON), then a Decision branches on `job.op` into the 37-pick / 38-place / 39-swap SubWorkflows. Showcases Map-over-asset, SubWorkflow-inside-Map-body, Decision-inside-Map-body, python asset-lookup, and the whole-object pose splice — all under one held lease. LIVE ONLY: requires `just dev xarm-up`."
+}

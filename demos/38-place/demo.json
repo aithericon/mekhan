@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000380",
+  "name": "38 · xArm Place (child SubWorkflow, MoveIt Path C)",
+  "description": "Reusable PLACE child subworkflow for the xArm 6 sample-handling capstone. Given a carried sample's insert/approach poses and its object_id, plans an approach trajectory to the place location (the carried collision body is planned away from obstacles while attached), gates on the typed plan metrics, executes via the shipped Path B FollowJointTrajectory, then atomically opens the gripper + detaches the object via /release. start → plan_pose (call_service /plan_to_pose, target = {{ input.approach_pose }}) → gate (Decision: success && point_count>0 && total_duration<=30) → execute (send_action_goal /xarm6_traj_controller/follow_joint_trajectory, trajectory = {{ plan_pose.trajectory }}) → release (call_service /release, object_id = {{ input.object_id }}) → End{placed: release.success}; rejected → End{placed: false}. Invoked by demo 39-swap and 40-sample-handling via SubWorkflow nodes. LIVE ONLY: requires `just dev xarm-up`."
+}

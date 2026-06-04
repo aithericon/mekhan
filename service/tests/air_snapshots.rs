@@ -395,6 +395,28 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // `xarm_fleet` + `ros` Requirement shape as 33; atomic grasp/release
         // (gripper actuation + scene attach/detach). Live-only.
         "35-xarm-grasp-release",
+        // 41-prepare-cell (ROS / xArm MoveIt Path C S4, docs/27) — same
+        // `xarm_fleet` + `ros` Requirement shape as 33; stages the planning
+        // scene / cell for sample handling. Renumbered off 36 (taken by
+        // 36-audio-transcribe on main). Live-only.
+        "41-prepare-cell",
+        // 37-pick (ROS / xArm MoveIt Path C S4, docs/27) — same `xarm_fleet` +
+        // `ros` Requirement shape as 33; pick SubWorkflow building block.
+        // Live-only.
+        "37-pick",
+        // 38-place (ROS / xArm MoveIt Path C S4, docs/27) — same `xarm_fleet` +
+        // `ros` Requirement shape as 33; place SubWorkflow building block.
+        // Live-only.
+        "38-place",
+        // 39-swap (ROS / xArm MoveIt Path C S4, docs/27) — same `xarm_fleet` +
+        // `ros` Requirement shape as 33; swap SubWorkflow composing pick/place.
+        // Live-only.
+        "39-swap",
+        // 40-sample-handling (ROS / xArm MoveIt Path C S4, docs/27) — same
+        // `xarm_fleet` + `ros` Requirement shape as 33; the north-star
+        // sample-handling workflow composing the pick/place/swap SubWorkflows.
+        // Live-only.
+        "40-sample-handling",
     ]
     .into_iter()
     .collect();

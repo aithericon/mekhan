@@ -1,0 +1,180 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Prepare Cell",
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
+      }
+    },
+    {
+      "id": "load_cells",
+      "type": "automated_step",
+      "slug": "load_cells",
+      "position": { "x": 300, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Load lab_cell asset → array",
+        "description": "Stages the bound `lab_cell` asset collection (assetBindings alias `cells`) as a token-resident JSON array so the downstream Map can scatter it — asset bindings are python-global stagings, NOT node outputs, so a Map cannot iterate an asset directly; this loader bridges the gap by emitting `items` (the record array the Map's itemsRef points at) and `count` (the data-driven object count the End reports). Plain python on the default worker pool.",
+        "assetBindings": [
+          { "alias": "cells", "refKey": "lab_cell" }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Cells",
+          "fields": [
+            { "name": "items", "label": "Cell records", "kind": "json", "required": true },
+            { "name": "count", "label": "Object count", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "clear_scene",
+      "type": "automated_step",
+      "slug": "clear_scene",
+      "position": { "x": 560, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Clear Planning Scene",
+        "description": "ROS `call_service` to `/clear_scene` (`aithericon_motion_bridge/srv/ClearScene`) — removes all world + attached collision objects from move_group's PERSISTENT scene so the cell is rebuilt from a clean slate. Idempotent (confirm-guarded). Runs on an `xarm_fleet` runner satisfying `ros.robot_model == xarm6`. The scene is stateful on the single live move_group, so this clear + the per-object adds all land on the same runner (only one xarm6 runner satisfies the requirement) — no LeaseScope needed (xarm_fleet is a presence capacity, not a scheduler capacity).",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/clear_scene",
+            "interface_type": "aithericon_motion_bridge/srv/ClearScene",
+            "fields": { "confirm": true },
+            "interface_typedefs": [
+              { "type": "aithericon_motion_bridge/ClearScene_Request", "fieldnames": ["confirm"], "fieldtypes": ["boolean"], "fieldarraylen": [-1] },
+              { "type": "aithericon_motion_bridge/ClearScene_Response", "fieldnames": ["success", "removed_count", "error_message"], "fieldtypes": ["boolean", "int32", "string"], "fieldarraylen": [-1, -1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "removed_count", "label": "Removed count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "mp",
+      "type": "map",
+      "slug": "scene",
+      "position": { "x": 820, "y": 200 },
+      "width": 520,
+      "height": 220,
+      "data": {
+        "type": "map",
+        "label": "Build cell from lab_cell asset",
+        "description": "Scatters the loaded `lab_cell` records (load_cells.items) into one body token per cell object and runs add_object once per element (data-parallel). Per-element `item.object_id`/`item.primitive`/`item.dimensions`/`item.pose` are token-resident itemVar leaves (no read-arc). Gathers the per-object `{added}` results into the `scene` collection.",
+        "itemsRef": "load_cells.items",
+        "itemVar": "item",
+        "resultVar": "success",
+        "output": {
+          "id": "out",
+          "label": "Added",
+          "fields": [
+            { "name": "success", "label": "Added OK", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "add_object",
+      "type": "automated_step",
+      "slug": "add_object",
+      "parentId": "mp",
+      "position": { "x": 40, "y": 60 },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Collision Object (from asset record)",
+        "description": "Map body. ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) — pushes one cell record as a CollisionObject into move_group's persistent scene via the runner-side motion-bridge node. The per-element fields come straight off the token-resident itemVar: `object_id`/`primitive`/`dimensions` splice as bare whole-object placeholders, and the record's `geometry_msgs/Pose` is wrapped into a `link_base` PoseStamped (`pose` = `{{ item.pose }}` as the bare-placeholder leaf so the backend re-parses the typed object). Runs on the `xarm_fleet` runner.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "{{ item.object_id }}",
+              "primitive": "{{ item.primitive }}",
+              "dimensions": "{{ item.dimensions }}",
+              "pose": "{{ item.pose_stamped }}"
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": ["object_id", "primitive", "dimensions", "pose"],
+                "fieldtypes": ["string", "string", "float64", "geometry_msgs/PoseStamped"],
+                "fieldarraylen": [-1, -1, 0, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": ["success", "error_message"],
+                "fieldtypes": ["boolean", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "success", "label": "Success", "kind": "bool" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1400, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "scene_objects", "expression": "load_cells.count" },
+          { "targetField": "scene_cleared", "expression": "clear_scene.success" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_load", "source": "start", "target": "load_cells", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_load_clear", "source": "load_cells", "target": "clear_scene", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_clear_mp", "source": "clear_scene", "target": "mp", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_mp_add", "source": "mp", "target": "add_object", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_add_mp", "source": "add_object", "target": "mp", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_mp_end", "source": "mp", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

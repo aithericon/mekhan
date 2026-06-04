@@ -1,0 +1,231 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Pick (approach → execute → grasp)",
+        "initial": {
+          "id": "in",
+          "label": "Pick Input",
+          "fields": [
+            { "name": "grasp_pose", "label": "Grasp pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "approach_pose", "label": "Approach pose (geometry_msgs/Pose, above the sample)", "kind": "json", "required": true },
+            { "name": "object_id", "label": "Collision object id to attach", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "plan_pose",
+      "type": "automated_step",
+      "slug": "plan_pose",
+      "position": { "x": 320, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Plan to Approach Pose (MoveIt)",
+        "description": "ROS `call_service` to `/plan_to_pose` (`aithericon_motion_bridge/srv/PlanToPose`) — plan a joint trajectory to the caller-supplied APPROACH pose (above the sample, not inside the collision object — a goal pose inside the object fails IK under avoid_collisions). The approach pose is spliced as the BARE whole-object placeholder `{{ start.approach_pose }}` so the backend re-parses the pure placeholder into the typed `geometry_msgs/Pose` with no reshaping. The bridge calls MoveIt's OWN services (`/compute_ik` then `/plan_kinematic_path`) and RETURNS the planned trajectory plus the typed metrics sidecar the Decision gate keys off. Runs on an `xarm_fleet` runner satisfying `ros.robot_model == xarm6`; the embedded `interface_typedefs` let the deriver shape the output port live for this non-bundled service.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/plan_to_pose",
+            "interface_type": "aithericon_motion_bridge/srv/PlanToPose",
+            "fields": {
+              "target": "{{ start.approach_pose }}",
+              "group": "xarm6",
+              "frame_id": "link_base",
+              "allowed_planning_time": 5.0,
+              "num_planning_attempts": 10
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/PlanToPose_Request",
+                "fieldnames": ["target", "group", "frame_id", "allowed_planning_time", "num_planning_attempts"],
+                "fieldtypes": ["geometry_msgs/Pose", "string", "string", "double", "int32"],
+                "fieldarraylen": [-1, -1, -1, -1, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/PlanToPose_Response",
+                "fieldnames": ["success", "trajectory", "planning_time", "point_count", "total_duration", "error_code", "error_message"],
+                "fieldtypes": ["boolean", "string", "double", "int32", "double", "int32", "string"],
+                "fieldarraylen": [-1, -1, -1, -1, -1, -1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "trajectory", "label": "Trajectory (opaque JSON-encoded JointTrajectory)", "kind": "text" },
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "planning_time", "label": "Planning time (s)", "kind": "number" },
+            { "name": "point_count", "label": "Point count", "kind": "number" },
+            { "name": "total_duration", "label": "Total duration (s)", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "gate",
+      "type": "decision",
+      "slug": "gate",
+      "position": { "x": 600, "y": 200 },
+      "data": {
+        "type": "decision",
+        "label": "Approach plan acceptable?",
+        "description": "Compiler-checked gate on the typed metrics sidecar from `plan_pose`. Accept only a successful plan with at least one trajectory point and a total duration within 30s; everything else routes to `end-rejected` (execute + grasp never fire). Each `<slug>.<field>` ref is resolved against `plan_pose`'s declared output port at compile time — a sidecar field-name typo fails pre-publish.",
+        "conditions": [
+          {
+            "edgeId": "branch-accept",
+            "label": "Accept",
+            "guard": "plan_pose.success == true && plan_pose.point_count > 0 && plan_pose.total_duration <= 30.0"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "execute",
+      "type": "automated_step",
+      "slug": "execute",
+      "position": { "x": 880, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Execute Approach Trajectory (Path B)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`) — the already-shipped Path B execution primitive. The planned trajectory is spliced verbatim as the BARE whole-object placeholder `{{ plan_pose.trajectory }}` (the only content of the `trajectory` field, so the backend's `is_pure_placeholder` path re-parses the rendered JSON object and adopts the typed value with zero reshaping). The action's terminal RESULT rides `stdout_tail`, NOT outputs — so `error_code` is NOT mapped here. Runs on the same `xarm_fleet` runner.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": "{{ plan_pose.trajectory }}"
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": ["error_code", "error_string"],
+                "fieldtypes": ["int32", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "grasp",
+      "type": "automated_step",
+      "slug": "grasp",
+      "position": { "x": 1160, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Grasp (atomic close + attach)",
+        "description": "ROS `call_service` to `/grasp` (`aithericon_motion_bridge/srv/Grasp`) — the atomic compound op: actuate the `xarm_gripper` group closed THEN `AttachedCollisionObject` ADD of the caller-supplied `object_id` on `/apply_planning_scene`, both in one service call, returning only after both complete. `object_id` is spliced as the BARE whole-object placeholder `{{ start.object_id }}`. In the fake-sim the grasp attaches from the pre-grasp (approach) pose — there is no cartesian descent into the collision object. Response `{success, attached, error_message}`; `attached==true` proves the object is now part of the robot's collision body. Runs on the same `xarm_fleet` runner.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/grasp",
+            "interface_type": "aithericon_motion_bridge/srv/Grasp",
+            "fields": {
+              "object_id": "{{ start.object_id }}",
+              "width": 0.0,
+              "effort": 50.0
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/Grasp_Request",
+                "fieldnames": ["object_id", "width", "effort"],
+                "fieldtypes": ["string", "double", "double"],
+                "fieldarraylen": [-1, -1, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/Grasp_Response",
+                "fieldnames": ["success", "attached", "error_message"],
+                "fieldtypes": ["boolean", "boolean", "string"],
+                "fieldarraylen": [-1, -1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "attached", "label": "Attached", "kind": "bool" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "end-done",
+      "type": "end",
+      "position": { "x": 1440, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Picked",
+        "resultMapping": [
+          { "targetField": "picked", "expression": "grasp.success" },
+          { "targetField": "object_id", "expression": "start.object_id" }
+        ]
+      }
+    },
+    {
+      "id": "end-rejected",
+      "type": "end",
+      "position": { "x": 880, "y": 320 },
+      "data": {
+        "type": "end",
+        "label": "Plan Rejected",
+        "resultMapping": [
+          { "targetField": "picked", "expression": "false" },
+          { "targetField": "object_id", "expression": "start.object_id" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_plan", "source": "start", "target": "plan_pose", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_plan_gate", "source": "plan_pose", "target": "gate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_gate_execute", "source": "gate", "target": "execute", "targetHandle": "in", "sourceHandle": "branch-accept", "label": "Accept", "type": "conditional" },
+    { "id": "e_gate_rejected", "source": "gate", "target": "end-rejected", "targetHandle": "in", "sourceHandle": "default", "label": "Reject", "type": "conditional" },
+    { "id": "e_execute_grasp", "source": "execute", "target": "grasp", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_grasp_done", "source": "grasp", "target": "end-done", "targetHandle": "in", "type": "sequence" }
+  ]
+}

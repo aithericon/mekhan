@@ -1,0 +1,23 @@
+{
+  "asset_type": {
+    "name": "instrument_ports",
+    "display_name": "Instrument Ports",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "port_id", "label": "Port ID", "kind": "text", "required": true },
+      { "name": "instrument", "label": "Instrument", "kind": "text", "required": true },
+      { "name": "insert_pose", "label": "Insert Pose", "kind": "json", "required": true },
+      { "name": "retract_pose", "label": "Retract Pose", "kind": "json", "required": true }
+    ]
+  },
+  "ref_key": "instrument_ports",
+  "display_name": "Instrument Ports",
+  "records": [
+    {
+      "port_id": "P1",
+      "instrument": "spectrometer",
+      "insert_pose": { "position": { "x": 0.30, "y": 0.15, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "retract_pose": { "position": { "x": 0.30, "y": 0.15, "z": 0.42 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } }
+    }
+  ]
+}
