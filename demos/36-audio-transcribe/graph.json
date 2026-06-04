@@ -1,0 +1,123 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Audio Transcribe",
+        "initial": {
+          "id": "in",
+          "label": "Audio Input",
+          "fields": [
+            {
+              "name": "audio_b64",
+              "label": "Audio (base64-encoded 16 kHz mono WAV)",
+              "kind": "textarea",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vad",
+      "type": "automated_step",
+      "slug": "vad",
+      "position": { "x": 340, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "VAD filter",
+        "description": "Borrows the uploaded WAV from Start via `{{ start.audio }}` (compiler stages it via StoragePath, runner resolves to a local path). Reads it with the stdlib `wave` module, runs a simple energy-gate VAD over 30 ms frames (pure-Python `audioop` RMS — swap webrtcvad/silero for production), and re-emits ONLY the voiced frames as raw 16-bit PCM over the Data/Out channel `speech` (~100 ms per write). The bulk audio bytes flow out-of-band over the JetStream datastream transport — they NEVER enter the net marking; the net sees only the channel's open + close (docs/25).",
+        "channels": [
+          {
+            "name": "speech",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "audio/L16" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "VAD stats",
+          "fields": [
+            { "name": "frames_total", "label": "Frames total", "kind": "number" },
+            { "name": "frames_voiced", "label": "Frames voiced", "kind": "number" },
+            { "name": "sample_rate", "label": "Sample rate", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "transcribe",
+      "type": "automated_step",
+      "slug": "transcribe",
+      "position": { "x": 660, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Transcribe (faster-whisper)",
+        "description": "Declares a Data/In channel `speech` wired from the VAD step's open handle. `aithericon.stream('speech')` drains the out-of-band voiced-audio byte stream (starting EARLY, while the VAD step is still producing), reassembles the raw 16-bit PCM, and runs faster-whisper (`tiny`, CPU/int8) over it. Sets the recognized text as `transcript`. LIVE-ONLY: first run pip-installs faster-whisper (ctranslate2/numpy) and downloads the `tiny` model (~75 MB) into the venv/HF cache — slow + network-dependent, exceeds the 60 s `mekhan test` cap on a cold run.",
+        "channels": [
+          {
+            "name": "speech",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "audio/L16" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["faster-whisper", "numpy"],
+            "virtualenv": true,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Transcript",
+          "fields": [
+            { "name": "transcript", "label": "Transcript", "kind": "text" },
+            { "name": "seconds", "label": "Audio seconds", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 980, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "transcript", "expression": "transcribe.transcript" },
+          { "targetField": "frames_voiced", "expression": "vad.frames_voiced" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_vad", "source": "start", "target": "vad", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_vad_speech_transcribe", "source": "vad", "sourceHandle": "speech", "target": "transcribe", "targetHandle": "speech", "type": "sequence" },
+    { "id": "e_transcribe_end", "source": "transcribe", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}
