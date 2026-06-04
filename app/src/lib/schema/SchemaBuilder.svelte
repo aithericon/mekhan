@@ -4,8 +4,8 @@
 	 *
 	 * SchemaBuilder is the primary deliverable of the builder stage. It wraps a
 	 * JSON Schema fragment with a full recursive editor: object/array/scalar
-	 * nodes with add/remove/rename/reorder, enum values, constraints, meta, and
-	 * a raw-JSON escape hatch.
+	 * nodes with add/remove/rename/reorder, enum values, constraints, a raw-JSON
+	 * escape hatch, union (oneOf/anyOf) variants, and $ref to named definitions.
 	 *
 	 * The component works entirely with JSON Schema as its stored form —
 	 * BuilderNode is an internal edit model, not exposed via props.
@@ -22,10 +22,14 @@
 	import GripVertical from '@lucide/svelte/icons/grip-vertical';
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import Code from '@lucide/svelte/icons/code';
+	import Link from '@lucide/svelte/icons/link';
+	import GitMerge from '@lucide/svelte/icons/git-merge';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Select from '$lib/components/ui/select';
+	import SchemaView from './SchemaView.svelte';
+	import { jsonSchemaToSchemaNode } from './model';
 	// Self-import for recursion (avoids deprecated <svelte:self>).
 	import SchemaBuilder from './SchemaBuilder.svelte';
 	import {
@@ -37,6 +41,7 @@
 		type BuilderObjectNode,
 		type BuilderArrayNode,
 		type BuilderScalarNode,
+		type BuilderUnionNode,
 		type FieldKindHint,
 		type ScalarJsonType
 	} from './builder-model';
@@ -53,13 +58,27 @@
 		 */
 		allowRootScalar?: boolean;
 		/**
+		 * Workflow-level reusable schema definitions (name → schema). When
+		 * provided, a "$ref" type option becomes available in the root-kind
+		 * toggle and the union variant adder. Callers should pass
+		 * `getWorkflowDefinitions()` from `$lib/editor/workflow-definitions.svelte`.
+		 * Pass an empty object (the default) when definitions aren't reachable.
+		 */
+		definitions?: Record<string, unknown>;
+		/**
 		 * Internal: nesting depth, drives indentation and compact sub-node
 		 * rendering. Callers leave this absent.
 		 */
 		_depth?: number;
 	};
 
-	let { schema, onchange, allowRootScalar = false, _depth = 0 }: Props = $props();
+	let {
+		schema,
+		onchange,
+		allowRootScalar = false,
+		definitions = {},
+		_depth = 0
+	}: Props = $props();
 
 	// ── Parse schema into builder node ───────────────────────────────────────
 
@@ -124,15 +143,21 @@
 
 	// ── Root type switcher ───────────────────────────────────────────────────
 
-	type RootKind = 'object' | 'array' | 'scalar';
+	type RootKind = 'object' | 'array' | 'scalar' | 'union' | 'ref';
 
 	const rootKind = $derived<RootKind>(
 		node.kind === 'array'
 			? 'array'
 			: node.kind === 'scalar'
 				? 'scalar'
-				: 'object'
+				: node.kind === 'union'
+					? 'union'
+					: node.kind === 'ref'
+						? 'ref'
+						: 'object'
 	);
+
+	const definitionNames = $derived(Object.keys(definitions));
 
 	function setRootKind(k: RootKind) {
 		if (k === rootKind) return;
@@ -144,8 +169,21 @@
 				items: { kind: 'object', fields: [], required: new Set(), sealed: false, nullable: false },
 				nullable: false
 			});
-		} else {
+		} else if (k === 'scalar') {
 			emitNode({ kind: 'scalar', type: 'string', nullable: false, enumValues: [] });
+		} else if (k === 'union') {
+			emitNode({
+				kind: 'union',
+				combinator: 'oneOf',
+				variants: [
+					{ kind: 'object', fields: [], required: new Set(), sealed: false, nullable: false },
+					{ kind: 'object', fields: [], required: new Set(), sealed: false, nullable: false }
+				]
+			});
+		} else if (k === 'ref') {
+			// Pick first available definition or blank name.
+			const firstName = definitionNames[0] ?? '';
+			emitNode({ kind: 'ref', name: firstName });
 		}
 	}
 
@@ -272,6 +310,64 @@
 		emitNode({ ...node, enumValues });
 	}
 
+	// ── Union-node helpers ────────────────────────────────────────────────────
+
+	function setUnionProp<K extends keyof BuilderUnionNode>(key: K, value: BuilderUnionNode[K]) {
+		if (node.kind !== 'union') return;
+		emitNode({ ...node, [key]: value });
+	}
+
+	function addUnionVariant() {
+		if (node.kind !== 'union') return;
+		emitNode({
+			...node,
+			variants: [
+				...node.variants,
+				{ kind: 'object', fields: [], required: new Set(), sealed: false, nullable: false }
+			]
+		});
+	}
+
+	function removeUnionVariant(idx: number) {
+		if (node.kind !== 'union') return;
+		const variants = node.variants.filter((_, i) => i !== idx);
+		emitNode({ ...node, variants });
+	}
+
+	function updateUnionVariant(idx: number, childNode: BuilderNode) {
+		if (node.kind !== 'union') return;
+		const variants = node.variants.map((v, i) => (i === idx ? childNode : v));
+		emitNode({ ...node, variants });
+	}
+
+	// Get the discriminator tag value for a variant (the const-enum value of the
+	// discriminator property) so the UI can label variants meaningfully.
+	function variantTagLabel(variantNode: BuilderNode, discriminator: string): string | null {
+		if (variantNode.kind !== 'object') return null;
+		const field = variantNode.fields.find((f) => f.name === discriminator);
+		if (!field) return null;
+		const fn = field.node;
+		if (fn.kind === 'scalar' && fn.enumValues.length === 1) {
+			return fn.enumValues[0];
+		}
+		return null;
+	}
+
+	// ── Ref-node helpers ──────────────────────────────────────────────────────
+
+	function setRefName(name: string) {
+		if (node.kind !== 'ref') return;
+		emitNode({ ...node, name });
+	}
+
+	// Resolve the referenced definition for preview.
+	const resolvedRefNode = $derived.by(() => {
+		if (node.kind !== 'ref' || !node.name) return null;
+		const defSchema = definitions[node.name];
+		if (defSchema === undefined) return null;
+		return jsonSchemaToSchemaNode(defSchema, definitions);
+	});
+
 	// ── Expanded-section state ────────────────────────────────────────────────
 
 	/** Which fields are expanded to show their child builder. */
@@ -282,6 +378,16 @@
 		if (next.has(name)) next.delete(name);
 		else next.add(name);
 		expandedFields = next;
+	}
+
+	/** Which union variants are expanded. */
+	let expandedVariants = $state<Set<number>>(new Set([0]));
+
+	function toggleVariantExpanded(idx: number) {
+		const next = new Set(expandedVariants);
+		if (next.has(idx)) next.delete(idx);
+		else next.add(idx);
+		expandedVariants = next;
 	}
 
 	/** Whether the meta/constraints section is expanded. */
@@ -380,7 +486,7 @@
 	{:else}
 		<!-- ── Root type selector (depth 0 only) ─────────────────────────── -->
 		{#if _depth === 0}
-			<div class="flex gap-1.5" data-testid="schema-builder-root-kind">
+			<div class="flex flex-wrap gap-1.5" data-testid="schema-builder-root-kind">
 				<button
 					type="button"
 					class="flex-1 rounded-md border px-2 py-1 text-sm transition-colors {rootKind === 'object' ? 'border-primary bg-primary/5 text-foreground' : 'border-border text-muted-foreground hover:bg-accent/30'}"
@@ -405,6 +511,26 @@
 						data-testid="schema-builder-kind-scalar"
 					>
 						Scalar
+					</button>
+				{/if}
+				<button
+					type="button"
+					class="flex-1 rounded-md border px-2 py-1 text-sm transition-colors {rootKind === 'union' ? 'border-primary bg-primary/5 text-foreground' : 'border-border text-muted-foreground hover:bg-accent/30'}"
+					onclick={() => setRootKind('union')}
+					data-testid="schema-builder-kind-union"
+					title="oneOf / anyOf union"
+				>
+					Union
+				</button>
+				{#if definitionNames.length > 0}
+					<button
+						type="button"
+						class="flex-1 rounded-md border px-2 py-1 text-sm transition-colors {rootKind === 'ref' ? 'border-primary bg-primary/5 text-foreground' : 'border-border text-muted-foreground hover:bg-accent/30'}"
+						onclick={() => setRootKind('ref')}
+						data-testid="schema-builder-kind-ref"
+						title="Reference a named definition"
+					>
+						$ref
 					</button>
 				{/if}
 				<button
@@ -508,6 +634,10 @@
 												<span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">object</span>
 											{:else if field.node.kind === 'array'}
 												<span class="rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">array</span>
+											{:else if field.node.kind === 'union'}
+												<span class="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{field.node.combinator}</span>
+											{:else if field.node.kind === 'ref'}
+												<span class="rounded bg-teal-100 px-1.5 py-0.5 font-mono text-xs text-teal-700 dark:bg-teal-900/30 dark:text-teal-300">$ref</span>
 											{:else if field.node.kind === 'scalar'}
 												<span class="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{field.node.type}</span>
 											{/if}
@@ -541,6 +671,7 @@
 												schema={builderNodeToSchema(field.node)}
 												onchange={(s) => updateFieldNode(idx, schemaToBuilderNode(s))}
 												allowRootScalar={true}
+												{definitions}
 												_depth={_depth + 1}
 											/>
 										</div>
@@ -616,6 +747,7 @@
 						schema={builderNodeToSchema(node.items)}
 						onchange={(s) => setArrayItems(schemaToBuilderNode(s))}
 						allowRootScalar={true}
+						{definitions}
 						_depth={_depth + 1}
 					/>
 				</div>
@@ -868,6 +1000,187 @@
 						</div>
 					{/if}
 				</div>
+			</div>
+
+		<!-- ── Union node (oneOf / anyOf) ─────────────────────────────────── -->
+		{:else if node.kind === 'union'}
+			<div class="space-y-2" data-testid="schema-builder-union">
+				<!-- Combinator toggle -->
+				<div class="flex items-center gap-2">
+					<GitMerge class="size-3.5 shrink-0 text-muted-foreground" />
+					<span class="text-xs text-muted-foreground">Combinator</span>
+					<div class="flex gap-1">
+						<button
+							type="button"
+							class="rounded border px-2 py-0.5 font-mono text-xs transition-colors {node.combinator === 'oneOf' ? 'border-primary bg-primary/5 text-foreground' : 'border-border text-muted-foreground hover:bg-accent/30'}"
+							onclick={() => setUnionProp('combinator', 'oneOf')}
+							data-testid="schema-builder-union-oneof"
+						>
+							oneOf
+						</button>
+						<button
+							type="button"
+							class="rounded border px-2 py-0.5 font-mono text-xs transition-colors {node.combinator === 'anyOf' ? 'border-primary bg-primary/5 text-foreground' : 'border-border text-muted-foreground hover:bg-accent/30'}"
+							onclick={() => setUnionProp('combinator', 'anyOf')}
+							data-testid="schema-builder-union-anyof"
+						>
+							anyOf
+						</button>
+					</div>
+					{#if node.discriminator}
+						<span class="ml-auto rounded bg-violet-100 px-1.5 py-0.5 font-mono text-xs text-violet-700 dark:bg-violet-900/30 dark:text-violet-300" title="Discriminator property detected">
+							discriminator: {node.discriminator}
+						</span>
+					{/if}
+				</div>
+
+				<!-- Variants list -->
+				<div class="space-y-1.5" data-testid="schema-builder-union-variants">
+					{#each node.variants as variant, idx (idx)}
+						{@const isExpanded = expandedVariants.has(idx)}
+						{@const tagLabel = node.discriminator ? variantTagLabel(variant, node.discriminator) : null}
+						<div class="rounded-md border border-border/60 bg-background" data-testid="schema-builder-union-variant-{idx}">
+							<div class="flex items-center gap-1.5 p-2">
+								<button
+									type="button"
+									class="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+									onclick={() => toggleVariantExpanded(idx)}
+									aria-label={isExpanded ? 'Collapse variant' : 'Expand variant'}
+									aria-expanded={isExpanded}
+								>
+									{#if isExpanded}
+										<ChevronDown class="size-3.5" />
+									{:else}
+										<ChevronRight class="size-3.5" />
+									{/if}
+								</button>
+								<span class="flex-1 text-xs text-muted-foreground">
+									{#if tagLabel}
+										<span class="font-mono text-foreground">{tagLabel}</span>
+									{:else}
+										Variant {idx + 1}
+									{/if}
+									<span class="ml-1.5 text-muted-foreground/50">({variant.kind})</span>
+								</span>
+								{#if node.variants.length > 1}
+									<button
+										type="button"
+										class="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-destructive"
+										onclick={() => removeUnionVariant(idx)}
+										aria-label="Remove variant"
+										data-testid="schema-builder-union-variant-remove-{idx}"
+									>
+										<Trash2 class="size-3.5" />
+									</button>
+								{/if}
+							</div>
+							{#if isExpanded}
+								<div class="border-t border-border/50 p-2 pl-6">
+									<SchemaBuilder
+										schema={builderNodeToSchema(variant)}
+										onchange={(s) => updateUnionVariant(idx, schemaToBuilderNode(s))}
+										allowRootScalar={true}
+										{definitions}
+										_depth={_depth + 1}
+									/>
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+
+				<!-- Add variant button -->
+				<button
+					type="button"
+					class="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					onclick={addUnionVariant}
+					data-testid="schema-builder-union-add-variant"
+				>
+					<Plus class="size-4" />
+					Add variant
+				</button>
+
+				<!-- Union description -->
+				<div class="rounded-md border border-border/40">
+					<button
+						type="button"
+						class="flex w-full items-center justify-between px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+						onclick={() => (metaExpanded = !metaExpanded)}
+					>
+						<span>Meta</span>
+						{#if metaExpanded}
+							<ChevronDown class="size-3.5" />
+						{:else}
+							<ChevronRight class="size-3.5" />
+						{/if}
+					</button>
+					{#if metaExpanded}
+						<div class="space-y-2.5 border-t border-border/40 px-3 pb-3 pt-2">
+							<div class="space-y-1">
+								<Label class="text-xs text-muted-foreground">Description (optional)</Label>
+								<Input
+									type="text"
+									value={node.description ?? ''}
+									placeholder="What this union represents…"
+									oninput={(e) => setUnionProp('description', (e.currentTarget as HTMLInputElement).value || undefined)}
+								/>
+							</div>
+						</div>
+					{/if}
+				</div>
+			</div>
+
+		<!-- ── $ref node ──────────────────────────────────────────────────── -->
+		{:else if node.kind === 'ref'}
+			<div class="space-y-2" data-testid="schema-builder-ref">
+				<!-- Ref name picker -->
+				<div class="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+					<Link class="size-3.5 shrink-0 text-muted-foreground" />
+					{#if definitionNames.length > 0}
+						<Select.Root
+							type="single"
+							value={node.name}
+							onValueChange={(v) => { if (v) setRefName(v); }}
+						>
+							<Select.Trigger size="sm" class="flex-1">
+								{node.name || 'Select definition…'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each definitionNames as defName (defName)}
+									<Select.Item value={defName} label={defName} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{:else}
+						<!-- No definitions available at this call site. -->
+						<Input
+							type="text"
+							value={node.name}
+							placeholder="definition name"
+							class="flex-1 font-mono text-xs h-7"
+							oninput={(e) => setRefName((e.currentTarget as HTMLInputElement).value)}
+							data-testid="schema-builder-ref-name-input"
+						/>
+						<span class="text-xs text-muted-foreground/60">(no definitions in scope)</span>
+					{/if}
+				</div>
+
+				<!-- Resolved preview -->
+				{#if node.name}
+					{#if resolvedRefNode !== null}
+						<div class="rounded-md border border-border/40 bg-muted/10 px-3 py-2.5">
+							<p class="mb-1.5 text-xs font-medium text-muted-foreground">
+								Preview: <code class="font-mono text-foreground">#{node.name}</code>
+							</p>
+							<SchemaView node={resolvedRefNode} depth={0} />
+						</div>
+					{:else}
+						<p class="flex items-center gap-1.5 text-xs text-muted-foreground/70">
+							<AlertCircle class="size-3 shrink-0" />
+							Definition <code class="font-mono">{node.name}</code> not found in workflow definitions.
+						</p>
+					{/if}
+				{/if}
 			</div>
 		{/if}
 

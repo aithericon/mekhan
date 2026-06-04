@@ -7,7 +7,9 @@ import {
 	type BuilderObjectNode,
 	type BuilderArrayNode,
 	type BuilderScalarNode,
-	type BuilderRawNode
+	type BuilderRawNode,
+	type BuilderUnionNode,
+	type BuilderRefNode
 } from './builder-model';
 
 // ── schemaToBuilderNode ───────────────────────────────────────────────────────
@@ -127,27 +129,92 @@ describe('schemaToBuilderNode', () => {
 		expect(node.kind).toBe('raw');
 	});
 
-	it('$ref → raw node', () => {
+	it('$ref → ref node', () => {
 		const node = schemaToBuilderNode({ $ref: '#/definitions/Foo' });
-		expect(node.kind).toBe('raw');
-		if (node.kind === 'raw') {
-			expect(node.reason).toMatch(/\$ref/);
+		expect(node.kind).toBe('ref');
+		if (node.kind === 'ref') {
+			expect(node.name).toBe('Foo');
 		}
 	});
 
-	it('oneOf → raw node', () => {
-		const node = schemaToBuilderNode({ oneOf: [{ type: 'string' }] });
+	it('$ref #/$defs/ → ref node (normalised to definitions name)', () => {
+		const node = schemaToBuilderNode({ $ref: '#/$defs/Bar' });
+		expect(node.kind).toBe('ref');
+		if (node.kind === 'ref') {
+			expect(node.name).toBe('Bar');
+		}
+	});
+
+	it('external $ref → raw node', () => {
+		const node = schemaToBuilderNode({ $ref: 'https://example.com/schema' });
 		expect(node.kind).toBe('raw');
 	});
 
-	it('anyOf → raw node', () => {
+	it('oneOf → union node', () => {
+		const node = schemaToBuilderNode({ oneOf: [{ type: 'string' }, { type: 'integer' }] });
+		expect(node.kind).toBe('union');
+		if (node.kind === 'union') {
+			expect(node.combinator).toBe('oneOf');
+			expect(node.variants).toHaveLength(2);
+			expect(node.variants[0].kind).toBe('scalar');
+			expect(node.variants[1].kind).toBe('scalar');
+		}
+	});
+
+	it('anyOf → union node', () => {
 		const node = schemaToBuilderNode({ anyOf: [{ type: 'string' }] });
-		expect(node.kind).toBe('raw');
+		expect(node.kind).toBe('union');
+		if (node.kind === 'union') {
+			expect(node.combinator).toBe('anyOf');
+		}
 	});
 
 	it('allOf → raw node', () => {
 		const node = schemaToBuilderNode({ allOf: [{ type: 'string' }] });
 		expect(node.kind).toBe('raw');
+	});
+
+	it('union preserves unmodeled sibling keys across a round-trip', () => {
+		const schema = {
+			title: 'Choice',
+			default: 'a',
+			'x-vendor': { hint: 1 },
+			description: 'pick one',
+			oneOf: [{ type: 'string' }, { type: 'integer' }]
+		};
+		const node = schemaToBuilderNode(schema);
+		expect(node.kind).toBe('union');
+		if (node.kind === 'union') {
+			expect(node.extra).toMatchObject({ title: 'Choice', default: 'a', 'x-vendor': { hint: 1 } });
+			expect(node.description).toBe('pick one');
+		}
+		// Round-trip must not drop the sibling keys.
+		expect(builderNodeToSchema(node)).toEqual(schema);
+	});
+
+	it('oneOf with discriminator → union node with discriminator detected', () => {
+		const node = schemaToBuilderNode({
+			oneOf: [
+				{
+					type: 'object',
+					properties: {
+						flavor: { enum: ['a'] },
+						value: { type: 'string' }
+					}
+				},
+				{
+					type: 'object',
+					properties: {
+						flavor: { enum: ['b'] },
+						count: { type: 'integer' }
+					}
+				}
+			]
+		});
+		expect(node.kind).toBe('union');
+		if (node.kind === 'union') {
+			expect(node.discriminator).toBe('flavor');
+		}
 	});
 
 	it('x-field-kind preserved on scalar', () => {
@@ -194,7 +261,12 @@ describe('schemaToBuilderNode', () => {
 			{ type: 'string', description: desc }
 		]) {
 			const node = schemaToBuilderNode(schema);
-			if (node.kind !== 'raw') {
+			if (
+				node.kind === 'object' ||
+				node.kind === 'array' ||
+				node.kind === 'scalar' ||
+				node.kind === 'union'
+			) {
 				expect(node.description).toBe(desc);
 			}
 		}
@@ -411,6 +483,51 @@ describe('builderNodeToSchema', () => {
 		expect(schema['required']).toEqual(['a', 'z']);
 	});
 
+	it('union node (oneOf) → {oneOf: [...]}', () => {
+		const node: BuilderUnionNode = {
+			kind: 'union',
+			combinator: 'oneOf',
+			variants: [
+				{ kind: 'scalar', type: 'string', nullable: false, enumValues: [] },
+				{ kind: 'scalar', type: 'integer', nullable: false, enumValues: [] }
+			]
+		};
+		const schema = builderNodeToSchema(node) as Record<string, unknown>;
+		expect(schema['oneOf']).toHaveLength(2);
+		const v0 = (schema['oneOf'] as unknown[])[0] as Record<string, unknown>;
+		const v1 = (schema['oneOf'] as unknown[])[1] as Record<string, unknown>;
+		expect(v0['type']).toBe('string');
+		expect(v1['type']).toBe('integer');
+	});
+
+	it('union node (anyOf) → {anyOf: [...]}', () => {
+		const node: BuilderUnionNode = {
+			kind: 'union',
+			combinator: 'anyOf',
+			variants: [{ kind: 'scalar', type: 'boolean', nullable: false, enumValues: [] }]
+		};
+		const schema = builderNodeToSchema(node) as Record<string, unknown>;
+		expect(schema['anyOf']).toBeDefined();
+		expect(schema['oneOf']).toBeUndefined();
+	});
+
+	it('union node with description → emits description', () => {
+		const node: BuilderUnionNode = {
+			kind: 'union',
+			combinator: 'oneOf',
+			variants: [],
+			description: 'A union of types'
+		};
+		const schema = builderNodeToSchema(node) as Record<string, unknown>;
+		expect(schema['description']).toBe('A union of types');
+	});
+
+	it('ref node → {$ref: "#/definitions/<name>"}', () => {
+		const node: BuilderRefNode = { kind: 'ref', name: 'MyType' };
+		const schema = builderNodeToSchema(node) as Record<string, unknown>;
+		expect(schema['$ref']).toBe('#/definitions/MyType');
+	});
+
 	it('fields with empty names are excluded from properties', () => {
 		const node: BuilderObjectNode = {
 			kind: 'object',
@@ -521,10 +638,77 @@ describe('round-trip fidelity', () => {
 		expect(out['description']).toBe('A percentage');
 	});
 
-	it('$ref passes through raw (no mutation)', () => {
+	it('$ref round-trips losslessly (always emits #/definitions/ form)', () => {
 		const schema = { $ref: '#/definitions/SomeType' };
 		const out = roundTrip(schema) as Record<string, unknown>;
 		expect(out['$ref']).toBe('#/definitions/SomeType');
+	});
+
+	it('$ref #/$defs/ normalised to #/definitions/ on round-trip', () => {
+		const schema = { $ref: '#/$defs/SomeType' };
+		const out = roundTrip(schema) as Record<string, unknown>;
+		// The builder normalises to #/definitions/ form.
+		expect(out['$ref']).toBe('#/definitions/SomeType');
+	});
+
+	it('oneOf round-trip: variants + combinator preserved', () => {
+		const schema = {
+			oneOf: [{ type: 'string' }, { type: 'integer' }],
+			description: 'Either a string or int'
+		};
+		const out = roundTrip(schema) as Record<string, unknown>;
+		expect(out['oneOf']).toBeDefined();
+		expect((out['oneOf'] as unknown[]).length).toBe(2);
+		expect(out['description']).toBe('Either a string or int');
+	});
+
+	it('anyOf round-trip: combinator preserved as anyOf', () => {
+		const schema = { anyOf: [{ type: 'boolean' }] };
+		const out = roundTrip(schema) as Record<string, unknown>;
+		expect(out['anyOf']).toBeDefined();
+		expect(out['oneOf']).toBeUndefined();
+	});
+
+	it('discriminated oneOf round-trip preserves discriminator property', () => {
+		const schema = {
+			oneOf: [
+				{
+					type: 'object',
+					properties: {
+						flavor: { enum: ['a'] },
+						value: { type: 'string' }
+					},
+					required: ['flavor']
+				},
+				{
+					type: 'object',
+					properties: {
+						flavor: { enum: ['b'] },
+						count: { type: 'integer' }
+					},
+					required: ['flavor']
+				}
+			]
+		};
+		const out = roundTrip(schema) as Record<string, unknown>;
+		const variants = out['oneOf'] as Record<string, unknown>[];
+		expect(variants).toHaveLength(2);
+		const props0 = variants[0]['properties'] as Record<string, Record<string, unknown>>;
+		expect(props0['flavor']['enum']).toEqual(['a']);
+	});
+
+	it('union with nested objects round-trips correctly', () => {
+		const schema = {
+			oneOf: [
+				{ type: 'object', properties: { name: { type: 'string' } } },
+				{ type: 'array', items: { type: 'string' } }
+			]
+		};
+		const out = roundTrip(schema) as Record<string, unknown>;
+		expect(out['oneOf']).toBeDefined();
+		const variants = out['oneOf'] as Record<string, unknown>[];
+		expect(variants[0]['type']).toBe('object');
+		expect(variants[1]['type']).toBe('array');
 	});
 });
 

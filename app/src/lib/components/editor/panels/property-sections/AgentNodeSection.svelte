@@ -10,6 +10,7 @@
 		type LlmCommonShape
 	} from './shared/LlmCommonFields.svelte';
 	import SchemaBuilder from '$lib/schema/SchemaBuilder.svelte';
+	import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 	import DeploymentSection from './DeploymentSection.svelte';
 	import AssetBindingsSection from './AssetBindingsSection.svelte';
 	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
@@ -307,6 +308,7 @@
 			schema={schemaObj}
 			onchange={handleBuilderChange}
 			allowRootScalar={true}
+			definitions={getWorkflowDefinitions()}
 		/>
 	</div>
 {/if}

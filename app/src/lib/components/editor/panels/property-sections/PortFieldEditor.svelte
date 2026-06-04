@@ -9,6 +9,7 @@
 	import StringListEditor from '../shared/StringListEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import SchemaBuilder from '$lib/schema/SchemaBuilder.svelte';
+	import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 
 	// Editor for a single PortField in a typed Port. Structurally mirrors
 	// InputBlockEditor.svelte (human-task field editor) but operates on the
@@ -211,6 +212,7 @@
 					<SchemaBuilder
 						schema={field.schema ?? (field.kind === 'object' ? {} : { type: 'array' })}
 						onchange={(schema) => onchange({ ...field, schema })}
+						definitions={getWorkflowDefinitions()}
 					/>
 				</div>
 			{/if}
