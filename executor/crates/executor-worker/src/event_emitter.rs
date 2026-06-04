@@ -228,6 +228,14 @@ impl EventStream for StreamContext {
         )
         .await;
     }
+
+    async fn output(&self, name: String, value: serde_json::Value) {
+        self.maybe_emit(
+            EventCategory::Output,
+            StatusDetail::OutputSet { name, value },
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]

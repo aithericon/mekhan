@@ -351,6 +351,14 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // presence-pool routing + capability match + the ROS backend ops are
         // proven live by `just dev ros-up` + `mekhan test`.
         "28-turtle-drive",
+        // 29-turtle-rotate (ROS action + StreamFold) is the same shape as 28:
+        // its ros AutomatedSteps target the `ros_fleet` runner_group via
+        // `deploymentModel.capacity.alias` and carry a `ros` capability
+        // Requirement — neither resolvable by bare `compile_to_air` (empty
+        // KnownResources/capability registry). The presence-pool routing +
+        // capability match + the `send_action_goal` streaming feedback path are
+        // proven live by `just dev ros-up` + `mekhan test`.
+        "29-turtle-rotate",
     ]
     .into_iter()
     .collect();

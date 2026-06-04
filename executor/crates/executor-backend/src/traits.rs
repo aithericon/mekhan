@@ -53,6 +53,20 @@ pub trait EventStream: Send + Sync {
         _usage: LlmUsage,
     ) {
     }
+
+    /// Emit one streamed `OutputSet { name, value }` event mid-execution —
+    /// the in-process equivalent of a child process's per-call
+    /// `set_output(name, value)` (which reaches the net through the IPC
+    /// sidecar). This is the per-chunk streaming path: each call deposits one
+    /// token on the producer's `p_{id}_stream` Signal place (when the
+    /// compiler set `ExecutorBridges.stream_output` for a `stream_output: true`
+    /// node), so a downstream `StreamFold` drains it as a stream chunk.
+    ///
+    /// Default no-op so non-streaming in-process backends (LLM, HTTP, …) are
+    /// unaffected. The ROS action backend calls this once per DISTINCT action
+    /// feedback message. No-op unless the job opted `"output"` into its
+    /// `stream_events` set (the compiler does this for `stream_output: true`).
+    async fn output(&self, _name: String, _value: Value) {}
 }
 
 /// Trait for execution backends. Each backend knows how to execute

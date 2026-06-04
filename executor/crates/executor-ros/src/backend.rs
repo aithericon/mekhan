@@ -142,7 +142,7 @@ impl ExecutionBackend for RosBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let start = Instant::now();
@@ -163,6 +163,30 @@ impl ExecutionBackend for RosBackend {
         .await;
 
         let timeout = Duration::from_millis(resolved.timeout_ms).min(run_context.timeout);
+
+        // SendActionGoal is long-running + streaming: it owns its own cancel
+        // handling (`cancel_action_goal` safe-stop) and uses `event_stream` to
+        // emit each distinct feedback as a streamed OutputSet, so it is NOT run
+        // through the `run_operation` select below.
+        if resolved.operation == RosOperation::SendActionGoal {
+            return match self
+                .run_action_goal(&resolved, event_stream, &cancel, timeout)
+                .await
+            {
+                Ok(action) => Ok(make_action_success(run_context, start, action)),
+                Err(ActionFail::Cancelled) => {
+                    info!("ros action goal cancelled");
+                    Ok(make_cancelled(run_context, start))
+                }
+                Err(ActionFail::TimedOut) => {
+                    info!(timeout_ms = resolved.timeout_ms, "ros action goal timed out");
+                    Ok(make_timed_out(run_context, start))
+                }
+                Err(ActionFail::Error(message)) => {
+                    Ok(make_backend_error(run_context, start, message))
+                }
+            };
+        }
 
         // The whole op (connect + the rosbridge exchange) races cancel + a hard
         // outer timeout so a wedged connection can't outlive the job.
@@ -192,12 +216,6 @@ impl RosBackend {
         resolved: &ResolvedRosConfig,
         timeout: Duration,
     ) -> Result<HashMap<String, Value>, String> {
-        if resolved.operation == RosOperation::SendActionGoal {
-            return Err(
-                "ros SendActionGoal is not implemented yet (action support is P4)".to_string(),
-            );
-        }
-
         let client = RosbridgeClient::connect(&self.ws_url)
             .await
             .map_err(|e| e.to_string())?;
@@ -238,10 +256,170 @@ impl RosBackend {
                 // type's fields at top level, not nested under "message").
                 promote_object_fields(&mut outputs, message);
             }
-            RosOperation::SendActionGoal => unreachable!("handled above"),
+            RosOperation::SendActionGoal => unreachable!("handled in execute()"),
         }
         Ok(outputs)
     }
+
+    /// Run a `send_action_goal` op: dispatch the goal, stream each DISTINCT
+    /// feedback as an `OutputSet { feedback_<i>, { remaining: .. } }` through
+    /// `event_stream` (so it lands on the node's `p_{id}_stream` Signal place
+    /// and flows to a downstream `StreamFold`), await the terminal result, and
+    /// return the per-feedback outputs map + the action `delta`.
+    ///
+    /// The returned `outputs` map contains EXACTLY the N dedup'd feedbacks
+    /// named `feedback_0..feedback_{N-1}`. This is deliberate: the executor
+    /// stamps `stream_count = outputs.len()` on the terminal Completed detail,
+    /// and re-emits one OutputSet per output name at job end — JetStream dedups
+    /// those terminal re-emits against the mid-execution emissions by msg_id
+    /// (`{exec}-output-{name}`), so the downstream `StreamFold(Array)` gather
+    /// barrier expects and receives exactly N feedback chunks. The terminal
+    /// `delta` (the RotateAbsolute result) is carried OUT of the outputs map —
+    /// putting it there would inflate `stream_count` to N+1 and leak a `delta`
+    /// token onto the stream place, corrupting the Array.
+    async fn run_action_goal(
+        &self,
+        resolved: &ResolvedRosConfig,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
+        cancel: &CancellationToken,
+        timeout: Duration,
+    ) -> Result<ActionExecution, ActionFail> {
+        let client = RosbridgeClient::connect(&self.ws_url)
+            .await
+            .map_err(|e| ActionFail::Error(e.to_string()))?;
+
+        // The goal `args` is the goal message body (e.g. `{ theta: 0.2 }`). A
+        // null `fields` is treated as an empty goal.
+        let goal_args = match &resolved.fields {
+            Value::Null => Value::Object(Default::default()),
+            other => other.clone(),
+        };
+
+        let (goal_id, mut feedback_rx, mut result_rx) = client
+            .send_action_goal(
+                &resolved.interface_name,
+                &resolved.interface_type,
+                &goal_args,
+            )
+            .await
+            .map_err(|e| ActionFail::Error(e.to_string()))?;
+
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        let mut feedback_index: usize = 0;
+        // The most recent feedback `values`, used to dedup consecutive-identical
+        // frames (rosbridge emits feedback DUPLICATED — verified live: a 0.2 rad
+        // rotation produced 26 raw frames = 13 distinct `remaining` values).
+        let mut last_feedback: Option<Value> = None;
+
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        // The client drops the feedback sender in the SAME locked section where it
+        // resolves the result oneshot, so on normal completion `feedback_rx` closes
+        // and `result_rx` becomes ready together. A `biased` select polls the
+        // feedback arm first; a closed channel returns `Poll::Ready(None)`
+        // immediately and forever, so without disabling the arm the loop would
+        // hot-spin on `None` and never poll the result → a false timeout. Gate the
+        // feedback arm on this flag and clear it once the channel closes.
+        let mut feedback_open = true;
+
+        loop {
+            tokio::select! { biased;
+                // Cancellation: safe-stop the goal (cancel_action_goal, not a kill)
+                // then surface a Cancelled outcome.
+                _ = cancel.cancelled() => {
+                    let _ = client.cancel_action_goal(&resolved.interface_name, &goal_id).await;
+                    return Err(ActionFail::Cancelled);
+                }
+                _ = &mut deadline => {
+                    let _ = client.cancel_action_goal(&resolved.interface_name, &goal_id).await;
+                    return Err(ActionFail::TimedOut);
+                }
+                // Feedback: dedup consecutive-identical frames, then emit each
+                // DISTINCT one as a streamed OutputSet. Disabled once the channel
+                // closes (see `feedback_open` above).
+                fb = feedback_rx.recv(), if feedback_open => {
+                    match fb {
+                        Some(values) => {
+                            if last_feedback.as_ref() == Some(&values) {
+                                continue; // duplicate consecutive frame — drop
+                            }
+                            last_feedback = Some(values.clone());
+                            let name = format!("feedback_{feedback_index}");
+                            if let Some(es) = event_stream.as_ref() {
+                                es.output(name.clone(), values.clone()).await;
+                            }
+                            outputs.insert(name, values);
+                            feedback_index += 1;
+                        }
+                        // Channel closed — stop polling this arm so the result
+                        // oneshot (or cancel/deadline) can resolve the goal.
+                        None => { feedback_open = false; }
+                    }
+                }
+                // Terminal result resolves the goal.
+                res = &mut result_rx => {
+                    return match res {
+                        Ok(action_result) => {
+                            // GoalStatus 4 == STATUS_SUCCEEDED. 5/6 (aborted/canceled)
+                            // or a `result: false` flag are failures.
+                            if !action_result.ok || action_result.status != 4 {
+                                return Err(ActionFail::Error(format!(
+                                    "ros action goal did not succeed (status={}, ok={}): {}",
+                                    action_result.status, action_result.ok, action_result.values
+                                )));
+                            }
+                            // Drain any feedback that arrived between the last poll
+                            // and the result, deduped, so the stream count is exact.
+                            while let Ok(values) = feedback_rx.try_recv() {
+                                if last_feedback.as_ref() == Some(&values) {
+                                    continue;
+                                }
+                                last_feedback = Some(values.clone());
+                                let name = format!("feedback_{feedback_index}");
+                                if let Some(es) = event_stream.as_ref() {
+                                    es.output(name.clone(), values.clone()).await;
+                                }
+                                outputs.insert(name, values);
+                                feedback_index += 1;
+                            }
+                            Ok(ActionExecution {
+                                outputs,
+                                result: action_result.values,
+                                feedback_count: feedback_index,
+                            })
+                        }
+                        Err(_) => Err(ActionFail::Error(
+                            "rosbridge connection closed before action result".to_string(),
+                        )),
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// Why a `send_action_goal` run ended without a successful result. `execute()`
+/// maps each variant to the matching [`ExecutionOutcome`] (Cancelled / TimedOut /
+/// BackendError) so a deliberately cancelled or timed-out action is reported with
+/// the same semantics as the other ROS ops, not collapsed into a generic failure.
+enum ActionFail {
+    Cancelled,
+    TimedOut,
+    Error(String),
+}
+
+/// The outcome of a `send_action_goal` run.
+struct ActionExecution {
+    /// EXACTLY the N dedup'd feedbacks, named `feedback_0..feedback_{N-1}`.
+    /// This map IS the node's `exec_result.outputs` — its length is the
+    /// `stream_count` the downstream `StreamFold` gather barrier counts on.
+    outputs: HashMap<String, Value>,
+    /// The action Result message (e.g. `{ "delta": .. }` for RotateAbsolute),
+    /// carried OUT of `outputs` so it never inflates `stream_count`.
+    result: Value,
+    /// The number of DISTINCT feedbacks received (== `outputs.len()`).
+    feedback_count: usize,
 }
 
 /// Promote the fields of a rosbridge reply object to top-level entries in the
@@ -394,6 +572,37 @@ fn make_success(
         stderr_tail: None,
         artifact_manifest: None,
         outputs,
+        progress: None,
+        run_dir: Some(run_context.run_dir.clone()),
+        metrics: None,
+        logs: None,
+    }
+}
+
+/// Build the success result for a `send_action_goal` run.
+///
+/// `outputs` is set to EXACTLY the N feedbacks (so `stream_count == N`); the
+/// action `result` (delta) + the feedback count ride `stdout_tail` for
+/// observability. They are intentionally NOT placed in `outputs` — see
+/// [`RosBackend::run_action_goal`]. The downstream demo derives its
+/// instance-result fields from the `StreamFold(Array)` output (the feedback
+/// chunks) rather than from a read-arc into this node's parked envelope.
+fn make_action_success(
+    run_context: &RunContext,
+    start: Instant,
+    action: ActionExecution,
+) -> ExecutionResult {
+    let stdout = format!(
+        "ros send_action_goal ok — {} feedback(s), result {}",
+        action.feedback_count, action.result
+    );
+    ExecutionResult {
+        outcome: ExecutionOutcome::Success,
+        duration: start.elapsed(),
+        stdout_tail: Some(stdout),
+        stderr_tail: None,
+        artifact_manifest: None,
+        outputs: action.outputs,
         progress: None,
         run_dir: Some(run_context.run_dir.clone()),
         metrics: None,
@@ -682,6 +891,55 @@ mod tests {
         outputs.insert("published".into(), Value::Bool(true));
         assert_eq!(outputs.get("published"), Some(&Value::Bool(true)));
         assert_eq!(outputs.len(), 1);
+    }
+
+    /// The action feedback dedup contract: consecutive-identical feedback
+    /// frames collapse to ONE distinct output; non-consecutive repeats are
+    /// kept (they are distinct stream positions). This mirrors the inline
+    /// dedup in `run_action_goal` (rosbridge emits feedback DUPLICATED — a
+    /// 0.2 rad rotation produced 26 raw frames = 13 distinct `remaining`s).
+    fn dedup_consecutive(frames: &[Value]) -> Vec<Value> {
+        let mut out: Vec<Value> = Vec::new();
+        let mut last: Option<&Value> = None;
+        for f in frames {
+            if last == Some(f) {
+                continue;
+            }
+            out.push(f.clone());
+            last = Some(f);
+        }
+        out
+    }
+
+    #[test]
+    fn action_feedback_dedups_consecutive_duplicates() {
+        let r = |v: f64| json!({ "remaining": v });
+        // rosbridge-style duplicated stream: each value emitted twice.
+        let raw = vec![r(0.20), r(0.20), r(0.18), r(0.18), r(0.10), r(0.10), r(0.0), r(0.0)];
+        let distinct = dedup_consecutive(&raw);
+        assert_eq!(distinct.len(), 4, "8 duplicated frames → 4 distinct");
+        assert_eq!(distinct[0], r(0.20));
+        assert_eq!(distinct[3], r(0.0));
+
+        // The N distinct feedbacks map to feedback_0..feedback_{N-1} — which is
+        // exactly `exec_result.outputs` (so stream_count == N).
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        for (i, v) in distinct.iter().enumerate() {
+            outputs.insert(format!("feedback_{i}"), v.clone());
+        }
+        assert_eq!(outputs.len(), 4);
+        assert_eq!(outputs.get("feedback_0"), Some(&r(0.20)));
+        assert_eq!(outputs.get("feedback_3"), Some(&r(0.0)));
+        // delta is NOT an outputs entry (it would inflate stream_count).
+        assert!(!outputs.contains_key("delta"));
+    }
+
+    #[test]
+    fn action_feedback_keeps_non_consecutive_repeats() {
+        let r = |v: f64| json!({ "remaining": v });
+        // A value that recurs after a different value is a distinct position.
+        let raw = vec![r(0.2), r(0.1), r(0.2)];
+        assert_eq!(dedup_consecutive(&raw).len(), 3);
     }
 
     #[test]
