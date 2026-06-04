@@ -2,22 +2,21 @@
 	import { Button } from '$lib/components/ui/button';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 
-	// Low-traffic engine/admin views, grouped out of the main nav. Opens on
-	// hover (the panel is a DOM child of the wrapper, so mouseleave only fires
-	// when the pointer leaves both trigger and panel — no portal hover-gap) and
-	// also toggles on click / closes on Escape for keyboard + touch.
-	const items = [
-		{ href: '/nets', label: 'Engine', testid: 'nav-nets', desc: 'Raw petri nets' },
-		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' },
-		{ href: '/clusters', label: 'Clusters', testid: 'nav-clusters', desc: 'Datacenters + live lease state' },
-		{
-			href: '/admin/capability-types',
-			label: 'Capability Types',
-			testid: 'nav-capability-types',
-			desc: 'Runner requirement registry'
-		}
-	];
+	export type NavMenuItem = { href: string; label: string; testid?: string; desc?: string };
 
+	type Props = {
+		label: string;
+		items: NavMenuItem[];
+		testid?: string;
+		/** Dim the trigger to match low-priority (engine/admin) nav. */
+		muted?: boolean;
+	};
+
+	let { label, items, testid, muted = false }: Props = $props();
+
+	// Opens on hover (the panel is a DOM child of the wrapper, so mouseleave only
+	// fires when the pointer leaves both trigger and panel — no portal hover-gap)
+	// and also toggles on click / closes on Escape for keyboard + touch.
 	let open = $state(false);
 	let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -45,25 +44,27 @@
 	onkeydown={(e) => {
 		if (e.key === 'Escape') open = false;
 	}}
-	data-testid="nav-internals"
+	data-testid={testid}
 >
 	<Button
 		variant="ghost"
 		size="sm"
-		class="gap-1 text-muted-foreground data-[open=true]:bg-accent data-[open=true]:text-foreground"
+		class="gap-1 data-[open=true]:bg-accent data-[open=true]:text-foreground {muted
+			? 'text-muted-foreground'
+			: ''}"
 		data-open={open}
 		aria-haspopup="menu"
 		aria-expanded={open}
 		onclick={() => (open = !open)}
 	>
-		Internals
+		{label}
 		<ChevronDown class="size-3.5 transition-transform duration-150 {open ? 'rotate-180' : ''}" />
 	</Button>
 
 	{#if open}
 		<!-- pt-1 keeps the visible panel detached from the trigger while leaving a
 		     contiguous hover bridge (it's inside the wrapper). -->
-		<div class="absolute top-full left-0 z-50 pt-1" role="menu" aria-label="Internal views">
+		<div class="absolute top-full left-0 z-50 pt-1" role="menu" aria-label={label}>
 			<div class="min-w-56 rounded-md border border-border bg-popover p-1 shadow-md">
 				{#each items as it (it.href)}
 					<a
@@ -74,7 +75,9 @@
 						onclick={() => (open = false)}
 					>
 						<span class="text-sm text-foreground">{it.label}</span>
-						<span class="text-xs text-muted-foreground">{it.desc}</span>
+						{#if it.desc}
+							<span class="text-xs text-muted-foreground">{it.desc}</span>
+						{/if}
 					</a>
 				{/each}
 			</div>

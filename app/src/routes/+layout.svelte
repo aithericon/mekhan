@@ -5,7 +5,7 @@
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { ModeWatcher } from 'mode-watcher';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
-	import InternalNavMenu from '$lib/components/InternalNavMenu.svelte';
+	import NavMenu, { type NavMenuItem } from '$lib/components/NavMenu.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
@@ -14,6 +14,26 @@
 	import { loadNodeTypes } from '$lib/editor/node-registry.svelte';
 
 	let { children } = $props();
+
+	// Data/asset views grouped out of the primary nav.
+	const libraryItems: NavMenuItem[] = [
+		{ href: '/catalogue', label: 'Catalogue', testid: 'nav-catalogue', desc: 'Published outputs & artifacts' },
+		{ href: '/resources', label: 'Resources', testid: 'nav-resources', desc: 'Typed credentials & secrets' },
+		{ href: '/assets', label: 'Assets', testid: 'nav-assets', desc: 'Curated record collections' }
+	];
+
+	// Low-traffic engine/admin views.
+	const internalItems: NavMenuItem[] = [
+		{ href: '/nets', label: 'Engine', testid: 'nav-nets', desc: 'Raw petri nets' },
+		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' },
+		{ href: '/clusters', label: 'Clusters', testid: 'nav-clusters', desc: 'Datacenters + live lease state' },
+		{
+			href: '/admin/capability-types',
+			label: 'Capability Types',
+			testid: 'nav-capability-types',
+			desc: 'Runner requirement registry'
+		}
+	];
 
 	onMount(async () => {
 		// BFF: the backend owns the OIDC callback (302s straight to the SPA),
@@ -46,12 +66,10 @@
 			<Button variant="ghost" size="sm" href="/projects" data-testid="nav-projects">Projects</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
-			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
-			<Button variant="ghost" size="sm" href="/resources" data-testid="nav-resources">Resources</Button>
+			<NavMenu label="Library" items={libraryItems} testid="nav-library" />
 			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
-			<Button variant="ghost" size="sm" href="/assets" data-testid="nav-assets">Assets</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-			<InternalNavMenu />
+			<NavMenu label="Internals" items={internalItems} testid="nav-internals" muted />
 			<div class="ml-auto flex items-center gap-1">
 				{#if auth.isAuthenticated}
 					<WorkspacePicker />
