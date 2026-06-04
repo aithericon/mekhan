@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/Pose",
+    "fieldnames": ["x", "y", "theta", "linear_velocity", "angular_velocity"],
+    "fieldtypes": ["float", "float", "float", "float", "float"],
+    "fieldarraylen": [-1, -1, -1, -1, -1]
+  }
+]

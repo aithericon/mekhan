@@ -1,0 +1,6 @@
+{
+  "path": "ros_fleet",
+  "resource_type": "runner_group",
+  "display_name": "ROS Fleet (dev)",
+  "config": {}
+}

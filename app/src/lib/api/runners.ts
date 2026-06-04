@@ -37,6 +37,9 @@ export type CreateRegistrationTokenRequest =
 export type PaginatedRunners = components['schemas']['PaginatedResponse_RunnerSummary'];
 export type PaginatedRegistrationTokens =
 	components['schemas']['PaginatedResponse_RegistrationTokenSummary'];
+export type RunnerInterfaces = components['schemas']['RunnerInterfaces'];
+export type RunnerInterfaceCatalog = components['schemas']['RunnerInterfaceCatalog'];
+export type InterfaceEntry = components['schemas']['InterfaceEntry'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -141,4 +144,54 @@ export async function revokeRegistrationToken(id: string): Promise<void> {
  */
 export async function getRunnerPresence(): Promise<RunnerPresenceSnapshot[]> {
 	return unwrap(await client.GET('/api/v1/runners/presence', {}));
+}
+
+// ── Interface-catalog endpoint ─────────────────────────────────────────────
+
+/**
+ * GET /api/v1/runners/{id}/interfaces — the runner's self-reported interface
+ * catalog (ROS topics/services/actions). Returns `null` when the runner has
+ * never pushed a catalog (the endpoint replies 404), so callers can render a
+ * friendly empty state instead of treating it as an error.
+ */
+export async function getRunnerInterfaces(id: string): Promise<RunnerInterfaces | null> {
+	const res = await client.GET('/api/v1/runners/{id}/interfaces', {
+		params: { path: { id } }
+	});
+	if (res.response.status === 404) return null;
+	return unwrap(res);
+}
+
+// ── ROS interface aggregation ──────────────────────────────────────────────
+
+/** One runner's ROS interface catalog, tagged with the runner it came from. */
+export interface RosInterfaceSource {
+	runnerId: string;
+	runnerName: string;
+	catalog: RunnerInterfaceCatalog;
+}
+
+/**
+ * List ROS interface catalogs across runners advertising a `ros` capability.
+ *
+ * Pulls the runner list (one page, up to 100), keeps those whose `capabilities`
+ * object carries a `ros` key, then fetches each one's self-reported interface
+ * catalog. Runners that have never pushed a catalog (404 → `null`) are skipped.
+ */
+export async function listRosInterfaces(): Promise<RosInterfaceSource[]> {
+	const { items } = await listRunners({ perPage: 100 });
+	const rosRunners = items.filter(
+		(r) =>
+			r.capabilities &&
+			typeof r.capabilities === 'object' &&
+			'ros' in (r.capabilities as Record<string, unknown>)
+	);
+	const sources = await Promise.all(
+		rosRunners.map(async (r) => {
+			const ifaces = await getRunnerInterfaces(r.id);
+			if (!ifaces) return null;
+			return { runnerId: r.id, runnerName: r.name, catalog: ifaces.catalog };
+		})
+	);
+	return sources.filter((s): s is RosInterfaceSource => s !== null);
 }

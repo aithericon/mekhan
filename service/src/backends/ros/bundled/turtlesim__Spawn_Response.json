@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/Spawn_Response",
+    "fieldnames": ["name"],
+    "fieldtypes": ["string"],
+    "fieldarraylen": [-1]
+  }
+]

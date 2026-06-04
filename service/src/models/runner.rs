@@ -269,6 +269,68 @@ impl From<RunnerRegistrationTokenRow> for RegistrationTokenSummary {
     }
 }
 
+// ── Phase 3 — Runner interface catalog ─────────────────────────────────────
+
+/// One advertised interface entry — a ROS topic/service/action `(name, type)`
+/// pair. The `type` field is renamed `type` on the wire (`type` is a Rust
+/// keyword, so the struct field is `type_`).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct InterfaceEntry {
+    /// Fully-qualified interface name, e.g. `/turtle1/cmd_vel`.
+    pub name: String,
+    /// ROS interface type, e.g. `geometry_msgs/msg/Twist`.
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// Optional raw rosapi message-details typedefs for this interface's
+    /// type(s) — the FLAT ARRAY of `{ type, fieldnames, fieldtypes,
+    /// fieldarraylen }` entries (the root typedef plus every nested typedef
+    /// referenced transitively), byte-identical to the bundled snapshot shape
+    /// in `service/src/backends/ros/bundled/*.json`. The editor copies the
+    /// chosen entry's value into the node config under `interface_typedefs`,
+    /// where the ROS deriver lowers it to a typed `Port` (generalizing port
+    /// derivation to any robot's interfaces, not just the bundled captures).
+    /// Stored verbatim in the JSONB `catalog` column (no migration needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typedefs: Option<serde_json::Value>,
+}
+
+/// The agreed topics/services/actions catalog a runner self-reports. Stored
+/// verbatim as the `catalog` JSONB column on `runner_interfaces`. Each list
+/// defaults to empty so a runner can report a partial surface.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
+pub struct RunnerInterfaceCatalog {
+    #[serde(default)]
+    pub topics: Vec<InterfaceEntry>,
+    #[serde(default)]
+    pub services: Vec<InterfaceEntry>,
+    #[serde(default)]
+    pub actions: Vec<InterfaceEntry>,
+}
+
+/// Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,
+/// self-only. Upserts the runner's single interface row.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct UpsertRunnerInterfacesRequest {
+    /// The full topics/services/actions catalog (write-once-per-push; replaces
+    /// any prior catalog for this runner).
+    pub catalog: RunnerInterfaceCatalog,
+    /// Optional runner-reported catalog version/hash (e.g. a content hash or a
+    /// ROS distro tag).
+    #[serde(default)]
+    pub catalog_version: Option<String>,
+}
+
+/// Response for `GET /api/v1/runners/{id}/interfaces`. 404 when the runner has
+/// never pushed a catalog.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RunnerInterfaces {
+    pub runner_id: Uuid,
+    pub catalog: RunnerInterfaceCatalog,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_version: Option<String>,
+    pub discovered_at: DateTime<Utc>,
+}
+
 // ── Token mint / parse / verify ────────────────────────────────────────────
 
 /// A freshly minted token: the row id, the full plaintext credential

@@ -1115,6 +1115,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         retry_policy,
         output,
         requirements,
+        stream_output,
         ..
     } = &cx.node.data
     else {
@@ -1123,6 +1124,12 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     let label = label.clone();
     let retry_policy = *retry_policy;
     let backend_type = execution_spec.backend_type;
+    // Streaming-output pooled step: mirror the inline path's `stream_output`
+    // side-channel (mint `p_{id}_stream`, opt the executor into `output` events,
+    // plumb it through the lifecycle, surface `stream_count` via
+    // `split_outputs_streaming`, and expose the "stream" handle). Gated on this
+    // flag so a NON-streaming pooled node's AIR stays byte-identical.
+    let stream_output = *stream_output;
     // Capture the authored placement Requirements as a Rhai literal NOW, while we
     // still hold `&cx.node.data` (the `&mut *cx.ctx` reborrow below ends this
     // borrow). Serialized to JSON then lowered to a Rhai map so the presence
@@ -1226,6 +1233,20 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    // Streaming side-channel (mirrors the inline path): a Signal place that the
+    // lifecycle's `log_output` transition copies each executor `set_output`
+    // event onto (one token per call), consumed by a downstream "stream" edge.
+    // Minted at NODE scope so its id is the unprefixed `p_{id}_stream` the
+    // StreamFold consumer's `"stream"` edge targets. `None` (and every
+    // downstream touchpoint below) is skipped for a non-streaming pooled node.
+    let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
+        Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
+    } else {
+        None
+    };
+    // Cloned for the move into the lifecycle `scoped_prefix` closure (the
+    // original is retained for the "stream" handle registration in the tail).
+    let p_stream_bridge = p_stream.clone();
     // `p_error` only when the error handle is wired; otherwise the failure
     // exit releases capacity and then crashes the net via `t_{id}_panic`.
     let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
@@ -1385,13 +1406,12 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process_step: None,
                 catalogue: true,
                 process: true,
-                // TODO(streaming-output): the `stream_output` "stream" handle is
-                // wired only on the plain inline executor path
-                // (`lower_automated_step`). Pooled/leased steps do not yet
-                // expose the stream side-channel — `None` keeps this path
-                // byte-identical. Plumbing `p_{id}_stream` through here would
-                // mirror the inline path exactly.
-                stream_output: None,
+                // Streaming-output pooled step: the lifecycle's `log_output`
+                // transition copies each executor Output event onto this Signal
+                // place (one token per `set_output` call), exactly as on the
+                // inline path. `None` for a non-streaming pooled node keeps the
+                // lifecycle AIR byte-identical.
+                stream_output: p_stream_bridge,
             },
         );
 
@@ -1459,6 +1479,14 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // register/release on.
     let reg_payload = "grant";
     let held_payload = "grant";
+    // Streaming pooled step opts the executor into per-call `output` events so
+    // the lifecycle emits each `set_output` onto `p_{id}_stream` mid-execution
+    // (mirrors the inline `stream_events_rhai`). Byte-identical otherwise.
+    let stream_events_rhai = if stream_output {
+        r#"["metric", "progress", "phase", "log", "output"]"#
+    } else {
+        r#"["metric", "progress", "phase", "log"]"#
+    };
     ctx.transition(format!("t_{id}_acquire"), format!("{label} - Acquire"))
         .auto_input("pending", &p_pending)
         .auto_input("grant", &p_grant_inbox)
@@ -1467,7 +1495,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .auto_output("reg", &p_register_out)
         .auto_output("held", &p_held)
         .logic(format!(
-            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
+            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
         ));
 
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
@@ -1581,11 +1609,25 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .done();
     }
 
-    // Foundation split + port registration tail — identical to the inline path.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    // Foundation split + port registration tail — mirrors the inline path. A
+    // streaming step uses `split_outputs_streaming` so the executor-reported
+    // `stream_count` (end-of-stream item count, carried on the terminal
+    // `completed` token) rides as a TOP-LEVEL leaf on the slim control token —
+    // the StreamFold consumer's `t_close` sizes its counted gather barrier on it.
+    let (data_place_id, p_ctrl) = if stream_output {
+        split_outputs_streaming(ctx, &id, &label, &p_output)
+    } else {
+        split_outputs(ctx, &id, &label, &p_output)
+    };
     let mut output_places = vec![(None, p_ctrl)];
     if let Some(p_error) = p_error {
         output_places.push((Some("error".to_string()), p_error));
+    }
+    // Expose the "stream" handle (the Signal place the lifecycle copies each
+    // Output event onto) so a downstream edge from this node's "stream" port
+    // drains the chunks. Present only for a streaming step.
+    if let Some(p_stream) = p_stream {
+        output_places.push((Some("stream".to_string()), p_stream));
     }
     cx.ports.insert(
         id.clone(),

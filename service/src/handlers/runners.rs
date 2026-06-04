@@ -31,9 +31,9 @@ use crate::models::capability::{load_known_capabilities, validate_caps_against_t
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
     mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
-    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerNatsCreds,
-    RunnerPresenceSnapshot, RunnerRegistrationTokenRow, RunnerRow, RunnerSummary, REG_TOKEN_PREFIX,
-    RUNNER_TOKEN_PREFIX,
+    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerInterfaceCatalog, RunnerInterfaces,
+    RunnerNatsCreds, RunnerPresenceSnapshot, RunnerRegistrationTokenRow, RunnerRow, RunnerSummary,
+    UpsertRunnerInterfacesRequest, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
 };
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
@@ -398,6 +398,121 @@ pub async fn issue_runner_nats_creds(
     Ok(Json(RunnerNatsCreds {
         nats_jwt,
         account_public_key: state.runner_nats_signer.account_public_key().to_string(),
+    }))
+}
+
+// ── b3. Interface catalog (runner-token authed push / human read) ──────────
+
+/// `POST /api/v1/runners/{id}/interfaces` — upsert the runner's self-reported
+/// interface catalog (ROS topics/services/actions). Runner-token authed,
+/// self-only: the principal's subject MUST be `runner:{id}` (same boundary as
+/// heartbeat). One row per runner, keyed on `runner_id`; a repeat push replaces
+/// the catalog and bumps `updated_at` while preserving `discovered_at`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/{id}/interfaces",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    request_body = UpsertRunnerInterfacesRequest,
+    responses(
+        (status = 204, description = "Interface catalog upserted"),
+        (status = 401, description = "Wrong / foreign / revoked runner token", body = ErrorResponse),
+        (status = 404, description = "Runner not found", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn upsert_runner_interfaces(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpsertRunnerInterfacesRequest>,
+) -> Result<StatusCode, ApiError> {
+    // A runner principal may only report interfaces for itself.
+    if user.subject != runner_subject(id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "this token may not report interfaces for that runner",
+        ));
+    }
+
+    // Resolve the runner's workspace from the live row (revoked rows → 404).
+    // This both validates the runner exists and stamps the workspace_id without
+    // trusting anything client-supplied.
+    let workspace_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT workspace_id FROM runners WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let workspace_id = workspace_id.ok_or_else(|| ApiError::not_found("runner not found"))?;
+
+    let catalog = serde_json::to_value(&req.catalog)
+        .map_err(|e| ApiError::internal(format!("could not serialize catalog: {e}")))?;
+
+    // Upsert on the runner_id PK: insert a fresh row, or on conflict replace the
+    // catalog + version and bump updated_at (discovered_at is preserved).
+    sqlx::query(
+        "INSERT INTO runner_interfaces \
+            (runner_id, workspace_id, catalog, catalog_version) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (runner_id) DO UPDATE SET \
+            catalog = EXCLUDED.catalog, \
+            catalog_version = EXCLUDED.catalog_version, \
+            updated_at = NOW()",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .bind(&catalog)
+    .bind(&req.catalog_version)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v1/runners/{id}/interfaces` — read the runner's interface catalog.
+/// Session/human authed + workspace-scoped (same boundary as `get_runner`).
+/// 404 when the runner is absent/foreign OR has never pushed a catalog.
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners/{id}/interfaces",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    responses(
+        (status = 200, description = "Runner interface catalog", body = RunnerInterfaces),
+        (status = 404, description = "Runner not found or no catalog reported", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn get_runner_interfaces(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RunnerInterfaces>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    // Join through the workspace so a foreign-workspace runner's catalog is never
+    // leaked; absence of either the runner-scope match or the catalog row → 404.
+    let row: Option<(serde_json::Value, Option<String>, chrono::DateTime<Utc>)> =
+        sqlx::query_as(
+            "SELECT ri.catalog, ri.catalog_version, ri.discovered_at \
+             FROM runner_interfaces ri \
+             WHERE ri.runner_id = $1 AND ri.workspace_id = $2",
+        )
+        .bind(id)
+        .bind(workspace_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    let (catalog_value, catalog_version, discovered_at) =
+        row.ok_or_else(|| ApiError::not_found("no interface catalog reported for this runner"))?;
+
+    let catalog: RunnerInterfaceCatalog = serde_json::from_value(catalog_value)
+        .map_err(|e| ApiError::internal(format!("stored catalog is malformed: {e}")))?;
+
+    Ok(Json(RunnerInterfaces {
+        runner_id: id,
+        catalog,
+        catalog_version,
+        discovered_at,
     }))
 }
 

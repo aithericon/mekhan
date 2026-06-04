@@ -6,8 +6,9 @@
 	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
 	import PresenceBoard from '$lib/components/fleet/PresenceBoard.svelte';
 	import WorkerPoolBoard from '$lib/components/fleet/WorkerPoolBoard.svelte';
+	import InterfacesCatalog from '$lib/components/fleet/InterfacesCatalog.svelte';
 
-	type Tab = 'runners' | 'board' | 'workers';
+	type Tab = 'runners' | 'board' | 'workers' | 'interfaces';
 	let activeTab = $state<Tab>('runners');
 </script>
 
@@ -58,14 +59,27 @@
 			>
 				Workers
 			</button>
+			<button
+				type="button"
+				onclick={() => (activeTab = 'interfaces')}
+				class="rounded-md px-4 py-1.5 text-sm font-medium transition-colors
+					{activeTab === 'interfaces'
+						? 'bg-background text-foreground shadow-sm'
+						: 'text-muted-foreground hover:text-foreground'}"
+				data-testid="tab-interfaces"
+			>
+				Interfaces
+			</button>
 		</div>
 
 		{#if activeTab === 'runners'}
 			<RunnerList />
 		{:else if activeTab === 'board'}
 			<PresenceBoard />
-		{:else}
+		{:else if activeTab === 'workers'}
 			<WorkerPoolBoard />
+		{:else}
+			<InterfacesCatalog />
 		{/if}
 	</div>
 </div>

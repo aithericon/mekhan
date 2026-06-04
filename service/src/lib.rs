@@ -348,6 +348,15 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // authed, self-only (subject == runner:{id}), same boundary as
         // heartbeat. Mints a fresh user JWT from the stored nats_public_key.
         .routes(routes!(handlers::runners::issue_runner_nats_creds))
+        // Phase 3 — runner interface catalog (ROS topics/services/actions).
+        // POST is runner-token authed, self-only (subject == runner:{id}), same
+        // boundary as heartbeat; GET is session/human authed + workspace-scoped
+        // (same boundary as get_runner). The `{id}/interfaces` literal segment is
+        // registered alongside the other `{id}/...` routes.
+        .routes(routes!(
+            handlers::runners::upsert_runner_interfaces,
+            handlers::runners::get_runner_interfaces
+        ))
         .routes(routes!(
             handlers::runners::get_runner,
             handlers::runners::revoke_runner

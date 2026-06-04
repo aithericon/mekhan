@@ -1,0 +1,30 @@
+{
+  "name": "rotates",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {}
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.feedback_count",
+      "op": "exists"
+    },
+    {
+      "path": "result.value.feedback_count",
+      "op": "gte",
+      "value": 1
+    },
+    {
+      "path": "result.value.rotation_delta",
+      "op": "exists"
+    },
+    {
+      "path": "result.value.final_theta",
+      "op": "exists"
+    }
+  ]
+}

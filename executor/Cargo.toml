@@ -25,6 +25,7 @@ members = [
     "crates/executor-smtp",
     "crates/executor-loki",
     "crates/executor-prometheus",
+    "crates/executor-ros",
 ]
 
 [workspace.package]
@@ -60,6 +61,7 @@ aithericon-executor-python = { path = "crates/executor-python" }
 aithericon-executor-smtp = { path = "crates/executor-smtp" }
 aithericon-executor-loki = { path = "crates/executor-loki" }
 aithericon-executor-prometheus = { path = "crates/executor-prometheus" }
+aithericon-executor-ros = { path = "crates/executor-ros" }
 aithericon-secrets = { path = "../shared/secrets" }
 # Cross-crate backend metadata — the same `&'static [&BackendMeta]` slice
 # the mekhan compiler keys off. Driving `build_executor` from this list
@@ -174,6 +176,13 @@ async-compression = { version = "0.4", features = ["futures-io", "gzip", "zstd"]
 bytes = "1"
 futures = "0.3"
 tower = { version = "0.5", features = ["util"] }
+
+# ROS — rosbridge WebSocket transport (executor-ros backend). The backend speaks
+# the rosbridge JSON protocol directly over tokio-tungstenite: roslibrust's typed
+# API bakes the ROS type name into a compile-time const and can't carry the
+# backend's *runtime* `interface_type`, so a high-level client buys us nothing.
+tokio-tungstenite = "0.17"
+futures-util = "0.3"
 
 # Pool register-as-pool wiring (sub-phase 2.2 C7).
 anyhow = "1"

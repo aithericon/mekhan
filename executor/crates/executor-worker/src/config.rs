@@ -292,10 +292,22 @@ pub struct ExecutorConfig {
     #[serde(default = "default_presence_interval_secs")]
     pub presence_interval_secs: u64,
 
+    /// ROS backend configuration (rosbridge connection — runner-local).
+    ///
+    /// The ROS backend reaches a rosbridge over a WebSocket. Unlike the
+    /// resource-bound query backends, the endpoint is configured on the daemon
+    /// (the runner advertises a reachable rosbridge) rather than bound per-step
+    /// as a workspace resource.
+    /// Config file: `[ros]` section in `executor.toml`.
+    #[serde(default)]
+    pub ros: Option<RosSettings>,
+
     /// Mekhan control-plane base URL (e.g. `https://mekhan.example.com`). Used
     /// by the worker self-enroll path (`worker_reg_token`) to POST
-    /// `/api/v1/workers/enroll` on boot. The CLI runner-enroll subcommands take
-    /// `--url` directly; this field is the daemon-boot worker analog.
+    /// `/api/v1/workers/enroll` on boot, AND by the runner-side ROS interface-
+    /// catalog publish (Phase 3) to POST `/api/v1/runners/{id}/interfaces` (the
+    /// `rnr_` bearer is read from `runner_token_path`). The CLI runner-enroll
+    /// subcommands take `--url` directly; this field is the daemon-boot analog.
     ///
     /// Environment variable: `EXECUTOR_MEKHAN_URL=https://mekhan.example.com`.
     #[serde(default)]
@@ -340,6 +352,24 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_WORKER_REG_TOKEN=wt_...`.
     #[serde(default)]
     pub worker_reg_token: Option<String>,
+}
+
+/// ROS backend connection settings.
+///
+/// A nested struct (not a flat field) so the documented
+/// `EXECUTOR_ROS__WS_URL` env var binds — config-rs uses `__` as the nesting
+/// separator (see the builder's `.separator("__")`), so a flat `ros_ws_url`
+/// field would only catch `EXECUTOR_ROS_WS_URL` and the documented form would
+/// silently no-op. Mirrors [`PythonCacheConfig`] / [`SandboxSettings`].
+///
+/// Environment variable: `EXECUTOR_ROS__WS_URL=ws://host:9090`.
+/// Config file: `[ros]` section in `executor.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RosSettings {
+    /// rosbridge WebSocket URL. When unset the [`ExecutorConfig::ros_ws_url`]
+    /// helper defaults to `ws://localhost:9090` (rosbridge's default port).
+    #[serde(default)]
+    pub ws_url: Option<String>,
 }
 
 /// On-disk runner identity persisted by `aithericon-executor register`.
@@ -700,6 +730,26 @@ impl ExecutorConfig {
     pub fn presence_interval(&self) -> Duration {
         Duration::from_secs(self.presence_interval_secs)
     }
+
+    /// The rosbridge WebSocket URL for the ROS backend, defaulting to
+    /// `ws://localhost:9090` (rosbridge's default port) when unset.
+    pub fn ros_ws_url(&self) -> String {
+        self.ros
+            .as_ref()
+            .and_then(|r| r.ws_url.clone())
+            .unwrap_or_else(|| "ws://localhost:9090".to_string())
+    }
+
+    /// The mekhan base URL for the runner-side catalog publish, or `None` when
+    /// unconfigured (the publish is then skipped, never fatal). Reads the flat
+    /// `mekhan_url` field (shared with the worker self-enroll path) and trims a
+    /// trailing slash so callers can append `/api/v1/...` without doubling it.
+    pub fn mekhan_url(&self) -> Option<String> {
+        self.mekhan_url
+            .clone()
+            .map(|u| u.trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty())
+    }
 }
 
 fn default_base_dir() -> String {
@@ -826,6 +876,7 @@ mod tests {
             runner_id: None,
             runner_token_path: None,
             presence_interval_secs: default_presence_interval_secs(),
+            ros: None,
             mekhan_url: None,
             worker_id: None,
             worker_group: None,

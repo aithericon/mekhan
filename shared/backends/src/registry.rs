@@ -226,6 +226,22 @@ pub const PROMETHEUS_META: BackendMeta = BackendMeta {
     user_authorable: true,
 };
 
+pub const ROS_META: BackendMeta = BackendMeta {
+    backend_type: ExecutionBackendType::Ros,
+    wire_name: "ros",
+    display_name: "ROS",
+    icon: "bot",
+    dispatch_mode: DispatchMode::ExecutorJob,
+    // Inline-only: the rosbridge endpoint is reached in-process from the
+    // executor daemon (like postgres/http/loki/prometheus). No Scheduled
+    // (Nomad/Slurm) toggle.
+    schedulable: false,
+    // The rosbridge connection is runner-local (advertised by the runner),
+    // not a workspace resource — nothing to overlay.
+    resource_channel: ResourceChannel::None,
+    user_authorable: true,
+};
+
 /// Every shipped backend. One entry per [`ExecutionBackendType`] variant;
 /// the conformance test in `mekhan-service` asserts bijection.
 pub static BACKENDS: &[&BackendMeta] = &[
@@ -242,6 +258,7 @@ pub static BACKENDS: &[&BackendMeta] = &[
     &POSTGRES_META,
     &LOKI_META,
     &PROMETHEUS_META,
+    &ROS_META,
 ];
 
 /// Look up the cross-crate metadata for a backend. Returns `None` only if
@@ -274,6 +291,7 @@ mod tests {
             ExecutionBackendType::Postgres,
             ExecutionBackendType::Loki,
             ExecutionBackendType::Prometheus,
+            ExecutionBackendType::Ros,
         ] {
             let m = lookup(bt).unwrap_or_else(|| panic!("BACKENDS missing entry for {bt:?}"));
             assert_eq!(m.wire_name, bt.as_wire_str());

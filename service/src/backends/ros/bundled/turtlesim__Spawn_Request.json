@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/Spawn_Request",
+    "fieldnames": ["x", "y", "theta", "name"],
+    "fieldtypes": ["float", "float", "float", "string"],
+    "fieldarraylen": [-1, -1, -1, -1]
+  }
+]

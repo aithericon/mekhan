@@ -1,0 +1,151 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Turtle Drive",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "teleport",
+      "type": "automated_step",
+      "slug": "teleport",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Teleport to (1,1)",
+        "description": "ROS `call_service` to `/turtle1/teleport_absolute` (`turtlesim/srv/TeleportAbsolute`). Moves the turtle to a known pose (x=1.0, y=1.0, theta=0.0) so the subsequent drive + pose read are deterministic. Runs on a `ros_fleet` runner that satisfies `ros.robot_model == turtlesim`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`). TeleportAbsolute's response is an empty ack, so the derived output port carries only a `published`-style ack — nothing referenced downstream.",
+        "deploymentModel": {
+          "mode": "executor",
+          "capacity": { "alias": "ros_fleet" }
+        },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "turtlesim" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/turtle1/teleport_absolute",
+            "interface_type": "turtlesim/srv/TeleportAbsolute",
+            "fields": { "x": 1.0, "y": 1.0, "theta": 0.0 }
+          }
+        },
+        "output": { "id": "out", "label": "Output", "fields": [] },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "drive",
+      "type": "automated_step",
+      "slug": "drive",
+      "position": { "x": 600, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Drive Forward",
+        "description": "ROS `publish_topic` to `/turtle1/cmd_vel` (`geometry_msgs/Twist`). Publishes a single forward velocity command (linear.x=2.0). turtlesim integrates the command over its timer, advancing the turtle from the teleported origin. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement. publish_topic returns a `{ published: Bool }` ack — the motion is observed via the downstream pose read, not this output.",
+        "deploymentModel": {
+          "mode": "executor",
+          "capacity": { "alias": "ros_fleet" }
+        },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "turtlesim" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "publish_topic",
+            "interface_name": "/turtle1/cmd_vel",
+            "interface_type": "geometry_msgs/Twist",
+            "fields": {
+              "linear": { "x": 2.0, "y": 0, "z": 0 },
+              "angular": { "x": 0, "y": 0, "z": 0 }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "published", "label": "Published", "kind": "bool" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "read_pose",
+      "type": "automated_step",
+      "slug": "read_pose",
+      "position": { "x": 880, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Read Pose",
+        "description": "ROS `await_topic` on `/turtle1/pose` (`turtlesim/Pose`). Blocks for the next pose message turtlesim publishes after the drive command, capturing where the turtle ended up. `await_topic` derives its output port from the message type itself — `turtlesim/Pose` fields land at the TOP LEVEL of the output: `x`, `y`, `theta`, `linear_velocity`, `angular_velocity` (all Number). The End node maps `x`/`y`/`theta` onto the instance result. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement.",
+        "deploymentModel": {
+          "mode": "executor",
+          "capacity": { "alias": "ros_fleet" }
+        },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "turtlesim" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "await_topic",
+            "interface_name": "/turtle1/pose",
+            "interface_type": "turtlesim/Pose",
+            "fields": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "x", "label": "X", "kind": "number" },
+            { "name": "y", "label": "Y", "kind": "number" },
+            { "name": "theta", "label": "Theta", "kind": "number" },
+            { "name": "linear_velocity", "label": "Linear velocity", "kind": "number" },
+            { "name": "angular_velocity", "label": "Angular velocity", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1160, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "final_pose_x", "expression": "read_pose.x" },
+          { "targetField": "final_pose_y", "expression": "read_pose.y" },
+          { "targetField": "final_theta", "expression": "read_pose.theta" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_teleport", "source": "start", "target": "teleport", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_teleport_drive", "source": "teleport", "target": "drive", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_drive_read", "source": "drive", "target": "read_pose", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_read_end", "source": "read_pose", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

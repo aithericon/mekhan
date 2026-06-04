@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/TeleportAbsolute_Request",
+    "fieldnames": ["x", "y", "theta"],
+    "fieldtypes": ["float", "float", "float"],
+    "fieldarraylen": [-1, -1, -1]
+  }
+]

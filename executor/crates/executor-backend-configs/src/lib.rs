@@ -8,6 +8,7 @@ pub mod postgres;
 pub mod process;
 pub mod prometheus;
 pub mod python;
+pub mod ros;
 pub mod smtp;
 
 use serde::de::DeserializeOwned;

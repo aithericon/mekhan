@@ -1831,6 +1831,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{id}/interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/runners/{id}/interfaces` — read the runner's interface catalog.
+         *     Session/human authed + workspace-scoped (same boundary as `get_runner`).
+         *     404 when the runner is absent/foreign OR has never pushed a catalog.
+         */
+        get: operations["get_runner_interfaces"];
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{id}/interfaces` — upsert the runner's self-reported
+         *     interface catalog (ROS topics/services/actions). Runner-token authed,
+         *     self-only: the principal's subject MUST be `runner:{id}` (same boundary as
+         *     heartbeat). One row per runner, keyed on `runner_id`; a repeat push replaces
+         *     the catalog and bumps `updated_at` while preserving `discovered_at`.
+         */
+        post: operations["upsert_runner_interfaces"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/{id}/nats-creds": {
         parameters: {
             query?: never;
@@ -4479,7 +4507,7 @@ export interface components {
          *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki" | "prometheus";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki" | "prometheus" | "ros";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -4920,6 +4948,29 @@ export interface components {
             marking: unknown;
             net_id: string;
             status: string;
+        };
+        /**
+         * @description One advertised interface entry — a ROS topic/service/action `(name, type)`
+         *     pair. The `type` field is renamed `type` on the wire (`type` is a Rust
+         *     keyword, so the struct field is `type_`).
+         */
+        InterfaceEntry: {
+            /** @description Fully-qualified interface name, e.g. `/turtle1/cmd_vel`. */
+            name: string;
+            /** @description ROS interface type, e.g. `geometry_msgs/msg/Twist`. */
+            type: string;
+            /**
+             * @description Optional raw rosapi message-details typedefs for this interface's
+             *     type(s) — the FLAT ARRAY of `{ type, fieldnames, fieldtypes,
+             *     fieldarraylen }` entries (the root typedef plus every nested typedef
+             *     referenced transitively), byte-identical to the bundled snapshot shape
+             *     in `service/src/backends/ros/bundled/*.json`. The editor copies the
+             *     chosen entry's value into the node config under `interface_typedefs`,
+             *     where the ROS deriver lowers it to a typed `Port` (generalizing port
+             *     derivation to any robot's interfaces, not just the bundled captures).
+             *     Stored verbatim in the JSONB `catalog` column (no migration needed).
+             */
+            typedefs?: unknown;
         };
         /**
          * @description Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus
@@ -6685,6 +6736,46 @@ export interface components {
          */
         Role: "system" | "user" | "assistant" | "tool";
         /**
+         * @description Configuration for a single ROS interaction job.
+         *
+         *     Deserialised from `ExecutionSpec.config` at runtime by the executor;
+         *     validated against this shape at compile-time by the mekhan compiler.
+         */
+        RosConfig: {
+            /**
+             * @description The goal / request / message field values.
+             *
+             *     May contain `{{slug.field}}` placeholders resolved at runtime against
+             *     the staged producer envelopes. Defaults to a JSON null when absent.
+             */
+            fields?: unknown;
+            /**
+             * @description The ROS interface name — the topic / service / action name, e.g.
+             *     `"/turtle1/cmd_vel"`. Required.
+             */
+            interface_name: string;
+            /** @description The ROS interface type, e.g. `"geometry_msgs/Twist"`. Required. */
+            interface_type: string;
+            /** @description Which ROS interaction to perform. Defaults to `PublishTopic`. */
+            operation?: components["schemas"]["RosOperation"];
+            /**
+             * Format: int64
+             * @description Per-request timeout in milliseconds. Defaults to 30000.
+             */
+            timeout_ms?: number;
+        };
+        /**
+         * @description Which ROS interaction the step performs.
+         *
+         *     `PublishTopic` (the default) publishes a single message to a topic.
+         *     `CallService` performs a request/response service call. `AwaitTopic`
+         *     blocks for the next message on a topic. `SendActionGoal` dispatches a
+         *     goal to an action server. This is the source of truth for which rosbridge
+         *     op the backend issues.
+         * @enum {string}
+         */
+        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal";
+        /**
          * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
          *     version. The body carries the new config — the type cannot change at
          *     rotation time (`resource_type` is immutable for a logical resource).
@@ -6720,6 +6811,28 @@ export interface components {
             status: string;
             /** Format: uuid */
             workspace_id: string;
+        };
+        /**
+         * @description The agreed topics/services/actions catalog a runner self-reports. Stored
+         *     verbatim as the `catalog` JSONB column on `runner_interfaces`. Each list
+         *     defaults to empty so a runner can report a partial surface.
+         */
+        RunnerInterfaceCatalog: {
+            actions?: components["schemas"]["InterfaceEntry"][];
+            services?: components["schemas"]["InterfaceEntry"][];
+            topics?: components["schemas"]["InterfaceEntry"][];
+        };
+        /**
+         * @description Response for `GET /api/v1/runners/{id}/interfaces`. 404 when the runner has
+         *     never pushed a catalog.
+         */
+        RunnerInterfaces: {
+            catalog: components["schemas"]["RunnerInterfaceCatalog"];
+            catalog_version?: string | null;
+            /** Format: date-time */
+            discovered_at: string;
+            /** Format: uuid */
+            runner_id: string;
         };
         /**
          * @description Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted
@@ -7743,6 +7856,22 @@ export interface components {
             human_answers?: unknown;
             name?: string | null;
             start_tokens?: components["schemas"]["StartToken"][] | null;
+        };
+        /**
+         * @description Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,
+         *     self-only. Upserts the runner's single interface row.
+         */
+        UpsertRunnerInterfacesRequest: {
+            /**
+             * @description The full topics/services/actions catalog (write-once-per-push; replaces
+             *     any prior catalog for this runner).
+             */
+            catalog: components["schemas"]["RunnerInterfaceCatalog"];
+            /**
+             * @description Optional runner-reported catalog version/hash (e.g. a content hash or a
+             *     ROS distro tag).
+             */
+            catalog_version?: string | null;
         };
         /**
          * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
@@ -12576,6 +12705,81 @@ export interface operations {
         responses: {
             /** @description Heartbeat recorded */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong / foreign / revoked runner token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Runner not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_runner_interfaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runner interface catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerInterfaces"];
+                };
+            };
+            /** @description Runner not found or no catalog reported */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upsert_runner_interfaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertRunnerInterfacesRequest"];
+            };
+        };
+        responses: {
+            /** @description Interface catalog upserted */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
