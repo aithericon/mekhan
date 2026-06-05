@@ -5299,32 +5299,34 @@ export interface components {
             pdf?: null | components["schemas"]["PdfSettings"];
         };
         /**
-         * @description A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives
-         *     under [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`
-         *     hoist the claim/grant/register/release handshake to loop scope — ONE
-         *     allocation held across all iterations, released exactly once on exit.
+         * @description A binding to a capacity provider held across a [`WorkflowNodeData::LeaseScope`]:
+         *     EITHER a `datacenter` resource (a leased cluster allocation) OR a `presence`
+         *     `capacity` resource (a single lab runner held exclusively). Its presence makes
+         *     `lower_lease_scope` hoist the claim/grant/register/release handshake to scope
+         *     scope — ONE unit held across the whole interior, released exactly once on exit.
          *
-         *     Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
-         *     `request: Option<Value>` and [`CapacityBinding`] so the existing
-         *     `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
-         *     applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
-         *     with the `Scheduled` lease path the loop body would otherwise inherit
-         *     per-step.
+         *     The `pool` alias resolves through the single dispatch authority
+         *     (`resolve_binding(.., LeaseHolder, ..)` → `axes_for_resource().backend()`): a
+         *     `datacenter` → `Scheduler` backend (`Lease__scheduler`); a presence `capacity`
+         *     → `Presence` backend (`Lease__presence`). The same claim/register/release
+         *     machinery applies to both — only the lease schema + the presence-only
+         *     `requirements` (cap-matching) differ.
          */
         LeaseBinding: {
             /**
-             * @description Claim-schema-shaped request params (`gpu_count`/`gpu_type`/
-             *     `max_duration_secs`); validated against the datacenter kind's
-             *     `claim_schema`. `None` ⇒ the allocator's default placement.
+             * @description Capacity provider alias (workspace alias) the scope holds a unit against —
+             *     a `datacenter` OR a `presence` `capacity`. Resolved at publish to
+             *     `pool-<resource_id>` + the backend's `Lease__<backend>` schema via
+             *     `resolve_binding(.., LeaseHolder, ..)`.
+             */
+            pool: string;
+            /**
+             * @description Claim-schema-shaped request params. For a `datacenter`:
+             *     `gpu_count`/`gpu_type`/`max_duration_secs` (validated against the
+             *     datacenter kind's `claim_schema`). `None` ⇒ the provider's default
+             *     placement.
              */
             request?: unknown;
-            /**
-             * @description `datacenter` resource alias (workspace alias) the loop holds a lease
-             *     against. Resolved at publish to `pool-<resource_id>` + the
-             *     `Lease__scheduler` schema, the same path as `Scheduled.scheduler`
-             *     (`resolve_binding(.., SchedulerLease, ..)`).
-             */
-            scheduler: string;
         };
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
@@ -8678,13 +8680,14 @@ export interface components {
             description?: string | null;
             label: string;
             /**
-             * @description REQUIRED datacenter lease binding (a LeaseScope with no lease is a
-             *     pointless empty container). Reuses [`LeaseBinding`] verbatim — the
-             *     `scheduler` alias resolves via `resolve_binding(..., "datacenter",
-             *     ...)` exactly as the Loop-lease path does — and is NOT `Option`;
-             *     `validate_lease_scope` rejects an empty `scheduler` alias.
+             * @description REQUIRED capacity lease binding (a LeaseScope with no lease is a
+             *     pointless empty container). Reuses [`LeaseBinding`] — the `pool` alias
+             *     resolves via `resolve_binding(..., LeaseHolder, ...)` to a `datacenter`
+             *     (Scheduler backend) OR a `presence` `capacity` (Presence backend) — and
+             *     is NOT `Option`; `validate_lease_scope` rejects an empty `pool` alias.
              */
             lease: components["schemas"]["LeaseBinding"];
+            requirements?: null | components["schemas"]["Requirements"];
             /** @enum {string} */
             type: "lease_scope";
         } | {

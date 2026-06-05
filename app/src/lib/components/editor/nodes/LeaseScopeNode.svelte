@@ -15,12 +15,13 @@
 	// so the resizer never crashes if rendered outside WorkflowCanvas.
 	const reportResize = getContext<ResizeReport | undefined>(RESIZE_REPORT_CONTEXT_KEY);
 
-	// Header reads `<label> · <datacenter alias>`. The alias is the held
-	// allocation's source; an unset alias (freshly dropped) renders as a muted
-	// "no datacenter" prompt that the property panel resolves.
-	let schedulerText = $derived.by(() => {
-		const s = (data.lease?.scheduler ?? '').trim();
-		return s || 'no datacenter';
+	// Header reads `<label> · <pool alias>`. The alias is the held unit's
+	// capacity provider (a datacenter OR a presence runner pool); an unset alias
+	// (freshly dropped) renders as a muted "no pool" prompt the property panel
+	// resolves.
+	let poolText = $derived.by(() => {
+		const s = (data.lease?.pool ?? '').trim();
+		return s || 'no pool';
 	});
 </script>
 
@@ -76,7 +77,7 @@
 	<div class="absolute left-3 right-3 top-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
 		<Lock class="size-4 text-node-lease-scope" />
 		<span>{data.label}</span>
-		<span class="font-mono text-sm opacity-60">· {schedulerText}</span>
+		<span class="font-mono text-sm opacity-60">· {poolText}</span>
 		<div class="ml-auto">
 			<NodeRuntimeBadge nodeId={id} />
 		</div>

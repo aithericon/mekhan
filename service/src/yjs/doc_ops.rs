@@ -590,9 +590,9 @@ mod tests {
         }
     }
 
-    /// A `LeaseScope`'s `lease.scheduler` (the held datacenter alias) MUST
-    /// survive graph→Y.Doc→graph: the editor renders its datacenter picker off
-    /// the Y.Doc, and a drop shows "no datacenter selected" against a seeded
+    /// A `LeaseScope`'s `lease.pool` (the held capacity-provider alias) MUST
+    /// survive graph→Y.Doc→graph: the editor renders its capacity picker off
+    /// the Y.Doc, and a drop shows "no provider selected" against a seeded
     /// demo whose disk fixture set it (same class as the loop-lease Yjs drop).
     #[test]
     fn lease_scope_lease_survives_ydoc_roundtrip() {
@@ -606,9 +606,10 @@ mod tests {
                     label: "GPU Lease".to_string(),
                     description: None,
                     lease: crate::models::template::LeaseBinding {
-                        scheduler: "nomad_dc".to_string(),
+                        pool: "nomad_dc".to_string(),
                         request: None,
                     },
+                    requirements: None,
                 },
                 parent_id: None,
                 width: Some(640.0),
@@ -625,8 +626,8 @@ mod tests {
         match &rt.nodes[0].data {
             WorkflowNodeData::LeaseScope { lease, .. } => {
                 assert_eq!(
-                    lease.scheduler, "nomad_dc",
-                    "lease.scheduler must survive the Y.Doc round-trip (editor picker reads it)"
+                    lease.pool, "nomad_dc",
+                    "lease.pool must survive the Y.Doc round-trip (editor picker reads it)"
                 );
             }
             other => panic!("expected LeaseScope, got {other:?}"),

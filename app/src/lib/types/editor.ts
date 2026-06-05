@@ -159,7 +159,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };
 		case 'lease_scope':
-			return { type: 'lease_scope', label: 'Lease Scope', lease: { scheduler: '' } };
+			return { type: 'lease_scope', label: 'Lease Scope', lease: { pool: '' } };
 		case 'phase_update':
 			return {
 				type: 'phase_update',

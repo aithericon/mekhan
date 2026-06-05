@@ -584,9 +584,16 @@ pub(super) enum DeploymentRole {
     /// `Executor { capacity: { alias } }` — accepts `Tokens` or `Presence`
     /// (platform-owned in-net admission pools).
     ExecutorCapacity,
-    /// `Scheduled { scheduler: alias, .. }` / `LeaseScope` — accepts `Scheduler`
-    /// (a lease against an external allocator, i.e. a `datacenter`).
+    /// `Scheduled { scheduler: alias, .. }` — accepts `Scheduler` ONLY (a lease
+    /// against an external allocator, i.e. a `datacenter`). A standalone cluster
+    /// submit is never presence-backed.
     SchedulerLease,
+    /// `LeaseScope { lease.pool }` — holds ONE unit of capacity across its body.
+    /// Accepts `Scheduler` (a datacenter allocation) OR `Presence` (a single held
+    /// lab runner). Both park a typed lease whose `executor_namespace` the body
+    /// steps inherit by containment (`lease-<grant>` vs `runner.<id>`). Rejects
+    /// `Tokens` (in-net admission, no held namespace) and every non-pool backend.
+    LeaseHolder,
 }
 
 /// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to the
@@ -654,6 +661,11 @@ pub(super) fn resolve_binding(
                 alias: alias.to_string(),
                 backend: label.to_string(),
             },
+            DeploymentRole::LeaseHolder => CompileError::LeaseScopeNotLeasable {
+                node_id: node_id.to_string(),
+                alias: alias.to_string(),
+                backend: label.to_string(),
+            },
         }
     };
 
@@ -689,6 +701,11 @@ pub(super) fn resolve_binding(
             matches!(backend, PoolBackend::Tokens | PoolBackend::Presence)
         }
         DeploymentRole::SchedulerLease => matches!(backend, PoolBackend::Scheduler),
+        // A held lease can be backed by a datacenter alloc OR a presence runner;
+        // a `tokens` concurrency limit has no held namespace and is rejected.
+        DeploymentRole::LeaseHolder => {
+            matches!(backend, PoolBackend::Scheduler | PoolBackend::Presence)
+        }
     };
     if !role_accepts {
         // e.g. a Scheduler-backed alias under Executor.capacity, or a

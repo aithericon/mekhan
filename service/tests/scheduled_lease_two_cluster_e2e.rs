@@ -123,9 +123,10 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 label: format!("Lease Scope ({dc_alias})"),
                 description: None,
                 lease: LeaseBinding {
-                    scheduler: dc_alias.to_string(),
+                    pool: dc_alias.to_string(),
                     request: None,
                 },
+                requirements: None,
             },
             parent_id: None,
             width: None,

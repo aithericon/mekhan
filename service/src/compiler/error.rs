@@ -551,6 +551,29 @@ pub enum CompileError {
         backend: String,
     },
 
+    /// A `LeaseScope.lease.pool` alias resolved to a resource whose dispatch
+    /// backend cannot back a held lease. A LeaseScope holds ONE unit of capacity
+    /// across its body, so it accepts ONLY a `datacenter` (Scheduler — a leased
+    /// cluster allocation) or a presence `capacity` (Presence — a single held
+    /// runner). A `tokens` capacity (a concurrency limit) is in-net admission with
+    /// no held namespace to inherit; a queue / deferred / plain credential is no
+    /// pool at all. `backend` is the human label of the resolved
+    /// [`crate::models::capacity::CapacityBackend`].
+    #[error(
+        "lease scope '{node_id}': lease pool '{alias}' resolves to a {backend} capacity, \
+         which cannot back a held lease — {}",
+        if backend == "tokens" {
+            "a concurrency limit is in-net admission; bind it under Executor.capacity instead"
+        } else {
+            "point `lease.pool` at a datacenter or a presence (instrument) capacity"
+        }
+    )]
+    LeaseScopeNotLeasable {
+        node_id: String,
+        alias: String,
+        backend: String,
+    },
+
     /// A `datacenter` resource declares `scheduler_flavor = "<flavor>"` but is
     /// missing a connection field that flavor requires (slurm needs
     /// `ssh_host` + `ssh_user` + `template_dir`; nomad needs `nomad_addr`;
@@ -898,6 +921,7 @@ impl CompileError {
             Self::AssetBindingAmbiguous { .. } => "asset_binding_ambiguous",
             Self::ResourcePoolNotAPool { .. } => "resource_pool_not_a_pool",
             Self::SchedulerNotADatacenter { .. } => "scheduler_not_a_datacenter",
+            Self::LeaseScopeNotLeasable { .. } => "lease_scope_not_leasable",
             Self::DatacenterConnectionIncomplete { .. } => "datacenter_connection_incomplete",
             Self::SchedulerUnresolved { .. } => "scheduler_unresolved",
             Self::JobTemplateUnresolved { .. } => "job_template_unresolved",
@@ -999,6 +1023,7 @@ impl CompileError {
             | Self::AssetBindingAmbiguous { node_id, .. }
             | Self::ResourcePoolNotAPool { node_id, .. }
             | Self::SchedulerNotADatacenter { node_id, .. }
+            | Self::LeaseScopeNotLeasable { node_id, .. }
             | Self::DatacenterConnectionIncomplete { node_id, .. }
             | Self::SchedulerUnresolved { node_id }
             | Self::JobTemplateUnresolved { node_id, .. }

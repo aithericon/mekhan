@@ -1223,7 +1223,7 @@ mod scope_reachability_tests {
                 "initial":{"id":"in","label":"Intake","fields":[
                   {"name":"rows","label":"Rows","kind":"json","required":true}]}}},
             {"id":"lease","type":"lease_scope","slug":"cell","position":{"x":120,"y":0},
-             "data":{"type":"lease_scope","label":"Cell","lease":{"scheduler":"xarm_fleet"}}},
+             "data":{"type":"lease_scope","label":"Cell","lease":{"pool":"xarm_fleet"}}},
             {"id":"mp","type":"map","slug":"work","parentId":"lease","position":{"x":40,"y":60},
              "data":{"type":"map","label":"Per row","itemsRef":"start.rows","itemVar":"row","resultVar":"done",
                 "output":{"id":"out","label":"Done","fields":[

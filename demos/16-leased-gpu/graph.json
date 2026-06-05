@@ -34,7 +34,7 @@
         "label": "GPU Lease · Nomad",
         "description": "Acquires ONE allocation from the `nomad_dc` datacenter on enter and releases it on exit. Everything inside runs on the held node by CONTAINMENT — the Scheduled body needs no scheduler of its own, it inherits this scope's datacenter. The lease (alloc_id, executor_namespace) is parked write-once so the held drain executor stays warm across every loop iteration. Release happens exactly once at the loop's terminal exit; a held-alloc death fails the run fast.",
         "lease": {
-          "scheduler": "nomad_dc"
+          "pool": "nomad_dc"
         }
       }
     },

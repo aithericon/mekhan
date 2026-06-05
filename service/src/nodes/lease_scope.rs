@@ -76,14 +76,26 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
 
 fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
-    let WorkflowNodeData::LeaseScope { lease, .. } = data else {
+    let WorkflowNodeData::LeaseScope {
+        lease,
+        requirements,
+        ..
+    } = data
+    else {
         unreachable!("lease_scope::yjs_encode on non-LeaseScope variant");
     };
-    // Persist the REQUIRED datacenter lease binding through Yjs, or it is
-    // silently dropped on publish's `doc_to_graph` reconstruction (mirrors the
-    // Loop-lease persistence rationale). Key `lease` matches the serde field
-    // name so `doc_to_graph`'s generic config-merge + `from_value` round-trips
-    // it back into the struct.
+    // Persist the REQUIRED capacity lease binding through Yjs, or it is silently
+    // dropped on publish's `doc_to_graph` reconstruction (mirrors the Loop-lease
+    // persistence rationale). Key `lease` matches the serde field name so
+    // `doc_to_graph`'s generic config-merge + `from_value` round-trips it back
+    // into the struct.
     let lease_val = serde_json::to_value(lease).unwrap_or(serde_json::Value::Null);
     config.insert(txn, "lease", json_value_to_any(&lease_val));
+    // Persist the optional presence-placement Requirements the same way (the
+    // scope picks WHICH runner to hold). Omitted when `None` so a datacenter
+    // lease's config stays clean and `from_value` defaults it back to `None`.
+    if let Some(req) = requirements {
+        let req_val = serde_json::to_value(req).unwrap_or(serde_json::Value::Null);
+        config.insert(txn, "requirements", json_value_to_any(&req_val));
+    }
 }

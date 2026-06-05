@@ -102,13 +102,17 @@ pub fn resolve_scheduler_defaults(
             }
             // ── LeaseScope (docs/17) ──────────────────────────────────────────
             WorkflowNodeData::LeaseScope { lease, .. } => {
-                let node_scheduler = non_blank(&lease.scheduler);
-                if let Some(alias) = node_scheduler {
-                    lease.scheduler = alias.to_string();
+                // A LeaseScope's `pool` may name a `datacenter` OR a presence
+                // `capacity`; an explicit alias always wins (and is REQUIRED by
+                // `validate_lease_scope`). The default-datacenter fallback only
+                // matters for the legacy blank-datacenter case.
+                let node_pool = non_blank(&lease.pool);
+                if let Some(alias) = node_pool {
+                    lease.pool = alias.to_string();
                     continue;
                 }
                 match default_alias {
-                    Some(alias) => lease.scheduler = alias.to_string(),
+                    Some(alias) => lease.pool = alias.to_string(),
                     None => errors.push(CompileError::SchedulerUnresolved {
                         node_id: node.id.clone(),
                     }),
@@ -185,7 +189,7 @@ mod tests {
                     deployment_model: DeploymentModel::Scheduled { scheduler, .. },
                     ..
                 } => scheduler.as_deref(),
-                WorkflowNodeData::LeaseScope { lease, .. } => Some(lease.scheduler.as_str()),
+                WorkflowNodeData::LeaseScope { lease, .. } => Some(lease.pool.as_str()),
                 _ => None,
             })
     }
@@ -242,7 +246,7 @@ mod tests {
             "data": {
                 "type": "lease_scope",
                 "label": "Lease Scope",
-                "lease": { "scheduler": scheduler },
+                "lease": { "pool": scheduler },
             }
         }))
         .expect("lease_scope node fixture")
