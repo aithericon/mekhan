@@ -349,4 +349,104 @@ mod presence_lease_tests {
             "expected a LeaseScopeNotLeasable error, got: {msg}"
         );
     }
+
+    fn transition_ids(air: &serde_json::Value) -> Vec<String> {
+        air.get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array")
+            .iter()
+            .filter_map(|t| t.get("id").and_then(|v| v.as_str()).map(String::from))
+            .collect()
+    }
+
+    fn guard_source(air: &serde_json::Value, transition_id: &str) -> String {
+        let t = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(transition_id))
+            .unwrap_or_else(|| panic!("transition {transition_id} not found"));
+        let g = t.get("guard").unwrap_or(&serde_json::Value::Null);
+        g.get("Rhai")
+            .and_then(|x| x.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| g.get("source").and_then(|s| s.as_str()))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// The pooled INHERIT-BYPASS: a presence-pooled step compiles with a
+    /// `t_<id>_inherit` path guarded on an inherited `_executor_namespace`, while
+    /// `t_<id>_claim` is guarded to the complementary case. This is what lets a
+    /// pooled step (e.g. demo 40's pick/place primitives) run BOTH standalone
+    /// (claim its own unit) AND under a held lease (inherit the held runner, no
+    /// claim → no deadlock). The terminals split on the sentinel held grant_id.
+    #[test]
+    fn pooled_step_compiles_with_inherit_bypass() {
+        let graph: WorkflowGraph = serde_json::from_value(json!({
+          "nodes": [
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Run",
+                "executionSpec":{"backendType":"docker","config":{"image":"python:3.12-slim"}},
+                "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                "deploymentModel":{"mode":"executor","capacity":{"alias":"xarm_fleet"}}}},
+            {"id":"end","type":"end","slug":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"step","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }))
+        .expect("pooled-step graph deser");
+
+        let known = presence_pool_known("xarm_fleet");
+        let known_globals = globals_from_resources(&known);
+        let crate::compiler::CompileArtifacts { air, .. } = compile_to_air_with_options(
+            &graph,
+            "pooled-inherit",
+            "test",
+            &HashMap::new(),
+            CompileOptions {
+                known_globals: &known_globals,
+                ..Default::default()
+            },
+        )
+        .expect("a pooled step must compile");
+
+        let ids = transition_ids(&air);
+        assert!(
+            ids.iter().any(|i| i == "t_step_inherit"),
+            "pooled step must emit the inherit-bypass transition, got: {ids:?}"
+        );
+        // t_claim only fires when NOTHING is inherited; t_inherit only when a
+        // namespace IS inherited — mutually exclusive on the single input token.
+        assert!(
+            guard_source(&air, "t_step_claim").contains("_executor_namespace == ()"),
+            "t_claim must be guarded to the no-inherit case"
+        );
+        assert!(
+            guard_source(&air, "t_step_inherit").contains("_executor_namespace != ()"),
+            "t_inherit must be guarded to the inherited case"
+        );
+        // The bypass dispatches on the inherited namespace, with no claim.
+        assert!(
+            logic_source(&air, "t_step_inherit")
+                .contains("d.executor_namespace = input._executor_namespace"),
+            "t_inherit must stamp the inherited namespace onto the job"
+        );
+        // Terminals split on the sentinel held grant_id so release-exactly-once
+        // holds per path (claim path releases; inherit path does not).
+        assert!(
+            guard_source(&air, "t_step_to_output").contains("held.grant_id != ()"),
+            "the claim-path success terminal must guard on a real held grant"
+        );
+        assert!(
+            guard_source(&air, "t_step_inherit_to_output").contains("held.grant_id == ()"),
+            "the inherit-path success terminal must guard on the sentinel held"
+        );
+    }
 }

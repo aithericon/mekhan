@@ -1304,10 +1304,20 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         )
     };
     // ── t_claim: mint grant_id, emit ClaimRequest, park {input, grant_id} ───
+    // GUARDED on `input._executor_namespace == ()` — the LEASE INHERIT-BYPASS:
+    // when a token arrives carrying an inherited `_executor_namespace` (a child
+    // net spawned under a LeaseScope — see `lower_subworkflow`), this pooled step
+    // must NOT claim its own unit (that unit is HELD by the enclosing lease →
+    // claiming it deadlocks). Instead `t_<id>_inherit` (below) builds the job
+    // directly on the inherited namespace, with no claim/register/release. The
+    // two are mutually exclusive on the single `p_input` token. A normal
+    // (non-inherited) flow has no such leaf, so the guard is true and the claim
+    // path runs exactly as before (token/presence/scheduler all unchanged).
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim"))
         .auto_input("input", &p_input)
         .auto_output("claim", &p_claim_out)
         .auto_output("pending", &p_pending)
+        .guard_rhai("input._executor_namespace == ()")
         .logic(format!(
             r#"let gid = {grant_id_expr}; #{{ claim: {claim_payload}, pending: #{{ input: input, grant_id: gid }} }}"#
         ));
@@ -1423,6 +1433,27 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai}, "channels": {channels_rhai} }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
         ));
 
+    // ── t_inherit: the LEASE INHERIT-BYPASS terminal of t_claim's guard. Fires
+    // when the inbound token carries an inherited `_executor_namespace` — build
+    // the SAME executor job as t_acquire but (a) source it straight from `input`
+    // (no claim/pending/grant round-trip), (b) stamp the INHERITED namespace
+    // (`runner.<id>` / `lease-<grant>` from the enclosing lease) so the job lands
+    // on the held unit, (c) stage NO `lease.json` (there is no grant), and (d)
+    // park a SENTINEL held `{ grant_id: (), unit_id: () }`. The sentinel routes
+    // the shared lifecycle's completion to the no-release inherit terminals
+    // below (`held.grant_id == ()`), so this path never bridges a claim/register/
+    // release — nothing was claimed. The `/*__BORROWED_INPUTS__*/` marker is kept
+    // for parity with t_acquire (Python `<slug>.<field>` staging); ROS bodies use
+    // Tera config templating + inputMapping, so it stays a no-op there.
+    ctx.transition(format!("t_{id}_inherit"), format!("{label} - Inherit Lease"))
+        .auto_input("input", &p_input)
+        .auto_output("job", &exec_inbox)
+        .auto_output("held", &p_held)
+        .guard_rhai("input._executor_namespace != ()")
+        .logic(format!(
+            r#"let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); d.executor_namespace = input._executor_namespace; {job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai}, "channels": {channels_rhai} }}; #{{ job: d, held: #{{ grant_id: (), unit_id: () }} }}"#
+        ));
+
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
     // Success path: lifecycle `completed` + held → output + release. ────────
     //
@@ -1437,7 +1468,28 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .auto_input("held", &p_held)
         .auto_output("output", &p_output)
         .auto_output("release", &p_release_out)
+        // Claim path only (`held.grant_id != ()`): release the held unit. The
+        // inherit-bypass path (sentinel held) routes to `t_<id>_inherit_to_output`
+        // below, which does NOT release (nothing was claimed). Mutually exclusive
+        // on the single {completed, held} pair, so release-exactly-once holds per
+        // path: a claim run releases once; an inherit run never bridges a release.
+        .guard_rhai("held.grant_id != ()")
         .logic(to_output_logic);
+
+    // Inherit-bypass success terminal: no held unit to release. Merge the
+    // sentinel lease for shape parity (a downstream `<slug>.lease.<field>` borrow
+    // resolves against the parked envelope; the sentinel's fields are `()`),
+    // forward the output, and bridge NOTHING to the pool.
+    ctx.transition(
+        format!("t_{id}_inherit_to_output"),
+        format!("{label} - To Output (inherited)"),
+    )
+    .auto_input("done", &handles.completed)
+    .auto_input("held", &p_held)
+    .auto_output("output", &p_output)
+    .guard_rhai("held.grant_id == ()")
+    .logic_rhai(r#"let out = done; out.lease = held; #{ output: out }"#)
+    .done();
 
     // Error path: retries exhausted (the ONLY reachable executor-failure
     // terminal — `dead_letter` is an unreachable lifecycle sink, see
@@ -1450,19 +1502,36 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     let _ = &handles.dead_letter;
     if let Some(p_error) = &p_error {
         // Wired: release capacity AND park the error token for the handler.
+        // Claim path only (`held.grant_id != ()`); the inherit-bypass path takes
+        // `t_<id>_inherit_to_error` below (no release — nothing was claimed).
         ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
             .auto_input("err", &p_exhausted)
             .auto_input("held", &p_held)
             .auto_output("error", p_error)
             .auto_output("release", &p_release_out)
-            .logic(r#"#{ error: err, release: #{ grant_id: held.grant_id } }"#);
+            .guard_rhai("held.grant_id != ()")
+            .logic_rhai(r#"#{ error: err, release: #{ grant_id: held.grant_id } }"#)
+            .done();
+        // Inherit-bypass error terminal: park the error for the handler, NO
+        // release.
+        ctx.transition(
+            format!("t_{id}_inherit_to_error"),
+            format!("{label} - To Error (inherited)"),
+        )
+        .auto_input("err", &p_exhausted)
+        .auto_input("held", &p_held)
+        .auto_output("error", p_error)
+        .guard_rhai("held.grant_id == ()")
+        .logic_rhai(r#"#{ error: err }"#)
+        .done();
     } else {
         // Unwired: release capacity FIRST (every-exit-releases invariant), then
         // crash the net. `t_to_error` consumes {p_exhausted, p_held}, emits the
         // release, and parks the error token into `p_{id}_panic_in`; the
         // separate `t_{id}_panic` then throws (permanent ScriptError → NetFailed).
         // Park-then-throw keeps the release arc intact — capacity is freed
-        // before the unwind.
+        // before the unwind. Claim path only; the inherit-bypass path parks the
+        // panic with NO release (nothing was claimed) but still crashes.
         let p_panic_in: PlaceHandle<DynamicToken> = ctx.state(
             format!("p_{id}_panic_in"),
             format!("{label} - Panic (released, awaiting crash)"),
@@ -1472,7 +1541,19 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             .auto_input("held", &p_held)
             .auto_output("panic", &p_panic_in)
             .auto_output("release", &p_release_out)
-            .logic(r#"#{ panic: err, release: #{ grant_id: held.grant_id } }"#);
+            .guard_rhai("held.grant_id != ()")
+            .logic_rhai(r#"#{ panic: err, release: #{ grant_id: held.grant_id } }"#)
+            .done();
+        ctx.transition(
+            format!("t_{id}_inherit_to_error"),
+            format!("{label} - To Error (inherited)"),
+        )
+        .auto_input("err", &p_exhausted)
+        .auto_input("held", &p_held)
+        .auto_output("panic", &p_panic_in)
+        .guard_rhai("held.grant_id == ()")
+        .logic_rhai(r#"#{ panic: err }"#)
+        .done();
 
         let msg = format!("pooled step '{label}' failed and no error handler is wired");
         ctx.transition(
