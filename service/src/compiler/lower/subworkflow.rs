@@ -37,6 +37,39 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
 
+    // Lease propagation (runner-based lease): a SubWorkflow nested in a lease
+    // holder spawns a child net whose steps can't see the parent's LeaseScope
+    // (the child is an INDEPENDENT net — `enclosing_leased_scope_slug` walks the
+    // PARENT graph). So we thread the held unit's namespace INTO the child as a
+    // `_executor_namespace` leaf on the spawn `initial_token`: the `_`-prefix
+    // makes it survive the spawn → child Start fork → child body verbatim, and a
+    // child net's plain executor steps honor it over their group default (see
+    // `lower_automated_step`'s default ns-frag). The value is the holder's parked
+    // `<holder>.lease.executor_namespace` (a datacenter's warm drain executor OR a
+    // presence runner's `runner.<id>`), borrowed via the SAME read-arc the
+    // `guard_readarc_plan` SubWorkflow arm registers — `apply_guard_borrows`
+    // rewrites `<holder>.lease.executor_namespace` → `d_<holder>.lease.…` and
+    // wires a read-arc into the holder's parked data place. Empty when not nested
+    // in a lease (the byte-identical no-lease path). Guarded on `__ci` being a map
+    // (a SubWorkflow's initial_token always is).
+    // Two propagation cases (a child net can be nested arbitrarily deep —
+    // demo 40's swap spawns a child that itself spawns pick/place):
+    //   (1) DIRECTLY under a LeaseScope → read the held namespace from the
+    //       parked lease (`<holder>.lease.executor_namespace`), since the Map
+    //       scatter that produced this body token did NOT carry the `_`-leaf.
+    //   (2) NOT under a lease, but the inbound token already carries an inherited
+    //       `_executor_namespace` (this IS a child net spawned under a lease, one
+    //       or more levels up) → PASS IT THROUGH. This is what threads the held
+    //       namespace into a grandchild net.
+    let ns_inherit_frag =
+        match crate::compiler::lower::automated_step::enclosing_leased_scope_slug(cx.node, cx.graph)
+        {
+            Some(holder) => format!(
+                r#" if type_of(__ci) == "map" {{ __ci._executor_namespace = {holder}.lease.executor_namespace; }}"#
+            ),
+            None => r#" if type_of(__ci) == "map" && input._executor_namespace != () { __ci._executor_namespace = input._executor_namespace; }"#.to_string(),
+        };
+
     // Rust panic/Result model (see lower_automated_step): a WIRED error handle
     // routes child failure to a handler; an UNWIRED handle crashes the net
     // (panic → NetFailed) rather than stranding the failure token in a dead-end
@@ -194,7 +227,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         .auto_input("input", &p_input)
         .auto_output("spawn_request", &p_request)
         .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+            r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }}{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
         )))
         .done();
     } else {
@@ -205,7 +238,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         .auto_input("input", &p_input)
         .auto_output("spawn_request", &p_request)
         .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr}); #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+            r#"{im_lets}let __ci = ({init_expr});{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
         )))
         .done();
     }

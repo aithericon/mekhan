@@ -1274,6 +1274,48 @@ mod scope_reachability_tests {
             scope.iter().map(|e| &e.path).collect::<Vec<_>>()
         );
     }
+
+    /// Lease propagation: a SubWorkflow nested in a LeaseScope registers a
+    /// read-arc into the scope's parked lease for `<scope>.lease.executor_namespace`
+    /// — the synthetic borrow `lower_subworkflow` injects into `t_<id>_shape` to
+    /// thread the held unit's namespace (`_executor_namespace`) into the spawned
+    /// child net. Without it, a child net's steps would land on their own group
+    /// instead of the held runner / warm executor.
+    #[test]
+    fn subworkflow_in_lease_scope_borrows_held_namespace() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"lease","type":"lease_scope","slug":"cell","position":{"x":120,"y":0},
+             "data":{"type":"lease_scope","label":"Cell","lease":{"pool":"xarm_fleet"}}},
+            {"id":"sub","type":"sub_workflow","slug":"sub","parentId":"lease","position":{"x":40,"y":60},
+             "data":{"type":"sub_workflow","label":"Do","templateId":"00000000-0000-0000-0000-0000000000aa"}},
+            {"id":"end","type":"end","slug":"end","position":{"x":420,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e0","source":"start","target":"lease","targetHandle":"in","type":"sequence"},
+            {"id":"e1","source":"lease","sourceHandle":"body_in","target":"sub","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"sub","target":"lease","targetHandle":"body_out","type":"sequence"},
+            {"id":"e3","source":"lease","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser lease-subworkflow graph");
+
+        let binds = guard_readarc_plan(&g, &Default::default())
+            .expect("the lease-namespace borrow must resolve");
+        assert!(
+            binds.iter().any(|b| b.consumer_node_id == "sub"
+                && b.referenced == "cell.lease.executor_namespace"
+                && b.producer_node == "lease"),
+            "SubWorkflow must read-arc the held lease namespace from the enclosing scope, got {:?}",
+            binds
+                .iter()
+                .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 /// A schema-override port (`PortField.schema`) must be drillable on the

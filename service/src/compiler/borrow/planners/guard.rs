@@ -915,11 +915,27 @@ pub(crate) fn guard_readarc_plan(
             // strips of the Start leaves, so only a parked-producer read-arc
             // reaches them. `apply_guard_borrows` walks `t_{id}_*` (incl.
             // `t_{id}_shape`) and rewrites `<slug>.<field>` → `d_<slug>.<field>`.
-            WorkflowNodeData::SubWorkflow { input_mapping, .. } => input_mapping
-                .iter()
-                .map(|m| m.expression.clone())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
+            WorkflowNodeData::SubWorkflow { input_mapping, .. } => {
+                let mut srcs: Vec<String> = input_mapping
+                    .iter()
+                    .map(|m| m.expression.clone())
+                    .filter(|s| !s.trim().is_empty())
+                    .collect();
+                // A SubWorkflow nested in a lease holder propagates the held
+                // unit's namespace INTO the spawned child net: `lower_subworkflow`
+                // injects `__ci._executor_namespace =
+                // <holder_slug>.lease.executor_namespace;` into `t_{id}_shape`, so
+                // the `_executor_namespace` leaf threads through the child and its
+                // plain executor steps inherit the held runner / warm executor.
+                // Synthesize the SAME dotted ref so the read-arc pipeline wires a
+                // read-arc into the holder's parked `p_<holder>_data` and rewrites
+                // the dotted text — identical mechanism to a leased body step's
+                // `executor_namespace` borrow. No enclosing holder ⇒ no fragment.
+                if let Some(holder_slug) = lease_holder_slug(node, graph) {
+                    srcs.push(format!("{holder_slug}.lease.executor_namespace"));
+                }
+                srcs
+            }
             // Delay/Timeout `durationMsExpr` is embedded verbatim in the
             // `t_{id}_prep` transition logic, so it borrows upstream
             // `<slug>.<field>` refs exactly like a Loop condition does.
@@ -953,28 +969,38 @@ pub(crate) fn guard_readarc_plan(
                 }
                 vec![items_ref.clone()]
             }
-            // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease
-            // holder (a LeaseScope or a leased Loop) ENQUEUES to the lease
-            // namespace (it lowers via the EXECUTOR path, not a separate cluster dispatch).
-            // `lower_automated_step` injects
+            // An AutomatedStep nested in a lease holder (a LeaseScope or a leased
+            // Loop) ENQUEUES to the held unit's namespace — implicit by
+            // containment. `lower_automated_step` (the INLINE path) injects
             // `d.executor_namespace = <holder_slug>.lease.executor_namespace;`
-            // into the `t_<id>_prepare` logic; we synthesize the SAME dotted
-            // source here so the standard read-arc pipeline wires a read-arc into
-            // the holder's parked `p_<holder>_data` and rewrites the dotted text
-            // to `d_<holder>.lease.executor_namespace`. `resolve_ref`'s
-            // Loop/LeaseScope branch resolves `<holder>.lease.executor_namespace`
-            // via `resolves_under_opaque` (the parked `<holder>.lease` is `Any`),
-            // returning a `Borrow` — no new BorrowSource, no new apply arm. The
-            // enclosure decides (there is no per-step flag):
-            // `enclosing_leased_scope_slug` walks the `parent_id` chain. No
-            // enclosing holder ⇒ the lowering injects nothing, so we emit nothing.
+            // into the `t_<id>_prepare` logic for any step that lowers inline
+            // under a lease: a `Scheduled` body (a datacenter lease's drain
+            // executor) OR a plain `Executor { capacity: None }` body (the
+            // runner-based lease — a held lab runner). A POOLED step
+            // (`Executor { capacity: Some }`) does NOT take the inline path (it
+            // claims its own unit via the grant namespace), so it gets no borrow
+            // and would deadlock against the held unit — not supported. We
+            // synthesize the SAME dotted source for the inline cases so the
+            // read-arc pipeline wires a read-arc into the holder's parked
+            // `p_<holder>_data` and rewrites the dotted text to
+            // `d_<holder>.lease.executor_namespace`. `resolve_ref`'s
+            // Loop/LeaseScope branch resolves it via `resolves_under_opaque` (the
+            // parked `<holder>.lease` is `Any`) → `Borrow`; no new BorrowSource.
             WorkflowNodeData::AutomatedStep {
-                deployment_model: crate::models::template::DeploymentModel::Scheduled { .. },
-                ..
-            } => match lease_holder_slug(node, graph) {
-                Some(holder_slug) => vec![format!("{holder_slug}.lease.executor_namespace")],
-                None => continue,
-            },
+                deployment_model, ..
+            } => {
+                let inline_under_lease = matches!(
+                    deployment_model,
+                    crate::models::template::DeploymentModel::Scheduled { .. }
+                        | crate::models::template::DeploymentModel::Executor { capacity: None, .. }
+                );
+                match (inline_under_lease, lease_holder_slug(node, graph)) {
+                    (true, Some(holder_slug)) => {
+                        vec![format!("{holder_slug}.lease.executor_namespace")]
+                    }
+                    _ => continue,
+                }
+            }
             _ => continue,
         };
         let in_shape = report.node_in.get(&node.id);

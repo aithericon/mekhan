@@ -279,17 +279,28 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         None => {
             // Default inline worker body: stamp the per-backend GROUP namespace
             // `executor-<wire>-grp/<partition>` so the engine routes to the
-            // group's partition on the parallel `executor-<wire>-grp` stream. A
-            // static literal — no borrow ref. We've necessarily reached this code
-            // with an `ExecutorJob` backend (the `EngineEffect` arm above
-            // early-returns via `lower_engine_effect` before any job-token build),
-            // so the DispatchMode gate is STRUCTURAL.
+            // group's partition on the parallel `executor-<wire>-grp` stream. We've
+            // necessarily reached this code with an `ExecutorJob` backend (the
+            // `EngineEffect` arm above early-returns via `lower_engine_effect`
+            // before any job-token build), so the DispatchMode gate is STRUCTURAL.
             //
             // `<partition>` is the worker group's capacity-resource UUID (the
             // step's named group, or the workspace's `default` group). There is no
             // bare `executor-<wire>` dispatch path any more — every job is grouped.
+            //
+            // LEASE PROPAGATION (runner-based lease): if the inbound token carries
+            // an INHERITED `_executor_namespace` leaf, honor it over the group
+            // default. A `LeaseScope` over a presence runner parks
+            // `runner.<id>`, and a SubWorkflow nested in that scope injects it as
+            // `_executor_namespace` onto the spawned child's token; the `_`-prefix
+            // makes it thread through the child verbatim, so a child net's plain
+            // executor steps land on the SAME held runner. Absent the leaf (every
+            // non-lease flow), the else-branch is the unchanged group default —
+            // runtime-identical, only the AIR text gains the conditional. `input`
+            // is the bound prepare input, so this stays on the eager `logic()`
+            // path (no unbound root var, unlike the leased borrow branch).
             format!(
-                r#" d.executor_namespace = "{ns}";"#,
+                r#" if input._executor_namespace != () {{ d.executor_namespace = input._executor_namespace; }} else {{ d.executor_namespace = "{ns}"; }}"#,
                 ns = backend_type.executor_namespace_for_group(&step_group_partition)
             )
         }
