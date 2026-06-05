@@ -473,11 +473,37 @@ impl NomadAllocatorClient {
             task["Env"] = JsonValue::Object(env);
         }
 
+        // P3 residency + service shaping. Every value below resolves to the
+        // EXACT current literal when its Option is None/absent, so a default
+        // (no-residency, batch) spec renders the byte-identical job the
+        // lease-executor emits today.
+        //
+        // Datacenters: a non-empty `residency_zone` drives the datacenter list;
+        // absent ⇒ today's `["dc1"]`. (The load-bearing residency pin is the
+        // `${meta.compliance_zone}` Constraint emitted below — the Datacenters
+        // swap is doc-29-specified but only correct if the zone IS a valid Nomad
+        // datacenter name; see the module risk note.)
+        let datacenters = match spec.residency_zone.as_deref().filter(|s| !s.is_empty()) {
+            Some(z) => json!([z]),
+            None => json!(["dc1"]),
+        };
+        // Type + Count. `job_type == "service"` flips Type to "service" and lets
+        // `replicas` drive Count; ANY other value (incl. None / "batch") ⇒ the
+        // batch literals. `replicas` is read ONLY on the service path, so a stray
+        // value on a batch spec cannot perturb the byte-stable batch render.
+        let is_service = spec.job_type.as_deref() == Some("service");
+        let job_type = if is_service { "service" } else { "batch" };
+        let count = if is_service {
+            spec.replicas.filter(|n| *n > 0).unwrap_or(1)
+        } else {
+            1
+        };
+
         let mut job = json!({
             "ID": args.slug,
             "Name": args.slug,
-            "Type": "batch",
-            "Datacenters": ["dc1"],
+            "Type": job_type,
+            "Datacenters": datacenters,
             "ParameterizedJob": {
                 "Payload": "optional",
                 "MetaRequired": [],
@@ -485,12 +511,24 @@ impl NomadAllocatorClient {
             },
             "TaskGroups": [{
                 "Name": "main",
-                "Count": 1,
+                "Count": count,
                 "RestartPolicy": { "Attempts": 0, "Mode": "fail" },
                 "ReschedulePolicy": { "Attempts": 0 },
                 "Tasks": [task],
             }],
         });
+
+        // Residency pin: a node Constraint on `${meta.compliance_zone}`, mirroring
+        // the GPU-Device `if let Some(...).filter(non-empty)` idiom above. Inserted
+        // ONLY when a zone is present, so the None path adds no `Constraints` key
+        // at all — the job map stays byte-identical to today (today emits none).
+        if let Some(zone) = spec.residency_zone.as_deref().filter(|s| !s.is_empty()) {
+            job["Constraints"] = json!([{
+                "LTarget": "${meta.compliance_zone}",
+                "Operand": "=",
+                "RTarget": zone,
+            }]);
+        }
 
         // v1 escape hatch: an `hcl_stanza` is advisory only (we register typed
         // JSON, not HCL). Record it so the author intent is visible/diagnosable
@@ -856,6 +894,178 @@ mod tests {
         assert_eq!(task["Driver"], "docker");
         assert_eq!(task["Config"]["image"], "py:3.12");
         assert_eq!(task["Env"]["FOO"], "bar");
+    }
+
+    #[tokio::test]
+    async fn render_default_spec_is_byte_identical_batch() {
+        // The hard P3 regression guard: a default StageSpec (residency_zone /
+        // replicas / job_type all None) — exactly what mekhan's build_staging_net
+        // seeds today — must render the byte-identical batch lease-executor job.
+        // We pin the WHOLE Job object against a golden literal so any incidental
+        // key drift (a stray Constraints:null, a reordered Count, …) fails.
+        let client = client_for("http://127.0.0.1:1"); // never dialed; render is pure.
+        let args = StageTemplateArgs {
+            slug: "train-job".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                cpus: Some(4),
+                gpus: Some(2),
+                gpu_type: Some("a100".to_string()),
+                mem_mb: Some(8192),
+                image: Some("py:3.12".to_string()),
+                entrypoint: Some("python run.py".to_string()),
+                env: std::iter::once(("FOO".to_string(), "bar".to_string())).collect(),
+                // residency_zone / replicas / job_type all default to None.
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+
+        let rendered = client.render_parameterized_job(&args);
+
+        // Golden Job: the EXACT shape the pre-P3 renderer emits for this spec.
+        // Type=="batch", Datacenters==["dc1"], Count==1, and NO Constraints key.
+        let golden = json!({
+            "ID": "train-job",
+            "Name": "train-job",
+            "Type": "batch",
+            "Datacenters": ["dc1"],
+            "ParameterizedJob": {
+                "Payload": "optional",
+                "MetaRequired": [],
+                "MetaOptional": [
+                    "petri_net_id",
+                    "petri_place",
+                    "petri_signal_key",
+                    "petri_signal_running",
+                    "petri_signal_completed",
+                    "petri_signal_failed",
+                ],
+            },
+            "TaskGroups": [{
+                "Name": "main",
+                "Count": 1,
+                "RestartPolicy": { "Attempts": 0, "Mode": "fail" },
+                "ReschedulePolicy": { "Attempts": 0 },
+                "Tasks": [{
+                    "Name": "petri-worker",
+                    "Driver": "docker",
+                    "Config": { "image": "py:3.12", "command": "sh", "args": ["-c", "python run.py"] },
+                    "Resources": {
+                        "CPU": 4,
+                        "MemoryMB": 8192,
+                        "Devices": [{ "Name": "a100", "Count": 2 }],
+                    },
+                    "Env": { "FOO": "bar" },
+                }],
+            }],
+        });
+
+        assert_eq!(
+            rendered["Job"], golden,
+            "default spec must render byte-identical batch job: {rendered:#}"
+        );
+        // Belt-and-suspenders: no Constraints key on the None-residency path.
+        assert!(
+            rendered["Job"].get("Constraints").is_none(),
+            "no Constraints key on default spec: {rendered:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn render_residency_zone_pins_datacenter_and_constraint() {
+        let client = client_for("http://127.0.0.1:1");
+        let args = StageTemplateArgs {
+            slug: "eu-job".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                residency_zone: Some("eu-west".to_string()),
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+
+        let rendered = client.render_parameterized_job(&args);
+        let job = &rendered["Job"];
+
+        assert_eq!(job["Datacenters"], json!(["eu-west"]));
+        assert_eq!(
+            job["Constraints"],
+            json!([{
+                "LTarget": "${meta.compliance_zone}",
+                "Operand": "=",
+                "RTarget": "eu-west",
+            }])
+        );
+        // Residency does not change the batch defaults.
+        assert_eq!(job["Type"], "batch");
+        assert_eq!(job["TaskGroups"][0]["Count"], 1);
+
+        // An EMPTY zone string falls back to the byte-stable default (no
+        // Datacenters=[""] / meaningless Constraint).
+        let empty_args = StageTemplateArgs {
+            slug: "empty-job".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                residency_zone: Some(String::new()),
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+        let empty = client.render_parameterized_job(&empty_args);
+        assert_eq!(empty["Job"]["Datacenters"], json!(["dc1"]));
+        assert!(empty["Job"].get("Constraints").is_none());
+    }
+
+    #[tokio::test]
+    async fn render_service_type_sets_type_and_count() {
+        let client = client_for("http://127.0.0.1:1");
+
+        // service + replicas ⇒ Type=="service", Count==replicas.
+        let svc = StageTemplateArgs {
+            slug: "svc-job".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                job_type: Some("service".to_string()),
+                replicas: Some(3),
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+        let r = client.render_parameterized_job(&svc);
+        assert_eq!(r["Job"]["Type"], "service");
+        assert_eq!(r["Job"]["TaskGroups"][0]["Count"], 3);
+
+        // service + replicas None ⇒ Count 1.
+        let svc_default = StageTemplateArgs {
+            slug: "svc-default".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                job_type: Some("service".to_string()),
+                replicas: None,
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+        let rd = client.render_parameterized_job(&svc_default);
+        assert_eq!(rd["Job"]["Type"], "service");
+        assert_eq!(rd["Job"]["TaskGroups"][0]["Count"], 1);
+
+        // replicas on a BATCH spec (job_type None) is ignored: Type stays
+        // "batch", Count stays 1 — replicas never perturbs the batch render.
+        let batch_with_replicas = StageTemplateArgs {
+            slug: "batch-stray".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                job_type: None,
+                replicas: Some(3),
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+        let bw = client.render_parameterized_job(&batch_with_replicas);
+        assert_eq!(bw["Job"]["Type"], "batch");
+        assert_eq!(bw["Job"]["TaskGroups"][0]["Count"], 1);
     }
 
     #[tokio::test]

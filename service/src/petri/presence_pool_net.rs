@@ -170,6 +170,13 @@ mod tests {
             .unwrap_or_else(|| t["logic"].to_string())
     }
 
+    fn guard_src(t: &serde_json::Value) -> String {
+        t["guard"]["source"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| t["guard"].to_string())
+    }
+
     /// The presence pool shares the EXACT cross-net contract (inbox names, grant
     /// reply channel) with the token pool, plus the NEW presence_acquire bridge_in
     /// + presence_expired signal + fail_outbox channel. Net name is `pool-<id>`.
@@ -217,8 +224,10 @@ mod tests {
         );
     }
 
-    /// `t_presence_acquire` admits a runner as ONE pool unit `{ unit_id:
-    /// runner_id, executor_namespace, caps }` — the contract's pool unit shape.
+    /// `t_presence_acquire` admits a controller-minted slot as ONE pool unit
+    /// `{ unit_id, runner_id, executor_namespace, caps }` — the contract's pool
+    /// unit shape (P3: `unit_id` is the per-slot id `"{runner_id}#{slot}"` the
+    /// controller supplies, `runner_id` is the shared reap key).
     #[test]
     fn presence_acquire_admits_unit() {
         let a = air(Uuid::nil());
@@ -244,10 +253,12 @@ mod tests {
 
         let src = logic_src(t);
         assert!(
-            src.contains("unit_id: presence.runner_id")
+            src.contains("unit_id: presence.unit_id")
+                && src.contains("runner_id: presence.runner_id")
                 && src.contains("executor_namespace: presence.executor_namespace")
                 && src.contains("caps: presence.caps"),
-            "unit must be {{ unit_id: runner_id, executor_namespace, caps }}: {src}"
+            "unit must be {{ unit_id, runner_id, executor_namespace, caps }} \
+             (controller supplies per-slot unit_id + shared runner_id): {src}"
         );
     }
 
@@ -261,9 +272,11 @@ mod tests {
         assert!(
             src.contains("grant_id: claim.grant_id")
                 && src.contains("unit_id: unit.unit_id")
+                && src.contains("runner_id: unit.runner_id")
                 && src.contains("executor_namespace: unit.executor_namespace")
                 && src.contains("caps: unit.caps"),
-            "t_grant must reply {{ grant_id, unit_id, executor_namespace, caps }}: {src}"
+            "t_grant must reply {{ grant_id, unit_id, runner_id, executor_namespace, caps }} \
+             (runner_id threads through grant→hold so t_reap_held can correlate): {src}"
         );
         // Grant routes to the grant_outbox ("grant" channel).
         let to_grant = g["outputs"]
@@ -274,8 +287,40 @@ mod tests {
         assert!(to_grant, "t_grant must route to grant_outbox: {g}");
     }
 
+    /// P3 — `runner_id` threads cleanly through the whole admission→grant→hold
+    /// chain so the reap-all-by-runner_id correlation can never compare against a
+    /// missing field (`()`), the exact bug class that leaked held capacity on
+    /// runner death historically. The acquire mint carries it, the grant relays
+    /// it, the hold records it, and the release re-exposes it on the recycled
+    /// unit (so a freed-then-reaped slot stays correlatable).
+    #[test]
+    fn runner_id_threads_acquire_grant_hold_release() {
+        let a = air(Uuid::nil());
+        let acquire = logic_src(transition(&a, "t_presence_acquire").expect("acquire"));
+        assert!(
+            acquire.contains("runner_id: presence.runner_id"),
+            "acquire mints runner_id: {acquire}"
+        );
+        let grant = logic_src(transition(&a, "t_grant").expect("grant"));
+        assert!(
+            grant.contains("runner_id: unit.runner_id"),
+            "grant relays runner_id from the unit: {grant}"
+        );
+        let reg = logic_src(transition(&a, "t_register").expect("register"));
+        assert!(
+            reg.contains("runner_id: reg.runner_id"),
+            "hold records runner_id off the registered lease: {reg}"
+        );
+        let rel = logic_src(transition(&a, "t_release").expect("release"));
+        assert!(
+            rel.contains("runner_id: held.runner_id"),
+            "release re-exposes runner_id on the recycled unit: {rel}"
+        );
+    }
+
     /// `t_reap_free` exists: consumes the bare `{ runner_id }` signal + a FREE
-    /// pool unit (correlate runner_id == unit_id) and drops it (capacity shrinks).
+    /// pool unit (correlate runner_id == runner_id) and drops it (capacity
+    /// shrinks by one slot).
     #[test]
     fn reap_free_present() {
         let a = air(Uuid::nil());
@@ -299,6 +344,15 @@ mod tests {
             .iter()
             .any(|o| o["place"] == "fail_outbox");
         assert!(!to_fail, "t_reap_free must NOT route to fail_outbox: {t}");
+
+        // P3 reap-all-by-runner_id: the guard correlates the bare signal's
+        // runner_id against the slot's SHARED runner_id (NOT the per-slot unit_id)
+        // so one signal matches ANY of the runner's C free slots.
+        assert!(
+            guard_src(t).contains("exp.runner_id == unit.runner_id"),
+            "t_reap_free must correlate on runner_id: {}",
+            guard_src(t)
+        );
     }
 
     /// `t_reap_held` exists: consumes the bare `{ runner_id }` signal + a HELD
@@ -326,6 +380,15 @@ mod tests {
             .iter()
             .any(|o| o["place"] == "fail_outbox");
         assert!(to_fail, "t_reap_held must route to fail_outbox: {t}");
+
+        // P3 reap-all-by-runner_id: the guard correlates on the HOLD's shared
+        // runner_id (threaded grant→hold via t_grant/t_register) so a held slot is
+        // reapable even though its unit_id is the granular per-slot id.
+        assert!(
+            guard_src(t).contains("exp.runner_id == held.runner_id"),
+            "t_reap_held must correlate on runner_id: {}",
+            guard_src(t)
+        );
     }
 
     /// The reply-routing split matches the taint rule: the grant_outbox carries

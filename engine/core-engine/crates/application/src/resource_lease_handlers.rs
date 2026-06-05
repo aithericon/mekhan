@@ -89,6 +89,21 @@ pub struct StageSpec {
     pub entrypoint: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Compliance/region zone the job must be pinned to (P3 residency). `None`
+    /// (or empty) ⇒ no residency: the renderer keeps today's `["dc1"]`
+    /// datacenters and emits no node Constraint — the byte-identical default.
+    #[serde(default)]
+    pub residency_zone: Option<String>,
+    /// Desired replica `Count` for a long-running `service` spec. Read ONLY when
+    /// `job_type == "service"`; ignored (and never perturbs the byte-stable
+    /// batch render) otherwise. `None`/`<=0` ⇒ Count 1.
+    #[serde(default)]
+    pub replicas: Option<i64>,
+    /// `"batch"` (default/`None`) or `"service"`. Not an enum — the wire stays
+    /// forgiving + additive; the renderer normalizes (any non-`"service"` value
+    /// ⇒ batch). Default is `"batch"`.
+    #[serde(default)]
+    pub job_type: Option<String>,
 }
 
 /// Per-flavor raw escape hatch on the `request` token's `escape_hatch` field:

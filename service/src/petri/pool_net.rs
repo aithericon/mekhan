@@ -13,13 +13,16 @@
 //!   `t_grant`, a `lease_expired` signal + single `t_reap`, and grant/hold/release
 //!   payloads of `{ grant_id, unit_id }`. No fail channel.
 //! - [`CapacitySource::Presence`] seeds NOTHING (a `presence_acquire` bridge +
-//!   `t_presence_acquire` injects one `{ unit_id: runner_id, executor_namespace,
-//!   caps }` unit per live runner), a `t_grant` GUARDED by
+//!   `t_presence_acquire` injects one `{ unit_id, runner_id, executor_namespace,
+//!   caps }` unit per controller-minted slot — C distinct slots per live runner,
+//!   `unit_id = "{runner_id}#{slot}"`, P3), a `t_grant` GUARDED by
 //!   `satisfies(claim.requirements, unit.caps)`, a `presence_expired` signal that
-//!   splits into `t_reap_free` (drop a free unit) + `t_reap_held` (drop the hold
-//!   AND fail the holder over a `fail_outbox`), a `reset_reply_routing_on("unit")`
-//!   on `t_release`, and grant/hold/release payloads carrying
-//!   `{ ..., executor_namespace, caps }`.
+//!   reaps **by runner_id** — `t_reap_free` (drop a free slot) + `t_reap_held`
+//!   (drop the hold AND fail the holder over a `fail_outbox`); the controller
+//!   injects C bare `{ runner_id }` signals (consumed once each) to drain a
+//!   runner's C slots — a `reset_reply_routing_on("unit")` on `t_release`, and
+//!   grant/hold/release payloads carrying `{ ..., runner_id, executor_namespace,
+//!   caps }`.
 //!
 //! The seeded variant is the mekhan-side port of
 //! `engine/sdk/examples/resource_pool_net.rs`, generalized so the net id and
@@ -88,12 +91,17 @@ pub enum CapacitySource {
     /// carry just `{ grant_id, unit_id }`.
     Seeded { capacity: u32 },
     /// **Presence pool** (`runner_group`): capacity-less; `t_presence_acquire`
-    /// injects one `{ unit_id: runner_id, executor_namespace, caps }` unit per
-    /// live runner via the `presence_acquire` bridge, and a `presence_expired`
-    /// signal reaps it (free → `t_reap_free`; held → `t_reap_held`, which fails
-    /// the holder over the `fail_outbox`). `t_grant` is GUARDED by
-    /// `satisfies(claim.requirements, unit.caps)`; grant/hold/release carry
-    /// `{ ..., executor_namespace, caps }`.
+    /// injects `{ unit_id, runner_id, executor_namespace, caps }` units via the
+    /// `presence_acquire` bridge — the controller mints **C distinct units per
+    /// live runner** (concurrency C, P3), one bridge token per slot with
+    /// `unit_id = "{runner_id}#{slot}"` and a shared `runner_id`. A
+    /// `presence_expired` signal reaps **by runner_id** (free → `t_reap_free`;
+    /// held → `t_reap_held`, which fails the holder over the `fail_outbox`).
+    /// Because the reap signal is consumed once per fire (consuming arc), the
+    /// controller injects **C bare `{ runner_id }` signals** to drain a runner's
+    /// C slots — each consumes one expire token + one matching unit. `t_grant` is
+    /// GUARDED by `satisfies(claim.requirements, unit.caps)`; grant/hold/release
+    /// carry `{ ..., runner_id, executor_namespace, caps }`.
     Presence,
 }
 
@@ -261,9 +269,12 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
         // --------------------------------------------------------------------
         CapacitySource::Presence => {
             // NEW presence-admit inbox — mekhan's presence controller deposits a
-            // `{ runner_id, executor_namespace, caps }` here when a runner
-            // checks in (cross-net subject
-            // `petri.bridge.pool-<rid>.presence_acquire`).
+            // `{ unit_id, runner_id, executor_namespace, caps }` here when a
+            // runner checks in (cross-net subject
+            // `petri.bridge.pool-<rid>.presence_acquire`). With C-unit
+            // concurrency (P3) the controller mints C distinct units per runner:
+            // one bridge token per slot, `unit_id = "{runner_id}#{slot}"`,
+            // sharing one `runner_id`.
             let presence_acquire: aithericon_sdk::PlaceHandle<DynamicToken> =
                 ctx.bridge_in(well_known::POOL_PRESENCE_ACQUIRE_INBOX, "Presence Acquire");
 
@@ -291,18 +302,24 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
             let presence_expired: aithericon_sdk::PlaceHandle<DynamicToken> =
                 ctx.signal(well_known::POOL_PRESENCE_EXPIRED_SIGNAL, "Presence Expired");
 
-            // t_presence_acquire — admit one runner as ONE free pool unit.
-            // `unit_id` IS the runner_id (one unit per runner). Carries
-            // executor_namespace + caps so the grant (and thus the body-visible
-            // lease) can route work to the runner's drain namespace and expose
-            // its caps.
+            // t_presence_acquire — admit ONE controller-supplied free pool unit.
+            // The mint logic carries the controller's per-slot `unit_id`
+            // (`"{runner_id}#{slot}"`) PLUS a `runner_id` field shared by all C
+            // of a runner's slots. `unit_id` stays the granular per-slot identity
+            // that flows into the grant/hold (each slot is an independently
+            // grantable lease); `runner_id` is the NEW reap key — `t_reap_*`
+            // correlate on it so one expire signal can match ANY of the runner's
+            // C slots. Carries executor_namespace + caps so the grant (and thus
+            // the body-visible lease) can route work to the runner's drain
+            // namespace and expose its caps.
             ctx.scope("Acquire", |ctx| {
                 ctx.transition("t_presence_acquire", "Admit Runner Unit")
                     .auto_input("presence", &presence_acquire)
                     .auto_output("unit", &pool)
                     .logic(
                         r#"#{ unit: #{
-                            unit_id: presence.runner_id,
+                            unit_id: presence.unit_id,
+                            runner_id: presence.runner_id,
                             executor_namespace: presence.executor_namespace,
                             caps: presence.caps
                         } }"#,
@@ -338,9 +355,13 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     .guard_rhai("satisfies(claim.requirements, unit.caps)")
                     .auto_output("grant", &grant_outbox)
                     .logic(
+                        // `runner_id` rides the grant so the hold (`t_register`)
+                        // can carry it and `t_reap_held` can correlate the
+                        // reap-all-by-runner_id signal against a held slot.
                         r#"#{ grant: #{
                             grant_id: claim.grant_id,
                             unit_id: unit.unit_id,
+                            runner_id: unit.runner_id,
                             executor_namespace: unit.executor_namespace,
                             caps: unit.caps
                         } }"#,
@@ -350,9 +371,9 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
             // t_register — record the hold over the register bridge. R2 registers
             // the hold over a bridge whose reply channels are limited to "fail",
             // so the `in_use` hold carries the "fail" routing (and only that) —
-            // `t_reap_held` resolves it. Keep `unit_id` + `executor_namespace` +
-            // `caps` on the hold so a reap can identify the unit by runner
-            // (unit_id == runner_id).
+            // `t_reap_held` resolves it. Keep `unit_id` (granular slot id) +
+            // `runner_id` (the reap correlation key) + `executor_namespace` +
+            // `caps` on the hold so `t_reap_held` can drop the slot by runner_id.
             ctx.transition("t_register", "Register Hold")
                 .auto_input("reg", &register_inbox)
                 .auto_output("hold", &in_use)
@@ -360,6 +381,7 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     r#"#{ hold: #{
                         grant_id: reg.grant_id,
                         unit_id: reg.unit_id,
+                        runner_id: reg.runner_id,
                         executor_namespace: reg.executor_namespace,
                         caps: reg.caps
                     } }"#,
@@ -391,9 +413,14 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     .reset_reply_routing_on("unit")
                     .auto_output("done", &done)
                     .logic(
+                        // Re-expose `runner_id` on the recycled unit so a unit
+                        // freed-then-reaped (runner expires while the slot sits
+                        // free in the pool again) is still reap-correlatable by
+                        // `t_reap_free`.
                         r#"#{
                             unit: #{
                                 unit_id: held.unit_id,
+                                runner_id: held.runner_id,
                                 executor_namespace: held.executor_namespace,
                                 caps: held.caps
                             },
@@ -401,44 +428,54 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                         }"#,
                     );
 
-                // t_reap_free — the expiring runner's unit is currently FREE in
-                // the pool. Correlate the bare `{ runner_id }` signal to a free
-                // unit on `runner_id == unit_id`, DROP it (capacity shrinks),
-                // record the reap. No instance is affected (the unit was not
-                // held).
+                // t_reap_free — one of the expiring runner's slots is currently
+                // FREE in the pool. Correlate the bare `{ runner_id }` signal to
+                // a free unit on `runner_id == runner_id`, DROP it (capacity
+                // shrinks by one slot), record the reap. No instance is affected
+                // (the slot was not held). With C-unit concurrency the controller
+                // injects C such signals; each fire consumes ONE expire token +
+                // ONE matching free slot (consuming arcs), so C signals drain up
+                // to C of the runner's free slots — the binding correlates on the
+                // shared `runner_id`, so each signal matches ANY of the runner's
+                // slots.
                 ctx.transition("t_reap_free", "Reap Free Unit")
                     .auto_input("exp", &presence_expired)
                     .auto_input("unit", &pool)
-                    // The signal carries `runner_id`; the unit carries `unit_id`
-                    // (== runner_id). `correlate` only matches a single shared
-                    // field name, so the cross-field match is an explicit guard.
-                    .guard("exp.runner_id == unit.unit_id")
+                    // The signal carries `runner_id`; each unit carries the SAME
+                    // `runner_id` across its C slots. `correlate` only matches a
+                    // single shared field name, so the match is an explicit guard
+                    // on the shared runner_id (NOT the per-slot unit_id).
+                    .guard("exp.runner_id == unit.runner_id")
                     .auto_output("done", &done)
                     .logic(
                         r#"#{ done: #{ runner_id: exp.runner_id, unit_id: unit.unit_id, outcome: "reaped_free" } }"#,
                     );
 
-                // t_reap_held — the expiring runner's unit is currently HELD by
-                // an instance. Correlate the bare `{ runner_id }` signal to the
-                // in_use hold on `runner_id == unit_id`, DROP the hold (the runner
-                // is gone — no release call), AND route a `{ runner_id, unit_id }`
-                // failure token over the "fail" reply channel back to the holding
-                // instance so it fails fast instead of running against a dead
-                // runner namespace. The fail token carries the HOLD's reply
-                // routing (the "fail" channel R2 stamped onto the register
-                // bridge), NOT the (routing-less) signal's.
+                // t_reap_held — one of the expiring runner's slots is currently
+                // HELD by an instance. Correlate the bare `{ runner_id }` signal
+                // to an in_use hold on `runner_id == runner_id`, DROP the hold
+                // (the runner is gone — no release call), AND route a
+                // `{ runner_id, unit_id }` failure token over the "fail" reply
+                // channel back to the holding instance so it fails fast instead of
+                // running against a dead runner namespace. The fail token carries
+                // the HOLD's reply routing (the "fail" channel R2 stamped onto the
+                // register bridge), NOT the (routing-less) signal's. With C-unit
+                // concurrency, C injected signals drain the runner's held slots —
+                // the eval-loop specificity rule fires `t_reap_held` (2 inputs)
+                // over `t_reap_free` (2 inputs) per the same enabling-time tie
+                // break, draining held slots whenever a held slot matches.
                 ctx.transition("t_reap_held", "Reap Held Unit (fail holder)")
                     .auto_input("exp", &presence_expired)
                     .auto_input("held", &in_use)
                     // Cross-field correlation: signal `runner_id` == hold
-                    // `unit_id`.
-                    .guard("exp.runner_id == held.unit_id")
+                    // `runner_id` (shared across the runner's C held slots).
+                    .guard("exp.runner_id == held.runner_id")
                     .auto_output("notify", &fail_outbox)
                     .auto_output("done", &done)
                     .logic(
                         r#"#{
-                            notify: #{ runner_id: held.unit_id, unit_id: held.unit_id },
-                            done:   #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped_held" }
+                            notify: #{ runner_id: held.runner_id, unit_id: held.unit_id },
+                            done:   #{ grant_id: held.grant_id, unit_id: held.unit_id, runner_id: held.runner_id, outcome: "reaped_held" }
                         }"#,
                     );
             });
@@ -1228,6 +1265,60 @@ mod tests {
             let grant = place(a, "grant_outbox").expect("grant_outbox");
             assert_eq!(grant["bridge_reply_channel"], "grant");
         }
+    }
+
+    /// P3 C-units reap topology: both reap transitions correlate the bare
+    /// `{ runner_id }` signal on the SHARED `runner_id` (not the per-slot
+    /// unit_id), and both consume their signal over a CONSUMING (non-read) arc —
+    /// so each injected signal reaps exactly one slot and the controller's C
+    /// signals drain the runner's C slots (free via `t_reap_free`, held via
+    /// `t_reap_held`). A read-arc signal would re-fire forever; a consuming arc is
+    /// what makes "C signals ⇒ ≤C slots reaped" hold.
+    #[test]
+    fn presence_reap_correlates_on_runner_id_via_consuming_signal() {
+        let presence = serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Presence))
+            .expect("presence pool serializes");
+
+        for (t_id, held_or_unit) in [("t_reap_free", "unit.runner_id"), ("t_reap_held", "held.runner_id")] {
+            let t = transition(&presence, t_id).unwrap_or_else(|| panic!("{t_id}"));
+            // Guard correlates the signal's runner_id against the slot's SHARED
+            // runner_id.
+            let guard = t["guard"]["source"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| t["guard"].to_string());
+            assert!(
+                guard.contains(&format!("exp.runner_id == {held_or_unit}")),
+                "{t_id} guard must correlate on runner_id: {guard}"
+            );
+
+            // The presence_expired input is a CONSUMING arc (read != true), so the
+            // signal is consumed on fire — one signal, one reap.
+            let exp_in = t["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["place"] == well_known::POOL_PRESENCE_EXPIRED_SIGNAL)
+                .unwrap_or_else(|| panic!("{t_id} consumes presence_expired"));
+            assert_ne!(
+                exp_in.get("read").and_then(|r| r.as_bool()),
+                Some(true),
+                "{t_id} must consume the expire signal (non-read arc) so C signals reap C slots: {exp_in}"
+            );
+        }
+
+        // The minted unit carries BOTH the granular unit_id and the shared
+        // runner_id (the controller supplies unit_id = "{runner_id}#{slot}").
+        let acquire = transition(&presence, "t_presence_acquire").expect("acquire");
+        let acquire_src = acquire["logic"]["source"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| acquire["logic"].to_string());
+        assert!(
+            acquire_src.contains("unit_id: presence.unit_id")
+                && acquire_src.contains("runner_id: presence.runner_id"),
+            "acquire mints a per-slot unit_id + shared runner_id: {acquire_src}"
+        );
     }
 
     // -----------------------------------------------------------------------
