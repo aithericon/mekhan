@@ -224,6 +224,90 @@ fn resolves_under_opaque(shape: &TokenShape, path: &[String]) -> bool {
 /// return to the caller. Don't try to unify the signatures — guard refs
 /// need the full shape context to decide control vs. borrow, while backend
 /// refs only need to verify "this exists and is upstream."
+/// Walk `node_id`'s `parent_id` chain, collecting the ids of every enclosing
+/// `LeaseScope` (innermost first).
+fn enclosing_lease_scopes(node_id: &str, graph: &WorkflowGraph) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.parent_id.as_deref());
+    while let Some(pid) = cur {
+        let Some(p) = graph.nodes.iter().find(|n| n.id == pid) else {
+            break;
+        };
+        if matches!(p.data, WorkflowNodeData::LeaseScope { .. }) {
+            out.push(pid.to_string());
+        }
+        cur = p.parent_id.as_deref();
+    }
+    out
+}
+
+/// True if `node_id` is `ancestor_id` itself, or nested within it via the
+/// `parent_id` chain.
+fn is_within(node_id: &str, ancestor_id: &str, graph: &WorkflowGraph) -> bool {
+    if node_id == ancestor_id {
+        return true;
+    }
+    let mut cur = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.parent_id.as_deref());
+    while let Some(pid) = cur {
+        if pid == ancestor_id {
+            return true;
+        }
+        cur = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == pid)
+            .and_then(|n| n.parent_id.as_deref());
+    }
+    false
+}
+
+/// Borrow-ordering predicate: is `producer` strictly upstream of `consumer`,
+/// such that a read-arc into the producer's parked `p_<producer>_data` is sound?
+///
+/// Primary rule: strict topological position (`pos[producer] < pos[consumer]`).
+///
+/// **LeaseScope recovery.** The topo DAG drops a scope's `body_out` return arc
+/// (it would close the cycle `scope → body_in → … → body_out → scope`), so the
+/// scope collapses to ONE node whose straight-through `out` successor can sort
+/// BEFORE the body branch — even though at runtime `t_<scope>_exit` consumes the
+/// body's *final* token (every body producer has parked its output) before
+/// forwarding to the post-scope continuation. Recover the true ordering: a
+/// producer contained in a LeaseScope `S` is upstream of any consumer that is
+/// OUTSIDE `S` (not nested within it) and at-or-after `S` in topo order (the
+/// scope node is a real DAG predecessor of its post-exit successors, so
+/// `pos[S] < pos[consumer]`). A consumer *inside* the same scope falls back to
+/// the strict topo check (a body node can't borrow a later sibling's gathered
+/// output).
+fn producer_upstream_of(
+    producer: &str,
+    consumer: &WorkflowNode,
+    graph: &WorkflowGraph,
+    pos: &BTreeMap<String, usize>,
+) -> bool {
+    let up = pos.get(producer).copied().unwrap_or(usize::MAX);
+    let me = pos.get(&consumer.id).copied().unwrap_or(0);
+    if up < me {
+        return true;
+    }
+    for scope_id in enclosing_lease_scopes(producer, graph) {
+        if is_within(&consumer.id, &scope_id, graph) {
+            continue;
+        }
+        if pos.get(&scope_id).copied().unwrap_or(usize::MAX) < me {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn resolve_ref(
     gref: &GuardRef,
     consumer: &WorkflowNode,
@@ -360,12 +444,8 @@ pub(crate) fn resolve_ref(
                     .find(|n| n.id == prod_id)
                     .and_then(|n| n.parent_id.as_deref())
                     == Some(consumer.id.as_str());
-            if !producer_is_body_child {
-                let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-                let me = pos.get(&consumer.id).copied().unwrap_or(0);
-                if up >= me {
-                    return RefResolution::Unresolved;
-                }
+            if !producer_is_body_child && !producer_upstream_of(&prod_id, consumer, graph, pos) {
+                return RefResolution::Unresolved;
             }
             if !is_parked_producer(graph, &prod_id) {
                 return RefResolution::Unresolved;
@@ -505,10 +585,14 @@ pub(crate) fn reachable_scope(
     //     dedupes back to its owner and a non-parked producer of the same key
     //     simply never qualifies.
     let pos = topo_pos(order, wg);
-    if let Some(self_pos) = pos.get(&node.id).copied() {
+    if pos.contains_key(&node.id) {
         for ni in order.iter() {
             let up = *wg.dag.node_weight(*ni).unwrap();
-            if pos.get(&up.id).copied().unwrap_or(usize::MAX) >= self_pos {
+            // Same upstream predicate the compiler's `resolve_ref` uses — incl.
+            // the LeaseScope-containment recovery — so the picker offers exactly
+            // what binds (a body producer is reachable from a node downstream of
+            // the scope, not just from strictly-lower topo positions).
+            if up.id == node.id || !producer_upstream_of(&up.id, node, graph, &pos) {
                 continue;
             }
             let Some(shape) = node_out.get(&up.id) else {

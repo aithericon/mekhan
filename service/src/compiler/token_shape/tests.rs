@@ -1203,6 +1203,77 @@ mod scope_reachability_tests {
         assert!(!by_path.contains_key("start.content_type"));
         assert!(!by_path.contains_key("start.document.url"));
     }
+
+    /// A parked producer nested inside a `LeaseScope` is borrow-reachable from a
+    /// node DOWNSTREAM of the scope (here: a Map's gathered output, read by the
+    /// post-scope `End` result mapping). The topo DAG drops the scope's
+    /// `body_out` return arc, so the collapsed scope node's straight-through
+    /// successor can sort before the body branch — but at runtime
+    /// `t_<scope>_exit` consumes the body's final token (the Map has parked its
+    /// gathered collection) before forwarding to `End`, so the read-arc is sound.
+    /// `producer_upstream_of`'s LeaseScope-containment recovery makes the borrow
+    /// resolve; before it, this errored `GuardUnresolved` with only `cell.lease`
+    /// in scope.
+    #[test]
+    fn map_in_lease_scope_is_borrowable_after_the_scope() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start",
+                "initial":{"id":"in","label":"Intake","fields":[
+                  {"name":"rows","label":"Rows","kind":"json","required":true}]}}},
+            {"id":"lease","type":"lease_scope","slug":"cell","position":{"x":120,"y":0},
+             "data":{"type":"lease_scope","label":"Cell","lease":{"scheduler":"xarm_fleet"}}},
+            {"id":"mp","type":"map","slug":"work","parentId":"lease","position":{"x":40,"y":60},
+             "data":{"type":"map","label":"Per row","itemsRef":"start.rows","itemVar":"row","resultVar":"done",
+                "output":{"id":"out","label":"Done","fields":[
+                  {"name":"done","label":"Done","kind":"bool","required":true}]}}},
+            {"id":"step","type":"automated_step","slug":"step","parentId":"mp","position":{"x":40,"y":60},
+             "data":{"type":"automated_step","label":"Do",
+                "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                "deploymentModel":{"mode":"executor"},
+                "output":{"id":"out","label":"Done","fields":[
+                  {"name":"done","label":"Done","kind":"bool","required":true}]}}},
+            {"id":"end","type":"end","slug":"end","position":{"x":420,"y":0},
+             "data":{"type":"end","label":"End","resultMapping":[
+               {"targetField":"summary","expression":"work[*].done"}]}}
+          ],
+          "edges":[
+            {"id":"e0","source":"start","target":"lease","targetHandle":"in","type":"sequence"},
+            {"id":"e1","source":"lease","sourceHandle":"body_in","target":"mp","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"mp","sourceHandle":"body_in","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"step","target":"mp","targetHandle":"body_out","type":"loop_back"},
+            {"id":"e4","source":"mp","target":"lease","targetHandle":"body_out","type":"sequence"},
+            {"id":"e5","source":"lease","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser lease-map graph");
+
+        let binds = guard_readarc_plan(&g, &Default::default())
+            .expect("End result mapping must resolve the cross-scope Map borrow");
+        assert!(
+            binds
+                .iter()
+                .any(|b| b.consumer_node_id == "end"
+                    && b.referenced == "work[*].done"
+                    && b.producer_node == "mp"),
+            "End must read-arc the lease-contained Map's gathered output, got {:?}",
+            binds
+                .iter()
+                .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
+                .collect::<Vec<_>>()
+        );
+
+        // The picker agrees: `work[*]`-rooted gathered output is offered at End.
+        let report = analyze(&g, &Default::default()).expect("analyze lease-map graph");
+        let scope = report.scopes.get("end").expect("end scope");
+        assert!(
+            scope.iter().any(|e| e.producer_node == "mp"),
+            "picker must offer the lease-contained Map output at End, got: {:?}",
+            scope.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// A schema-override port (`PortField.schema`) must be drillable on the
