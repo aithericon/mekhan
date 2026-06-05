@@ -66,11 +66,12 @@ impl std::fmt::Display for ActuateError {
 /// `model_replicas` row.
 pub fn build_model_replica_net(
     replica_id: Uuid,
+    generation: i64,
     slug: &str,
     conn: &DatacenterConnection,
     spec: Value,
 ) -> ScenarioDefinition {
-    let net_id = well_known::model_replica_net_id(replica_id);
+    let net_id = well_known::model_replica_net_id(replica_id, generation);
     let flavor = conn.scheduler_flavor.as_str();
     let mut ctx = Context::new(net_id).description(format!(
         "Model-replica actuation {replica_id}: register service job '{slug}' on \
@@ -137,17 +138,30 @@ pub fn replica_slug(model_id: &str, replica_id: Uuid) -> String {
 
 /// Actuate a replica row to `target` Count (provision / scale / teardown — one
 /// path). Resolves the datacenter, applies the GDPR fail-closed residency guard,
-/// builds + deploys the `model-replica-<row>` net. Returns the registered slug.
+/// builds + deploys a FRESH `model-replica-<row>-<generation>` net, then reaps
+/// the prior generation's (now terminal) net. Returns the registered slug.
+///
+/// `generation` is this actuation's monotonic stamp (the loop passes
+/// `last_actuated_at.timestamp_millis()`); `prev_generation` is the stamp of the
+/// net last deployed for this row (`None` on first actuation). A fresh net id per
+/// actuation is what makes scale/teardown actually fire — a stable-per-row id let
+/// the one-shot net reach its terminal marking, after which re-POSTing the same
+/// id never re-seeds `t_stage` (the P4-L1 bug). The Nomad job slug stays stable
+/// across generations, so the fresh net re-registers the same service job in
+/// place at the new Count.
 ///
 /// A *deploy* failure is an `Err` (the loop records it on the row's `last_error`
 /// with a `failed` status); a clean deploy returns the slug (the loop flips the
 /// row to `provisioning`/`scaling`/`draining`). The terminal cluster outcome is
 /// folded onto the row by the `model_replicas` projection.
+#[allow(clippy::too_many_arguments)]
 pub async fn actuate_replica(
     db: &PgPool,
     petri: &PetriClient,
     workspace_id: Uuid,
     replica_id: Uuid,
+    generation: i64,
+    prev_generation: Option<i64>,
     policy: &ModelAutoscalePolicy,
     datacenter_resource_id: Uuid,
     target: u32,
@@ -176,9 +190,9 @@ pub async fn actuate_replica(
 
     let slug = replica_slug(&policy.model_id, replica_id);
     let spec = build_replica_spec(policy, target);
-    let air = serde_json::to_value(build_model_replica_net(replica_id, &slug, &conn, spec))
+    let air = serde_json::to_value(build_model_replica_net(replica_id, generation, &slug, &conn, spec))
         .map_err(|e| ActuateError::new(format!("serialize model-replica net AIR: {e}")))?;
-    let net_id = well_known::model_replica_net_id(replica_id);
+    let net_id = well_known::model_replica_net_id(replica_id, generation);
 
     crate::petri::instance::deploy_instance(
         petri,
@@ -191,10 +205,23 @@ pub async fn actuate_replica(
     .map_err(|e| ActuateError::new(format!("deploy model-replica net: {e}")))?;
 
     tracing::info!(
-        %net_id, %slug, %datacenter_resource_id, target,
+        %net_id, %slug, %datacenter_resource_id, target, generation,
         model_id = %policy.model_id,
         "deployed model-replica actuation net"
     );
+
+    // Reap the prior generation's net — it's a completed one-shot at its terminal
+    // marking, so this only frees engine registry state; the `service` job it
+    // registered lives under the stable `slug` and was just updated in place by
+    // the fresh net above (NOT torn down). Best-effort: a 404 (already hibernated)
+    // is fine, and a reap failure must not fail an otherwise-good actuation.
+    if let Some(prev) = prev_generation.filter(|p| *p != generation) {
+        let prev_net = well_known::model_replica_net_id(replica_id, prev);
+        if let Err(e) = petri.terminate_net(&prev_net).await {
+            tracing::warn!(%prev_net, "failed to reap prior model-replica net (non-fatal): {e}");
+        }
+    }
+
     Ok(slug)
 }
 
@@ -244,5 +271,22 @@ mod tests {
         assert_eq!(s, "model-qwen2-5-7b-aabbccdd");
         // Deterministic.
         assert_eq!(s, replica_slug("Qwen2.5-7B", id));
+    }
+
+    #[test]
+    fn net_id_is_generation_discriminated_but_slug_is_stable() {
+        // An actuation is an EVENT: each generation gets a FRESH net id (so the
+        // engine re-seeds + re-fires `t_stage`), while the Nomad job slug is
+        // STABLE across generations (so the service job is updated in place).
+        let id = Uuid::parse_str("aabbccdd-1111-2222-3333-444455556666").unwrap();
+        let g1 = crate::compiler::well_known::model_replica_net_id(id, 1717000000000);
+        let g2 = crate::compiler::well_known::model_replica_net_id(id, 1717000015000);
+        assert_ne!(g1, g2, "distinct generations must yield distinct net ids");
+        assert!(g1.starts_with(&format!("model-replica-{id}-")));
+        assert_eq!(
+            replica_slug("Qwen2.5-7B", id),
+            replica_slug("Qwen2.5-7B", id),
+            "slug stays stable across generations",
+        );
     }
 }

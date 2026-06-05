@@ -267,11 +267,19 @@ async fn reconcile_policy(
     .map_err(|e| format!("upsert model_replicas row: {e}"))?;
 
     if decision.actuate {
+        // An actuation is an EVENT — discriminate the net id by this actuation's
+        // monotonic stamp so the engine re-seeds + re-fires the one-shot net
+        // (a stable-per-row id never re-fired → the P4-L1 scale/teardown no-op).
+        // `decision.last_actuated_at` is `Some(now)` whenever `actuate` is true.
+        let generation = decision.last_actuated_at.unwrap_or(now).timestamp_millis();
+        let prev_generation = prev_actuated.map(|t| t.timestamp_millis());
         match actuate::actuate_replica(
             db,
             petri,
             workspace_id,
             row.id,
+            generation,
+            prev_generation,
             policy,
             dc_uuid,
             decision.desired,

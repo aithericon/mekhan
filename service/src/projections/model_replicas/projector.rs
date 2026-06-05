@@ -43,9 +43,17 @@ pub struct ReplicaUpdate {
 
 /// Recover the `model_replicas` row id from a `model-replica-<uuid>` net id.
 fn replica_id_from_net(net_id: &str) -> Option<Uuid> {
-    net_id
-        .strip_prefix("model-replica-")
-        .and_then(|s| Uuid::parse_str(s).ok())
+    let rest = net_id.strip_prefix("model-replica-")?;
+    // Bare `<uuid>` (legacy) parses directly; the generation-discriminated
+    // `<uuid>-<generation>` form has a trailing all-digits generation to strip
+    // from the last `-`.
+    Uuid::parse_str(rest).ok().or_else(|| {
+        rest.rsplit_once('-').and_then(|(head, gen)| {
+            (!gen.is_empty() && gen.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| Uuid::parse_str(head).ok())
+                .flatten()
+        })
+    })
 }
 
 /// Project a replica-actuation net's event stream into at most one
@@ -128,8 +136,23 @@ mod tests {
     }
 
     const REPLICA: &str = "55555555-5555-5555-5555-555555555555";
+    // Generation-discriminated net id (the real shape the autoscaler deploys).
     fn net() -> String {
-        format!("model-replica-{REPLICA}")
+        format!("model-replica-{REPLICA}-1717000015000")
+    }
+
+    #[test]
+    fn replica_id_recovered_from_generation_and_legacy_net_ids() {
+        let want = Uuid::parse_str(REPLICA).unwrap();
+        // Generation-discriminated form.
+        assert_eq!(replica_id_from_net(&net()), Some(want));
+        // Legacy bare-uuid form still parses.
+        assert_eq!(
+            replica_id_from_net(&format!("model-replica-{REPLICA}")),
+            Some(want)
+        );
+        // Not a replica net.
+        assert_eq!(replica_id_from_net("staging-abc"), None);
     }
 
     fn effect_completed(seq: u64, result: serde_json::Value) -> PersistedEvent {

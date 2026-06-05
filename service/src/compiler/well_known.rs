@@ -43,16 +43,28 @@ pub fn materialize_net_id(materialize_id: uuid::Uuid) -> String {
 
 /// Net id for a one-shot **model-replica actuation** run (model-pool P4, docs/29
 /// §6'). The autoscaler reconciles one `model_replicas` row per `model_policy`
-/// resource; on every provision / scale / teardown it (re)deploys a short-lived
-/// net (`build_model_replica_net`) that fires the engine's `stage_template`
-/// effect once — registering / scaling / stopping a long-running `service` job on
-/// the target datacenter. Keyed by the `model_replicas` row id so the
-/// effect_result's echoed correlation id maps back to the row the
-/// `model_replicas` projection updates, and so re-actuating the same policy
-/// upserts the row → reuses its id → re-deploys the same net id (engine replaces
-/// it). Pure function of the row id ⇒ replay-safe + unique per policy.
-pub fn model_replica_net_id(replica_id: uuid::Uuid) -> String {
-    format!("model-replica-{replica_id}")
+/// resource; on every provision / scale / teardown it deploys a short-lived net
+/// (`build_model_replica_net`) that fires the engine's `stage_template` effect
+/// once — registering / scaling / stopping a long-running `service` job on the
+/// target datacenter.
+///
+/// **An actuation is an EVENT, not an entity.** The net id is therefore keyed by
+/// `(replica_id, generation)`, where `generation` is the actuation's monotonic
+/// stamp (the loop passes `last_actuated_at.timestamp_millis()`). Each
+/// provision / scale / teardown gets a FRESH net id, so the engine seeds + fires
+/// `t_stage` again — a stable-per-row id was the P4-L1 scale/teardown bug: the
+/// net's single shot had already reached its terminal marking, so re-POSTing the
+/// same id replaced the *definition* but never re-seeded `t_stage`, and the new
+/// `Count` never reached Nomad. The Nomad job slug (`replica_slug`) stays stable
+/// across generations, so each fresh net re-registers the SAME service job in
+/// place at the new Count; the autoscaler reaps the prior generation's net.
+///
+/// Correlation is unaffected: the `stage_template` effect_result echoes
+/// `staging_id = replica_id` (generation-independent), so the `model_replicas`
+/// projection still folds onto the right row. Pure function of `(row id,
+/// generation)` ⇒ replay-safe + unique per actuation.
+pub fn model_replica_net_id(replica_id: uuid::Uuid, generation: i64) -> String {
+    format!("model-replica-{replica_id}-{generation}")
 }
 
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
