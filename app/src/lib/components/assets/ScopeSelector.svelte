@@ -9,10 +9,9 @@
 	// (Template-level scoping is reachable from the editor, where the template id
 	// is in context; the standalone /assets page exposes workspace + folder.)
 	//
-	// NOTE: the asset-layer `ScopeContext` still uses `kind: 'project'` (the
-	// backend `scope_kind` for assets is independent of the template-folder
-	// rename). We surface folders as the selectable grouping but keep the
-	// existing scope token shape until the asset scope is rationalized.
+	// The asset-layer `ScopeContext` scopes by `kind: 'folder'` — the backend
+	// `scope_kind` and the `folder:<uuid>` wire token line up with the folder
+	// tree directly (docs/20 §2).
 	import { onMount } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { auth } from '$lib/auth/store.svelte';
@@ -52,14 +51,14 @@
 			return;
 		}
 		const [kind, id] = token.split(':');
-		if (kind === 'project' && id) onChange({ kind: 'project', id });
+		if (kind === 'folder' && id) onChange({ kind: 'folder', id });
 		else if (kind === 'template' && id) onChange({ kind: 'template', id });
 		else onChange({ kind: 'workspace' });
 	}
 
 	const selectedLabel = $derived.by(() => {
 		if (value.kind === 'workspace') return 'Workspace';
-		if (value.kind === 'project') {
+		if (value.kind === 'folder') {
 			const f = folders.find((f) => f.id === value.id);
 			return `Folder: ${f?.display_name ?? value.id}`;
 		}
@@ -76,7 +75,7 @@
 		<Select.Content>
 			<Select.Item value="workspace" label="Workspace" />
 			{#each folders as f (f.id)}
-				<Select.Item value={`project:${f.id}`} label={`Folder: ${f.display_name}`} />
+				<Select.Item value={`folder:${f.id}`} label={`Folder: ${f.display_name}`} />
 			{/each}
 		</Select.Content>
 	</Select.Root>

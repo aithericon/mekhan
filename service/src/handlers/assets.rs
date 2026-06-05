@@ -82,7 +82,7 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 
 /// Parse a `?scope=` query value into a concrete binding context for
 /// downward-visibility resolution. Accepts `workspace`, `workspace:<uuid>`,
-/// `project:<uuid>`, `template:<uuid>`. Bare `workspace` (or absent) resolves
+/// `folder:<uuid>`, `template:<uuid>`. Bare `workspace` (or absent) resolves
 /// to the caller's workspace.
 fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid), ApiError> {
     let Some(raw) = scope else {
@@ -94,7 +94,7 @@ fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid)
     }
     let (kind_str, id_str) = raw.split_once(':').ok_or_else(|| {
         ApiError::bad_request(format!(
-            "invalid scope '{raw}' — expected `workspace`, `project:<uuid>`, or `template:<uuid>`"
+            "invalid scope '{raw}' — expected `workspace`, `folder:<uuid>`, or `template:<uuid>`"
         ))
     })?;
     let kind = ScopeKind::from_db(kind_str)
@@ -1276,8 +1276,8 @@ fn visible_pairs(visible: &VisibleScopes) -> (Vec<String>, Vec<Uuid>) {
         kinds.push(ScopeKind::Workspace.as_db().to_string());
         ids.push(ws);
     }
-    for p in &visible.projects {
-        kinds.push(ScopeKind::Project.as_db().to_string());
+    for p in &visible.folders {
+        kinds.push(ScopeKind::Folder.as_db().to_string());
         ids.push(*p);
     }
     if let Some(t) = visible.template {

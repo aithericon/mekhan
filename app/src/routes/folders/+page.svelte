@@ -89,6 +89,19 @@
 		moving = false;
 	}
 
+	// Inline "new subfolder" affordance from a tree row: select the folder (which
+	// mirrors into the create form's parent) and focus the slug input.
+	function startSubfolder(parent: Folder) {
+		selectFolder(parent.id);
+		newSlug = '';
+		newName = '';
+		queueMicrotask(() => {
+			document
+				.querySelector<HTMLInputElement>('[data-testid="input-new-folder-slug"]')
+				?.focus();
+		});
+	}
+
 	async function handleCreate(e: Event) {
 		e.preventDefault();
 		const slug = newSlug.trim();
@@ -200,6 +213,22 @@
 
 <svelte:head><title>Folders | Mekhan</title></svelte:head>
 
+{#snippet actions(f: Folder)}
+	<button
+		type="button"
+		class="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+		title={`New subfolder under ${f.display_name}`}
+		aria-label={`New subfolder under ${f.display_name}`}
+		onclick={(e) => {
+			e.stopPropagation();
+			startSubfolder(f);
+		}}
+		data-testid={`btn-new-subfolder-${f.slug}`}
+	>
+		<Plus class="size-3.5" />
+	</button>
+{/snippet}
+
 <div class="mx-auto max-w-5xl px-6 py-8" data-testid="folders-index">
 	<header class="mb-6 flex items-baseline justify-between">
 		<div>
@@ -267,7 +296,7 @@
 			<div class="grid gap-4 md:grid-cols-[18rem_1fr]">
 				<!-- Tree -->
 				<aside class="rounded-lg border border-border bg-card/30 p-3" data-testid="folders-tree-panel">
-					<FolderTree {folders} {selectedId} onSelect={selectFolder} />
+					<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
 				</aside>
 
 				<!-- Detail -->

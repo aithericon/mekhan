@@ -167,7 +167,7 @@
           {
             "name": "scope",
             "in": "query",
-            "description": "Scope context for downward-visibility resolution. `workspace` (the\ncaller's workspace) when omitted. Format: `workspace`, `project:<uuid>`,\nor `template:<uuid>`.",
+            "description": "Scope context for downward-visibility resolution. `workspace` (the\ncaller's workspace) when omitted. Format: `workspace`, `folder:<uuid>`,\nor `template:<uuid>`.",
             "required": false,
             "schema": {
               "type": [
@@ -5180,7 +5180,7 @@
           {
             "name": "scope",
             "in": "query",
-            "description": "Scope context for downward-visibility resolution (docs/20 §2). Format:\n`workspace`, `project:<uuid>`, or `template:<uuid>`. When present it\noverrides `workspace_id`: the list returns the most-specific-wins\nvisible set for the binding context. When absent, the legacy flat\n`workspace_id` filter applies.",
+            "description": "Scope context for downward-visibility resolution (docs/20 §2). Format:\n`workspace`, `folder:<uuid>`, or `template:<uuid>`. When present it\noverrides `workspace_id`: the list returns the most-specific-wins\nvisible set for the binding context. When absent, the legacy flat\n`workspace_id` filter applies.",
             "required": false,
             "schema": {
               "type": [
@@ -18724,10 +18724,10 @@
       },
       "ScopeKind": {
         "type": "string",
-        "description": "Polymorphic owner discriminator. A resource/asset/asset-type is owned by\n**exactly one** scope; visibility flows downward (template ⊃ project ⊃\nworkspace) with most-specific-wins. See [`crate::scope`].",
+        "description": "Polymorphic owner discriminator. A resource/asset/asset-type is owned by\n**exactly one** scope; visibility flows downward (template ⊃ folder ⊃\nworkspace) with most-specific-wins. See [`crate::scope`].",
         "enum": [
           "workspace",
-          "project",
+          "folder",
           "template"
         ]
       },

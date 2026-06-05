@@ -226,7 +226,7 @@ pub struct ListResourcesQuery {
     /// layer fills this in.
     pub workspace_id: Option<Uuid>,
     /// Scope context for downward-visibility resolution (docs/20 §2). Format:
-    /// `workspace`, `project:<uuid>`, or `template:<uuid>`. When present it
+    /// `workspace`, `folder:<uuid>`, or `template:<uuid>`. When present it
     /// overrides `workspace_id`: the list returns the most-specific-wins
     /// visible set for the binding context. When absent, the legacy flat
     /// `workspace_id` filter applies.

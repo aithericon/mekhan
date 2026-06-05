@@ -1,20 +1,22 @@
 //! Scope resolution (docs/20 §2) — the single source of truth for "what is
 //! visible from a binding context, and which definition wins."
 //!
-//! The platform hierarchy is **workspace → projects (an M:N grouping of
-//! templates, *not* a tree) → templates → instances**. A resource / asset /
+//! The platform hierarchy is **workspace → folders (a single-parent tree that
+//! is a template's one home) → templates → instances**. A resource / asset /
 //! asset-type is owned by **exactly one** scope `(ScopeKind, scope_id)`.
 //!
 //! Resolution rules:
 //! - **Visibility flows downward.** A binding inside template `T` can *see*
-//!   anything owned by `T`, by any project that contains `T`, or by the
+//!   anything owned by `T`, by the folder that homes `T`, or by the
 //!   workspace.
-//! - **Most-specific-wins.** `template` shadows `project` shadows `workspace`
+//! - **Most-specific-wins.** `template` shadows `folder` shadows `workspace`
 //!   for a given ref-key.
-//! - **Ambiguity is a hard error.** If `T` belongs to two projects that *both*
+//! - **Ambiguity is a hard error.** If two equally-specific scopes *both*
 //!   define the same ref-key, the scopes are **incomparable** → an error,
 //!   never a silent pick (the platform's "compiler is the borrow-checker;
-//!   ambiguity is an error, not a guess" ethos).
+//!   ambiguity is an error, not a guess" ethos). A template has at most one
+//!   home folder, so folder-vs-folder clashes cannot arise today — the
+//!   incomparable path is retained for when scoping widens to ancestors.
 //!
 //! This module is pure (no DB I/O): callers gather the candidate owned items
 //! and the binding context's visible scope set, then call [`resolve_refs`] /
@@ -30,7 +32,7 @@ use uuid::Uuid;
 use crate::models::asset::ScopeKind;
 
 /// A concrete owner scope: a `(kind, id)` pair. For `Workspace` the id is the
-/// workspace id; for `Project`, the project id; for `Template`, the template's
+/// workspace id; for `Folder`, the folder id; for `Template`, the template's
 /// chain-root (`base_template_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Scope {
@@ -45,9 +47,9 @@ impl Scope {
             id,
         }
     }
-    pub fn project(id: Uuid) -> Self {
+    pub fn folder(id: Uuid) -> Self {
         Self {
-            kind: ScopeKind::Project,
+            kind: ScopeKind::Folder,
             id,
         }
     }
@@ -59,11 +61,11 @@ impl Scope {
     }
 
     /// Precedence rank for most-specific-wins. Higher = more specific.
-    /// `template (2) > project (1) > workspace (0)`.
+    /// `template (2) > folder (1) > workspace (0)`.
     pub fn rank(&self) -> u8 {
         match self.kind {
             ScopeKind::Workspace => 0,
-            ScopeKind::Project => 1,
+            ScopeKind::Folder => 1,
             ScopeKind::Template => 2,
         }
     }
@@ -71,13 +73,16 @@ impl Scope {
 
 /// The downward-visible owner set for a binding context, plus the context
 /// itself. Built by [`visible_scopes_for`]. The set is small (one workspace,
-/// 0..n projects, 0..1 template).
+/// 0..1 home folder, 0..1 template). `folders` is a `Vec` rather than an
+/// `Option` so the resolver stays unchanged if folder visibility later widens
+/// to the ancestor chain.
 #[derive(Debug, Clone, Default)]
 pub struct VisibleScopes {
     /// The workspace owner (always present for a real binding context).
     pub workspace: Option<Uuid>,
-    /// Every project that contains the context template (M:N — may be many).
-    pub projects: Vec<Uuid>,
+    /// The folder(s) that home the context template. A template has exactly
+    /// one home today, so this holds 0..1 entries.
+    pub folders: Vec<Uuid>,
     /// The context template itself, if the binding is template-scoped.
     pub template: Option<Uuid>,
 }
@@ -89,7 +94,7 @@ impl VisibleScopes {
     pub fn contains(&self, scope: &Scope) -> bool {
         match scope.kind {
             ScopeKind::Workspace => self.workspace == Some(scope.id),
-            ScopeKind::Project => self.projects.contains(&scope.id),
+            ScopeKind::Folder => self.folders.contains(&scope.id),
             ScopeKind::Template => self.template == Some(scope.id),
         }
     }
@@ -140,8 +145,8 @@ impl std::error::Error for IncomparableClash {}
 ///
 /// "Most-specific-wins" = the highest [`Scope::rank`] for a given ref-key wins.
 /// If two items share the same ref-key AND the same (highest) rank but
-/// different scope ids — e.g. two *projects* both containing the template each
-/// define `steel` — that is incomparable → error.
+/// different scope ids — e.g. two sibling *folders* each define `steel` and
+/// both are visible — that is incomparable → error.
 pub fn resolve_refs<T: Clone>(
     items: Vec<ScopedItem<T>>,
 ) -> Result<BTreeMap<String, ScopedItem<T>>, IncomparableClash> {
@@ -161,7 +166,7 @@ pub fn resolve_refs<T: Clone>(
             .collect();
 
         // Distinct owner scopes at the top rank. More than one distinct scope
-        // at the same rank = incomparable (e.g. two sibling projects).
+        // at the same rank = incomparable (e.g. two sibling folders).
         let mut distinct_scopes: Vec<Scope> = Vec::new();
         for c in &top {
             if !distinct_scopes.contains(&c.scope) {
@@ -217,13 +222,13 @@ pub fn resolve_visible<T: Clone>(
 /// DB helper: compute the downward-visible owner set for a binding context.
 ///
 /// - `Workspace` context: visible = just that workspace.
-/// - `Template` context: visible = the template's chain-root + every project
-///   that contains it + the template's workspace.
-/// - `Project` context: visible = the project + its workspace (used by the
-///   picker when browsing project-scoped definitions directly).
+/// - `Template` context: visible = the template's chain-root + its home folder
+///   + the template's workspace.
+/// - `Folder` context: visible = the folder + its workspace (used by the
+///   picker when browsing folder-scoped definitions directly).
 ///
 /// `scope_id` semantics per kind: workspace id / template chain-root
-/// (`base_template_id`) / project id.
+/// (`base_template_id`) / folder id.
 pub async fn visible_scopes_for(
     db: &PgPool,
     kind: ScopeKind,
@@ -232,11 +237,11 @@ pub async fn visible_scopes_for(
     match kind {
         ScopeKind::Workspace => Ok(VisibleScopes {
             workspace: Some(scope_id),
-            projects: Vec::new(),
+            folders: Vec::new(),
             template: None,
         }),
-        ScopeKind::Project => {
-            // `Project` scope is now backed by a folder -> its workspace.
+        ScopeKind::Folder => {
+            // Folder scope -> resolve its workspace for upward visibility.
             let ws: Option<(Uuid,)> =
                 sqlx::query_as("SELECT workspace_id FROM folders WHERE id = $1")
                     .bind(scope_id)
@@ -244,7 +249,7 @@ pub async fn visible_scopes_for(
                     .await?;
             Ok(VisibleScopes {
                 workspace: ws.map(|(w,)| w),
-                projects: vec![scope_id],
+                folders: vec![scope_id],
                 template: None,
             })
         }
@@ -263,18 +268,18 @@ pub async fn visible_scopes_for(
                 Some(b) => b,
                 None => {
                     // Unknown template — treat scope_id itself as the template
-                    // owner with no workspace/projects (defensive).
+                    // owner with no workspace/folders (defensive).
                     return Ok(VisibleScopes {
                         workspace: None,
-                        projects: Vec::new(),
+                        folders: Vec::new(),
                         template: Some(scope_id),
                     });
                 }
             };
 
-            // A template now has at most ONE home folder (filesystem model),
-            // which maps to a single `Project`-scope owner.
-            let projects: Vec<(Uuid,)> = sqlx::query_as(
+            // A template has at most ONE home folder (filesystem model), which
+            // maps to a single `Folder`-scope owner.
+            let folders: Vec<(Uuid,)> = sqlx::query_as(
                 "SELECT folder_id FROM template_folders WHERE base_template_id = $1",
             )
             .bind(base_id)
@@ -283,7 +288,7 @@ pub async fn visible_scopes_for(
 
             Ok(VisibleScopes {
                 workspace: Some(workspace_id),
-                projects: projects.into_iter().map(|(p,)| p).collect(),
+                folders: folders.into_iter().map(|(p,)| p).collect(),
                 template: Some(base_id),
             })
         }
@@ -317,23 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn project_overrides_workspace() {
-        // Same ref-key defined at workspace and at a (single) project: the
-        // more-specific project wins.
+    fn folder_overrides_workspace() {
+        // Same ref-key defined at workspace and at the (single) home folder: the
+        // more-specific folder wins.
         let items = vec![
             item(ScopeKind::Workspace, 1, "prod_db", "ws_def"),
-            item(ScopeKind::Project, 2, "prod_db", "proj_def"),
+            item(ScopeKind::Folder, 2, "prod_db", "folder_def"),
         ];
         let resolved = resolve_refs(items).expect("no clash");
-        assert_eq!(resolved["prod_db"].item, "proj_def");
-        assert_eq!(resolved["prod_db"].scope.kind, ScopeKind::Project);
+        assert_eq!(resolved["prod_db"].item, "folder_def");
+        assert_eq!(resolved["prod_db"].scope.kind, ScopeKind::Folder);
     }
 
     #[test]
-    fn template_overrides_project_and_workspace() {
+    fn template_overrides_folder_and_workspace() {
         let items = vec![
             item(ScopeKind::Workspace, 1, "prod_db", "ws_def"),
-            item(ScopeKind::Project, 2, "prod_db", "proj_def"),
+            item(ScopeKind::Folder, 2, "prod_db", "folder_def"),
             item(ScopeKind::Template, 3, "prod_db", "tpl_def"),
         ];
         let resolved = resolve_refs(items).expect("no clash");
@@ -342,12 +347,12 @@ mod tests {
     }
 
     #[test]
-    fn two_projects_same_ref_is_incomparable_clash() {
-        // Template belongs to two projects, both define `steel` — neither
+    fn two_folders_same_ref_is_incomparable_clash() {
+        // Two equally-specific folders both define `steel` — neither
         // dominates → hard error.
         let items = vec![
-            item(ScopeKind::Project, 10, "steel", "projA"),
-            item(ScopeKind::Project, 11, "steel", "projB"),
+            item(ScopeKind::Folder, 10, "steel", "folderA"),
+            item(ScopeKind::Folder, 11, "steel", "folderB"),
         ];
         let err = resolve_refs(items).expect_err("expected incomparable clash");
         assert_eq!(err.ref_key, "steel");
@@ -356,14 +361,14 @@ mod tests {
 
     #[test]
     fn clash_at_lower_rank_is_shadowed_not_an_error() {
-        // Two projects define `steel`, BUT the template also defines it — the
-        // template wins outright; the project ambiguity never surfaces.
+        // Two folders define `steel`, BUT the template also defines it — the
+        // template wins outright; the folder ambiguity never surfaces.
         let items = vec![
-            item(ScopeKind::Project, 10, "steel", "projA"),
-            item(ScopeKind::Project, 11, "steel", "projB"),
+            item(ScopeKind::Folder, 10, "steel", "folderA"),
+            item(ScopeKind::Folder, 11, "steel", "folderB"),
             item(ScopeKind::Template, 12, "steel", "tpl_def"),
         ];
-        let resolved = resolve_refs(items).expect("template shadows the project clash");
+        let resolved = resolve_refs(items).expect("template shadows the folder clash");
         assert_eq!(resolved["steel"].item, "tpl_def");
     }
 
@@ -371,7 +376,7 @@ mod tests {
     fn distinct_ref_keys_coexist() {
         let items = vec![
             item(ScopeKind::Workspace, 1, "prod_db", "ws_db"),
-            item(ScopeKind::Project, 2, "steel", "proj_steel"),
+            item(ScopeKind::Folder, 2, "steel", "proj_steel"),
         ];
         let resolved = resolve_refs(items).expect("no clash");
         assert_eq!(resolved.len(), 2);
@@ -383,7 +388,7 @@ mod tests {
     fn resolve_one_picks_most_specific() {
         let items = vec![
             item(ScopeKind::Workspace, 1, "prod_db", "ws_def"),
-            item(ScopeKind::Project, 2, "prod_db", "proj_def"),
+            item(ScopeKind::Folder, 2, "prod_db", "proj_def"),
         ];
         let got = resolve_one("prod_db", items).expect("no clash");
         assert_eq!(got.unwrap().item, "proj_def");
@@ -398,16 +403,16 @@ mod tests {
 
     #[test]
     fn resolve_visible_filters_invisible_scopes() {
-        // An item owned by a project NOT in the visible set must be dropped.
+        // An item owned by a folder NOT in the visible set must be dropped.
         let visible = VisibleScopes {
             workspace: Some(Uuid::from_u128(1)),
-            projects: vec![Uuid::from_u128(2)],
+            folders: vec![Uuid::from_u128(2)],
             template: None,
         };
         let items = vec![
             item(ScopeKind::Workspace, 1, "prod_db", "ws_def"),
-            item(ScopeKind::Project, 2, "steel", "visible_proj"),
-            item(ScopeKind::Project, 99, "hidden", "invisible_proj"),
+            item(ScopeKind::Folder, 2, "steel", "visible_folder"),
+            item(ScopeKind::Folder, 99, "hidden", "invisible_folder"),
         ];
         let resolved = resolve_visible(&visible, items).expect("no clash");
         assert_eq!(resolved.len(), 2);

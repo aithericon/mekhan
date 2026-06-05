@@ -565,8 +565,8 @@ async fn discover_asset_globals(
         scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
         scope_ids.push(ws);
     }
-    for p in &visible.projects {
-        scope_kinds.push(ScopeKind::Project.as_db().to_string());
+    for p in &visible.folders {
+        scope_kinds.push(ScopeKind::Folder.as_db().to_string());
         scope_ids.push(*p);
     }
     if let Some(t) = visible.template {

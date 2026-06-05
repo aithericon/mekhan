@@ -7448,11 +7448,11 @@ export interface components {
         };
         /**
          * @description Polymorphic owner discriminator. A resource/asset/asset-type is owned by
-         *     **exactly one** scope; visibility flows downward (template ⊃ project ⊃
+         *     **exactly one** scope; visibility flows downward (template ⊃ folder ⊃
          *     workspace) with most-specific-wins. See [`crate::scope`].
          * @enum {string}
          */
-        ScopeKind: "workspace" | "project" | "template";
+        ScopeKind: "workspace" | "folder" | "template";
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -9341,7 +9341,7 @@ export interface operations {
                 per_page?: number;
                 /**
                  * @description Scope context for downward-visibility resolution. `workspace` (the
-                 *     caller's workspace) when omitted. Format: `workspace`, `project:<uuid>`,
+                 *     caller's workspace) when omitted. Format: `workspace`, `folder:<uuid>`,
                  *     or `template:<uuid>`.
                  */
                 scope?: string | null;
@@ -12873,7 +12873,7 @@ export interface operations {
                 workspace_id?: string | null;
                 /**
                  * @description Scope context for downward-visibility resolution (docs/20 §2). Format:
-                 *     `workspace`, `project:<uuid>`, or `template:<uuid>`. When present it
+                 *     `workspace`, `folder:<uuid>`, or `template:<uuid>`. When present it
                  *     overrides `workspace_id`: the list returns the most-specific-wins
                  *     visible set for the binding context. When absent, the legacy flat
                  *     `workspace_id` filter applies.
