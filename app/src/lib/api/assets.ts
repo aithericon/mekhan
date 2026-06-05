@@ -78,12 +78,12 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
 
 /**
  * Scope context for downward-visibility resolution. Format on the wire:
- * `workspace`, `project:<uuid>`, or `template:<uuid>`. Omit for the caller's
+ * `workspace`, `folder:<uuid>`, or `template:<uuid>`. Omit for the caller's
  * workspace.
  */
 export type ScopeContext =
 	| { kind: 'workspace' }
-	| { kind: 'project'; id: string }
+	| { kind: 'folder'; id: string }
 	| { kind: 'template'; id: string };
 
 export function scopeToParam(scope?: ScopeContext): string | undefined {

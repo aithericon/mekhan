@@ -855,6 +855,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/folders/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/folders/{id}
+         * @description Delete a folder WITHOUT destroying content. Child folders are reparented
+         *     to the deleted folder's parent (subtree paths rewritten); templates homed
+         *     in this folder are repointed to the parent (or moved to root when the
+         *     deleted folder was a root folder). Templates are never deleted.
+         */
+        delete: operations["delete_folder"];
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/v1/folders/{id}
+         * @description Rename (`display_name`/`description`) and/or MOVE (`slug` and/or
+         *     `parent_id`) a folder. A move rewrites the entire subtree's materialized
+         *     paths in one transaction and is cycle-guarded.
+         */
+        patch: operations["update_folder"];
+        trace?: never;
+    };
     "/api/v1/inference/requests": {
         parameters: {
             query?: never;
@@ -1625,69 +1654,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** DELETE /api/v1/projects/{id} */
-        delete: operations["delete_project"];
-        options?: never;
-        head?: never;
-        /**
-         * PATCH /api/v1/projects/{id}
-         * @description Rename / re-describe a project. `slug` is immutable (it's the stable
-         *     filter key the templates list and OpenAPI bundle route hang off of), so
-         *     only `display_name` and `description` are mutable. Omitted fields are
-         *     left untouched via COALESCE.
-         */
-        patch: operations["update_project"];
-        trace?: never;
-    };
-    "/api/v1/projects/{id}/templates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * POST /api/v1/projects/{id}/templates
-         * @description Attach a template (by *base* id — the chain root). The caller must be
-         *     an editor on the project's workspace AND able to read the template
-         *     (workspace member OR template is public).
-         */
-        post: operations["attach_template"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/projects/{id}/templates/{base_template_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** DELETE /api/v1/projects/{id}/templates/{base_template_id} */
-        delete: operations["detach_template"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
         parameters: {
             query?: never;
@@ -2199,8 +2165,8 @@ export interface paths {
          *         (published, version, visibility, created_at, …)
          *
          *     plus the template-specific relational/security params in
-         *     [`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,
-         *     `owner_template_id`).
+         *     [`TemplateListExtras`] (`folder_id` + `recursive`, `tag`,
+         *     `base_template_id`, `owner_template_id`).
          */
         get: operations["list_templates"];
         put?: never;
@@ -2348,6 +2314,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/folder
+         * @description The template's current home folder (by chain root), or `null` when it
+         *     lives at the workspace root. Read-gated like the tags endpoint so the
+         *     move dialog can show the current home without a fan-out.
+         */
+        get: operations["get_template_folder"];
+        /**
+         * PUT /api/v1/templates/{id}/folder
+         * @description Set (or clear) a template's home folder. `folder_id = Some` upserts the
+         *     `template_folders` row (validating the folder is in the template's
+         *     workspace); `folder_id = None` deletes the row (moves the template to the
+         *     workspace root). Keyed on the chain root so it follows the live version.
+         */
+        put: operations["set_template_folder"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/io-contract": {
         parameters: {
             query?: never;
@@ -2439,28 +2434,6 @@ export interface paths {
         put?: never;
         /** POST /api/v1/templates/{id}/new-version */
         post: operations["new_version"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/templates/{id}/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * GET /api/v1/templates/{id}/projects
-         * @description Projects this template (by chain root) is currently attached to, within
-         *     its workspace. Read-gated like the tags endpoint so the assign dialog can
-         *     show membership and offer a detach toggle without a fan-out.
-         */
-        get: operations["list_template_projects"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3075,6 +3048,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{id}/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/workspaces/{id}/folders
+         * @description Flat list of every folder in the workspace, ordered by `path`. The
+         *     frontend reconstructs the tree from `parent_id`.
+         */
+        get: operations["list_folders"];
+        put?: never;
+        /**
+         * POST /api/v1/workspaces/{id}/folders
+         * @description Create a folder under an optional parent. `path` is derived from the
+         *     parent's path + the new slug. A sibling-slug or root-slug collision maps
+         *     to 409.
+         */
+        post: operations["create_folder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{id}/members": {
         parameters: {
             query?: never;
@@ -3120,24 +3120,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/workspaces/{id}/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** GET /api/v1/workspaces/{id}/projects */
-        get: operations["list_projects"];
-        put?: never;
-        /** POST /api/v1/workspaces/{id}/projects */
-        post: operations["create_project"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/workspaces/{id}/tags": {
         parameters: {
             query?: never;
@@ -3160,7 +3142,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json": {
+    "/api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json": {
         parameters: {
             query?: never;
             header?: never;
@@ -3168,13 +3150,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json
+         * GET /api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json
          * @description Returns a synthesized OpenAPI 3.0.3 document covering every callable
-         *     trigger in the project's attached templates. The shape is suitable for
-         *     feeding into `openapi-typescript`, `openapi-generator`, or any OAS3
-         *     viewer.
+         *     trigger in the templates homed anywhere in the folder's subtree. The shape
+         *     is suitable for feeding into `openapi-typescript`, `openapi-generator`, or
+         *     any OAS3 viewer.
          */
-        get: operations["project_openapi_bundle"];
+        get: operations["folder_openapi_bundle"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3551,16 +3533,6 @@ export interface components {
              * @description The asset version this run pinned (immutable for the life of the run).
              */
             version_used: number;
-        };
-        AttachTemplateRequest: {
-            /**
-             * Format: uuid
-             * @description The *base* template id (the first version's id, which the
-             *     `is_latest`-chained version graph hangs off of). Project membership
-             *     follows the live version chain so attaching once survives version
-             *     bumps.
-             */
-            template_id: string;
         };
         /**
          * @description One attachment. The compiler emits one of these per `attachments[]` entry
@@ -4325,6 +4297,16 @@ export interface components {
             /** @description Capability name, unique within the workspace. */
             name: string;
         };
+        CreateFolderRequest: {
+            description?: string;
+            display_name: string;
+            /**
+             * Format: uuid
+             * @description Parent folder; `None` creates a root-level folder.
+             */
+            parent_id?: string | null;
+            slug: string;
+        };
         CreateInstanceRequest: {
             /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
@@ -4373,11 +4355,6 @@ export interface components {
              * @description Optional workspace scoping. `None` resolves to the caller's workspace.
              */
             workspace_id?: string | null;
-        };
-        CreateProjectRequest: {
-            description?: string;
-            display_name: string;
-            slug: string;
         };
         /** @description Request body for `POST /api/v1/runners/registration-tokens`. */
         CreateRegistrationTokenRequest: {
@@ -5042,6 +5019,31 @@ export interface components {
         FleetMetrics: {
             clusters: components["schemas"]["ClusterMetrics"][];
             fleet_total: components["schemas"]["ClusterMetrics"];
+        };
+        /**
+         * @description A folder node in a workspace's single-parent template tree (filesystem
+         *     model). `path` is the materialized path ('/a/b/c'); the frontend builds the
+         *     tree from `parent_id`.
+         */
+        Folder: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            description: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Parent folder, or `None` for a root-level folder.
+             */
+            parent_id?: string | null;
+            /** @description Materialized path, e.g. `/research/q3`. Unique within a workspace. */
+            path: string;
+            slug: string;
+            /** Format: uuid */
+            workspace_id: string;
         };
         /**
          * @description One holder of a live token grant, best-effort decoded from an `allocations`
@@ -6851,19 +6853,6 @@ export interface components {
              */
             updated_at: string;
         };
-        Project: {
-            /** Format: date-time */
-            created_at: string;
-            /** Format: uuid */
-            created_by: string;
-            description: string;
-            display_name: string;
-            /** Format: uuid */
-            id: string;
-            slug: string;
-            /** Format: uuid */
-            workspace_id: string;
-        };
         /**
          * @description Configuration for a single Prometheus query job.
          *
@@ -7489,11 +7478,11 @@ export interface components {
         };
         /**
          * @description Polymorphic owner discriminator. A resource/asset/asset-type is owned by
-         *     **exactly one** scope; visibility flows downward (template ⊃ project ⊃
+         *     **exactly one** scope; visibility flows downward (template ⊃ folder ⊃
          *     workspace) with most-specific-wins. See [`crate::scope`].
          * @enum {string}
          */
-        ScopeKind: "workspace" | "project" | "template";
+        ScopeKind: "workspace" | "folder" | "template";
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -7520,6 +7509,14 @@ export interface components {
              * @description Target workspace id. The caller must already be a member.
              */
             workspace_id: string;
+        };
+        /**
+         * @description Set (or clear) the home folder of a template. `None` moves the template to
+         *     the workspace root (deletes its `template_folders` row).
+         */
+        SetFolderRequest: {
+            /** Format: uuid */
+            folder_id?: string | null;
         };
         SetTagsRequest: {
             tags: string[];
@@ -8366,6 +8363,23 @@ export interface components {
             fields?: components["schemas"]["PortField"][] | null;
         };
         /**
+         * @description Partial update for a folder. All fields optional. Supplying `slug` and/or
+         *     `parent_id` performs a MOVE (subtree paths are rewritten); `display_name` /
+         *     `description` are COALESCE renames.
+         */
+        UpdateFolderRequest: {
+            description?: string | null;
+            display_name?: string | null;
+            /**
+             * Format: uuid
+             * @description New parent folder (move). Present-and-`null` is ambiguous with absent in
+             *     flat JSON, so a move-to-root is expressed via `slug` change or by the
+             *     caller setting a different parent; `Some(id)` reparents under `id`.
+             */
+            parent_id?: string | null;
+            slug?: string | null;
+        };
+        /**
          * @description Request body for `PUT /api/v1/job-templates/{id}`. A change to any of
          *     `common_spec` / `escape_hatch` / `parameters` BUMPS a new version;
          *     metadata-only changes (`display_name` / `visibility` / `consumer_locked`)
@@ -8385,14 +8399,6 @@ export interface components {
             escape_hatch?: null | components["schemas"]["EscapeHatch"];
             parameters?: components["schemas"]["TemplateParameter"][] | null;
             visibility?: string | null;
-        };
-        /**
-         * @description Partial update for a project. Both fields optional — omitted fields are
-         *     left untouched (COALESCE). `slug` is immutable (stable filter key).
-         */
-        UpdateProjectRequest: {
-            description?: string | null;
-            display_name?: string | null;
         };
         /**
          * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
@@ -9365,7 +9371,7 @@ export interface operations {
                 per_page?: number;
                 /**
                  * @description Scope context for downward-visibility resolution. `workspace` (the
-                 *     caller's workspace) when omitted. Format: `workspace`, `project:<uuid>`,
+                 *     caller's workspace) when omitted. Format: `workspace`, `folder:<uuid>`,
                  *     or `template:<uuid>`.
                  */
                 scope?: string | null;
@@ -11064,6 +11070,108 @@ export interface operations {
             };
         };
     };
+    delete_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted (content reparented) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Folder not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Folder"];
+                };
+            };
+            /** @description Illegal move (cycle) or bad parent */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Folder not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sibling slug already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_inference_requests: {
         parameters: {
             query?: {
@@ -12628,165 +12736,6 @@ export interface operations {
             };
         };
     };
-    delete_project: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Editor role required */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Project not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    update_project: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Updated */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"];
-                };
-            };
-            /** @description Editor role required */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Project not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    attach_template: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AttachTemplateRequest"];
-            };
-        };
-        responses: {
-            /** @description Attached */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Forbidden */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Project or template not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    detach_template: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project id */
-                id: string;
-                /** @description Base template id */
-                base_template_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Detached */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Editor role required */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     provenance_from_artifact: {
         parameters: {
             query?: {
@@ -12954,7 +12903,7 @@ export interface operations {
                 workspace_id?: string | null;
                 /**
                  * @description Scope context for downward-visibility resolution (docs/20 §2). Format:
-                 *     `workspace`, `project:<uuid>`, or `template:<uuid>`. When present it
+                 *     `workspace`, `folder:<uuid>`, or `template:<uuid>`. When present it
                  *     overrides `workspace_id`: the list returns the most-specific-wins
                  *     visible set for the binding context. When absent, the legacy flat
                  *     `workspace_id` filter applies.
@@ -13865,11 +13814,18 @@ export interface operations {
                  */
                 base_template_id?: string | null;
                 /**
-                 * @description Restrict to templates attached to a project (M:N via
-                 *     `project_templates.base_template_id`). The join is non-restrictive
-                 *     w.r.t. version chain — the live `is_latest` row wins.
+                 * @description Restrict to templates homed in this folder (via
+                 *     `template_folders.base_template_id`). With `recursive=true` the filter
+                 *     covers the whole subtree rooted at the folder; otherwise only direct
+                 *     members. The live `is_latest` row wins.
                  */
-                project_id?: string | null;
+                folder_id?: string | null;
+                /**
+                 * @description When a `folder_id` is supplied, include templates homed anywhere in the
+                 *     folder's subtree (matched by materialized-path prefix) rather than only
+                 *     its direct members.
+                 */
+                recursive?: boolean;
                 /** @description Restrict to templates carrying this tag in the user's workspace. */
                 tag?: string | null;
                 /**
@@ -14328,6 +14284,99 @@ export interface operations {
             };
         };
     };
+    get_template_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Home folder, or null at root */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": null | components["schemas"]["Folder"];
+                };
+            };
+            /** @description No read access */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_template_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Folder set / cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Folder not in template's workspace */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_io_contract: {
         parameters: {
             query?: {
@@ -14498,47 +14547,6 @@ export interface operations {
             };
             /** @description Server error */
             500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    list_template_projects: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Template id (any version) */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Projects containing this template */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"][];
-                };
-            };
-            /** @description No read access */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Template not found */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15791,6 +15799,92 @@ export interface operations {
             };
         };
     };
+    list_folders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Folders in this workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Folder"][];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Folder created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Folder"];
+                };
+            };
+            /** @description Parent not in this workspace */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Sibling slug already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_members: {
         parameters: {
             query?: never;
@@ -15918,83 +16012,6 @@ export interface operations {
             };
         };
     };
-    list_projects: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Projects in this workspace */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"][];
-                };
-            };
-            /** @description Not a member */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    create_project: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Workspace id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Project created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"];
-                };
-            };
-            /** @description Editor role required */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Slug already exists */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     list_workspace_tags: {
         parameters: {
             query?: never;
@@ -16027,21 +16044,21 @@ export interface operations {
             };
         };
     };
-    project_openapi_bundle: {
+    folder_openapi_bundle: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 /** @description Workspace id */
                 workspace_id: string;
-                /** @description Project id */
-                project_id: string;
+                /** @description Folder id */
+                folder_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Project OpenAPI bundle */
+            /** @description Folder OpenAPI bundle */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16059,7 +16076,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Project not found or not in workspace */
+            /** @description Folder not found or not in workspace */
             404: {
                 headers: {
                     [name: string]: unknown;

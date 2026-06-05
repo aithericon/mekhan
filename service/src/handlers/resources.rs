@@ -684,7 +684,7 @@ async fn list_resources_scoped(
     use crate::models::asset::ScopeKind;
     use crate::scope::{self, Scope, ScopedItem};
 
-    // Parse the scope token: `workspace`, `project:<uuid>`, `template:<uuid>`.
+    // Parse the scope token: `workspace`, `folder:<uuid>`, `template:<uuid>`.
     let (kind, scope_id) = {
         let raw = scope_raw.trim();
         if raw.is_empty() || raw == "workspace" {
@@ -697,7 +697,7 @@ async fn list_resources_scoped(
         } else {
             let (k, ids) = raw.split_once(':').ok_or_else(|| {
                 ApiError::bad_request(format!(
-                    "invalid scope '{raw}' — expected `workspace`, `project:<uuid>`, or `template:<uuid>`"
+                    "invalid scope '{raw}' — expected `workspace`, `folder:<uuid>`, or `template:<uuid>`"
                 ))
             })?;
             let kind = ScopeKind::from_db(k)
@@ -717,8 +717,8 @@ async fn list_resources_scoped(
         kinds.push("workspace".to_string());
         ids.push(ws);
     }
-    for p in &visible.projects {
-        kinds.push("project".to_string());
+    for p in &visible.folders {
+        kinds.push("folder".to_string());
         ids.push(*p);
     }
     if let Some(t) = visible.template {

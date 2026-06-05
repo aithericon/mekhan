@@ -1,6 +1,6 @@
 /**
- * Parser for the synthesized per-project OpenAPI bundle
- * (`GET /api/v1/workspaces/{ws}/projects/{p}/openapi.json`).
+ * Parser for the synthesized per-folder OpenAPI bundle
+ * (`GET /api/v1/workspaces/{ws}/folders/{id}/openapi.json`).
  *
  * The bundle is a free-form OpenAPI 3.0.3 document (not part of `schema.d.ts`),
  * so we normalize it here into the small shape the API drawer + invoke
