@@ -239,6 +239,12 @@ message EmitControlRequest {
 message StreamChunksRequest {
     string channel = 1;
     string subject = 2;
+    // Out-of-band transport tag lifted from the producer's `open` descriptor
+    // (`jetstream` | `nats-latest`). The consumer's executor dispatches the
+    // matching subscribe adapter off this so it reads the stream the same way
+    // the producer wrote it. Empty defaults to `jetstream` (older producers /
+    // descriptors that predate the field).
+    string transport = 3;
 }
 
 // One binary envelope on a data stream (producer→consumer), or the end-of-stream

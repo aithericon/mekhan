@@ -16,7 +16,9 @@ pub mod staging;
 
 pub use batch::BatchRunner;
 pub use cancel::{CancellationRegistry, NatsCancelListener};
-pub use chunks::{datastream_subject, JetStreamTransport, StreamTransport};
+pub use chunks::{
+    datastream_subject, JetStreamTransport, NatsLatestTransport, StreamTransport, TransportRegistry,
+};
 pub use completion::CompletionTracker;
 pub use config::{
     CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, ModelAgentSettings,

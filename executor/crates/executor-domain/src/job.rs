@@ -103,6 +103,21 @@ pub struct ChannelManifestEntry {
 
     /// Element shape tag: `"json"`, `"binary"`, or `"any"`.
     pub element_kind: String,
+
+    /// Out-of-band transport tag for a `data` channel: `"jetstream"` (default)
+    /// or `"nats-latest"`. The producer's executor dispatches the publish
+    /// adapter off this; the SDK stamps it into the `open` descriptor so the
+    /// consumer's executor dispatches the subscribe adapter to match. Defaults
+    /// to `"jetstream"` for older specs that predate the field (and is
+    /// irrelevant for `control` channels).
+    #[serde(default = "default_transport")]
+    pub transport: String,
+}
+
+/// The default transport tag (`"jetstream"`) for a manifest entry whose spec
+/// predates the `transport` field. Keeps deserialization total.
+fn default_transport() -> String {
+    "jetstream".to_string()
 }
 
 /// Open-ended execution spec. The `backend` field selects which backend

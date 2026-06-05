@@ -1,6 +1,6 @@
 {
   "definitions": {
-    "Ctrl__joiner": {
+    "Ctrl__consumer": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -12,7 +12,7 @@
       "additionalProperties": true,
       "type": "object"
     },
-    "Data__joiner": {
+    "Data__consumer": {
       "additionalProperties": true,
       "properties": {
         "detail": {
@@ -27,9 +27,15 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "transcript": {
+                "received": {
                   "type": [
-                    "string",
+                    "number",
+                    "null"
+                  ]
+                },
+                "total_bytes": {
+                  "type": [
+                    "number",
                     "null"
                   ]
                 }
@@ -84,7 +90,18 @@
                 "null"
               ]
             },
-            "outputs": {}
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "sent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
           },
           "type": "object"
         },
@@ -1169,7 +1186,7 @@
   "groups": [
     {
       "id": "group_1",
-      "name": "Producer"
+      "name": "Producer (nats-latest)"
     },
     {
       "id": "group_10",
@@ -1228,7 +1245,7 @@
     },
     {
       "id": "group_8",
-      "name": "Joiner"
+      "name": "Consumer (unchanged stream())"
     },
     {
       "id": "group_9",
@@ -1236,236 +1253,254 @@
       "parent_id": "group_8"
     }
   ],
-  "name": "17 · Stream Map",
+  "name": "43 · Lossy Frame Stream (transport dispatch proof)",
   "places": [
     {
       "group_id": "group_10",
-      "id": "joiner/accepted",
+      "id": "consumer/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/artifact_log",
+      "id": "consumer/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_12",
-      "id": "joiner/cancel_request",
+      "id": "consumer/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
       "group_id": "group_12",
-      "id": "joiner/cancelled",
+      "id": "consumer/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_12",
-      "id": "joiner/cancelling",
+      "id": "consumer/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/completed",
+      "id": "consumer/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/dead_letter",
+      "id": "consumer/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/effect_errors",
+      "id": "consumer/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
       "group_id": "group_11",
-      "id": "joiner/failed",
+      "id": "consumer/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/failure",
+      "id": "consumer/failure",
       "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/failure_log",
+      "id": "consumer/failure_log",
       "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/failure_logged",
+      "id": "consumer/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/inbox",
+      "id": "consumer/inbox",
       "name": "Inbox",
       "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/message_log",
+      "id": "consumer/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/metric_log",
+      "id": "consumer/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/output_log",
+      "id": "consumer/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/phase_log",
+      "id": "consumer/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/progress_log",
+      "id": "consumer/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_10",
-      "id": "joiner/running",
+      "id": "consumer/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_accepted",
+      "id": "consumer/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_artifact",
+      "id": "consumer/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_cancelled",
+      "id": "consumer/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_completed",
+      "id": "consumer/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_failed",
+      "id": "consumer/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_log",
+      "id": "consumer/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_metric",
+      "id": "consumer/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_output",
+      "id": "consumer/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_phase",
+      "id": "consumer/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_progress",
+      "id": "consumer/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_running",
+      "id": "consumer/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_8",
-      "id": "joiner/sig_timed_out",
+      "id": "consumer/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_9",
-      "id": "joiner/submitted",
+      "id": "consumer/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
       "group_id": "group_11",
-      "id": "joiner/timed_out",
+      "id": "consumer/timed_out",
       "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_ctrl",
+      "name": "Consumer (unchanged stream()) - Control Token",
+      "token_schema": "#/definitions/Ctrl__consumer",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_data",
+      "name": "Consumer (unchanged stream()) - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__consumer",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_output",
+      "name": "Consumer (unchanged stream()) - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -1482,68 +1517,38 @@
       "type": "state"
     },
     {
-      "id": "p_joiner_ctrl",
-      "name": "Joiner - Control Token",
-      "token_schema": "#/definitions/Ctrl__joiner",
-      "type": "state"
-    },
-    {
-      "id": "p_joiner_data",
-      "name": "Joiner - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__joiner",
-      "type": "state"
-    },
-    {
-      "id": "p_joiner_output",
-      "name": "Joiner - Output",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_producer_control_in",
-      "name": "Producer - Control Emit Inbox",
+      "name": "Producer (nats-latest) - Control Emit Inbox",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "id": "p_producer_ctrl",
-      "name": "Producer - Control Token",
+      "name": "Producer (nats-latest) - Control Token",
       "token_schema": "#/definitions/Ctrl__producer",
       "type": "state"
     },
     {
       "id": "p_producer_data",
-      "name": "Producer - Parked Data (write-once)",
+      "name": "Producer (nats-latest) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__producer",
       "type": "state"
     },
     {
-      "id": "p_producer_items",
-      "name": "Producer - Channel 'items' (raw)",
+      "id": "p_producer_frames",
+      "name": "Producer (nats-latest) - Data Channel 'frames'",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "id": "p_producer_items_count",
-      "name": "Producer - Channel 'items' Gather Coordinator",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_producer_items_gathered",
-      "name": "Producer - Channel 'items' Gathered",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_producer_items_results",
-      "name": "Producer - Channel 'items' Items",
+      "id": "p_producer_frames_close",
+      "name": "Producer (nats-latest) - Data Channel 'frames' Close (producer status)",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_producer_output",
-      "name": "Producer - Output",
+      "name": "Producer (nats-latest) - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -1849,14 +1854,14 @@
   "transitions": [
     {
       "caused_signals": [
-        "joiner/sig_cancelled"
+        "consumer/sig_cancelled"
       ],
       "group_id": "group_12",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/cancel",
+      "id": "consumer/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1882,12 +1887,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/running",
+          "place": "consumer/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/cancel_request",
+          "place": "consumer/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -1922,12 +1927,12 @@
       },
       "outputs": [
         {
-          "place": "joiner/cancelling",
+          "place": "consumer/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "joiner/effect_errors",
+          "place": "consumer/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -1939,7 +1944,7 @@
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "joiner/dlq_effect_err",
+      "id": "consumer/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1957,7 +1962,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/effect_errors",
+          "place": "consumer/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -1984,7 +1989,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/dead_letter",
+          "place": "consumer/dead_letter",
           "port": "dead",
           "weight": 1
         }
@@ -1996,7 +2001,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "joiner/exhausted_deadend",
+      "id": "consumer/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2014,20 +2019,20 @@
       },
       "inputs": [
         {
-          "place": "joiner/failure",
+          "place": "consumer/failure",
           "port": "f",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Joiner' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Consumer (unchanged stream())' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_artifact",
+      "id": "consumer/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2045,7 +2050,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_artifact",
+          "place": "consumer/sig_artifact",
           "port": "artifacts",
           "weight": 1
         }
@@ -2072,7 +2077,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/artifact_log",
+          "place": "consumer/artifact_log",
           "port": "catalogued",
           "weight": 1
         }
@@ -2080,7 +2085,7 @@
     },
     {
       "group_id": "group_8",
-      "id": "joiner/log_failure",
+      "id": "consumer/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2098,7 +2103,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/failure_log",
+          "place": "consumer/failure_log",
           "port": "message",
           "weight": 1
         }
@@ -2125,7 +2130,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/failure_logged",
+          "place": "consumer/failure_logged",
           "port": "logged",
           "weight": 1
         }
@@ -2133,7 +2138,7 @@
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_message",
+      "id": "consumer/log_message",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2151,7 +2156,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_log",
+          "place": "consumer/sig_log",
           "port": "message",
           "weight": 1
         }
@@ -2178,7 +2183,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/message_log",
+          "place": "consumer/message_log",
           "port": "logged",
           "weight": 1
         }
@@ -2186,7 +2191,7 @@
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_metric",
+      "id": "consumer/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2204,7 +2209,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_metric",
+          "place": "consumer/sig_metric",
           "port": "metric",
           "weight": 1
         }
@@ -2231,7 +2236,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/metric_log",
+          "place": "consumer/metric_log",
           "port": "logged",
           "weight": 1
         }
@@ -2239,7 +2244,7 @@
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_output",
+      "id": "consumer/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2257,7 +2262,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_output",
+          "place": "consumer/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -2284,7 +2289,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/output_log",
+          "place": "consumer/output_log",
           "port": "log",
           "weight": 1
         }
@@ -2292,7 +2297,7 @@
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_phase",
+      "id": "consumer/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2310,7 +2315,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_phase",
+          "place": "consumer/sig_phase",
           "port": "phase",
           "weight": 1
         }
@@ -2337,7 +2342,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/phase_log",
+          "place": "consumer/phase_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2345,7 +2350,7 @@
     },
     {
       "group_id": "group_13",
-      "id": "joiner/log_progress",
+      "id": "consumer/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2363,7 +2368,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/sig_progress",
+          "place": "consumer/sig_progress",
           "port": "progress",
           "weight": 1
         }
@@ -2390,7 +2395,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/progress_log",
+          "place": "consumer/progress_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2398,7 +2403,7 @@
     },
     {
       "group_id": "group_8",
-      "id": "joiner/on_failed",
+      "id": "consumer/on_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2416,7 +2421,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/failed",
+          "place": "consumer/failed",
           "port": "e",
           "weight": 1
         }
@@ -2448,12 +2453,12 @@
       },
       "outputs": [
         {
-          "place": "joiner/failure",
+          "place": "consumer/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "joiner/failure_log",
+          "place": "consumer/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2461,7 +2466,7 @@
     },
     {
       "group_id": "group_8",
-      "id": "joiner/on_timeout",
+      "id": "consumer/on_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2479,7 +2484,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/timed_out",
+          "place": "consumer/timed_out",
           "port": "e",
           "weight": 1
         }
@@ -2511,12 +2516,12 @@
       },
       "outputs": [
         {
-          "place": "joiner/failure",
+          "place": "consumer/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "joiner/failure_log",
+          "place": "consumer/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2524,7 +2529,7 @@
     },
     {
       "group_id": "group_8",
-      "id": "joiner/prepare",
+      "id": "consumer/prepare",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2542,16 +2547,16 @@
       },
       "inputs": [
         {
-          "place": "p_producer_items_gathered",
+          "place": "p_producer_frames",
           "port": "input",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"joiner\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Joiner — concatenate the gathered collection (docs/25).\\n#\\n# The producer's Control channel \\\"items\\\" is consumed by this edge with\\n# `join: gather`, so the compiler's gather barrier parks the gathered collection\\n# as the envelope `{ output: [<word>, ...] }` on the channel's gathered place.\\n# The graph wires that place (sourceHandle \\\"items\\\") straight into this node, so\\n# the gathered envelope IS this step's input token — read the list off\\n# `input.output` (the runner exposes the inbound token as the `input` global).\\n#\\n# The items are already in stream order (the gather barrier sorts by emit\\n# index). Uppercase each word and concatenate into the final transcript —\\n# \\\"THE QUICK BROWN FOX\\\".\\n\\nelems = input.output or []\\n\\ntranscript = \\\" \\\".join(str(e).upper() for e in elems)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"transcript\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/joiner/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; d.executor_namespace = \"executor-python-grp/default\"; #{ job: d }",
+        "source": "let d = input; d.job_id = \"consumer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Consumer: drain the `frames` data channel with the ORDINARY stream() API.\\n\\nThis code is identical to what it would be over JetStream — it never names a\\ntransport. The consumer's executor lifts `transport` from the producer's `open`\\ndescriptor and dispatches the matching (lossy core-NATS) subscribe adapter. That\\nindifference is the whole point: one consumer contract, any transport.\\n\\n`received` may be LESS than the producer's `sent` — lossy-latest drops anything\\npublished before this job subscribed. We assert only that the stream delivered\\n(received >= 1), which proves the dispatched adapter actually carried bytes.\\n\\\"\\\"\\\"\\n\\nimport aithericon\\n\\nreceived = 0\\ntotal_bytes = 0\\n\\nfor frame in aithericon.stream(\\\"frames\\\"):\\n    received += 1\\n    if isinstance(frame, (bytes, bytearray)):\\n        total_bytes += len(frame)\\n\\naithericon.set_output(\\\"received\\\", received)\\naithericon.set_output(\\\"total_bytes\\\", total_bytes)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"received\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"total_bytes\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/consumer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}] }; d.executor_namespace = \"executor-python-grp/default\"; #{ job: d }",
         "type": "rhai"
       },
-      "name": "Joiner - Prepare",
+      "name": "Consumer (unchanged stream()) - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -2569,7 +2574,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/inbox",
+          "place": "consumer/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2581,7 +2586,7 @@
         "source": "f.retries < f.max_retries",
         "type": "rhai"
       },
-      "id": "joiner/retry",
+      "id": "consumer/retry",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2599,7 +2604,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/failure",
+          "place": "consumer/failure",
           "port": "f",
           "weight": 1
         }
@@ -2626,7 +2631,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/inbox",
+          "place": "consumer/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2638,7 +2643,7 @@
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "joiner/retry_effect_err",
+      "id": "consumer/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2656,7 +2661,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/effect_errors",
+          "place": "consumer/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -2683,7 +2688,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/inbox",
+          "place": "consumer/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2691,32 +2696,32 @@
     },
     {
       "caused_signals": [
-        "joiner/sig_accepted",
-        "joiner/sig_running",
-        "joiner/sig_completed",
-        "joiner/sig_failed",
-        "joiner/sig_timed_out"
+        "consumer/sig_accepted",
+        "consumer/sig_running",
+        "consumer/sig_completed",
+        "consumer/sig_failed",
+        "consumer/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "joiner/sig_artifact",
-          "log": "joiner/sig_log",
-          "metric": "joiner/sig_metric",
-          "output": "joiner/sig_output",
-          "phase": "joiner/sig_phase",
-          "progress": "joiner/sig_progress"
+          "artifact": "consumer/sig_artifact",
+          "log": "consumer/sig_log",
+          "metric": "consumer/sig_metric",
+          "output": "consumer/sig_output",
+          "phase": "consumer/sig_phase",
+          "progress": "consumer/sig_progress"
         },
         "signal_routes": {
-          "accepted": "joiner/sig_accepted",
-          "cancelled": "joiner/sig_cancelled",
-          "completed": "joiner/sig_completed",
-          "failed": "joiner/sig_failed",
-          "running": "joiner/sig_running",
-          "timed_out": "joiner/sig_timed_out"
+          "accepted": "consumer/sig_accepted",
+          "cancelled": "consumer/sig_cancelled",
+          "completed": "consumer/sig_completed",
+          "failed": "consumer/sig_failed",
+          "running": "consumer/sig_running",
+          "timed_out": "consumer/sig_timed_out"
         }
       },
       "group_id": "group_9",
-      "id": "joiner/submit",
+      "id": "consumer/submit",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2734,7 +2739,7 @@
       },
       "inputs": [
         {
-          "place": "joiner/inbox",
+          "place": "consumer/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2742,20 +2747,20 @@
       "logic": {
         "config": {
           "event_routes": {
-            "artifact": "joiner/sig_artifact",
-            "log": "joiner/sig_log",
-            "metric": "joiner/sig_metric",
-            "output": "joiner/sig_output",
-            "phase": "joiner/sig_phase",
-            "progress": "joiner/sig_progress"
+            "artifact": "consumer/sig_artifact",
+            "log": "consumer/sig_log",
+            "metric": "consumer/sig_metric",
+            "output": "consumer/sig_output",
+            "phase": "consumer/sig_phase",
+            "progress": "consumer/sig_progress"
           },
           "signal_routes": {
-            "accepted": "joiner/sig_accepted",
-            "cancelled": "joiner/sig_cancelled",
-            "completed": "joiner/sig_completed",
-            "failed": "joiner/sig_failed",
-            "running": "joiner/sig_running",
-            "timed_out": "joiner/sig_timed_out"
+            "accepted": "consumer/sig_accepted",
+            "cancelled": "consumer/sig_cancelled",
+            "completed": "consumer/sig_completed",
+            "failed": "consumer/sig_failed",
+            "running": "consumer/sig_running",
+            "timed_out": "consumer/sig_timed_out"
           }
         },
         "handler_id": "executor_submit",
@@ -2787,12 +2792,12 @@
       },
       "outputs": [
         {
-          "place": "joiner/submitted",
+          "place": "consumer/submitted",
           "port": "submitted",
           "weight": 1
         },
         {
-          "place": "joiner/effect_errors",
+          "place": "consumer/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -2804,7 +2809,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_accepted",
+      "id": "consumer/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2830,12 +2835,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/submitted",
+          "place": "consumer/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_accepted",
+          "place": "consumer/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -2862,7 +2867,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/accepted",
+          "place": "consumer/accepted",
           "port": "out",
           "weight": 1
         }
@@ -2874,7 +2879,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_cancelled",
+      "id": "consumer/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2900,12 +2905,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/cancelling",
+          "place": "consumer/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_cancelled",
+          "place": "consumer/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -2932,7 +2937,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/cancelled",
+          "place": "consumer/cancelled",
           "port": "out",
           "weight": 1
         }
@@ -2944,7 +2949,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_failed",
+      "id": "consumer/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2970,12 +2975,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/running",
+          "place": "consumer/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_failed",
+          "place": "consumer/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -3002,7 +3007,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/failed",
+          "place": "consumer/failed",
           "port": "err",
           "weight": 1
         }
@@ -3014,7 +3019,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_failed_pre_run",
+      "id": "consumer/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3040,12 +3045,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/accepted",
+          "place": "consumer/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_failed",
+          "place": "consumer/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -3072,7 +3077,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/failed",
+          "place": "consumer/failed",
           "port": "err",
           "weight": 1
         }
@@ -3084,7 +3089,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_running",
+      "id": "consumer/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3110,12 +3115,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/accepted",
+          "place": "consumer/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_running",
+          "place": "consumer/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -3142,7 +3147,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/running",
+          "place": "consumer/running",
           "port": "out",
           "weight": 1
         }
@@ -3154,7 +3159,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_success",
+      "id": "consumer/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3180,12 +3185,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/running",
+          "place": "consumer/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_completed",
+          "place": "consumer/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -3212,7 +3217,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/completed",
+          "place": "consumer/completed",
           "port": "done",
           "weight": 1
         }
@@ -3224,7 +3229,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_timeout",
+      "id": "consumer/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3250,12 +3255,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/running",
+          "place": "consumer/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_timed_out",
+          "place": "consumer/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3282,7 +3287,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/timed_out",
+          "place": "consumer/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -3294,7 +3299,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "joiner/t_timeout_pre_run",
+      "id": "consumer/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3320,12 +3325,12 @@
       },
       "inputs": [
         {
-          "place": "joiner/accepted",
+          "place": "consumer/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "joiner/sig_timed_out",
+          "place": "consumer/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3352,7 +3357,7 @@
       },
       "outputs": [
         {
-          "place": "joiner/timed_out",
+          "place": "consumer/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -3531,7 +3536,7 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Producer' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Producer (nats-latest)' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
@@ -4059,10 +4064,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — emit the words onto a Control/Out channel (docs/25).\\n#\\n# The producer declares a Control channel \\\"items\\\" (graph.json). It emits ONE\\n# uniform bracketed episode — open → N items → close — and does NOT decide how\\n# that episode folds. The CONSUMER edge\\n# (sourceHandle \\\"items\\\") carries `join: gather`, so the compiler synthesizes a\\n# per-channel gather barrier (sized on the close count) that re-orders the items\\n# by emit index and parks the gathered collection as `{ output: [<word>, ...] }`\\n# on the channel's gathered place. The downstream edge feeds that collection\\n# straight into the joiner.\\n#\\n# `out(\\\"items\\\")` opens the episode: every `ch.emit(value)` fires one\\n# instance-colored `item` control token; closing the context fires a `close`\\n# carrying the total item count.\\n#\\n# Replaces the old `streamOutput`/`set_output(f\\\"chunk_i\\\")` model: no per-chunk\\n# token spam in the marking, just one open + N items + one close, each a control\\n# emission off-band of the net's firing.\\n\\nimport aithericon\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nwith aithericon.out(\\\"items\\\") as ch:\\n    for w in words:\\n        ch.emit(w)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"any\", \"name\": \"items\", \"plane\": \"control\", \"transport\": \"jetstream\"}] }; d.executor_namespace = \"executor-python-grp/default\"; #{ job: d }",
+        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Producer: pace small binary frames over a LOSSY-LATEST data channel.\\n\\nThe channel `frames` declares `transport: nats-latest` in the graph, so its\\nbytes ride plain core NATS (no JetStream, no replay, no back-pressure) instead of\\nthe durable default. Nothing here is transport-aware — this is the exact same\\n`open_output(...).write(...)` API every data demo uses. The transport choice\\nlives in the manifest the compiler baked; the SDK stamps it into the `open`\\ndescriptor; the executor dispatches the lossy publish adapter off it.\\n\\nBecause core NATS has no replay, a consumer only receives frames published AFTER\\nit subscribed. We emit `open` (on context entry), wait a brief lead-in so the\\ndownstream consumer can connect, THEN start writing — so most frames land while\\nthe consumer is listening. A slow consumer still legitimately misses some: that\\nis the lossy-latest contract.\\n\\\"\\\"\\\"\\n\\nimport time\\n\\nimport aithericon\\n\\nFRAMES = 20\\nLEAD_IN_S = 0.5  # after `open`, before the first write — lets the consumer connect\\nPACE_S = 0.15  # ~3 s of streaming, a wide window for the consumer to catch up\\nFRAME_BYTES = 256\\n\\nwith aithericon.open_output(\\\"frames\\\") as out:\\n    # `open` has fired; give the consumer time to receive it and subscribe.\\n    time.sleep(LEAD_IN_S)\\n    for i in range(FRAMES):\\n        # A distinct, fixed-size binary frame per write.\\n        out.write(bytes([i & 0xFF]) * FRAME_BYTES, content_type=\\\"application/octet-stream\\\")\\n        time.sleep(PACE_S)\\n\\naithericon.set_output(\\\"sent\\\", FRAMES)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"sent\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}] }; d.executor_namespace = \"executor-python-grp/default\"; #{ job: d }",
         "type": "rhai"
       },
-      "name": "Producer - Prepare",
+      "name": "Producer (nats-latest) - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -4872,6 +4877,150 @@
       ]
     },
     {
+      "id": "t_consumer_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Consumer (unchanged stream())' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_consumer_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_consumer_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_consumer_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_consumer_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__consumer"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__consumer"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_consumer_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_consumer_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
       "id": "t_end_proc_complete",
       "input_ports": [
         {
@@ -4944,8 +5093,13 @@
         },
         {
           "cardinality": "single",
-          "name": "d_joiner",
-          "schema_ref": "#/definitions/Data__joiner"
+          "name": "d_producer",
+          "schema_ref": "#/definitions/Data__producer"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_consumer",
+          "schema_ref": "#/definitions/Data__consumer"
         }
       ],
       "input_schema": {
@@ -4958,19 +5112,25 @@
       },
       "inputs": [
         {
-          "place": "p_joiner_ctrl",
+          "place": "p_consumer_ctrl",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_joiner_data",
-          "port": "d_joiner",
+          "place": "p_producer_data",
+          "port": "d_producer",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_consumer_data",
+          "port": "d_consumer",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_joiner.detail.outputs.transcript); let __rv = #{ \"transcript\": __rv0 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_producer.detail.outputs.sent); let __rv1 = (d_consumer.detail.outputs.received); let __rv2 = (d_consumer.detail.outputs.total_bytes); let __rv = #{ \"sent\": __rv0, \"received\": __rv1, \"total_bytes\": __rv2 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Done - Result",
@@ -4998,153 +5158,12 @@
       ]
     },
     {
-      "id": "t_joiner_to_error_deadend",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "dead",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "joiner/dead_letter",
-          "port": "dead",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "throw \"automated step 'Joiner' dead-lettered (infra failure) and no error handler is wired\"",
-        "type": "rhai"
-      },
-      "name": "Joiner - Dead-letter (no handler — crash net)"
-    },
-    {
-      "id": "t_joiner_to_output",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "joiner/completed",
-          "port": "done",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: done }",
-        "type": "rhai"
-      },
-      "name": "Joiner - To Output",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_joiner_output",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_joiner_yield",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "tok",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_joiner_output",
-          "port": "tok",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
-        "type": "rhai"
-      },
-      "name": "Joiner - Yield (park data, forward control)",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "data",
-          "schema_ref": "#/definitions/Data__joiner"
-        },
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__joiner"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_joiner_data",
-          "port": "data",
-          "weight": 1
-        },
-        {
-          "place": "p_joiner_ctrl",
-          "port": "ctrl",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "effect_config": {
+        "channel_close_routes": {
+          "frames": "p_producer_frames_close"
+        },
         "channel_routes": {
-          "items": "p_producer_items"
+          "frames": "p_producer_frames"
         }
       },
       "id": "t_producer_control_emit",
@@ -5172,18 +5191,26 @@
       ],
       "logic": {
         "config": {
+          "channel_close_routes": {
+            "frames": "p_producer_frames_close"
+          },
           "channel_routes": {
-            "items": "p_producer_items"
+            "frames": "p_producer_frames"
           }
         },
         "handler_id": "control_emit",
         "type": "effect"
       },
-      "name": "Producer - Control Emit",
+      "name": "Producer (nats-latest) - Control Emit",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "p_producer_items",
+          "name": "p_producer_frames",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "p_producer_frames_close",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5197,185 +5224,13 @@
       },
       "outputs": [
         {
-          "place": "p_producer_items",
-          "port": "p_producer_items",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "guard": {
-        "source": "close.kind == \"close\"",
-        "type": "rhai"
-      },
-      "id": "t_producer_items_close",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "close",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_producer_items",
-          "port": "close",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
-        "type": "rhai"
-      },
-      "name": "Producer - Channel 'items' Close",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "count",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_producer_items_count",
-          "port": "count",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_producer_items_gather",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "count",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "batch",
-          "name": "results",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_producer_items_count",
-          "port": "count",
-          "read": true,
+          "place": "p_producer_frames",
+          "port": "p_producer_frames",
           "weight": 1
         },
         {
-          "correlate_on": "__map_id",
-          "count_from": "count.count",
-          "place": "p_producer_items_results",
-          "port": "results",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __r = results; __r.sort(|a, b| if a.__map_idx < b.__map_idx { -1 } else if a.__map_idx > b.__map_idx { 1 } else { 0 }); let __out = []; for __e in __r { __out.push(__e.value); } #{ gathered: #{ output: __out } }",
-        "type": "rhai"
-      },
-      "name": "Producer - Gather",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "gathered",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_producer_items_gathered",
-          "port": "gathered",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "guard": {
-        "source": "item.kind == \"item\"",
-        "type": "rhai"
-      },
-      "id": "t_producer_items_item",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "item",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_producer_items",
-          "port": "item",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ result: #{ value: item.payload, \"__map_idx\": item.__map_idx, \"__map_id\": item.__map_id } }",
-        "type": "rhai"
-      },
-      "name": "Producer - Channel 'items' Item",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "result",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_producer_items_results",
-          "port": "result",
+          "place": "p_producer_frames_close",
+          "port": "p_producer_frames_close",
           "weight": 1
         }
       ]
@@ -5405,10 +5260,10 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Producer' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Producer (nats-latest)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Producer - Dead-letter (no handler — crash net)"
+      "name": "Producer (nats-latest) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_producer_to_output",
@@ -5438,7 +5293,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Producer - To Output",
+      "name": "Producer (nats-latest) - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5490,7 +5345,7 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Producer - Yield (park data, forward control)",
+      "name": "Producer (nats-latest) - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5611,7 +5466,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d._process_name = \"Stream Map Demo\"; #{ output: d }",
+        "source": "let d = input; d._process_name = \"Lossy Frame Stream Demo\"; #{ output: d }",
         "type": "rhai"
       },
       "name": "Start - Derive Process Name",

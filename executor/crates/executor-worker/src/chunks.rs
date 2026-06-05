@@ -33,7 +33,9 @@
 //! before forwarding into the consumer, so an out-of-order delivery can never
 //! reach the consumer out of order.
 
-use async_nats::jetstream;
+use std::sync::Arc;
+
+use async_nats::{jetstream, Client};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -239,6 +241,143 @@ impl StreamTransport for JetStreamTransport {
             }
         });
         Ok(handle)
+    }
+}
+
+/// Lossy-latest core-NATS adapter — the semantic OPPOSITE of
+/// [`JetStreamTransport`], and what proves the [`StreamTransport`] dispatch seam
+/// is real (two adapters, selected by the channel's declared transport tag, over
+/// the SAME producer/consumer SDK).
+///
+/// Bytes ride PLAIN core NATS (no JetStream): no persistence, no replay, no
+/// per-element ack, and — on the read side — NO [`ReorderBuffer`]. The
+/// consequences are the point, not a defect:
+///
+///   * **No back-pressure.** `write` publishes fire-and-forget and returns
+///     immediately (it never awaits an ack), so a fast producer is never slowed
+///     by a slow consumer — the producer's cadence is preserved.
+///   * **Lossy / latest-wins.** A consumer only receives elements published
+///     *after* it subscribed; one that joins late or falls behind silently
+///     misses elements. This is the right transport for a high-rate liveness
+///     stream (camera frames, telemetry) where currency beats completeness.
+///
+/// Same in-band EOF sentinel as JetStream (a `ChunkMessage{is_eof:true}` on the
+/// data subject) so the consumer's read loop terminates identically.
+#[derive(Clone)]
+pub struct NatsLatestTransport {
+    nats: Client,
+}
+
+impl NatsLatestTransport {
+    pub fn new(nats: Client) -> Self {
+        Self { nats }
+    }
+}
+
+#[async_trait::async_trait]
+impl StreamTransport for NatsLatestTransport {
+    async fn write(
+        &self,
+        subject: &str,
+        envelope: &ChunkMessage,
+    ) -> Result<(), async_nats::Error> {
+        // Fire-and-forget core publish: NO ack await ⇒ NO back-pressure (lossy).
+        // The `Nats-Msg-Id` header is harmless here (core NATS ignores it); we
+        // reuse the shared encoder so the wire framing matches JetStream exactly.
+        let msg_id = format!("{subject}-{}", envelope.seq);
+        let (headers, body) = encode_envelope(envelope, &msg_id);
+        self.nats
+            .publish_with_headers(subject.to_string(), headers, body.into())
+            .await?;
+        Ok(())
+    }
+
+    async fn close(&self, subject: &str, final_seq: u64) -> Result<(), async_nats::Error> {
+        let eof = ChunkMessage {
+            seq: final_seq,
+            content_type: String::new(),
+            payload: Vec::new(),
+            is_eof: true,
+        };
+        self.write(subject, &eof).await
+    }
+
+    async fn subscribe(
+        &self,
+        subject: String,
+        sink: mpsc::Sender<ChunkMessage>,
+        shutdown: CancellationToken,
+    ) -> Result<JoinHandle<()>, async_nats::Error> {
+        let mut sub = self.nats.subscribe(subject.clone()).await?;
+        debug!(%subject, "nats-latest consumer subscribed (lossy, no replay)");
+
+        let handle = tokio::spawn(async move {
+            // NO reorder buffer: forward each message the instant it arrives.
+            // Core NATS delivers a single subject's messages in publish order but
+            // offers no gap-fill or dedup — that best-effort ordering IS the
+            // latest-wins contract.
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    next = sub.next() => {
+                        let Some(msg) = next else { break; };
+                        let env = decode_envelope(msg.headers.as_ref(), &msg.payload);
+                        let is_eof = env.is_eof;
+                        if sink.send(env).await.is_err() {
+                            break;
+                        }
+                        if is_eof {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(handle)
+    }
+}
+
+/// Resolves a channel's declared transport tag to its [`StreamTransport`]
+/// adapter. ONE registry per worker, cloned cheaply (Arc-backed) into each job's
+/// IPC sidecar. The producer's executor dispatches on the manifest entry's
+/// `transport`; the consumer's executor dispatches on the tag lifted from the
+/// `open` descriptor — so the same channel is read the way it was written,
+/// selected by data, not hardcoded.
+#[derive(Clone)]
+pub struct TransportRegistry {
+    jetstream: Arc<JetStreamTransport>,
+    nats_latest: Arc<NatsLatestTransport>,
+}
+
+impl TransportRegistry {
+    /// Build the registry from the worker's JetStream context + core NATS client
+    /// (both already connected at worker startup — no second connection).
+    pub fn new(jetstream: jetstream::Context, nats: Client) -> Self {
+        Self {
+            jetstream: Arc::new(JetStreamTransport::new(jetstream)),
+            nats_latest: Arc::new(NatsLatestTransport::new(nats)),
+        }
+    }
+
+    /// Resolve a transport tag to its adapter. `""` defaults to JetStream (older
+    /// specs/descriptors that predate the field). An UNKNOWN tag returns `None`
+    /// so the caller fails loudly rather than silently mis-routing bytes.
+    pub fn get(&self, tag: &str) -> Option<Arc<dyn StreamTransport>> {
+        match tag {
+            "" | "jetstream" => Some(self.jetstream.clone()),
+            "nats-latest" => Some(self.nats_latest.clone()),
+            _ => None,
+        }
+    }
+
+    /// Ensure any durable streams the adapters require exist. Only JetStream
+    /// needs one; core NATS (`nats-latest`) is connectionless pub/sub.
+    pub async fn ensure_streams(
+        jetstream: &jetstream::Context,
+        replicas: usize,
+    ) -> Result<(), async_nats::Error> {
+        JetStreamTransport::ensure_stream(jetstream, replicas).await
     }
 }
 

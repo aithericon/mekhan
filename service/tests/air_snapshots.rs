@@ -68,6 +68,11 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // UNCONSUMED (no consumer edge) — the UI taps it live via ?follow=1. Pins
     // that an unwired data OUT channel compiles; running it is live-only (paced).
     "42-live-audio-stream",
+    // 43-lossy-frame-stream: producer → consumer over a `nats-latest` (lossy
+    // core-NATS) DATA channel — pins that the per-channel `transport` tag lowers
+    // into the manifest; running it (live-only) proves the executor dispatches
+    // the lossy adapter off the descriptor with zero SDK change.
+    "43-lossy-frame-stream",
 ];
 
 fn repo_root() -> PathBuf {
@@ -285,6 +290,11 @@ fn snapshot_36_audio_transcribe() {
 #[test]
 fn snapshot_42_live_audio_stream() {
     run("42-live-audio-stream");
+}
+
+#[test]
+fn snapshot_43_lossy_frame_stream() {
+    run("43-lossy-frame-stream");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

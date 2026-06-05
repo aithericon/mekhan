@@ -934,11 +934,13 @@ mod tests {
                 name: "progress".into(),
                 plane: "control".into(),
                 element_kind: "json".into(),
+                transport: "jetstream".into(),
             },
             ChannelManifestEntry {
                 name: "frames".into(),
                 plane: "data".into(),
                 element_kind: "binary".into(),
+                transport: "nats-latest".into(),
             },
         ];
 

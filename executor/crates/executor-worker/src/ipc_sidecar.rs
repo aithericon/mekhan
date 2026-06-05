@@ -15,7 +15,7 @@ use aithericon_executor_domain::{
     Progress, StatusDetail,
 };
 
-use crate::chunks::{datastream_subject, StreamTransport};
+use crate::chunks::{datastream_subject, TransportRegistry};
 use crate::event_emitter::{enrich_log_fields, EventEmitter, StreamContext};
 use aithericon_executor_ipc::proto;
 use aithericon_executor_ipc::{ExecutorSidecar, ExecutorSidecarServer};
@@ -171,16 +171,18 @@ struct SidecarService {
     /// executor has no emitter (e.g. unit tests), in which case `EmitControl`
     /// validates but does not publish.
     event_emitter: Option<Arc<dyn EventEmitter>>,
-    /// Data-plane byte transport (docs/25 §6). Backs BOTH directions:
-    ///   * `PublishChunk` (producer write) — the producer writer hands the
-    ///     executor framed envelopes, the executor publishes them onto the
-    ///     channel's datastream subject; and
-    ///   * `StreamChunks` (consumer read) — the executor subscribes to the
-    ///     PRODUCER's subject (carried in the request) and relays its envelopes
-    ///     back over the server-stream.
+    /// Data-plane byte transport REGISTRY (docs/25 §6). Backs BOTH directions,
+    /// dispatching the adapter off the channel's declared transport tag:
+    ///   * `PublishChunk` (producer write) — selects the adapter from the
+    ///     manifest entry's `transport` and publishes framed envelopes onto the
+    ///     channel's subject; and
+    ///   * `StreamChunks` (consumer read) — selects the adapter from the
+    ///     `transport` the SDK lifted out of the producer's `open` descriptor,
+    ///     subscribes to the producer's subject, and relays its envelopes back.
+    ///
     /// `None` when NATS is not wired (unit tests), in which case `PublishChunk`
     /// validates + no-ops and `StreamChunks` returns an immediately-empty stream.
-    transport: Option<Arc<dyn StreamTransport>>,
+    transports: Option<TransportRegistry>,
 }
 
 #[tonic::async_trait]
@@ -324,7 +326,7 @@ impl ExecutorSidecar for SidecarService {
             &req,
             &self.execution_id,
             &self.channels,
-            &self.transport,
+            &self.transports,
         )
         .await;
         Ok(Response::new(make_response(status, error_message)))
@@ -350,8 +352,12 @@ impl ExecutorSidecar for SidecarService {
     ) -> Result<Response<Self::StreamChunksStream>, Status> {
         let req = request.into_inner();
         let subject = req.subject.trim().to_string();
+        // The transport tag the SDK lifted from the producer's `open` descriptor
+        // (empty → JetStream default). Dispatch the matching subscribe adapter so
+        // the consumer reads the stream the way the producer wrote it.
+        let transport_tag = req.transport.trim();
 
-        let Some(transport) = self.transport.clone() else {
+        let Some(registry) = self.transports.as_ref() else {
             debug!(
                 channel = %req.channel,
                 "IPC sidecar: StreamChunks with no transport wired — empty stream"
@@ -365,6 +371,12 @@ impl ExecutorSidecar for SidecarService {
             );
             return Ok(Response::new(ChunkStream::empty()));
         }
+        let Some(transport) = registry.get(transport_tag) else {
+            return Err(Status::invalid_argument(format!(
+                "stream_chunks: channel '{}' names an unknown transport '{transport_tag}'",
+                req.channel
+            )));
+        };
 
         // Subscribe to the producer's datastream subject. The transport spawns an
         // ordered+reordered drain task that forwards each envelope into `tx`;
@@ -593,13 +605,14 @@ async fn handle_emit_control(
 ///   3. an `envelope` must be present.
 ///
 /// On success the envelope is published onto
-/// `executor.datastream.{execution_id}.{channel}` via the [`StreamTransport`]; a
-/// missing transport (no NATS wired) validates then no-ops, identical offline.
+/// `executor.datastream.{execution_id}.{channel}` via the adapter the manifest
+/// entry's `transport` selects; a missing registry (no NATS wired) validates
+/// then no-ops, identical offline.
 async fn handle_publish_chunk(
     req: &proto::PublishChunkRequest,
     execution_id: &str,
     channels: &[ChannelManifestEntry],
-    transport: &Option<Arc<dyn StreamTransport>>,
+    transports: &Option<TransportRegistry>,
 ) -> (proto::ResponseStatus, Option<String>) {
     let channel = req.channel.trim();
     if channel.is_empty() {
@@ -636,8 +649,20 @@ async fn handle_publish_chunk(
     };
 
     let subject = datastream_subject(execution_id, channel);
-    match transport {
-        Some(t) => {
+    match transports {
+        Some(registry) => {
+            // Dispatch the publish adapter off the channel's DECLARED transport
+            // (the manifest entry) — the same tag the SDK stamps into the `open`
+            // descriptor, so producer-write and consumer-read agree.
+            let Some(t) = registry.get(&entry.transport) else {
+                return (
+                    proto::ResponseStatus::InvalidArgument,
+                    Some(format!(
+                        "publish_chunk: channel '{channel}' names an unknown transport '{}'",
+                        entry.transport
+                    )),
+                );
+            };
             if let Err(e) = t.write(&subject, envelope).await {
                 return (
                     proto::ResponseStatus::Error,
@@ -647,6 +672,7 @@ async fn handle_publish_chunk(
             debug!(
                 %execution_id,
                 channel,
+                transport = %entry.transport,
                 seq = envelope.seq,
                 is_eof = envelope.is_eof,
                 "datastream envelope published"
@@ -766,7 +792,7 @@ pub async fn start_ipc_sidecar(
     stream_ctx: Option<Arc<StreamContext>>,
     channels: Vec<ChannelManifestEntry>,
     event_emitter: Option<Arc<dyn EventEmitter>>,
-    transport: Option<Arc<dyn StreamTransport>>,
+    transports: Option<TransportRegistry>,
 ) -> Result<tokio::task::JoinHandle<SidecarResult>, std::io::Error> {
     // Ensure socket parent directory exists (may be outside the run dir
     // when the path was shortened to fit the Unix sun_path limit).
@@ -838,7 +864,7 @@ pub async fn start_ipc_sidecar(
             channels,
             metadata: control_metadata,
             event_emitter,
-            transport,
+            transports,
         };
 
         let shutdown = tokio_util::sync::CancellationToken::new();

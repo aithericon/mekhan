@@ -112,6 +112,7 @@ pub(crate) fn channel_manifest_rhai(channels: &[Channel]) -> String {
                 "name": c.name,
                 "plane": plane,
                 "element_kind": element_kind,
+                "transport": c.transport.wire_tag(),
             })
         })
         .collect();

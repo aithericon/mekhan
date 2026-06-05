@@ -1570,6 +1570,38 @@ impl Default for ChannelJoin {
     }
 }
 
+/// Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This
+/// is the single source of truth the producer SDK stamps into the `open`
+/// descriptor and both executors dispatch on: the producer's executor picks the
+/// publish adapter, the consumer's executor picks the subscribe adapter off the
+/// descriptor it lifted. Ignored for `Control` channels (their payloads ride the
+/// net, not a transport).
+///
+/// * `Jetstream` — the v1 default: reliable, ordered, replayable JetStream
+///   stream with per-element ack backpressure. The tappable durable log.
+/// * `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a
+///   late/slow consumer misses early elements (live frames / drop-stale). The
+///   semantic opposite of JetStream — what proves the dispatch seam is real.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChannelTransport {
+    #[default]
+    Jetstream,
+    NatsLatest,
+}
+
+impl ChannelTransport {
+    /// The wire tag baked into the manifest + descriptor (the dispatch key both
+    /// executors and the SDK switch on). Stable across the model→manifest→SDK
+    /// boundary — do not derive from the serde rename alone.
+    pub fn wire_tag(self) -> &'static str {
+        match self {
+            ChannelTransport::Jetstream => "jetstream",
+            ChannelTransport::NatsLatest => "nats-latest",
+        }
+    }
+}
+
 /// A statically-declared, typed port on an [`AutomatedStep`]. The job emits
 /// (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
 /// place at runtime; the net wires edges to it by `name`. A control OUT
@@ -1582,6 +1614,12 @@ pub struct Channel {
     pub direction: ChannelDirection,
     pub plane: ChannelPlane,
     pub element: ElementType,
+    /// Out-of-band transport for a `Data` channel's bytes (default
+    /// `Jetstream`). Ignored for `Control` channels. Baked into the manifest so
+    /// the producer SDK stamps it into the `open` descriptor and both executors
+    /// dispatch the right [`StreamTransport`] adapter off it.
+    #[serde(default)]
+    pub transport: ChannelTransport,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]

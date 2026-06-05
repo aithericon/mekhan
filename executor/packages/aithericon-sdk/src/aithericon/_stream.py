@@ -42,19 +42,21 @@ from aithericon._client import get_stub
 from aithericon._inputs import token
 
 
-def _subject_from_input(name):
-    """Lift the producer's transport ``subject`` from this consumer's input.
+def _coords_from_input(name):
+    """Lift the producer's transport COORDINATES from this consumer's input.
 
     The engine deposits the producer's ``open`` control token —
     ``{channel, kind:"open", payload:<descriptor>}`` — into the data channel's
     place, which flows into this consumer job as input. The descriptor payload is
     ``{transport, subject, content_type?, credential?}`` (docs/25 §6). We scan the
     workflow token for the matching ``open`` token and return its
-    ``descriptor.subject`` — the PRODUCER's datastream subject
-    (``executor.datastream.{producer_execution_id}.{channel}``), which the
-    executor needs to subscribe to. Returns ``None`` when no matching descriptor
-    is present (offline, or the producer has not opened yet), in which case the
-    read is a silent no-op.
+    ``(subject, transport)``: the PRODUCER's datastream subject
+    (``executor.datastream.{producer_execution_id}.{channel}``) the executor must
+    subscribe to, and the transport tag (``jetstream`` | ``nats-latest``) the
+    executor dispatches its subscribe adapter off — so the consumer reads the
+    stream the way the producer wrote it. Returns ``None`` when no matching
+    descriptor is present (offline, or the producer has not opened yet), in which
+    case the read is a silent no-op.
     """
     tok = token()
     if not isinstance(tok, dict):
@@ -80,7 +82,13 @@ def _subject_from_input(name):
     if not isinstance(descriptor, dict):
         return None
     subject = descriptor.get("subject")
-    return subject if isinstance(subject, str) and subject else None
+    if not (isinstance(subject, str) and subject):
+        return None
+    # Transport tag the producer stamped; absent/blank → executor defaults to
+    # jetstream (older descriptors that predate the field).
+    transport = descriptor.get("transport")
+    transport = transport if isinstance(transport, str) else ""
+    return subject, transport
 
 
 def _decode(envelope, element_kind):
@@ -125,18 +133,21 @@ async def _astream(name):
     resolve_data_channel(name)
     element_kind = element_kind_for(name)
 
-    # The producer's subject is the authoritative coordinate — without it the
-    # executor has nothing to subscribe to (the consumer's own execution id is
-    # NOT the producer's). No descriptor → no producer opened yet → empty read.
-    subject = _subject_from_input(name)
-    if not subject:
+    # The producer's coordinates are authoritative — without them the executor
+    # has nothing to subscribe to (the consumer's own execution id is NOT the
+    # producer's). No descriptor → no producer opened yet → empty read.
+    coords = _coords_from_input(name)
+    if not coords:
         return
+    subject, transport = coords
 
     from aithericon._proto import executor_sidecar_pb2
 
     try:
         stream = stub.StreamChunks(
-            executor_sidecar_pb2.StreamChunksRequest(channel=name, subject=subject)
+            executor_sidecar_pb2.StreamChunksRequest(
+                channel=name, subject=subject, transport=transport
+            )
         )
         for envelope in stream:
             if envelope.is_eof:
