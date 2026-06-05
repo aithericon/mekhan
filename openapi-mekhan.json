@@ -2230,6 +2230,64 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/channels/{channel}/data": {
+      "get": {
+        "tags": [
+          "executions"
+        ],
+        "summary": "GET /api/v1/executions/{execution_id}/channels/{channel}/data",
+        "description": "Stream the raw, reordered, concatenated payload bytes of one execution's\ndata-plane channel. The response `Content-Type` is taken from the channel's\nfirst envelope (default `application/octet-stream`). The stream ends at the\n`is_eof` envelope, or — for a never-closed / nonexistent channel — when no\nfurther envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an\nempty channel yields a 200 with no body). The ephemeral consumer is reaped\nby NATS via `inactive_threshold` once this response future is dropped.",
+        "operationId": "tap_channel_data",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "AutomatedStep execution id (the `execution_id` stamped on the parked output envelope).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "Data-plane channel name (Rhai-identifier-safe slug).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Concatenated channel payload bytes; Content-Type echoes the channel envelope's content_type.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Malformed execution_id or channel path component.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "JetStream consumer could not be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -2347,6 +2405,7 @@
           "models"
         ],
         "summary": "`GET /api/v1/inference/requests` — the inference audit ledger, newest-first.",
+        "description": "NOT tenant-scoped yet (deliberate, MVP): the ledger's `tenant_id` is the\n*router's* Bearer tenant (a fixed dev-noop string until real router JWT auth\nlands — docs/29 Router-MVP deferral), which does NOT yet align with mekhan's\nworkspace UUID. Filtering by `caller_workspace` here would drop every row in\ndev. Auth is still required (`AuthUser`). When the router's tenant is mapped\nto the workspace, add a `WHERE tenant_id = $workspace` scope — otherwise this\nGDPR processing record is readable across tenants. Tracked as a P5 follow-up.",
         "operationId": "list_inference_requests",
         "parameters": [
           {
@@ -11002,7 +11061,7 @@
       },
       "Channel": {
         "type": "object",
-        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. A control OUT\nchannel lowers uniformly to one accumulating place; the fold discipline\nlives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a\nuniform safety cap (positive if present); a `gather` consumer REQUIRES the\nproducer channel to set it (the barrier cap).",
+        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. A control OUT\nchannel lowers uniformly to one accumulating place; the fold discipline\nlives on the CONSUMER edge's [`ChannelJoin`], NOT here.",
         "required": [
           "name",
           "direction",
@@ -11015,14 +11074,6 @@
           },
           "element": {
             "$ref": "#/components/schemas/ElementType"
-          },
-          "max_fanout": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "minimum": 0
           },
           "name": {
             "type": "string"
@@ -11042,7 +11093,7 @@
       },
       "ChannelJoin": {
         "type": "string",
-        "description": "How a CONSUMER edge folds a CONTROL channel's bracketed episode (the\nproducer emits one uniform `open | item* | close` stream; the consumer's\n`join` decides the fold). `Each` fires downstream once per `item`\n(the old `signal` behaviour, generalised); `Gather` is the counted\nbarrier (the old `scatter` path) that collects all items, sorts by\n`__map_idx`, and projects a single array — requiring the producer\nchannel to carry a positive `max_fanout` (the barrier cap).",
+        "description": "How a CONSUMER edge folds a CONTROL channel's bracketed episode (the\nproducer emits one uniform `open | item* | close` stream; the consumer's\n`join` decides the fold). `Each` fires downstream once per `item`\n(the old `signal` behaviour, generalised); `Gather` is the counted\nbarrier (the old `scatter` path) that collects all items, sorts by\n`__map_idx`, and projects a single array — sized by the episode's own\n`close.count`.",
         "enum": [
           "each",
           "gather"
@@ -19057,6 +19108,13 @@
           "error": {
             "description": "`EffectFailed` payload (error_message, retryable, ...) for failed steps."
           },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Executor `execution_id` (`mekhan-{net}-{uuid}`) for AutomatedStep/Agent\nsteps — the key the datastream tap scopes a channel's bytes by\n(`GET /api/v1/executions/{execution_id}/channels/{c}/data`). `None` for\nnon-executor nodes (Start/End/Decision/...)."
+          },
           "inputs": {
             "description": "`{ \"<producer_node_id>\": <envelope> }` grouped by upstream owner of\neach read-arc place this step consumed."
           },
@@ -22249,6 +22307,10 @@
     {
       "name": "instances",
       "description": "Running workflow instances deployed to the petri-lab engine."
+    },
+    {
+      "name": "executions",
+      "description": "AutomatedStep execution introspection — data-plane channel byte taps (out-of-band streaming channel payloads over JetStream)."
     },
     {
       "name": "processes",

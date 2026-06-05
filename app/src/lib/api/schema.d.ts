@@ -778,6 +778,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/executions/{execution_id}/channels/{channel}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/executions/{execution_id}/channels/{channel}/data
+         * @description Stream the raw, reordered, concatenated payload bytes of one execution's
+         *     data-plane channel. The response `Content-Type` is taken from the channel's
+         *     first envelope (default `application/octet-stream`). The stream ends at the
+         *     `is_eof` envelope, or — for a never-closed / nonexistent channel — when no
+         *     further envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an
+         *     empty channel yields a 200 with no body). The ephemeral consumer is reaped
+         *     by NATS via `inactive_threshold` once this response future is dropped.
+         */
+        get: operations["tap_channel_data"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -831,7 +857,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** `GET /api/v1/inference/requests` — the inference audit ledger, newest-first. */
+        /**
+         * `GET /api/v1/inference/requests` — the inference audit ledger, newest-first.
+         * @description NOT tenant-scoped yet (deliberate, MVP): the ledger's `tenant_id` is the
+         *     *router's* Bearer tenant (a fixed dev-noop string until real router JWT auth
+         *     lands — docs/29 Router-MVP deferral), which does NOT yet align with mekhan's
+         *     workspace UUID. Filtering by `caller_workspace` here would drop every row in
+         *     dev. Auth is still required (`AuthUser`). When the router's tenant is mapped
+         *     to the workspace, add a `WHERE tenant_id = $workspace` scope — otherwise this
+         *     GDPR processing record is readable across tenants. Tracked as a P5 follow-up.
+         */
         get: operations["list_inference_requests"];
         put?: never;
         post?: never;
@@ -3905,15 +3940,11 @@ export interface components {
          *     (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
          *     place at runtime; the net wires edges to it by `name`. A control OUT
          *     channel lowers uniformly to one accumulating place; the fold discipline
-         *     lives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a
-         *     uniform safety cap (positive if present); a `gather` consumer REQUIRES the
-         *     producer channel to set it (the barrier cap).
+         *     lives on the CONSUMER edge's [`ChannelJoin`], NOT here.
          */
         Channel: {
             direction: components["schemas"]["ChannelDirection"];
             element: components["schemas"]["ElementType"];
-            /** Format: int32 */
-            max_fanout?: number | null;
             name: string;
             plane: components["schemas"]["ChannelPlane"];
         };
@@ -3929,8 +3960,8 @@ export interface components {
          *     `join` decides the fold). `Each` fires downstream once per `item`
          *     (the old `signal` behaviour, generalised); `Gather` is the counted
          *     barrier (the old `scatter` path) that collects all items, sorts by
-         *     `__map_idx`, and projects a single array — requiring the producer
-         *     channel to carry a positive `max_fanout` (the barrier cap).
+         *     `__map_idx`, and projects a single array — sized by the episode's own
+         *     `close.count`.
          * @enum {string}
          */
         ChannelJoin: "each" | "gather";
@@ -7680,6 +7711,13 @@ export interface components {
             /** @description `EffectFailed` payload (error_message, retryable, ...) for failed steps. */
             error?: unknown;
             /**
+             * @description Executor `execution_id` (`mekhan-{net}-{uuid}`) for AutomatedStep/Agent
+             *     steps — the key the datastream tap scopes a channel's bytes by
+             *     (`GET /api/v1/executions/{execution_id}/channels/{c}/data`). `None` for
+             *     non-executor nodes (Start/End/Decision/...).
+             */
+            execution_id?: string | null;
+            /**
              * @description `{ "<producer_node_id>": <envelope> }` grouped by upstream owner of
              *     each read-arc place this step consumed.
              */
@@ -10857,6 +10895,49 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    tap_channel_data: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AutomatedStep execution id (the `execution_id` stamped on the parked output envelope). */
+                execution_id: string;
+                /** @description Data-plane channel name (Rhai-identifier-safe slug). */
+                channel: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Concatenated channel payload bytes; Content-Type echoes the channel envelope's content_type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Malformed execution_id or channel path component. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JetStream consumer could not be opened. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

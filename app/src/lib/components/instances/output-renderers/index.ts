@@ -13,6 +13,7 @@ import SmtpEnvelope from './SmtpEnvelope.svelte';
 import PostgresResultEnvelope from './PostgresResultEnvelope.svelte';
 import EndTerminalEnvelope from './EndTerminalEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
+import MediaPlayer from './MediaPlayer.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
 import KeyValueList from './KeyValueList.svelte';
@@ -180,6 +181,33 @@ function matchesPostgresResult(value: unknown): boolean {
 	return hasRowCount || hasRowsAffected;
 }
 
+/** True when a `content_type` string names a playable inline-media MIME
+ *  (audio / video / image). Used by both the file-ref-media and data-URL
+ *  branches of `matchesMedia`. */
+function isMediaContentType(ct: string): boolean {
+	return /^(audio|video|image)\//.test(ct);
+}
+
+/** Inline-playable media source — either a file-ref `{url, content_type}`
+ *  whose `content_type` is audio/* | video/* | image/*, OR a `data:` URL
+ *  carrying that same media MIME (`data:audio/…`, `data:video/…`,
+ *  `data:image/…`). Routed to `MediaPlayer`, which renders an `<audio>` /
+ *  `<video>` / `<img>` inline.
+ *
+ *  Deliberately narrow: a non-media file ref (`{url}` with no media
+ *  content_type) falls through to `matchesFileRef`/FileReference, and a plain
+ *  string (a transcript, an LLM response) is NOT a `data:` media URL so it
+ *  never matches here — that's why this entry sits ABOVE both `file-ref` and
+ *  `primitive`/`storage-ref` in the registry. Exported for unit tests. */
+export function matchesMedia(value: unknown): boolean {
+	if (typeof value === 'string') {
+		const m = /^data:([^;,]+)/.exec(value);
+		return m !== null && isMediaContentType(m[1]);
+	}
+	if (!isObj(value)) return false;
+	return typeof value.url === 'string' && typeof value.content_type === 'string' && isMediaContentType(value.content_type);
+}
+
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
 function matchesFileRef(value: unknown): boolean {
 	if (!isObj(value)) return false;
@@ -290,6 +318,16 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Process token',
 		matches: matchesProcessToken,
 		component: ProcessTokenEnvelope
+	},
+	{
+		// ABOVE file-ref (so media file refs render as a player, not a generic
+		// file link) and ABOVE primitive/storage-ref (so `data:` media URLs
+		// aren't stolen as plain strings). Narrow predicate — non-media refs and
+		// plain text fall through.
+		name: 'media-player',
+		label: 'Media',
+		matches: matchesMedia,
+		component: MediaPlayer
 	},
 	{
 		name: 'file-ref',

@@ -25,10 +25,10 @@
 //!     token (guarded `item.kind == "item"`) projects to a result; the shared
 //!     `gather::emit_gather_barrier` collects exactly `count` items correlated on
 //!     `__map_id`, sorts by `__map_idx`, and reduces to one `#{ output: [..] }`
-//!     collection token on `p_{id}_{name}_gathered`. A `gather` consumer REQUIRES
-//!     the producer channel to carry a positive `max_fanout` (the barrier cap),
-//!     enforced loudly per-item and at close-count. `count == 0` (an empty
-//!     episode: `open` then `close(0)`) fires the barrier once with `[]`.
+//!     collection token on `p_{id}_{name}_gathered`. The barrier sizes itself on
+//!     the episode's own `close.count` — there is no producer-side fan-out cap.
+//!     `count == 0` (an empty episode: `open` then `close(0)`) fires the barrier
+//!     once with `[]`.
 //!
 //!   - **Data** (docs/25 §2-4) — the OPEN control token (`kind: open`), carrying
 //!     the out-of-band transport DESCRIPTOR, lands verbatim on `p_{id}_{name}`
@@ -181,7 +181,7 @@ pub(crate) fn control_inbox(
 /// Builds the per-channel raw places, the `control_emit` ingestion seam (inbox +
 /// effect transition with `channel_routes`), and — per CONSUMER-edge
 /// [`ChannelJoin`] — either an each-projection transition (`Each`) or the counted
-/// gather barrier + `max_fanout` guard (`Gather`). Returns the wiring ports the
+/// gather barrier (`Gather`). Returns the wiring ports the
 /// caller folds into the node's `NodePorts`.
 ///
 /// PRODUCER LOWERING IS UNIFORM: every control OUT channel deposits its uniform
@@ -356,23 +356,12 @@ pub(crate) fn lower_channels(
                     format!("{label} - Channel '{}' Gathered", ch.name),
                 );
 
-                // `max_fanout` guard. A `gather` consumer REQUIRES the producer
-                // channel to carry a positive `max_fanout` (enforced by
-                // `validate_channels`); a `close` whose `count` exceeds it throws
-                // → NetFailed (the instance fails loudly, never silent-dropping
-                // items). The cap also bounds the worst-case fan-out the barrier
-                // waits on.
-                let max_fanout = ch.max_fanout.unwrap_or(0);
-
-                // t_{id}_{seg}_close — consume the `close` token, enforce the cap,
-                // emit the gather coordinator `#{ count: <n>, __map_id }`. The
-                // correlate id is the emit's `__map_id`. `count == 0` (empty
-                // episode) yields `count: 0` and the barrier fires once with `[]`
-                // (the engine's count-gated gather fires when `len >= 0`).
-                let fanout_msg = format!(
-                    "gather channel '{}' on step '{label}' exceeded max_fanout ({max_fanout})",
-                    ch.name
-                );
+                // t_{id}_{seg}_close — consume the `close` token, emit the gather
+                // coordinator `#{ count: <n>, __map_id }`. The correlate id is the
+                // emit's `__map_id`. `count == 0` (empty episode) yields `count: 0`
+                // and the barrier fires once with `[]` (the engine's count-gated
+                // gather fires when `len >= 0`). The barrier sizes itself entirely
+                // on `close.count` — there is no producer-side fan-out cap.
                 ctx.transition(
                     format!("t_{id}_{seg}_close"),
                     format!("{label} - Channel '{}' Close", ch.name),
@@ -380,26 +369,14 @@ pub(crate) fn lower_channels(
                 .auto_input("close", &p_raw)
                 .auto_output("count", &p_count)
                 .guard_rhai(r#"close.kind == "close""#)
-                .logic_rhai(format!(
-                    "if close.count > {max_fanout} {{ throw \"{}\"; }} \
-                     #{{ count: #{{ count: close.count, \"__map_id\": close.__map_id }} }}",
-                    rhai_str_escape(&fanout_msg)
-                ))
+                .logic_rhai(
+                    r#"#{ count: #{ count: close.count, "__map_id": close.__map_id } }"#
+                        .to_string(),
+                )
                 .done();
 
                 // t_{id}_{seg}_item — consume each `item` token, project it to the
                 // gather's `#{ value, __map_idx, __map_id }` shape.
-                //
-                // Per-ITEM `max_fanout` guard: the close-count cap can be desynced
-                // from the actual emit count. A 0-based `__map_idx` reaching the
-                // cap means the item count has exceeded it, so throw at the first
-                // offending item — the instance fails loudly (NetFailed via
-                // ScriptError), never a silent over-fanout orphan. This is the
-                // per-item sibling of the close-count cap on `t_{id}_{seg}_close`.
-                let item_fanout_msg = format!(
-                    "gather channel '{}' on step '{label}' exceeded max_fanout ({max_fanout}) — item index out of bounds",
-                    ch.name
-                );
                 ctx.transition(
                     format!("t_{id}_{seg}_item"),
                     format!("{label} - Channel '{}' Item", ch.name),
@@ -407,10 +384,10 @@ pub(crate) fn lower_channels(
                 .auto_input("item", &p_raw)
                 .auto_output("result", &p_results)
                 .guard_rhai(r#"item.kind == "item""#)
-                .logic_rhai(format!(
-                    r#"if item.__map_idx >= {max_fanout} {{ throw "{}"; }} #{{ result: #{{ value: item.payload, "__map_idx": item.__map_idx, "__map_id": item.__map_id }} }}"#,
-                    rhai_str_escape(&item_fanout_msg)
-                ))
+                .logic_rhai(
+                    r#"#{ result: #{ value: item.payload, "__map_idx": item.__map_idx, "__map_id": item.__map_id } }"#
+                        .to_string(),
+                )
                 .done();
 
                 // Shared counted barrier: read the coordinator for `count` +
@@ -601,7 +578,7 @@ mod tests {
 
     fn gather_channel() -> serde_json::Value {
         json!({ "name": "items", "direction": "out", "plane": "control",
-                "element": { "type": "any" }, "max_fanout": 16 })
+                "element": { "type": "any" } })
     }
 
     fn data_channel() -> serde_json::Value {
@@ -844,12 +821,11 @@ mod tests {
         }
     }
 
-    /// The gather ITEM transition carries a per-item `max_fanout` guard
-    /// (`item.__map_idx >= {max_fanout}` → throw), the per-item sibling of the
-    /// close-count cap, so an over-fanout fails the instance loudly at the first
-    /// offending item rather than silently orphaning it.
+    /// The gather ITEM transition projects each item to the gather's
+    /// `#{ value, __map_idx, __map_id }` shape with NO producer-side cap — the
+    /// barrier sizes itself on `close.count`, so there is no over-fanout throw.
     #[test]
-    fn gather_item_has_per_item_max_fanout_guard() {
+    fn gather_item_projects_without_fanout_cap() {
         let graph = graph_with_consumer_join(gather_channel(), Some("gather"));
         let air =
             compile_to_air(&graph, "ch-guard", "d", &std::collections::HashMap::new()).unwrap();
@@ -861,14 +837,13 @@ mod tests {
             .or_else(|| item["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("item transition rhai source");
-        // gather_channel() declares max_fanout: 16.
         assert!(
-            src.contains("item.__map_idx >= 16"),
-            "item transition must guard against over-fanout; got {src}"
+            src.contains("__map_idx") && src.contains("__map_id"),
+            "item transition must project the gather shape; got {src}"
         );
         assert!(
-            src.contains("throw"),
-            "over-fanout must throw (NetFailed), not silently drop; got {src}"
+            !src.contains("throw"),
+            "item transition must NOT carry a fan-out cap (no throw); got {src}"
         );
     }
 
@@ -1061,26 +1036,22 @@ mod tests {
         assert_eq!(err.kind(), "channel_invalid");
     }
 
-    /// A `gather` consumer edge on a producer channel WITHOUT a positive
-    /// `max_fanout` is rejected (the barrier has no cap). The cap is no longer
-    /// tied to a producer contract — it's a consumer-join requirement.
+    /// A `gather` consumer edge is VALID with no producer-side cap — the counted
+    /// barrier sizes itself on the episode's own `close.count`.
     #[test]
-    fn validate_rejects_gather_without_producer_max_fanout() {
-        // gather consumer edge, but the producer channel declares no max_fanout.
+    fn validate_accepts_gather_without_producer_cap() {
         let graph = graph_with_consumer_join(
             json!({ "name": "items", "direction": "out", "plane": "control",
                     "element": { "type": "any" } }),
             Some("gather"),
         );
-        let err = validate_channels(&graph).unwrap_err();
-        assert_eq!(err.kind(), "channel_invalid");
+        assert!(validate_channels(&graph).is_ok());
     }
 
-    /// A bare control channel with no max_fanout and no consumer is now VALID —
-    /// it defaults to the `Each` join (the old "must declare a contract" rule is
-    /// gone; the producer is uniform).
+    /// A bare control channel with no consumer is VALID — it defaults to the
+    /// `Each` join (the producer is uniform; there are no producer-side knobs).
     #[test]
-    fn validate_accepts_control_channel_without_max_fanout() {
+    fn validate_accepts_bare_control_channel() {
         let graph = graph_with_channels(json!([
             { "name": "events", "direction": "out", "plane": "control",
               "element": { "type": "any" } }
@@ -1119,16 +1090,6 @@ mod tests {
     fn validate_accepts_well_formed_data_channel() {
         let graph = graph_with_channels(json!([data_channel()]));
         assert!(validate_channels(&graph).is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_data_channel_with_max_fanout() {
-        let graph = graph_with_channels(json!([
-            { "name": "frames", "direction": "out", "plane": "data",
-              "element": { "type": "any" }, "max_fanout": 4 }
-        ]));
-        let err = validate_channels(&graph).unwrap_err();
-        assert_eq!(err.kind(), "channel_invalid");
     }
 
     #[test]

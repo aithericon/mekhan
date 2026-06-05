@@ -269,6 +269,11 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::instances::list_instance_children))
         .routes(routes!(handlers::instances::list_instance_allocations))
         .routes(routes!(handlers::instances::stream_instance))
+        // Executions — data-plane channel byte tap. Generic byte pipe over the
+        // executor's `EXECUTOR_DATASTREAM` JetStream stream
+        // (`executor.datastream.{execution_id}.{channel}`); ephemeral consumer,
+        // streams payload bytes chunk-by-chunk until the EOF envelope.
+        .routes(routes!(handlers::executions::tap_channel_data))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))

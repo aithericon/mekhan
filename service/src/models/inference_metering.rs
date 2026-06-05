@@ -6,7 +6,7 @@
 //! (`crate::projections::inference_metering`) off the `INFERENCE_METERING`
 //! JetStream stream the router publishes to. Columns mirror the
 //! `inference_request_log` table 1:1 (see
-//! `migrations/20240147000000_inference_request_log.sql`); the `record.tenant →
+//! `migrations/20240148000000_inference_request_log.sql`); the `record.tenant →
 //! tenant_id` and `record.model → model_id` renames happen at the upsert binds
 //! in the projector.
 

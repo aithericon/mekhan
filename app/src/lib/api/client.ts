@@ -75,6 +75,7 @@ export type PromoteToTestRequest = components['schemas']['PromoteToTestRequest']
 export type WorkflowGraph = components['schemas']['WorkflowGraph'];
 export type WorkflowNode = components['schemas']['WorkflowNode'];
 export type WorkflowNodeData = components['schemas']['WorkflowNodeData'];
+export type Channel = components['schemas']['Channel'];
 export type WorkflowEdge = components['schemas']['WorkflowEdge'];
 export type Viewport = components['schemas']['Viewport'];
 export type Position = components['schemas']['Position'];

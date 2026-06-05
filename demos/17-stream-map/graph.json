@@ -18,14 +18,13 @@
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Emits one word per item onto its Control/Out channel 'items' (max_fanout=8), as a uniform open → items → close episode. The consumer edge's `join: gather` drives the gather barrier that re-orders the fan-out into a single gathered collection.",
+        "description": "Emits one word per item onto its Control/Out channel 'items', as a uniform open → items → close episode. The consumer edge's `join: gather` drives the gather barrier that re-orders the fan-out into a single gathered collection (sized on the episode's own close count).",
         "channels": [
           {
             "name": "items",
             "direction": "out",
             "plane": "control",
-            "element": { "type": "any" },
-            "max_fanout": 8
+            "element": { "type": "any" }
           }
         ],
         "executionSpec": {

@@ -331,10 +331,9 @@ impl EffectHandler for ExecutorStreamFeedHandler {
 ///
 /// ## Fire-and-forget
 ///
-/// The engine NEVER gates or declines an emit. There is no `max_fanout`
-/// enforcement here — back-pressure is JetStream's job; an over-fanout is the
-/// compiler/validation layer's concern, not the runtime's. The handler simply
-/// deposits the token.
+/// The engine NEVER gates or declines an emit — back-pressure, where it exists,
+/// is JetStream's job. The handler simply deposits the token; a gather barrier
+/// downstream sizes itself on the episode's own `close.count`.
 ///
 /// ## `effect_config`
 ///

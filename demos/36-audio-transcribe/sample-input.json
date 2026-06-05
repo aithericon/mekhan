@@ -1,0 +1,8 @@
+[
+  {
+    "start_block_id": "start",
+    "token": {
+      "audio": { "__file": "assets/sample.wav" }
+    }
+  }
+]

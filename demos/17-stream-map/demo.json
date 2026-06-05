@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f17",
   "name": "17 · Stream Map",
-  "description": "Gather fold over a streaming Control channel (docs/25). A producer AutomatedStep declares a Control/Out channel 'items' (max_fanout=8) and emits one uniform bracketed episode — open → 4 items (the/quick/brown/fox) → close — one control emission per word. The producer does NOT decide the fold; the consumer EDGE carries `join: gather`, so the compiler's gather barrier re-orders the fan-out by emit index into a single `{ output: [...] }` collection, wired (sourceHandle 'items') straight into a joiner that uppercases and concatenates the words in stream order into 'THE QUICK BROWN FOX'.",
+  "description": "Gather fold over a streaming Control channel (docs/25). A producer AutomatedStep declares a Control/Out channel 'items' and emits one uniform bracketed episode — open → 4 items (the/quick/brown/fox) → close — one control emission per word. The producer does NOT decide the fold; the consumer EDGE carries `join: gather`, so the compiler's gather barrier re-orders the fan-out by emit index into a single `{ output: [...] }` collection, wired (sourceHandle 'items') straight into a joiner that uppercases and concatenates the words in stream order into 'THE QUICK BROWN FOX'.",
   "visibility": "public"
 }

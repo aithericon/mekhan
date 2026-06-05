@@ -155,9 +155,8 @@ pub const EXECUTOR_STREAM_FEED: EffectDescriptor = EffectDescriptor {
 /// (`ControlEmitHandler`) resolves the emit's `channel` against the
 /// `channel_routes` map baked on the transition's `effect_config` and forwards
 /// the payload into the channel's own place `p_{node}_{channel}`. Fire-and-
-/// forget: the engine NEVER gates or declines (no `max_fanout` enforcement —
-/// that is the compiler/validation layer's concern; back-pressure is
-/// JetStream's). `default_input_port` / `default_output_port` are unused — the
+/// forget: the engine NEVER gates or declines an emit (back-pressure, where it
+/// exists, is JetStream's). `default_input_port` / `default_output_port` are unused — the
 /// handler reads the single bound input and deposits onto the place id resolved
 /// per-fire from `channel_routes`.
 pub const CONTROL_EMIT: EffectDescriptor = EffectDescriptor {
