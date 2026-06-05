@@ -47,7 +47,8 @@
 	id="tools"
 	type="source"
 	position={Position.Top}
-	style="background:#a855f7;border-color:#7e22ce;width:10px;height:10px;"
+	class="!h-3 !w-3 !border-2"
+	style="background:#a855f7;border-color:#7e22ce;"
 	title="Connect to tool nodes the agent can call"
 />
 <WorkflowNodeCard
@@ -123,6 +124,7 @@
 	id="error"
 	type="source"
 	position={Position.Bottom}
+	class="!h-3 !w-3 !border-2"
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On agent failure"
 />
