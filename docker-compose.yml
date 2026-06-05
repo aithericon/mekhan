@@ -23,12 +23,13 @@ services:
 
   nats:
     image: nats:2.12-alpine
-    command: ["--jetstream", "-m", "8222", "--store_dir", "/data"]
+    command: ["-c", "/etc/nats/nats.conf"]
     ports:
       - "${MEKHAN_NATS_PORT:-14333}:4222"        # client
       - "${MEKHAN_NATS_MON_PORT:-18333}:8222"    # http monitoring
     volumes:
       - mekhan-natsdata:/data
+      - ./deploy/docker/nats.conf:/etc/nats/nats.conf:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
       interval: 5s
