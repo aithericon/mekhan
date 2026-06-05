@@ -454,7 +454,7 @@ fn overlay_resource(
         aithericon_executor_backend::load_resource::<ResolvedOpenAiResource>(run_context, alias)?;
 
     if config.api_key.is_none() {
-        config.api_key = Some(resource.api_key);
+        config.api_key = resource.api_key;
     }
     if config.base_url.is_none() {
         config.base_url = resource.base_url;

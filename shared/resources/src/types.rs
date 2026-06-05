@@ -72,6 +72,79 @@ pub struct OpenAI {
     pub base_url: Option<String>,
 }
 
+/// Internal self-hosted model-pool endpoint binding (docs/28 + docs/29 P1).
+///
+/// `base_url` points at the in-cluster inference **router** (the OpenAI-compatible
+/// proxy in front of the self-hosted model servers). This is a DISTINCT kind from
+/// [`OpenAI`] on purpose: it carries the IDENTICAL overlay shape
+/// (`api_key` + `base_url`, the only fields the provider-agnostic executor overlay
+/// `executor-llm/src/backend.rs::overlay_resource` reads), so the executor needs
+/// ZERO change — but the separate wire-name gives the frontend the router-backed
+/// signal it keys the model picker + the GDPR off-router LOCK off of (an
+/// `internal_llm` binding must never be able to silently escape off-router — doc 28
+/// §11), plus a DB-level audit marker.
+///
+/// Divergence from [`OpenAI`]: here `base_url` is **required + public** (the router
+/// endpoint is the whole point of the binding) and `api_key` is **optional** (an
+/// in-cluster router is frequently unauthenticated). When the router IS
+/// authenticated, stage an `api_key` so the overlay (whose `ResolvedOpenAiResource`
+/// requires it) deserializes cleanly.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "internal_llm",
+    display_name = "Internal Model Pool",
+    icon = "lucide-cpu"
+)]
+pub struct InternalLlm {
+    /// Base URL of the in-cluster inference router (OpenAI-compatible),
+    /// e.g. `http://router.internal:13200/v1`. Required: routing through the
+    /// router is the whole purpose of this kind.
+    pub base_url: String,
+    /// Optional bearer key for an authenticated router. Absent → no
+    /// `Authorization` header is sent (in-cluster routers are commonly open).
+    #[serde(default)]
+    #[resource(secret)]
+    pub api_key: Option<String>,
+}
+
+/// One operator-approved model in a [`ModelRegistry`]'s curated SET (docs/29 P1).
+///
+/// Defined here (not in `service/`) so the schema flows into the `model_registry`
+/// descriptor's `schemars` schema for free, and `mekhan-service` consumes the SAME
+/// type by re-export — no duplicate shape, no cyclic dep.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ApprovedModelConfig {
+    /// The model id the router routes on (e.g. `llama3`). Matches the
+    /// `ModelEntry.model_id` a runner advertises in its interface catalog.
+    pub model_id: String,
+    /// The provider wire-name the Agent/LLM step uses when calling the router
+    /// (`openai` for the OpenAI-compatible router path).
+    pub provider: String,
+    /// Optional base model id for a LoRA adapter (`None` for a base model).
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+/// Operator-curated model SET + the registry that backs the loaded-state machine
+/// (docs/29 P1). Not a credential surface itself — it references the
+/// [`InternalLlm`] resource (by `router_resource` alias) that carries the router
+/// endpoint, and enumerates the `approved_models` the operator allows to be
+/// loaded. The autoscaler (later phase) scales replica COUNT within this SET; the
+/// operator curates the SET.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "model_registry",
+    display_name = "Model Registry",
+    icon = "lucide-library"
+)]
+pub struct ModelRegistry {
+    /// Alias (`path`) of the `internal_llm` resource carrying the router endpoint.
+    pub router_resource: String,
+    /// The curated SET of models the operator approves for loading.
+    #[serde(default)]
+    pub approved_models: Vec<ApprovedModelConfig>,
+}
+
 /// Anthropic API credentials + endpoint binding. Mirrors [`OpenAI`]'s shape
 /// minus the org id: `api_key` is the only secret, `base_url` lives on the
 /// resource so a corp proxy / Bedrock-Anthropic shim is paired with its key
@@ -132,7 +205,11 @@ pub struct Loki {
 /// absent means no `Authorization` header is sent. `org_id` is the multi-tenant
 /// `X-Scope-OrgID` header (Thanos/Cortex/Mimir), also optional.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "prometheus", display_name = "Prometheus", icon = "lucide-activity")]
+#[resource(
+    name = "prometheus",
+    display_name = "Prometheus",
+    icon = "lucide-activity"
+)]
 pub struct Prometheus {
     /// Base URL of the Prometheus HTTP API, e.g. `http://localhost:9090` (no
     /// trailing `/api/v1/query` — the backend appends the API path).

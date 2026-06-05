@@ -79,6 +79,7 @@ impl ApplyStrategy for EnvelopeStageStrategy {
             BorrowResolution::PythonEnvelope
                 | BorrowResolution::ResourceEnvelope { .. }
                 | BorrowResolution::AssetStaging { .. }
+                | BorrowResolution::MapItemVarEnvelope { .. }
         )
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {

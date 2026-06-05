@@ -12,6 +12,7 @@ pub mod health;
 pub mod instances;
 pub mod job_templates;
 pub mod me;
+pub mod model_pool;
 pub mod node_types;
 pub mod observability;
 pub mod openapi_bundle;

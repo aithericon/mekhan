@@ -2522,6 +2522,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "inference-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "inference-router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "async-stream",
+ "axum",
+ "chrono",
+ "config",
+ "futures",
+ "inference-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"

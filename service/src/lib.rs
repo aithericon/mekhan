@@ -220,6 +220,14 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // `capacity` + `datacenter` resource classified by the SINGLE dispatch
         // authority (`CapacityAxes::backend`) with live utilization.
         .routes(routes!(handlers::capacities::list_capacities))
+        // Model-pool (docs/28 + docs/29 P1) — loaded-set projection + the
+        // operator state-machine step. Projection/control seam only: inference
+        // bypasses the engine net + presence net, no NATS subjects added.
+        .routes(routes!(
+            handlers::model_pool::list_loaded_models,
+            handlers::model_pool::transition_model
+        ))
+        .routes(routes!(handlers::model_pool::get_model))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

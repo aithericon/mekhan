@@ -1,0 +1,8 @@
+{
+  "path": "internal_pool_router",
+  "resource_type": "internal_llm",
+  "display_name": "Internal Model Pool Router (dev)",
+  "config": {
+    "base_url": "http://localhost:11434"
+  }
+}

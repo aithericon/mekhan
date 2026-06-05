@@ -250,9 +250,16 @@ pub struct LlmConfig {
 /// so the mekhan side and the backend stay in lockstep without a dep
 /// edge between them. Used when the LLM step binds to a workspace
 /// resource via `resource_alias`.
+///
+/// `api_key` is OPTIONAL: while `aithericon_resources::types::OpenAI` requires
+/// it, this permissive overlay also backs `internal_llm` (the in-cluster pool
+/// router, which may be unauthenticated) and self-hosted OpenAI-compatible
+/// shims like Ollama that accept no key. A missing key → no `Authorization`
+/// header (see the `config.api_key` merge in `overlay_resource`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedOpenAiResource {
-    pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

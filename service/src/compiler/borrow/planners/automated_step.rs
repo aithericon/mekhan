@@ -55,6 +55,15 @@ pub(crate) enum AutomatedStepDataBorrow {
         /// staging when `is_path_site` is true.
         producer_field_kind: FieldKind,
     },
+    /// Map-body item-var stage. The consumer is a direct child of a Map
+    /// whose `item_var` matches a `{{<item_var>.…}}` ref in its Envelope
+    /// config. The element is token-resident (no parked producer), so this
+    /// stages it from the in-scope firing token — see
+    /// [`crate::compiler::borrow::shape::BorrowResolution::MapItemVarEnvelope`].
+    MapItemVar {
+        consumer_node_id: String,
+        item_var: String,
+    },
 }
 
 impl AutomatedStepDataBorrow {
@@ -66,18 +75,25 @@ impl AutomatedStepDataBorrow {
             Self::PerField {
                 consumer_node_id, ..
             } => consumer_node_id,
+            Self::MapItemVar {
+                consumer_node_id, ..
+            } => consumer_node_id,
         }
     }
     pub fn slug(&self) -> &str {
         match self {
             Self::Envelope { slug, .. } => slug,
             Self::PerField { slug, .. } => slug,
+            // The staged file stem is the item var.
+            Self::MapItemVar { item_var, .. } => item_var,
         }
     }
     pub fn producer_node(&self) -> &str {
         match self {
             Self::Envelope { producer_node, .. } => producer_node,
             Self::PerField { producer_node, .. } => producer_node,
+            // Token-resident — no parked producer.
+            Self::MapItemVar { .. } => "",
         }
     }
 }
@@ -120,6 +136,10 @@ pub(crate) fn automated_step_borrow_plan(
 
     let mut out: Vec<AutomatedStepDataBorrow> = Vec::new();
     let mut envelope_seen: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    // Dedup Map item-var stages by (consumer, item_var) so a config that
+    // references `{{cand.a}}` and `{{cand.d}}` stages `cand.json` once.
+    let mut mapitem_seen: std::collections::BTreeSet<(String, String)> =
         std::collections::BTreeSet::new();
 
     for node in &graph.nodes {
@@ -185,6 +205,28 @@ pub(crate) fn automated_step_borrow_plan(
             match decl.borrow_shape {
                 BorrowShape::Envelope => {
                     let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+                        // Not a producer slug. It may be a bare Map item-var
+                        // ref (`{{cand.field}}`) inside a Map body — token-
+                        // resident, so a Tera-templated Envelope backend's
+                        // staged-file context can't see it unless we stage it
+                        // explicitly. Gate on `!pyi_introspection`: the Python
+                        // runner already promotes token-resident keys to module
+                        // globals (so a Python body reads the item var for
+                        // free), whereas ROS/HTTP/SMTP resolve refs ONLY through
+                        // the staged-file Tera context and need it staged.
+                        // Mirror the guard planner's item_var resolution
+                        // (direct-parent Map whose item_var == head). Anything
+                        // else (Tera built-ins, `input.*`, typos) is a silent
+                        // skip, exactly as before.
+                        if !decl.pyi_introspection
+                            && is_map_item_var(graph, &node.id, &r.head)
+                            && mapitem_seen.insert((node.id.clone(), r.head.clone()))
+                        {
+                            out.push(AutomatedStepDataBorrow::MapItemVar {
+                                consumer_node_id: node.id.clone(),
+                                item_var: r.head,
+                            });
+                        }
                         continue;
                     };
                     if prod_id == node.id {
@@ -241,6 +283,24 @@ pub(crate) fn automated_step_borrow_plan(
         }
     }
     Ok(out)
+}
+
+/// True when `head` is the `item_var` of the Map that is `node_id`'s direct
+/// parent — i.e. `node_id` is a Map body element node and `{{<head>.…}}`
+/// references the per-element token the scatter stamped. Mirrors the guard
+/// planner's item_var resolution (`planners/guard.rs`): direct-parent Map only,
+/// so an Envelope-body item ref resolves exactly where a guard's would.
+fn is_map_item_var(graph: &WorkflowGraph, node_id: &str, head: &str) -> bool {
+    let Some(node) = graph.nodes.iter().find(|n| n.id == node_id) else {
+        return false;
+    };
+    let Some(parent) = node.parent_id.as_deref() else {
+        return false;
+    };
+    graph.nodes.iter().any(|n| {
+        n.id == parent
+            && matches!(&n.data, WorkflowNodeData::Map { item_var, .. } if item_var == head)
+    })
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -415,6 +475,16 @@ impl BorrowSource for AutomatedStepSource {
                         is_path_site,
                         field_kind: producer_field_kind,
                     },
+                }),
+                AutomatedStepDataBorrow::MapItemVar {
+                    consumer_node_id,
+                    item_var,
+                } => out.push(Borrow {
+                    consumer_node_id,
+                    // Token-resident — no parked producer to read-arc against.
+                    producer_node: String::new(),
+                    slug: item_var.clone(),
+                    resolution: BorrowResolution::MapItemVarEnvelope { item_var },
                 }),
             }
         }

@@ -152,6 +152,26 @@ pub(crate) enum BorrowResolution {
         literal: String,
     },
 
+    /// Map-body item-var envelope. A node that sits inside a Map body and
+    /// whose backend Tera-renders its config against staged `<slug>.json`
+    /// files (`BorrowShape::Envelope` — ROS, HTTP, SMTP) references the bare
+    /// per-element item var (`{{ cand.field }}`). A Python body reads the
+    /// same item var as a runner global (the scatter stamps `<item_var>` onto
+    /// each body token), but an Envelope backend builds its template context
+    /// only from staged files, so the bare item var is invisible there.
+    ///
+    /// This stages the token-resident element as `<item_var>.json` — sourced
+    /// from the in-scope `input.<item_var>` the prepare transition already
+    /// binds (the firing body token) — so `{{ item_var.field }}` resolves
+    /// identically to the Python body. No upstream producer and no read-arc:
+    /// the value rides the firing token, not a parked place (symmetric with
+    /// the Resource / Asset envelope variants that also skip `wire_read_arc`).
+    MapItemVarEnvelope {
+        /// The enclosing Map's `item_var` — the staged file stem
+        /// (`<item_var>.json`) and the Tera variable the body config reads.
+        item_var: String,
+    },
+
     /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
     /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
     /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config

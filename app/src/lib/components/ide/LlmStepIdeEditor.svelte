@@ -11,6 +11,7 @@
 		detectShape
 	} from '$lib/components/editor/panels/property-sections/automated/JsonSchemaBuilder.svelte';
 	import InsertRefButton from '$lib/components/editor/panels/property-sections/InsertRefButton.svelte';
+	import ModelPicker from '$lib/components/editor/panels/property-sections/shared/ModelPicker.svelte';
 	import { untrack } from 'svelte';
 
 	type Props = {
@@ -30,6 +31,10 @@
 	);
 
 	const provider = $derived((config.provider as string) ?? 'openai');
+	/// GDPR: the internal pool routes through the in-cluster router — the model
+	/// is picked from the loaded set, never free-typed.
+	const isInternal = $derived(provider === 'internal');
+	const resourceAlias = $derived((config.resource_alias as string) ?? '');
 	const responseFormatType = $derived(
 		((config.response_format as Record<string, unknown>)?.type as string) ?? 'text'
 	);
@@ -104,7 +109,8 @@
 	const providerLabels: Record<string, string> = {
 		openai: 'OpenAI',
 		anthropic: 'Anthropic',
-		ollama: 'Ollama'
+		ollama: 'Ollama',
+		internal: 'Internal Model Pool'
 	};
 </script>
 
@@ -138,25 +144,38 @@
 								<Select.Item value="openai" label="OpenAI" />
 								<Select.Item value="anthropic" label="Anthropic" />
 								<Select.Item value="ollama" label="Ollama" />
+								<Select.Item value="internal" label="Internal Model Pool" />
 							</Select.Content>
 						</Select.Root>
 					</FormField>
-					<FormField label="Model" for="ide-llm-model" class="flex-1">
-						<Input
-							id="ide-llm-model"
-							type="text"
-							value={(config.model as string) ?? ''}
-							placeholder={provider === 'anthropic'
-								? 'claude-sonnet-4-20250514'
-								: provider === 'ollama'
-									? 'llama3'
-									: 'gpt-4o'}
-							disabled={readonly}
-							oninput={(e) =>
-								setField('model', (e.currentTarget as HTMLInputElement).value)}
-							class="font-mono"
-						/>
-					</FormField>
+					{#if isInternal}
+						<div class="flex-1">
+							<ModelPicker
+								selected={(config.model as string) ?? ''}
+								onChange={(modelId) => setField('model', modelId)}
+								resourceAlias={resourceAlias}
+								{readonly}
+								testId="ide-llm-model-picker"
+							/>
+						</div>
+					{:else}
+						<FormField label="Model" for="ide-llm-model" class="flex-1">
+							<Input
+								id="ide-llm-model"
+								type="text"
+								value={(config.model as string) ?? ''}
+								placeholder={provider === 'anthropic'
+									? 'claude-sonnet-4-20250514'
+									: provider === 'ollama'
+										? 'llama3'
+										: 'gpt-4o'}
+								disabled={readonly}
+								oninput={(e) =>
+									setField('model', (e.currentTarget as HTMLInputElement).value)}
+								class="font-mono"
+							/>
+						</FormField>
+					{/if}
 				</div>
 
 				<div class="space-y-1.5">

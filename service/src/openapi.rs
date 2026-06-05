@@ -227,6 +227,19 @@ use utoipa::OpenApi;
             crate::handlers::capacities::CapacityLive,
             crate::handlers::capacities::GrantHolder,
             crate::models::capacity::CapacityBackend,
+            // Model-pool DTOs (docs/28 + docs/29 P1). `ModelSetView` appears only
+            // inside the `Vec<_>` list response, so register it + the state enum +
+            // transition request + the runner-advertised entry shapes (the live
+            // half of the loaded-set AND-gate) for frontend codegen.
+            // `ApprovedModelConfig` is NOT here: it carries only schemars (it lives
+            // in `aithericon_resources` so the `model_registry` descriptor schema
+            // picks it up) and surfaces via `GET /api/v1/resources/types`, not the
+            // utoipa component block.
+            crate::models::model_pool::ModelSetView,
+            crate::models::model_pool::ModelState,
+            crate::models::model_pool::TransitionRequest,
+            crate::models::runner::ModelEntry,
+            crate::models::runner::ModelInterfaceKind,
         ),
     ),
     tags(
@@ -257,6 +270,7 @@ use utoipa::OpenApi;
         (name = "workers", description = "Grouped + Enrolled Workers — the identity plane on the executor worker pool: enrolled, group-scoped, revocable workers that still PULL. Public `POST /enroll` is authed by a `wt_` registration token in the body; workers then authenticate with a mekhan-native `wkr_` bearer. A group is backed by a `capacity` resource with the `worker` preset. Plus the anonymous worker-pool coverage read."),
         (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
         (name = "capacities", description = "Capacity aggregator (docs/23 + docs/24) — the unified Control-Plane read: every `capacity` + `datacenter` resource classified by the SINGLE dispatch authority (`CapacityAxes::backend`) with live utilization (token holders / presence online / worker coverage / scheduler lease state)."),
+        (name = "models", description = "Model-pool control plane (docs/28 + docs/29) — the loaded-set projection (operator-curated `model_states` AND-gated against live runner interface catalogs) that sources the editor model picker, plus the operator state-machine transition (`approved → loading → loaded → draining → unloaded`). Projection/control seam only: inference bypasses the engine net + presence net; no NATS subjects."),
     ),
 )]
 pub struct ApiDoc;
