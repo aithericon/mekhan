@@ -5,14 +5,22 @@
 	//   presence  → StatusDot + "X/Y online" + advertised backends
 	//   queue     → StatusDot + "X/Y online" + advertised backends
 	//   scheduler → labelled stat grid (flavor / watcher / leases / success%)
-	// Card actions are placeholders this phase (Phase 3 wires them): presence
-	// cards link to /fleet/{id} + offer "Enroll here"; scheduler cards link to
-	// /clusters/{id} + offer reconnect/drain; all cards expose an edit/delete
-	// affordance. Semantic Tailwind tokens only so the dashboard theme applies.
+	// Card actions: presence/queue cards link to /fleet/{id} + offer "Enroll
+	// here"; scheduler cards link to /clusters/{id} + offer reconnect/drain. The
+	// edit/delete affordance lives in a header overflow (⋮) menu, top-right.
+	// Semantic Tailwind tokens only so the dashboard theme applies.
 	import { Button } from '$lib/components/ui/button';
+	import {
+		DropdownMenu,
+		DropdownMenuTrigger,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuSeparator
+	} from '$lib/components/ui/dropdown-menu';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import StatusDot from './StatusDot.svelte';
 	import BackendChips from './BackendChips.svelte';
 	import type { CapacitySummary } from '$lib/api/capacities';
@@ -69,6 +77,16 @@
 		if (capacity.backend === 'scheduler') return `/clusters/${capacity.id}`;
 		return null;
 	});
+
+	// Edit/delete now live in the header overflow menu, so the footer only renders
+	// when there's a backend-specific action (enroll / reconnect / drain) or a
+	// detail deep-link to show.
+	const hasFooterActions = $derived(
+		capacity.backend === 'presence' ||
+			capacity.backend === 'queue' ||
+			capacity.backend === 'scheduler' ||
+			detailHref != null
+	);
 </script>
 
 <div
@@ -76,13 +94,40 @@
 		{tone === 'live' ? 'border-emerald-200 dark:border-emerald-800/50' : 'border-border'}"
 	data-testid="capacity-card-{capacity.id}"
 >
-	<!-- Header: name + path -->
+	<!-- Header: name + path, with an overflow (⋮) menu for edit/delete top-right -->
 	<div class="flex min-w-0 items-start gap-2">
 		{#if showDot}<StatusDot {tone} class="mt-1" />{/if}
 		<div class="min-w-0 flex-1">
 			<p class="truncate text-sm font-medium text-foreground">{capacity.display_name}</p>
 			<p class="truncate font-mono text-sm text-muted-foreground">{capacity.path}</p>
 		</div>
+		<DropdownMenu>
+			<DropdownMenuTrigger
+				data-testid="capacity-menu-{capacity.id}"
+				aria-label="Capacity actions"
+				class="-mr-1 -mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+			>
+				<EllipsisVertical class="size-4" />
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				<DropdownMenuItem
+					data-testid="capacity-edit-{capacity.id}"
+					onSelect={() => onedit?.(capacity.id)}
+				>
+					<Pencil class="size-4" />
+					Edit
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem
+					variant="destructive"
+					data-testid="capacity-delete-{capacity.id}"
+					onSelect={() => ondelete?.(capacity.id)}
+				>
+					<Trash2 class="size-4" />
+					Delete
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	</div>
 
 	<!-- Live line — backend-discriminated -->
@@ -149,70 +194,51 @@
 	</div>
 
 	<!-- Actions -->
-	<div class="flex items-center gap-1 border-t border-border pt-2">
-		{#if capacity.backend === 'presence' || capacity.backend === 'queue'}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-sm text-muted-foreground"
-				onclick={() => onenroll?.(capacity.path)}
-				data-testid="capacity-enroll-{capacity.id}"
-			>
-				Enroll here
-			</Button>
-		{:else if capacity.backend === 'scheduler'}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-sm text-muted-foreground"
-				onclick={() => onreconnect?.(capacity.id)}
-				data-testid="capacity-reconnect-{capacity.id}"
-			>
-				Reconnect
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-sm text-muted-foreground"
-				onclick={() => ondrain?.(capacity.id)}
-				data-testid="capacity-drain-{capacity.id}"
-			>
-				{live.kind === 'scheduler' && live.draining ? 'Draining' : 'Drain'}
-			</Button>
-		{/if}
+	{#if hasFooterActions}
+		<div class="flex items-center gap-1 border-t border-border pt-2">
+			{#if capacity.backend === 'presence' || capacity.backend === 'queue'}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-sm text-muted-foreground"
+					onclick={() => onenroll?.(capacity.path)}
+					data-testid="capacity-enroll-{capacity.id}"
+				>
+					Enroll here
+				</Button>
+			{:else if capacity.backend === 'scheduler'}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-sm text-muted-foreground"
+					onclick={() => onreconnect?.(capacity.id)}
+					data-testid="capacity-reconnect-{capacity.id}"
+				>
+					Reconnect
+				</Button>
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-sm text-muted-foreground"
+					onclick={() => ondrain?.(capacity.id)}
+					data-testid="capacity-drain-{capacity.id}"
+				>
+					{live.kind === 'scheduler' && live.draining ? 'Draining' : 'Drain'}
+				</Button>
+			{/if}
 
-		{#if detailHref}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="gap-1 text-sm text-muted-foreground"
-				href={detailHref}
-				data-testid="capacity-detail-{capacity.id}"
-			>
-				Detail
-				<ArrowRight class="size-3.5" />
-			</Button>
-		{/if}
-
-		<div class="ml-auto flex items-center gap-1">
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-muted-foreground"
-				onclick={() => onedit?.(capacity.id)}
-				title="Edit"
-			>
-				<Pencil class="size-3.5" />
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-				onclick={() => ondelete?.(capacity.id)}
-				title="Delete"
-			>
-				<Trash2 class="size-3.5" />
-			</Button>
+			{#if detailHref}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="ml-auto gap-1 text-sm text-muted-foreground"
+					href={detailHref}
+					data-testid="capacity-detail-{capacity.id}"
+				>
+					Detail
+					<ArrowRight class="size-3.5" />
+				</Button>
+			{/if}
 		</div>
-	</div>
+	{/if}
 </div>
