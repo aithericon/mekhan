@@ -1438,7 +1438,7 @@
       "name": "VAD filter"
     }
   ],
-  "name": "36 · Audio Transcribe (VAD → data channel → faster-whisper)",
+  "name": "36 · Audio Transcribe (VAD → data channel → streamed parts → gather)",
   "places": [
     {
       "group_id": "group_25",
@@ -6349,7 +6349,7 @@
         }
       ],
       "logic": {
-        "source": "if close.count > 256 { throw \"gather channel 'parts' on step 'Transcribe (faster-whisper)' exceeded max_fanout (256)\"; } #{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
+        "source": "#{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
         "type": "rhai"
       },
       "name": "Transcribe (faster-whisper) - Channel 'parts' Close",
@@ -6470,7 +6470,7 @@
         }
       ],
       "logic": {
-        "source": "if item.__map_idx >= 256 { throw \"gather channel 'parts' on step 'Transcribe (faster-whisper)' exceeded max_fanout (256) — item index out of bounds\"; } #{ result: #{ value: item.payload, \"__map_idx\": item.__map_idx, \"__map_id\": item.__map_id } }",
+        "source": "#{ result: #{ value: item.payload, \"__map_idx\": item.__map_idx, \"__map_id\": item.__map_id } }",
         "type": "rhai"
       },
       "name": "Transcribe (faster-whisper) - Channel 'parts' Item",

@@ -83,8 +83,7 @@
             "name": "parts",
             "direction": "out",
             "plane": "control",
-            "element": { "type": "any" },
-            "max_fanout": 256
+            "element": { "type": "any" }
           }
         ],
         "executionSpec": {

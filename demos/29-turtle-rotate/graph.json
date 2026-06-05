@@ -50,7 +50,7 @@
       "data": {
         "type": "automated_step",
         "label": "Rotate (action, streaming feedback)",
-        "description": "ROS `send_action_goal` to `/turtle1/rotate_absolute` (`turtlesim/action/RotateAbsolute`). As the turtle rotates, the action server publishes `feedback { remaining }`; the ROS backend dedups the consecutive-identical frames rosbridge emits and streams each DISTINCT feedback as an `item` control token (docs/25) into the node's Control/Out `out` channel `feedback` (max_fanout 1024). On the terminal result it stamps a `close` carrying the total count. The consumer edge to `fold` carries `join: gather`, so the compiler's per-channel gather barrier (sized on that count) re-orders the items and parks the gathered feedback collection `{ output: [{ remaining }, ...] }` on the channel's gathered place, which the downstream `fold` consumer drains — no per-feedback token spams the marking and no feedback rides the node's `outputs` map. The terminal action `delta` rides `stdout_tail` only. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement.",
+        "description": "ROS `send_action_goal` to `/turtle1/rotate_absolute` (`turtlesim/action/RotateAbsolute`). As the turtle rotates, the action server publishes `feedback { remaining }`; the ROS backend dedups the consecutive-identical frames rosbridge emits and streams each DISTINCT feedback as an `item` control token (docs/25) into the node's Control/Out `out` channel `feedback`. On the terminal result it stamps a `close` carrying the total count. The consumer edge to `fold` carries `join: gather`, so the compiler's per-channel gather barrier (sized on that count) re-orders the items and parks the gathered feedback collection `{ output: [{ remaining }, ...] }` on the channel's gathered place, which the downstream `fold` consumer drains — no per-feedback token spams the marking and no feedback rides the node's `outputs` map. The terminal action `delta` rides `stdout_tail` only. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement.",
         "deploymentModel": {
           "mode": "executor",
           "capacity": { "alias": "ros_fleet" }
@@ -65,8 +65,7 @@
             "name": "feedback",
             "direction": "out",
             "plane": "control",
-            "element": { "type": "any" },
-            "max_fanout": 1024
+            "element": { "type": "any" }
           }
         ],
         "executionSpec": {

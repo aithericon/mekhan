@@ -669,8 +669,8 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 ///   `MapItemsRef*` errors win over the guard pass's generic `GuardUnresolved`
 ///   (which would otherwise fire first on the itemsRef read-arc).
 /// - `validate_channels` (docs/25) — each AutomatedStep's streaming channel
-///   declarations: unique names, positive `max_fanout` for scatter, control-
-///   only contracts, resolvable `Json` element schemas, plane/wiring coherence.
+///   declarations: unique names, resolvable `Json` element schemas, plane/wiring
+///   coherence, and consumer-edge `join` agreement.
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,

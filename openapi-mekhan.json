@@ -10761,7 +10761,7 @@
       },
       "Channel": {
         "type": "object",
-        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. A control OUT\nchannel lowers uniformly to one accumulating place; the fold discipline\nlives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a\nuniform safety cap (positive if present); a `gather` consumer REQUIRES the\nproducer channel to set it (the barrier cap).",
+        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. A control OUT\nchannel lowers uniformly to one accumulating place; the fold discipline\nlives on the CONSUMER edge's [`ChannelJoin`], NOT here.",
         "required": [
           "name",
           "direction",
@@ -10774,14 +10774,6 @@
           },
           "element": {
             "$ref": "#/components/schemas/ElementType"
-          },
-          "max_fanout": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "minimum": 0
           },
           "name": {
             "type": "string"
@@ -10801,7 +10793,7 @@
       },
       "ChannelJoin": {
         "type": "string",
-        "description": "How a CONSUMER edge folds a CONTROL channel's bracketed episode (the\nproducer emits one uniform `open | item* | close` stream; the consumer's\n`join` decides the fold). `Each` fires downstream once per `item`\n(the old `signal` behaviour, generalised); `Gather` is the counted\nbarrier (the old `scatter` path) that collects all items, sorts by\n`__map_idx`, and projects a single array — requiring the producer\nchannel to carry a positive `max_fanout` (the barrier cap).",
+        "description": "How a CONSUMER edge folds a CONTROL channel's bracketed episode (the\nproducer emits one uniform `open | item* | close` stream; the consumer's\n`join` decides the fold). `Each` fires downstream once per `item`\n(the old `signal` behaviour, generalised); `Gather` is the counted\nbarrier (the old `scatter` path) that collects all items, sorts by\n`__map_idx`, and projects a single array — sized by the episode's own\n`close.count`.",
         "enum": [
           "each",
           "gather"

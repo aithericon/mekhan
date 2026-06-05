@@ -1545,8 +1545,8 @@ pub enum ElementType {
 /// `join` decides the fold). `Each` fires downstream once per `item`
 /// (the old `signal` behaviour, generalised); `Gather` is the counted
 /// barrier (the old `scatter` path) that collects all items, sorts by
-/// `__map_idx`, and projects a single array — requiring the producer
-/// channel to carry a positive `max_fanout` (the barrier cap).
+/// `__map_idx`, and projects a single array — sized by the episode's own
+/// `close.count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelJoin {
@@ -1564,9 +1564,7 @@ impl Default for ChannelJoin {
 /// (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
 /// place at runtime; the net wires edges to it by `name`. A control OUT
 /// channel lowers uniformly to one accumulating place; the fold discipline
-/// lives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a
-/// uniform safety cap (positive if present); a `gather` consumer REQUIRES the
-/// producer channel to set it (the barrier cap).
+/// lives on the CONSUMER edge's [`ChannelJoin`], NOT here.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Channel {
@@ -1574,8 +1572,6 @@ pub struct Channel {
     pub direction: ChannelDirection,
     pub plane: ChannelPlane,
     pub element: ElementType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_fanout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
