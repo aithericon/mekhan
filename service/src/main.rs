@@ -228,6 +228,30 @@ async fn main() -> anyhow::Result<()> {
     // handle stored in AppState.
     mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone());
 
+    // Model-pool replica autoscaler (P4-L1, docs/29 §6'). A reconcile loop that
+    // drives the model-server replica COUNT per `model_policy` resource on its
+    // target datacenter (residency-aware, GDPR fail-closed), observing the live
+    // count off the fleet roster. L1 = manual mode (`demand = None`); L2 wires a
+    // `DemandSource` over the Router `/metrics`. Inference never touches the
+    // engine net or the presence net — the loop only provisions via the staging
+    // plane (a generated `model-replica-<row>` net firing `stage_template`).
+    mekhan_service::autoscaler::spawn_autoscaler(
+        db.clone(),
+        petri.clone(),
+        runner_presence.clone(),
+        None,
+    );
+
+    // Model-replicas projection (PETRI_GLOBAL → model_replicas). Folds each
+    // `model-replica-<row>` net's terminal `stage_template` effect into its row's
+    // status/replica_slug/last_error (observed_count stays roster-driven).
+    tokio::spawn(
+        mekhan_service::projections::model_replicas::start_model_replicas_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

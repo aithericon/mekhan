@@ -240,6 +240,10 @@ use utoipa::OpenApi;
             crate::models::model_pool::TransitionRequest,
             crate::models::runner::ModelEntry,
             crate::models::runner::ModelInterfaceKind,
+            // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
+            // manual scale DTOs.
+            crate::models::model_replicas::ModelReplicaRow,
+            crate::models::model_replicas::ModelReplicaScaleRequest,
         ),
     ),
     tags(

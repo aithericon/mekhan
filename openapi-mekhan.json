@@ -3451,6 +3451,126 @@
         }
       }
     },
+    "/api/v1/models/replicas": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/replicas` — list every replica row in the workspace.",
+        "operationId": "list_model_replicas",
+        "responses": {
+          "200": {
+            "description": "Per-policy model-replica reconciliation rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelReplicaRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/replicas/{policy_id}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/replicas/{policy_id}` — one policy's replica state.",
+        "operationId": "get_model_replica",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "description": "model_policy resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One policy's replica row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No replica row for that policy yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/replicas/{policy_id}/scale": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/models/replicas/{policy_id}/scale` — the L1 manual desired\noverride. Writes `desired_count`; the loop reconciles next tick. Upserts the\nrow off the `model_policy` resource so a scale before the first reconcile\nstill takes (404 if the policy resource itself doesn't exist).",
+        "operationId": "scale_model_replica",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "description": "model_policy resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelReplicaScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Desired count written; the updated row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model_policy resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/models/{model_id}": {
       "get": {
         "tags": [
@@ -15100,6 +15220,109 @@
               "null"
             ],
             "format": "double"
+          }
+        }
+      },
+      "ModelReplicaRow": {
+        "type": "object",
+        "description": "One `model_replicas` row — the durable reconciliation target + Control-Plane\nread. `desired_count`/`observed_count` are stored `INT`; the loop works in\n`u32` and converts at the edges.",
+        "required": [
+          "id",
+          "workspace_id",
+          "policy_resource_id",
+          "model_id",
+          "datacenter_resource_id",
+          "desired_count",
+          "observed_count",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Resolved `datacenter` resource UUID (the policy carries an alias; the loop\nresolves it before the upsert)."
+          },
+          "desired_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Last desired COUNT the loop drove (or the scale endpoint's manual override)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_actuated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Anchors the durable cooldown gate (survives a mekhan restart)."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "observed_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live count from the fleet roster (runners advertising `model_id`). NOT the\nstaging effect result — that only proves \"registered\", not \"serving\"."
+          },
+          "policy_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `model_policy` resource this row reconciles (UNIQUE — one row/policy)."
+          },
+          "replica_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native job NAME registered on the cluster (Nomad service-job id). `None`\nuntil first actuation."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone recorded for the Control-Plane read + audit."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of `status::*`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ModelReplicaScaleRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/models/replicas/{policy_id}/scale` body — the L1 manual desired\noverride. Writes `desired_count` on the row; the loop picks it up next tick\n(in `manual` mode the row's `desired_count` is the live control, seeded from\nthe policy's `desired_replicas`).",
+        "required": [
+          "desired_replicas"
+        ],
+        "properties": {
+          "desired_replicas": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
