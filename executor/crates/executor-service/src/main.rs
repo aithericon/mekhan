@@ -341,9 +341,9 @@ async fn run_nats_daemon(
     // the registry so producer-write/consumer-read dispatch the adapter off the
     // channel's declared transport (`jetstream` durable | `nats-latest` lossy).
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> = Some(TransportRegistry::new(
-        jetstream.clone(),
-        nats_client_for_cancel.clone(),
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+        &config,
     ));
 
     // Build the JobExecutor. `registered_wires` is the set of backend
@@ -622,9 +622,9 @@ async fn run_nats_drain(
 
     // Data-plane byte transport REGISTRY (see `run_nats_daemon` for the rationale).
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> = Some(TransportRegistry::new(
-        jetstream.clone(),
-        nats_client_for_cancel.clone(),
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+        &config,
     ));
 
     // Build the executor with a completion tracker
@@ -759,8 +759,10 @@ async fn run_manifest(
     // Data-plane transport REGISTRY: a manifest job MAY be a producer
     // (`open_output`) or a consumer (`stream`), so wire it here too.
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> =
-        Some(TransportRegistry::new(jetstream.clone(), nats_client.clone()));
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client.clone()),
+        &config,
+    ));
     // Manifest mode is its own single-namespace dispatcher — no per-backend
     // fan-out, so the registered wire set is unused here.
     let (executor, _registered_wires) = build_executor(
@@ -1168,6 +1170,39 @@ async fn maybe_enroll_worker(
     );
 
     Ok(())
+}
+
+/// Attach the durable object-store data-plane transport (`transport: "s3"`) to a
+/// freshly-built [`TransportRegistry`], when the `opendal` feature is on and a
+/// `[storage]` section is configured. Reuses the SAME `StorageConfig` that backs
+/// the artifact store, so the datastream objects land in the configured bucket
+/// (under the store prefix). A worker with no `[storage]` simply has no `"s3"`
+/// transport — a `transport: "s3"` channel then fails loudly at dispatch.
+#[cfg(feature = "opendal")]
+fn attach_object_store(registry: TransportRegistry, config: &ExecutorConfig) -> TransportRegistry {
+    let Some(storage) = &config.storage else {
+        return registry;
+    };
+    match aithericon_executor_storage::build_operator(storage) {
+        Ok(operator) => {
+            info!(
+                backend = ?storage.backend,
+                "data-plane object-store transport enabled (transport=s3)"
+            );
+            registry.with_object_store(operator, storage.prefix.clone())
+        }
+        Err(e) => {
+            warn!(error = %e, "object-store data-plane transport unavailable — build_operator failed");
+            registry
+        }
+    }
+}
+
+/// No-op without the `opendal` feature — the `"s3"` transport is then simply
+/// absent from the registry (and the `get("s3")` match arm compiles to `None`).
+#[cfg(not(feature = "opendal"))]
+fn attach_object_store(registry: TransportRegistry, _config: &ExecutorConfig) -> TransportRegistry {
+    registry
 }
 
 /// Build the artifact store based on config.

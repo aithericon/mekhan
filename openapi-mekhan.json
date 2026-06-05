@@ -11122,10 +11122,11 @@
       },
       "ChannelTransport": {
         "type": "string",
-        "description": "Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This\nis the single source of truth the producer SDK stamps into the `open`\ndescriptor and both executors dispatch on: the producer's executor picks the\npublish adapter, the consumer's executor picks the subscribe adapter off the\ndescriptor it lifted. Ignored for `Control` channels (their payloads ride the\nnet, not a transport).\n\n* `Jetstream` — the v1 default: reliable, ordered, replayable JetStream\n  stream with per-element ack backpressure. The tappable durable log.\n* `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a\n  late/slow consumer misses early elements (live frames / drop-stale). The\n  semantic opposite of JetStream — what proves the dispatch seam is real.",
+        "description": "Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This\nis the single source of truth the producer SDK stamps into the `open`\ndescriptor and both executors dispatch on: the producer's executor picks the\npublish adapter, the consumer's executor picks the subscribe adapter off the\ndescriptor it lifted. Ignored for `Control` channels (their payloads ride the\nnet, not a transport).\n\n* `Jetstream` — the v1 default: reliable, ordered, replayable JetStream\n  stream with per-element ack backpressure. The tappable durable log.\n* `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a\n  late/slow consumer misses early elements (live frames / drop-stale). The\n  semantic opposite of JetStream — what proves the dispatch seam is real.\n* `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each\n  element is one object, the consumer polls keys in order. Lossless, ordered,\n  and fully **replayable** from element zero long after the producer finished\n  — the right transport for large/durable blobs (checkpoints, datasets,\n  archived media). A different transport SHAPE (key/value, not pub/sub),\n  proving the dispatch port is genuinely store-agnostic. Requires the worker\n  to have a `[storage]` backend configured.",
         "enum": [
           "jetstream",
-          "nats-latest"
+          "nats-latest",
+          "s3"
         ]
       },
       "ChatMessage": {

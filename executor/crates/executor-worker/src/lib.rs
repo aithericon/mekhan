@@ -16,6 +16,8 @@ pub mod staging;
 
 pub use batch::BatchRunner;
 pub use cancel::{CancellationRegistry, NatsCancelListener};
+#[cfg(feature = "opendal")]
+pub use chunks::S3Transport;
 pub use chunks::{
     datastream_subject, JetStreamTransport, NatsLatestTransport, StreamTransport, TransportRegistry,
 };

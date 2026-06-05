@@ -100,26 +100,34 @@ pub fn datastream_subject(execution_id: &str, channel: &str) -> String {
 }
 
 /// The data-plane byte transport **port** (docs/25 §6). Adapters are pluggable
-/// (JetStream is the v1 impl; S3 / lossy-latest are P2). A producer `write`s
-/// framed envelopes onto a subject and `close`s with a final EOF; a consumer
-/// `subscribe`s and drains envelopes in order.
+/// and selected by a channel's declared transport tag; a producer `write`s
+/// framed envelopes and `close`s with a final EOF, a consumer `subscribe`s and
+/// drains envelopes in order.
+///
+/// The `locator` is **opaque to the port** — it is whatever the producer's `open`
+/// descriptor carried (today `executor.datastream.{exec}.{channel}`), and each
+/// adapter interprets it in its OWN address space: the NATS adapters treat it as
+/// a subject, the object-store adapter treats it as a key prefix. That opacity is
+/// the load-bearing decoupling — the port assumes no NATS (or any) transport
+/// shape, so a non-pub/sub transport (S3) drops in with no port change.
 #[async_trait::async_trait]
 pub trait StreamTransport: Send + Sync {
-    /// Publish one binary envelope onto `subject` (producer write). Ordered:
-    /// awaiting the ack lets the transport's window back-pressure a too-fast
-    /// producer (docs/25 §5). `seq` keys per-subject dedup.
-    async fn write(&self, subject: &str, envelope: &ChunkMessage)
+    /// Publish one binary envelope at `locator` (producer write). Where the
+    /// adapter awaits durable acceptance (JetStream ack, an object PUT) this
+    /// back-pressures a too-fast producer (docs/25 §5). `seq` keys per-locator
+    /// dedup/ordering.
+    async fn write(&self, locator: &str, envelope: &ChunkMessage)
         -> Result<(), async_nats::Error>;
 
-    /// Publish the in-band EOF sentinel onto `subject` (producer close). The
+    /// Publish the in-band EOF sentinel at `locator` (producer close). The
     /// consumer drains up to and including this and ends its stream.
-    async fn close(&self, subject: &str, final_seq: u64) -> Result<(), async_nats::Error>;
+    async fn close(&self, locator: &str, final_seq: u64) -> Result<(), async_nats::Error>;
 
-    /// Subscribe to `subject` and forward each decoded envelope into `sink` in
+    /// Subscribe to `locator` and forward each decoded envelope into `sink` in
     /// `seq` order until EOF (consumer read). Spawns a task; returns its handle.
     async fn subscribe(
         &self,
-        subject: String,
+        locator: String,
         sink: mpsc::Sender<ChunkMessage>,
         shutdown: CancellationToken,
     ) -> Result<JoinHandle<()>, async_nats::Error>;
@@ -338,6 +346,175 @@ impl StreamTransport for NatsLatestTransport {
     }
 }
 
+/// Object-store adapter — a DURABLE, replayable [`StreamTransport`] over any
+/// OpenDAL-backed object store (S3 / GCS / Azure / local-fs), selected by the
+/// `transport: "s3"` tag. This is the adapter that proves the port is genuinely
+/// transport-SHAPE-agnostic, not just NATS-flavour-agnostic: where the NATS
+/// adapters are pub/sub (a subject, live subscribers, a JetStream log), this one
+/// is a key/value store with **no subscribe primitive at all**. The same
+/// producer (`open_output(...).write`) and consumer (`for x in stream(...)`) SDK
+/// drive it unchanged — only the executor-side adapter differs.
+///
+/// Wire model: each envelope becomes ONE object at `{prefix}{locator}/c{seq:020}`
+/// (the opaque `locator`'s dots become path separators, so a stream is an
+/// isolated "directory" of per-`seq` chunk objects). `write` awaits the PUT — the
+/// object store's durability ack IS the back-pressure (docs/25 §5). The EOF
+/// sentinel is the object at `c{final_seq:020}` with `is_eof`. There is no live
+/// fan-out, so `subscribe` **polls** the next key in order: it reads `c0, c1, …`,
+/// blocking-with-backoff on a not-yet-written key, until it reads the EOF object.
+/// That gives the consumer the OPPOSITE guarantees of `nats-latest`: lossless,
+/// strictly ordered, and fully **replayable** — a consumer that starts long after
+/// the producer finished still reads every element from `c0`. The right transport
+/// for large/durable blobs (model checkpoints, datasets, archived media) where
+/// completeness and replay beat currency.
+#[cfg(feature = "opendal")]
+#[derive(Clone)]
+pub struct S3Transport {
+    operator: ::opendal::Operator,
+    /// Store-level key prefix (the executor's `[storage].prefix`), prepended to
+    /// every stream so datastream objects sit beside (not on top of) artifacts.
+    prefix: String,
+}
+
+#[cfg(feature = "opendal")]
+impl S3Transport {
+    pub fn new(operator: ::opendal::Operator, prefix: String) -> Self {
+        Self { operator, prefix }
+    }
+}
+
+/// Object-key prefix for a stream's opaque `locator`. The locator is the same
+/// string the NATS adapters use as a subject; here its dots become path
+/// separators so each stream is an isolated directory of chunk objects.
+#[cfg(feature = "opendal")]
+fn s3_key_prefix(prefix: &str, locator: &str) -> String {
+    format!("{}{}/", prefix, locator.replace('.', "/"))
+}
+
+/// The per-`seq` chunk object key (zero-padded so lexical order == numeric).
+#[cfg(feature = "opendal")]
+fn s3_chunk_key(prefix: &str, locator: &str, seq: u64) -> String {
+    format!("{}c{:020}", s3_key_prefix(prefix, locator), seq)
+}
+
+/// Frame one envelope into an object body: `[ct_len: u16 LE][ct][is_eof: u8][payload…]`.
+/// `seq` rides the object KEY, not the body.
+#[cfg(feature = "opendal")]
+fn s3_encode(env: &ChunkMessage) -> Vec<u8> {
+    let ct = env.content_type.as_bytes();
+    let ct_len = ct.len().min(u16::MAX as usize);
+    let mut out = Vec::with_capacity(2 + ct_len + 1 + env.payload.len());
+    out.extend_from_slice(&(ct_len as u16).to_le_bytes());
+    out.extend_from_slice(&ct[..ct_len]);
+    out.push(u8::from(env.is_eof));
+    out.extend_from_slice(&env.payload);
+    out
+}
+
+/// Inverse of [`s3_encode`]; `seq` comes from the object key the caller read.
+#[cfg(feature = "opendal")]
+fn s3_decode(seq: u64, body: &[u8]) -> ChunkMessage {
+    if body.len() < 3 {
+        return ChunkMessage {
+            seq,
+            content_type: String::new(),
+            payload: body.to_vec(),
+            is_eof: false,
+        };
+    }
+    let ct_len = u16::from_le_bytes([body[0], body[1]]) as usize;
+    let ct_end = (2 + ct_len).min(body.len());
+    let content_type = String::from_utf8_lossy(&body[2..ct_end]).into_owned();
+    let is_eof = body.get(ct_end).map(|b| *b == 1).unwrap_or(false);
+    let payload = body.get(ct_end + 1..).unwrap_or(&[]).to_vec();
+    ChunkMessage {
+        seq,
+        content_type,
+        payload,
+        is_eof,
+    }
+}
+
+/// Poll cadence when the next chunk object has not been written yet. Snappy
+/// enough for live producer→consumer overlap, cheap enough to idle on.
+#[cfg(feature = "opendal")]
+const S3_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[cfg(feature = "opendal")]
+#[async_trait::async_trait]
+impl StreamTransport for S3Transport {
+    async fn write(
+        &self,
+        locator: &str,
+        envelope: &ChunkMessage,
+    ) -> Result<(), async_nats::Error> {
+        let key = s3_chunk_key(&self.prefix, locator, envelope.seq);
+        // Await the PUT — durable acceptance IS the back-pressure here.
+        self.operator.write(&key, s3_encode(envelope)).await?;
+        Ok(())
+    }
+
+    async fn close(&self, locator: &str, final_seq: u64) -> Result<(), async_nats::Error> {
+        let eof = ChunkMessage {
+            seq: final_seq,
+            content_type: String::new(),
+            payload: Vec::new(),
+            is_eof: true,
+        };
+        self.write(locator, &eof).await
+    }
+
+    async fn subscribe(
+        &self,
+        locator: String,
+        sink: mpsc::Sender<ChunkMessage>,
+        shutdown: CancellationToken,
+    ) -> Result<JoinHandle<()>, async_nats::Error> {
+        let operator = self.operator.clone();
+        let prefix = self.prefix.clone();
+        debug!(%locator, "object-store consumer subscribed (durable, replay from c0)");
+
+        let handle = tokio::spawn(async move {
+            // No subscribe primitive — drain the chunk objects in `seq` order,
+            // polling the next key until it lands (or we're torn down). Lossless
+            // + ordered by construction; no ReorderBuffer needed.
+            let mut next: u64 = 0;
+            loop {
+                if shutdown.is_cancelled() {
+                    break;
+                }
+                let key = s3_chunk_key(&prefix, &locator, next);
+                match operator.read(&key).await {
+                    Ok(buf) => {
+                        let env = s3_decode(next, &buf.to_vec());
+                        let is_eof = env.is_eof;
+                        if sink.send(env).await.is_err() {
+                            break;
+                        }
+                        if is_eof {
+                            break;
+                        }
+                        next += 1;
+                    }
+                    Err(e) if e.kind() == ::opendal::ErrorKind::NotFound => {
+                        // Not written yet — back off, then retry the same `seq`.
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => break,
+                            _ = tokio::time::sleep(S3_POLL_INTERVAL) => {}
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, %key, "object-store read error — ending stream");
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(handle)
+    }
+}
+
 /// Resolves a channel's declared transport tag to its [`StreamTransport`]
 /// adapter. ONE registry per worker, cloned cheaply (Arc-backed) into each job's
 /// IPC sidecar. The producer's executor dispatches on the manifest entry's
@@ -348,31 +525,58 @@ impl StreamTransport for NatsLatestTransport {
 pub struct TransportRegistry {
     jetstream: Arc<JetStreamTransport>,
     nats_latest: Arc<NatsLatestTransport>,
+    /// Durable object-store adapter (`transport: "s3"`). `None` until an OpenDAL
+    /// operator is attached via [`TransportRegistry::with_object_store`] — so a
+    /// `transport: "s3"` channel on a worker with no `[storage]` configured fails
+    /// loudly (`get` → `None`) instead of silently mis-routing. Only present with
+    /// the `opendal` feature.
+    #[cfg(feature = "opendal")]
+    object_store: Option<Arc<S3Transport>>,
 }
 
 impl TransportRegistry {
     /// Build the registry from the worker's JetStream context + core NATS client
-    /// (both already connected at worker startup — no second connection).
+    /// (both already connected at worker startup — no second connection). The
+    /// object-store adapter is opt-in via [`with_object_store`](Self::with_object_store).
     pub fn new(jetstream: jetstream::Context, nats: Client) -> Self {
         Self {
             jetstream: Arc::new(JetStreamTransport::new(jetstream)),
             nats_latest: Arc::new(NatsLatestTransport::new(nats)),
+            #[cfg(feature = "opendal")]
+            object_store: None,
         }
     }
 
+    /// Attach the durable object-store adapter (`transport: "s3"`), built from an
+    /// OpenDAL operator the service binary derives from the executor's
+    /// `[storage]` config. Builder-style so the three `new(...)` call sites wire
+    /// it uniformly.
+    #[cfg(feature = "opendal")]
+    pub fn with_object_store(mut self, operator: ::opendal::Operator, prefix: String) -> Self {
+        self.object_store = Some(Arc::new(S3Transport::new(operator, prefix)));
+        self
+    }
+
     /// Resolve a transport tag to its adapter. `""` defaults to JetStream (older
-    /// specs/descriptors that predate the field). An UNKNOWN tag returns `None`
-    /// so the caller fails loudly rather than silently mis-routing bytes.
+    /// specs/descriptors that predate the field). An UNKNOWN tag — or a `"s3"`
+    /// tag with no object store attached — returns `None` so the caller fails
+    /// loudly rather than silently mis-routing bytes.
     pub fn get(&self, tag: &str) -> Option<Arc<dyn StreamTransport>> {
         match tag {
             "" | "jetstream" => Some(self.jetstream.clone()),
             "nats-latest" => Some(self.nats_latest.clone()),
+            #[cfg(feature = "opendal")]
+            "s3" => self
+                .object_store
+                .clone()
+                .map(|t| t as Arc<dyn StreamTransport>),
             _ => None,
         }
     }
 
     /// Ensure any durable streams the adapters require exist. Only JetStream
-    /// needs one; core NATS (`nats-latest`) is connectionless pub/sub.
+    /// needs one; core NATS (`nats-latest`) is connectionless pub/sub and the
+    /// object store creates objects on demand.
     pub async fn ensure_streams(
         jetstream: &jetstream::Context,
         replicas: usize,
@@ -511,5 +715,54 @@ mod tests {
             datastream_subject("exec-9", "frames"),
             "executor.datastream.exec-9.frames"
         );
+    }
+
+    #[cfg(feature = "opendal")]
+    #[test]
+    fn s3_key_scheme_dots_become_path() {
+        // The opaque locator's dots map to key-path separators, so a stream is an
+        // isolated directory of zero-padded chunk objects under the store prefix.
+        let locator = datastream_subject("exec-9", "frames");
+        assert_eq!(
+            s3_chunk_key("executor/", &locator, 7),
+            "executor/executor/datastream/exec-9/frames/c00000000000000000007"
+        );
+        // Empty prefix still yields a clean directory.
+        assert_eq!(
+            s3_key_prefix("", &locator),
+            "executor/datastream/exec-9/frames/"
+        );
+    }
+
+    #[cfg(feature = "opendal")]
+    #[test]
+    fn s3_envelope_body_roundtrip() {
+        let env = ChunkMessage {
+            seq: 5,
+            content_type: "image/jpeg".to_string(),
+            payload: vec![0xff, 0xd8, 0x00, 0x10, 0xff],
+            is_eof: false,
+        };
+        // seq is NOT in the body — the reader supplies it from the key.
+        let decoded = s3_decode(env.seq, &s3_encode(&env));
+        assert_eq!(decoded.seq, 5);
+        assert_eq!(decoded.content_type, "image/jpeg");
+        assert_eq!(decoded.payload, vec![0xff, 0xd8, 0x00, 0x10, 0xff]);
+        assert!(!decoded.is_eof);
+    }
+
+    #[cfg(feature = "opendal")]
+    #[test]
+    fn s3_eof_body_roundtrip() {
+        let eof = ChunkMessage {
+            seq: 20,
+            content_type: String::new(),
+            payload: Vec::new(),
+            is_eof: true,
+        };
+        let decoded = s3_decode(eof.seq, &s3_encode(&eof));
+        assert_eq!(decoded.seq, 20);
+        assert!(decoded.is_eof);
+        assert!(decoded.payload.is_empty());
     }
 }

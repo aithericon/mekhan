@@ -73,6 +73,12 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // into the manifest; running it (live-only) proves the executor dispatches
     // the lossy adapter off the descriptor with zero SDK change.
     "43-lossy-frame-stream",
+    // 44-durable-blob-stream: producer → consumer over an `s3` (durable
+    // object-store) DATA channel — a different transport SHAPE (key/value, not
+    // pub/sub). Pins that the `s3` transport tag lowers into the manifest;
+    // running it (live-only) proves the executor dispatches the object-store
+    // adapter off the descriptor, lossless + replayable, with zero SDK change.
+    "44-durable-blob-stream",
 ];
 
 fn repo_root() -> PathBuf {
@@ -295,6 +301,11 @@ fn snapshot_42_live_audio_stream() {
 #[test]
 fn snapshot_43_lossy_frame_stream() {
     run("43-lossy-frame-stream");
+}
+
+#[test]
+fn snapshot_44_durable_blob_stream() {
+    run("44-durable-blob-stream");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

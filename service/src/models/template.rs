@@ -1582,12 +1582,20 @@ impl Default for ChannelJoin {
 /// * `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a
 ///   late/slow consumer misses early elements (live frames / drop-stale). The
 ///   semantic opposite of JetStream — what proves the dispatch seam is real.
+/// * `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each
+///   element is one object, the consumer polls keys in order. Lossless, ordered,
+///   and fully **replayable** from element zero long after the producer finished
+///   — the right transport for large/durable blobs (checkpoints, datasets,
+///   archived media). A different transport SHAPE (key/value, not pub/sub),
+///   proving the dispatch port is genuinely store-agnostic. Requires the worker
+///   to have a `[storage]` backend configured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChannelTransport {
     #[default]
     Jetstream,
     NatsLatest,
+    S3,
 }
 
 impl ChannelTransport {
@@ -1598,6 +1606,7 @@ impl ChannelTransport {
         match self {
             ChannelTransport::Jetstream => "jetstream",
             ChannelTransport::NatsLatest => "nats-latest",
+            ChannelTransport::S3 => "s3",
         }
     }
 }

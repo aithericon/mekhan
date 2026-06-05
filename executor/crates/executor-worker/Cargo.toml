@@ -38,11 +38,12 @@ config = { version = "0.14", default-features = false, features = ["toml"] }
 sysinfo = "0.34"
 aithericon-secrets = { workspace = true }
 reqwest = { workspace = true, optional = true }
+opendal = { workspace = true, optional = true }
 
 [features]
 default = []
 vault = ["aithericon-secrets/vault"]
-opendal = ["aithericon-executor-storage/opendal"]
+opendal = ["dep:opendal", "aithericon-executor-storage/opendal"]
 url-inputs = ["dep:reqwest"]
 
 [dev-dependencies]
