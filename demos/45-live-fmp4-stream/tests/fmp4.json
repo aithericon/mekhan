@@ -1,0 +1,15 @@
+{
+  "name": "Live fMP4 stream: producer muxes a fragmented MP4/AAC arpeggio with PyAV and paces it over the `media` data channel; validator drains it transport-unaware and proves the received bytes are a genuine multi-fragment, MSE-appendable fragmented MP4",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.fragments_written", "op": "gte", "value": 2 },
+    { "path": "result.value.bytes_written", "op": "gt", "value": 0 },
+    { "path": "result.value.received_bytes", "op": "gt", "value": 0 },
+    { "path": "result.value.moof_fragments", "op": "gte", "value": 2 },
+    { "path": "result.value.valid_fmp4", "op": "eq", "value": true }
+  ]
+}

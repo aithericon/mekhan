@@ -79,6 +79,13 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // running it (live-only) proves the executor dispatches the object-store
     // adapter off the descriptor, lossless + replayable, with zero SDK change.
     "44-durable-blob-stream",
+    // 45-live-fmp4-stream: producer (PyAV-muxed fragmented MP4) → validator over
+    // a default-transport DATA channel whose element content_type is
+    // `audio/mp4;codecs="mp4a.40.2"`. Pins that an audio/mp4 element type lowers
+    // cleanly; the point is the PRESENTATION-side render-adapter dispatch (the UI
+    // routes this channel to the MSE player off the content_type), live-verified
+    // in the browser, not in the AIR snapshot.
+    "45-live-fmp4-stream",
 ];
 
 fn repo_root() -> PathBuf {
@@ -306,6 +313,11 @@ fn snapshot_43_lossy_frame_stream() {
 #[test]
 fn snapshot_44_durable_blob_stream() {
     run("44-durable-blob-stream");
+}
+
+#[test]
+fn snapshot_45_live_fmp4_stream() {
+    run("45-live-fmp4-stream");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
