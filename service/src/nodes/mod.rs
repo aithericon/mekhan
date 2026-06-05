@@ -539,6 +539,7 @@ mod tests {
             item_var: "item".to_string(),
             result_var: "result".to_string(),
             output: None,
+            asset_bindings: vec![],
         };
         let decl = lookup_by_variant(&data).expect("map registered");
         assert_eq!(decl.wire_name, "map");

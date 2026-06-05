@@ -60,6 +60,10 @@ impl BorrowSource for GlobalNamedSource {
         emit_resource_envelopes(ctx, &mut staged_seen, &mut out);
         emit_asset_body_tokens(ctx, &mut staged_seen, &mut out);
         emit_asset_stagings(ctx.graph, ctx.known_globals, &mut staged_seen, &mut out);
+        // Feature B: a Map's bare `itemsRef` that matches its OWN assetBindings
+        // alias scatters the bound COLLECTION asset.
+        let slugs = crate::compiler::token_shape::slug_index(ctx.graph)?;
+        emit_map_items_ref_assets(ctx.graph, ctx.known_globals, &slugs, &mut out);
         Ok(out)
     }
 }
@@ -369,5 +373,46 @@ fn emit_asset_stagings(
                 },
             });
         }
+    }
+}
+
+/// Feature B: emit one `MapItemsRefAsset` borrow per Map whose bare `itemsRef`
+/// matches one of the Map's OWN assetBindings aliases (and isn't a producer
+/// slug). The records reach the scatter via the SAME publish-time
+/// `let __assets = #{...}` splice that `emit_asset_stagings` relies on (driven
+/// by the asset manifest, independent of which borrow variant referenced the
+/// alias); this borrow only drives the apply-time `<alias>` → `__assets["<alias>"]`
+/// rewrite on `t_<map>_scatter`. The asset global is guaranteed Collection by
+/// the binding/discovery path; we still assert `envelope_channel` to mirror
+/// `emit_asset_stagings`.
+fn emit_map_items_ref_assets(
+    graph: &WorkflowGraph,
+    globals: &crate::compiler::named_global::KnownGlobals,
+    slugs: &crate::compiler::token_shape::SlugIndex,
+    out: &mut Vec<Borrow>,
+) {
+    use crate::compiler::borrow::planners::guard::map_items_ref_asset_alias;
+
+    for node in &graph.nodes {
+        if !matches!(node.data, WorkflowNodeData::Map { .. }) {
+            continue;
+        }
+        let Some(alias) = map_items_ref_asset_alias(node, slugs) else {
+            continue;
+        };
+        let Some(global) = globals.get(alias) else {
+            continue;
+        };
+        if global.kind != GlobalKind::Asset || !global.envelope_channel {
+            continue;
+        }
+        out.push(Borrow {
+            consumer_node_id: node.id.clone(),
+            producer_node: format!("__assets__/{alias}"),
+            slug: alias.to_string(),
+            resolution: BorrowResolution::MapItemsRefAsset {
+                alias: alias.to_string(),
+            },
+        });
     }
 }

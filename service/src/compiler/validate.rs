@@ -1917,6 +1917,18 @@ pub(crate) fn validate_maps(graph: &WorkflowGraph) -> Result<(), CompileError> {
             continue;
         }
 
+        // Feature B: a bare `itemsRef` that matches the Map's OWN assetBindings
+        // alias (and is NOT a producer slug) is valid — the scatter draws its
+        // source from the bound collection asset (`__assets["<alias>"]`), not a
+        // producer read-arc. Accept it BEFORE the producer-ref `split_once`
+        // resolution so a bare alias isn't rejected as MapItemsRefUnresolved.
+        // The discover strict path separately enforces the binding resolves.
+        if crate::compiler::borrow::planners::guard::map_items_ref_asset_alias(node, &slugs)
+            .is_some()
+        {
+            continue;
+        }
+
         // Parse `<slug>.<path>…`. At least `<slug>.<field>` (one dot).
         let Some((head, rest)) = raw.split_once('.') else {
             return Err(CompileError::MapItemsRefUnresolved {

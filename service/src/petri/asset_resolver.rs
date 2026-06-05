@@ -134,12 +134,23 @@ pub fn splice_assets_into_air(
             continue;
         };
 
-        let is_prepare = t_obj
+        // Splice targets: the backend-job `prepare`/`acquire` transitions (the
+        // historical asset-staging sites) PLUS a Map's `t_<id>_scatter` (feature
+        // B: a bare-`itemsRef` asset binding rewrites `let __src = __assets["a"]`
+        // into the scatter — a pure-Rhai transition, NOT a prepare suffix, so it
+        // would otherwise never receive the `let __assets = #{...}` declaration).
+        // The `references_any` check below still gates the actual splice, so this
+        // only widens the candidate set to transitions that genuinely index the
+        // envelope.
+        let is_splice_target = t_obj
             .get("id")
             .and_then(JsonValue::as_str)
-            .map(crate::compiler::borrow::apply::has_prepare_transition_suffix)
+            .map(|id| {
+                crate::compiler::borrow::apply::has_prepare_transition_suffix(id)
+                    || id.ends_with("_scatter")
+            })
             .unwrap_or(false);
-        if !is_prepare {
+        if !is_splice_target {
             continue;
         }
 

@@ -426,6 +426,11 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // sample-handling workflow composing the pick/place/swap SubWorkflows.
         // Live-only.
         "40-sample-handling",
+        // 37-internal-pool-agent (model-pool P1, docs/28/29) — Agent step calling
+        // a self-hosted LLM via the internal model pool (Ollama/vLLM-backed). Needs
+        // a live model-pool + inference backend, not a deterministic AIR snapshot.
+        // Live-only.
+        "37-internal-pool-agent",
     ]
     .into_iter()
     .collect();
