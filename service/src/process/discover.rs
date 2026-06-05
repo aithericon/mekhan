@@ -525,6 +525,11 @@ async fn discover_asset_globals(
         let bindings: &[AssetBinding] = match &node.data {
             WorkflowNodeData::AutomatedStep { asset_bindings, .. } => asset_bindings,
             WorkflowNodeData::Agent { asset_bindings, .. } => asset_bindings,
+            // Feature B: a Map's own assetBindings make the bound COLLECTION an
+            // envelope-used asset global (so it lands in the publish-time
+            // `__assets` splice the scatter indexes). Same collection-staging
+            // path as the step bindings above.
+            WorkflowNodeData::Map { asset_bindings, .. } => asset_bindings,
             _ => continue,
         };
         for b in bindings {

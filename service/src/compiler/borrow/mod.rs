@@ -591,6 +591,195 @@ mod tests {
         assert_eq!(envelope[0].producer_node, "prev");
     }
 
+    // ── Feature B: Map itemsRef → own assetBindings alias ─────────────────
+
+    /// Build `Start → Map{itemsRef, assetBindings:[{alias,refKey}]} → End` with
+    /// one AutomatedStep body child (`parent_id == map.id`). The Map's own
+    /// binding alias is what feature B resolves itemsRef against.
+    fn make_map_asset_graph(
+        items_ref: &str,
+        item_var: &str,
+        result_var: &str,
+        binding_alias: &str,
+        binding_ref_key: &str,
+        // When set, adds a producer AutomatedStep with this slug feeding the Map
+        // (to exercise producer-wins precedence).
+        producer_slug: Option<&str>,
+    ) -> crate::models::template::WorkflowGraph {
+        let producer_node = producer_slug
+            .map(|s| {
+                format!(
+                    r#",{{"id":"{s}","type":"automated_step","slug":"{s}","position":{{"x":0,"y":0}},
+                     "data":{{"type":"automated_step","label":"Prod",
+                             "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
+                             "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                             "deploymentModel":{{"mode":"executor"}},
+                             "output":{{"id":"o","label":"O","fields":[{{"name":"items","label":"I","kind":"json","required":false}}]}}}}}}"#
+                )
+            })
+            .unwrap_or_default();
+        let nodes = format!(
+            r#"{{"id":"start","type":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start"}}}},
+                {{"id":"map1","type":"map","slug":"map1","position":{{"x":0,"y":0}},
+                 "data":{{"type":"map","label":"Map","itemsRef":"{items_ref}","itemVar":"{item_var}",
+                         "resultVar":"{result_var}",
+                         "assetBindings":[{{"alias":"{binding_alias}","refKey":"{binding_ref_key}"}}]}}}},
+                {{"id":"body","type":"automated_step","slug":"body","parentId":"map1","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Body",
+                         "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"executor"}},
+                         "output":{{"id":"bo","label":"BO","fields":[{{"name":"{result_var}","label":"R","kind":"json","required":false}}]}}}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}{producer_node}"#,
+        );
+        let edges = r#"{"id":"e1","source":"start","target":"map1","type":"sequence"},
+                {"id":"e2","source":"map1","target":"end","type":"sequence"}"#;
+        let full = format!(r#"{{"nodes":[{nodes}],"edges":[{edges}]}}"#);
+        serde_json::from_str(&full).expect("deser map-asset graph")
+    }
+
+    /// A Map with bare `itemsRef:"inv"` and `assetBindings:[{alias:"inv"}]`
+    /// produces exactly one `MapItemsRefAsset { alias:"inv" }` borrow on the Map
+    /// node, and NO `Guard` borrow for itemsRef.
+    #[test]
+    fn map_items_ref_asset_borrow_for_bare_alias() {
+        let graph = make_map_asset_graph("inv", "item", "seeded", "inv", "run_inventory", None);
+        let files = std::collections::HashMap::new();
+        let assets = known_assets(&[("inv", "run_inventory")]);
+
+        let borrows = collect_borrows(&graph, &files, &assets).expect("collect_borrows");
+
+        let map_borrows: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::MapItemsRefAsset { .. }))
+            .collect();
+        assert_eq!(
+            map_borrows.len(),
+            1,
+            "expected exactly one MapItemsRefAsset borrow; got: {borrows:?}"
+        );
+        match &map_borrows[0].resolution {
+            BorrowResolution::MapItemsRefAsset { alias } => assert_eq!(alias, "inv"),
+            _ => unreachable!(),
+        }
+        assert_eq!(map_borrows[0].consumer_node_id, "map1");
+
+        // The itemsRef must NOT have produced a guard read-arc borrow.
+        let guard_for_map = borrows.iter().any(|b| {
+            b.consumer_node_id == "map1" && matches!(b.resolution, BorrowResolution::Guard { .. })
+        });
+        assert!(
+            !guard_for_map,
+            "bare-alias itemsRef must not synthesize a Guard read-arc; got: {borrows:?}"
+        );
+    }
+
+    /// The apply step rewrites `t_map1_scatter`'s `let __src = inv;` to
+    /// `let __src = __assets["inv"];` and leaves `__map_id` and the QUOTED
+    /// item-var key untouched.
+    #[test]
+    fn map_items_ref_asset_apply_rewrites_scatter() {
+        use crate::compiler::borrow::apply::map_items_ref::apply_map_items_ref_borrows;
+        use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
+
+        let mut scenario = ScenarioDefinition::new("test");
+        // The lowered scatter shape (itemVar == alias == "job" mirrors the
+        // handle_jobs demo case: the bare alias appears once as `let __src =
+        // job`, while the itemVar is a QUOTED key `"job":`).
+        let lowered = r#"let __src = job; let __arr = if type_of(__src) == "array" { __src } else { [] }; let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ "job": __arr[__i], "__map_idx": __i, "__map_id": "map1" }); __i += 1; } #{ count: #{ expected: __arr.len(), "__map_id": "map1" }, items: __items }"#;
+        scenario.transitions.push(ScenarioTransition {
+            id: "t_map1_scatter".to_string(),
+            name: "scatter".to_string(),
+            group_id: None,
+            input_ports: vec![],
+            output_ports: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            guard: None,
+            priority: None,
+            logic: TransitionLogic::Rhai {
+                source: lowered.to_string(),
+            },
+            effect_config: None,
+            caused_signals: vec![],
+            input_schema: None,
+            output_schema: None,
+            process_step_started: None,
+            process_step_completed: None,
+        });
+
+        let borrow = Borrow {
+            consumer_node_id: "map1".to_string(),
+            producer_node: "__assets__/job".to_string(),
+            slug: "job".to_string(),
+            resolution: BorrowResolution::MapItemsRefAsset {
+                alias: "job".to_string(),
+            },
+        };
+        apply_map_items_ref_borrows(&mut scenario, "map1", std::slice::from_ref(&borrow));
+
+        let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
+            panic!("scatter must remain Rhai")
+        };
+        assert!(
+            source.contains(r#"let __src = __assets["job"];"#),
+            "scatter must index __assets; got: {source}"
+        );
+        assert!(
+            !source.contains("let __src = job;"),
+            "bare alias must be rewritten; got: {source}"
+        );
+        // The quoted item-var key and __map_id must be untouched.
+        assert!(
+            source.contains(r#""job": __arr[__i]"#),
+            "quoted itemVar key must be untouched; got: {source}"
+        );
+        assert!(
+            source.contains(r#""__map_id": "map1""#),
+            "__map_id must be untouched; got: {source}"
+        );
+    }
+
+    /// `map_items_ref_asset_alias` detection / back-compat matrix.
+    #[test]
+    fn map_items_ref_asset_alias_detection() {
+        use crate::compiler::borrow::planners::guard::map_items_ref_asset_alias;
+        use crate::compiler::token_shape::slug_index;
+
+        // (1) Bare alias, no producer slug → Some("inv").
+        let g = make_map_asset_graph("inv", "item", "seeded", "inv", "run_inventory", None);
+        let slugs = slug_index(&g).unwrap();
+        let map_node = g.nodes.iter().find(|n| n.id == "map1").unwrap();
+        assert_eq!(map_items_ref_asset_alias(map_node, &slugs), Some("inv"));
+
+        // (2) Producer-ref form (has a dot) → None.
+        let g2 = make_map_asset_graph(
+            "load_cells.items",
+            "item",
+            "seeded",
+            "inv",
+            "run_inventory",
+            None,
+        );
+        let slugs2 = slug_index(&g2).unwrap();
+        let map2 = g2.nodes.iter().find(|n| n.id == "map1").unwrap();
+        assert_eq!(map_items_ref_asset_alias(map2, &slugs2), None);
+
+        // (3) Bare identifier that is ALSO a producer slug → None (producer wins).
+        let g3 = make_map_asset_graph("inv", "item", "seeded", "inv", "run_inventory", Some("inv"));
+        let slugs3 = slug_index(&g3).unwrap();
+        let map3 = g3.nodes.iter().find(|n| n.id == "map1").unwrap();
+        assert_eq!(map_items_ref_asset_alias(map3, &slugs3), None);
+
+        // (4) Bare identifier with no matching binding alias → None.
+        let g4 = make_map_asset_graph("nope", "item", "seeded", "inv", "run_inventory", None);
+        let slugs4 = slug_index(&g4).unwrap();
+        let map4 = g4.nodes.iter().find(|n| n.id == "map1").unwrap();
+        assert_eq!(map_items_ref_asset_alias(map4, &slugs4), None);
+    }
+
     /// Round-trip equivalence: chaining the five existing planners through
     /// `collect_borrows` produces the same count of borrows the apply phase
     /// would see today (sanity check against silent loss in conversion).

@@ -16,6 +16,7 @@ pub(crate) mod constant;
 pub(crate) mod envelope;
 pub(crate) mod guard;
 pub(crate) mod human_task;
+pub(crate) mod map_items_ref;
 pub(crate) mod strategy;
 
 use strategy::{ApplyCtx, STRATEGIES};
@@ -119,6 +120,19 @@ pub(crate) fn has_prepare_transition_suffix(transition_id: &str) -> bool {
         || transition_id.ends_with("_prepare")
         || transition_id.ends_with("_prepare_call")
         || transition_id.ends_with("_acquire")
+        // Feature B: `t_<map>_scatter` is a publish-time `__assets` splice target
+        // when its bare itemsRef was rewritten to `__assets["<alias>"]`. The
+        // splice body still only mutates a transition whose source actually
+        // contains that substring (asset_resolver's `references_any` guard), so
+        // adding the suffix is a no-op for every producer-ref Map (byte-stable).
+        //
+        // ASYMMETRY (intentional): the scatter is added here (publish splice)
+        // but NOT to `is_prepare_transition_id`/`find_prepare_transition_mut` —
+        // the borrow-apply prepare-finder must NOT treat the scatter as a
+        // job-staging prepare transition. The scatter has no `BORROW_MARKER`;
+        // the `MapItemsRefAsset` apply arm targets it directly by id, not via
+        // `find_prepare_transition_mut`.
+        || transition_id.ends_with("_scatter")
 }
 
 /// Locate the prepare transition for `consumer_id`. The `Option` return

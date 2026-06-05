@@ -5447,6 +5447,7 @@ fn map_node(id: &str, slug: &str, items_ref: &str, result_var: &str) -> Workflow
                     accept: None,
                 }],
             }),
+            asset_bindings: vec![],
         },
         parent_id: None,
         width: None,

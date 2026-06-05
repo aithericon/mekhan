@@ -8807,6 +8807,17 @@ export interface components {
             /** @enum {string} */
             type: "lease_scope";
         } | {
+            /**
+             * @description Node-level asset bindings (docs/20 §5, feature B). When the Map's
+             *     `itemsRef` is a bare identifier matching one of these aliases (and
+             *     is NOT a producer slug — producer wins), the scatter draws its
+             *     source collection from the bound asset's records via the publish-time
+             *     `let __assets = #{...}` splice (`let __src = __assets["<alias>"]`),
+             *     instead of from an upstream producer read-arc. `#[serde(default)]` ⇒
+             *     existing templates (field absent → empty) round-trip unchanged (same
+             *     precedent as AutomatedStep's `asset_bindings`).
+             */
+            assetBindings?: components["schemas"]["AssetBinding"][];
             description?: string | null;
             /**
              * @description Identifier the per-item element is bound to on each body token.

@@ -21518,6 +21518,13 @@
               "type"
             ],
             "properties": {
+              "assetBindings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AssetBinding"
+                },
+                "description": "Node-level asset bindings (docs/20 §5, feature B). When the Map's\n`itemsRef` is a bare identifier matching one of these aliases (and\nis NOT a producer slug — producer wins), the scatter draws its\nsource collection from the bound asset's records via the publish-time\n`let __assets = #{...}` splice (`let __src = __assets[\"<alias>\"]`),\ninstead of from an upstream producer read-arc. `#[serde(default)]` ⇒\nexisting templates (field absent → empty) round-trip unchanged (same\nprecedent as AutomatedStep's `asset_bindings`)."
+              },
               "description": {
                 "type": [
                   "string",

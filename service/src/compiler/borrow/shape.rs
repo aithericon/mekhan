@@ -172,6 +172,24 @@ pub(crate) enum BorrowResolution {
         item_var: String,
     },
 
+    /// Bare `itemsRef` on a Map that matches one of the Map's OWN
+    /// `assetBindings` aliases (feature B). The bound COLLECTION's records reach
+    /// the scatter via the publish-time `let __assets = #{...}` splice (the same
+    /// machinery [`Self::AssetStaging`] relies on); this variant's apply arm
+    /// word-boundary-rewrites the bare `<alias>` identifier inside
+    /// `t_<map>_scatter`'s logic (`let __src = <alias>` →
+    /// `let __src = __assets["<alias>"]`). The scatter is a PURE-Rhai transition:
+    /// NO `job_inputs` push, NO `__asset_files` sidecar, NO read-arc — symmetric
+    /// with how the Guard arm rewrites in-place, but indexing the envelope
+    /// instead of a parked producer. Only `alias` is needed (the asset
+    /// pin/version/file fields are carried by the asset global and materialized
+    /// by the publish splice keyed by alias).
+    MapItemsRefAsset {
+        /// Binding alias — the `__assets` map key the scatter indexes after the
+        /// rewrite (`__assets["<alias>"]`).
+        alias: String,
+    },
+
     /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
     /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
     /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config
