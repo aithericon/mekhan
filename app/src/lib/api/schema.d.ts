@@ -3792,12 +3792,13 @@ export interface components {
         /**
          * @description A statically-declared, typed port on an [`AutomatedStep`]. The job emits
          *     (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
-         *     place at runtime; the net wires edges to it by `name`. `contract` is set
-         *     only on `Control`-plane channels (the firing semantics); `max_fanout` caps
-         *     a `Scatter`'s fan-out width.
+         *     place at runtime; the net wires edges to it by `name`. A control OUT
+         *     channel lowers uniformly to one accumulating place; the fold discipline
+         *     lives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a
+         *     uniform safety cap (positive if present); a `gather` consumer REQUIRES the
+         *     producer channel to set it (the barrier cap).
          */
         Channel: {
-            contract?: null | components["schemas"]["ControlContract"];
             direction: components["schemas"]["ChannelDirection"];
             element: components["schemas"]["ElementType"];
             /** Format: int32 */
@@ -3811,6 +3812,17 @@ export interface components {
          * @enum {string}
          */
         ChannelDirection: "in" | "out";
+        /**
+         * @description How a CONSUMER edge folds a CONTROL channel's bracketed episode (the
+         *     producer emits one uniform `open | item* | close` stream; the consumer's
+         *     `join` decides the fold). `Each` fires downstream once per `item`
+         *     (the old `signal` behaviour, generalised); `Gather` is the counted
+         *     barrier (the old `scatter` path) that collects all items, sorts by
+         *     `__map_idx`, and projects a single array — requiring the producer
+         *     channel to carry a positive `max_fanout` (the barrier cap).
+         * @enum {string}
+         */
+        ChannelJoin: "each" | "gather";
         /**
          * @description Which net plane a [`Channel`] rides on: `Control` carries slim control
          *     tokens that drive net firing (the borrow resolver can reference their
@@ -4088,13 +4100,6 @@ export interface components {
          * @enum {string}
          */
         ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
-        /**
-         * @description The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token
-         *     per emission (fire-and-forget downstream); `Scatter` fans out instance-
-         *     colored items closed by a count, sized at the gather barrier by `max_fanout`.
-         * @enum {string}
-         */
-        ControlContract: "signal" | "scatter";
         CopyConfig: {
             compress?: null | components["schemas"]["Compression"];
             decompress?: null | components["schemas"]["Compression"];
@@ -8220,6 +8225,7 @@ export interface components {
         };
         WorkflowEdge: {
             id: string;
+            join?: null | components["schemas"]["ChannelJoin"];
             label?: string | null;
             source: string;
             sourceHandle?: string | null;

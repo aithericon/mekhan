@@ -195,6 +195,7 @@ fn seq(id: &str, source: &str, target: &str, sh: Option<&str>, th: Option<&str>)
         source_handle: sh.map(str::to_string),
         target_handle: th.map(str::to_string),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     }
 }

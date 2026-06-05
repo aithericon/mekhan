@@ -499,8 +499,16 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // the `control_emit` ingestion seam (inbox + effect transition with
     // `channel_routes`) + scatter gather. Returns the per-channel wiring ports
     // folded into NodePorts below. No control channels ⇒ no topology (byte-stable).
-    let lowered_channels =
-        super::channels::lower_channels(ctx, id, label, &channels, p_control_in, &p_input);
+    let lowered_channels = super::channels::lower_channels(
+        ctx,
+        id,
+        label,
+        &cx.node.id,
+        &channels,
+        &cx.graph.edges,
+        p_control_in,
+        &p_input,
+    );
 
     // Slim control success output, plus the named "error" output ONLY when the
     // handle is wired. An edge from the node's error handle (source_handle ==
@@ -1486,8 +1494,16 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     }
 
     // Streaming channels (docs/25): same synthesis as the inline path.
-    let lowered_channels =
-        super::channels::lower_channels(ctx, &id, &label, &channels, p_control_in, &p_input);
+    let lowered_channels = super::channels::lower_channels(
+        ctx,
+        &id,
+        &label,
+        &id,
+        &channels,
+        &cx.graph.edges,
+        p_control_in,
+        &p_input,
+    );
 
     // Foundation split + port registration tail — mirrors the inline path.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);

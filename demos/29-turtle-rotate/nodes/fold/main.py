@@ -1,8 +1,9 @@
 # Fold — reduce the rotate action's gathered feedback collection (docs/25).
 #
-# The `rotate` node's Control/Scatter channel "feedback" parks its gathered
-# collection as the envelope `{ output: [{ remaining }, ...] }` on the channel's
-# gathered place. The graph wires that place (sourceHandle "feedback") straight
+# The `rotate` node's Control channel "feedback" is consumed by this edge with
+# `join: gather`, so the gather barrier parks its gathered collection as the
+# envelope `{ output: [{ remaining }, ...] }` on the channel's gathered place.
+# The graph wires that place (sourceHandle "feedback") straight
 # into this node, so the gathered envelope IS this step's input token — read the
 # list off `input.output` (the runner exposes the inbound token as `input`).
 #

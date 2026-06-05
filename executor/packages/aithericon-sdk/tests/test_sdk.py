@@ -199,6 +199,117 @@ def test_noop_functions_dont_crash(monkeypatch):
     aithericon.log_metrics([{"name": "acc", "value": 0.9}])
 
 
+# ── control-plane out() episode emission (docs/25) ───────────────────
+# The producer emits ONE uniform bracketed episode: open → item* → close.
+# The consumer edge's join (each|gather) folds it; the producer never branches.
+
+def _control_pb():
+    from aithericon._proto import executor_sidecar_pb2 as pb
+    return pb
+
+
+def test_out_disconnected_is_noop(monkeypatch):
+    """out() context + send() are silent no-ops without a sidecar stub."""
+    import aithericon._client as client_mod
+    monkeypatch.setattr(client_mod, "_stub", None)
+    monkeypatch.delenv("AITHERICON_CHANNELS", raising=False)
+
+    with aithericon.out("items") as o:
+        o.emit({"row": 1})
+        o.emit({"row": 2})
+    aithericon.out("anomaly").send({"alert": True})
+
+
+def test_out_context_issues_open_items_close(monkeypatch):
+    """A ``with out(...)`` block fires OPEN, one ITEM per emit (incrementing
+    item_idx, same episode_uid), then CLOSE stamping the final count."""
+    pb = _control_pb()
+
+    class OkResp:
+        status = pb.RESPONSE_STATUS_OK
+        error_message = ""
+
+    calls = []
+
+    class FakeStub:
+        def EmitControl(self, request):
+            calls.append(request)
+            return OkResp()
+
+    import aithericon._client as client_mod
+    monkeypatch.setattr(client_mod, "_stub", FakeStub())
+    monkeypatch.delenv("AITHERICON_CHANNELS", raising=False)
+
+    with aithericon.out("items") as o:
+        o.emit({"row": 1})
+        o.emit({"row": 2})
+
+    kinds = [c.kind for c in calls]
+    assert kinds == [
+        pb.CONTROL_KIND_OPEN,
+        pb.CONTROL_KIND_ITEM,
+        pb.CONTROL_KIND_ITEM,
+        pb.CONTROL_KIND_CLOSE,
+    ]
+    # All emissions share one episode_uid.
+    uids = {c.episode_uid for c in calls}
+    assert len(uids) == 1 and next(iter(uids)) != ""
+    # Items carry incrementing 0-based item_idx + JSON payload.
+    items = [c for c in calls if c.kind == pb.CONTROL_KIND_ITEM]
+    assert [c.item_idx for c in items] == [0, 1]
+    assert [json.loads(c.payload_json) for c in items] == [{"row": 1}, {"row": 2}]
+    # Close stamps the total count.
+    close = calls[-1]
+    assert close.count == 2
+
+
+def test_out_send_sugar_is_single_item_episode(monkeypatch):
+    """out(name).send(value) fuses to open + item(idx 0) + close(count 1)."""
+    pb = _control_pb()
+
+    class OkResp:
+        status = pb.RESPONSE_STATUS_OK
+        error_message = ""
+
+    calls = []
+
+    class FakeStub:
+        def EmitControl(self, request):
+            calls.append(request)
+            return OkResp()
+
+    import aithericon._client as client_mod
+    monkeypatch.setattr(client_mod, "_stub", FakeStub())
+    monkeypatch.delenv("AITHERICON_CHANNELS", raising=False)
+
+    aithericon.out("anomaly").send({"sensor": "s3", "value": 91.2})
+
+    assert [c.kind for c in calls] == [
+        pb.CONTROL_KIND_OPEN,
+        pb.CONTROL_KIND_ITEM,
+        pb.CONTROL_KIND_CLOSE,
+    ]
+    item = calls[1]
+    assert item.item_idx == 0
+    assert json.loads(item.payload_json) == {"sensor": "s3", "value": 91.2}
+    assert calls[-1].count == 1
+    assert len({c.episode_uid for c in calls}) == 1
+
+
+def test_out_rejects_data_channel(monkeypatch):
+    """out() targets control channels only; a data channel raises at the call."""
+    monkeypatch.setenv(
+        "AITHERICON_CHANNELS",
+        json.dumps([{"name": "frames", "plane": "data", "element_kind": "binary"}]),
+    )
+    try:
+        aithericon.out("frames")
+    except ValueError as e:
+        assert "control channel" in str(e)
+    else:
+        raise AssertionError("out() on a data channel should raise ValueError")
+
+
 # ── data-plane stream() subject extraction (docs/25 §4) ──────────────
 # Regression: the consumer's stream() must lift the producer's transport
 # subject out of the OPEN descriptor token the engine deposits as input. The

@@ -142,9 +142,6 @@
 					<Badge variant="outline" class="font-mono text-sm font-normal">{ch.direction}</Badge>
 					<Badge variant="outline" class="font-mono text-sm font-normal">{ch.plane}</Badge>
 					<Badge variant="outline" class="font-mono text-sm font-normal">{elementLabel(ch)}</Badge>
-					{#if ch.contract}
-						<Badge variant="secondary" class="font-mono text-sm font-normal">{ch.contract}</Badge>
-					{/if}
 					{#if status}
 						<span class="ml-auto font-mono text-sm text-muted-foreground">{status}</span>
 					{/if}

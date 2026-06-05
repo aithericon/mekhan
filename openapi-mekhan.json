@@ -10761,7 +10761,7 @@
       },
       "Channel": {
         "type": "object",
-        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. `contract` is set\nonly on `Control`-plane channels (the firing semantics); `max_fanout` caps\na `Scatter`'s fan-out width.",
+        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. A control OUT\nchannel lowers uniformly to one accumulating place; the fold discipline\nlives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a\nuniform safety cap (positive if present); a `gather` consumer REQUIRES the\nproducer channel to set it (the barrier cap).",
         "required": [
           "name",
           "direction",
@@ -10769,16 +10769,6 @@
           "element"
         ],
         "properties": {
-          "contract": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ControlContract"
-              }
-            ]
-          },
           "direction": {
             "$ref": "#/components/schemas/ChannelDirection"
           },
@@ -10807,6 +10797,14 @@
         "enum": [
           "in",
           "out"
+        ]
+      },
+      "ChannelJoin": {
+        "type": "string",
+        "description": "How a CONSUMER edge folds a CONTROL channel's bracketed episode (the\nproducer emits one uniform `open | item* | close` stream; the consumer's\n`join` decides the fold). `Each` fires downstream once per `item`\n(the old `signal` behaviour, generalised); `Gather` is the counted\nbarrier (the old `scatter` path) that collects all items, sorts by\n`__map_idx`, and projects a single array — requiring the producer\nchannel to carry a positive `max_fanout` (the barrier cap).",
+        "enum": [
+          "each",
+          "gather"
         ]
       },
       "ChannelPlane": {
@@ -11336,14 +11334,6 @@
           "none",
           "drop_oldest",
           "summarize_oldest"
-        ]
-      },
-      "ControlContract": {
-        "type": "string",
-        "description": "The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token\nper emission (fire-and-forget downstream); `Scatter` fans out instance-\ncolored items closed by a count, sized at the gather barrier by `max_fanout`.",
-        "enum": [
-          "signal",
-          "scatter"
         ]
       },
       "CopyConfig": {
@@ -20445,6 +20435,17 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "join": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChannelJoin",
+                "description": "CONSUMER-side fold discipline for a CONTROL channel edge (see\n[`ChannelJoin`]). Applies only when this edge's `target_handle` names a\ncontrol IN channel fed by a control OUT channel: `each` fires the\ndownstream once per emitted item, `gather` collects the whole episode\ninto one array at a counted barrier. Absent/`None` ⇒ `Each`. Must NOT\nbe set on data-plane edges."
+              }
+            ]
           },
           "label": {
             "type": [

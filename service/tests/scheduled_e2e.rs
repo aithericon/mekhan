@@ -142,6 +142,7 @@ fn scheduled_graph(step_id: &str, scheduler: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -151,6 +152,7 @@ fn scheduled_graph(step_id: &str, scheduler: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
         ],

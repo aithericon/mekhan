@@ -276,20 +276,21 @@ impl ExecutionEvent {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ControlKind {
-    /// CONTROL plane: a single one-shot control token.
-    Signal,
-    /// CONTROL plane: one instance-colored item of a fan-out.
-    ScatterItem,
-    /// CONTROL plane: end of a fan-out, stamping the total item count.
-    ScatterClose,
-    /// DATA plane: opens a data channel. `payload_json` carries the transport
-    /// DESCRIPTOR `{transport, subject, content_type, credential?}`; flows to the
-    /// consumer EARLY (the moment `open_output` is called) so it can start
-    /// draining the out-of-band byte stream while the producer still produces.
+    /// Episode lifecycle marker. DATA plane: opens a data channel — `payload_json`
+    /// carries the transport DESCRIPTOR `{transport, subject, content_type,
+    /// credential?}`; flows to the consumer EARLY (the moment `open_output` is
+    /// called) so it can start draining the out-of-band byte stream while the
+    /// producer still produces. CONTROL plane: a harmless uniformity marker.
     Open,
-    /// DATA plane: closes a data channel. `payload_json` carries `{count, status}`
-    /// (elements written + terminal status); updates the producer's status (the
-    /// consumer drains until the transport's `is_eof`, independent of this).
+    /// One element of the episode. Carries the payload (+ `item_idx` /
+    /// `episode_uid` on the control plane). Absorbs the old `signal` (a one-shot
+    /// alert is just one item).
+    Item,
+    /// End of the episode. CONTROL plane: stamps the total item `count` (+
+    /// `episode_uid`) so the gather coordinator knows the fan-out is complete.
+    /// DATA plane: `payload_json` carries `{count, status}` (elements written +
+    /// terminal status); the consumer drains until the transport's `is_eof`,
+    /// independent of this.
     Close,
 }
 
@@ -307,23 +308,23 @@ pub struct ControlEmitEvent {
     /// The declared `out` channel name the token is emitted into.
     pub channel: String,
 
-    /// Signal vs. scatter-item vs. scatter-close.
+    /// open vs. item vs. close.
     pub kind: ControlKind,
 
-    /// JSON-serialized control-token payload (empty string for a bare signal /
-    /// scatter-close that carries no value).
+    /// JSON-serialized control-token payload (empty string for a close that
+    /// carries no value on the control plane).
     pub payload_json: String,
 
-    /// 0-based item index within a scatter (0 for a signal).
-    pub scatter_id: u64,
+    /// 0-based element index within the episode (carried on `Item`).
+    pub item_idx: u64,
 
-    /// Total item count, carried on a `ScatterClose` emit (0 otherwise).
-    pub scatter_count: u64,
+    /// Total item count, carried on a control-plane `Close` emit (0 otherwise).
+    pub count: u64,
 
-    /// Per-fan-out correlation id, minted once per `with scatter(name)` block
-    /// and stamped on every item + the close so the engine's gather barrier can
-    /// correlate all emits of one scatter invocation. Empty string for a signal.
-    pub scatter_uid: String,
+    /// Per-episode correlation id, minted once per producer episode and stamped
+    /// on every item + the close so the engine's gather barrier can correlate all
+    /// emits of one invocation. Empty string for a data open/close.
+    pub episode_uid: String,
 
     /// The job's routing metadata, echoed verbatim (same surface as
     /// `ExecutionEvent.metadata`). The engine's `ExecutorWatcher` reads
@@ -344,33 +345,41 @@ impl ControlEmitEvent {
         )
     }
 
-    /// JetStream dedup id. A signal is once-per-channel; scatter items + close
-    /// are keyed by the per-invocation `scatter_uid` (and, for items, the index)
-    /// so an apalis redelivery re-emits the same id while two distinct fan-outs
-    /// into the same channel stay independent.
+    /// JetStream dedup id. Items + close are keyed by the per-episode
+    /// `episode_uid` (and, for items, the index) so an apalis redelivery re-emits
+    /// the same id while two distinct episodes into the same channel stay
+    /// independent. A data-plane open/close carries no `episode_uid`, so the
+    /// channel name alone keys those (once-per-channel-per-execution: one open,
+    /// one close).
+    ///
+    /// The dedup namespace folds on `episode_uid` presence: a non-empty uid keys
+    /// the control-plane episode brackets; an empty uid keys the data-plane
+    /// brackets by channel.
     pub fn msg_id(&self) -> String {
         match self.kind {
-            ControlKind::Signal => {
-                format!("{}-control-{}-signal", self.execution_id, self.channel)
-            }
-            ControlKind::ScatterItem => format!(
-                "{}-control-{}-{}-item-{}",
-                self.execution_id, self.channel, self.scatter_uid, self.scatter_id
-            ),
-            ControlKind::ScatterClose => {
-                format!(
-                    "{}-control-{}-{}-close",
-                    self.execution_id, self.channel, self.scatter_uid
-                )
-            }
-            // Data-plane brackets are once-per-channel-per-execution (one open,
-            // one close), so the channel name alone keys the dedup id — an
-            // apalis redelivery re-emits the same id.
             ControlKind::Open => {
-                format!("{}-data-{}-open", self.execution_id, self.channel)
+                if self.episode_uid.is_empty() {
+                    format!("{}-data-{}-open", self.execution_id, self.channel)
+                } else {
+                    format!(
+                        "{}-control-{}-{}-open",
+                        self.execution_id, self.channel, self.episode_uid
+                    )
+                }
             }
+            ControlKind::Item => format!(
+                "{}-control-{}-{}-item-{}",
+                self.execution_id, self.channel, self.episode_uid, self.item_idx
+            ),
             ControlKind::Close => {
-                format!("{}-data-{}-close", self.execution_id, self.channel)
+                if self.episode_uid.is_empty() {
+                    format!("{}-data-{}-close", self.execution_id, self.channel)
+                } else {
+                    format!(
+                        "{}-control-{}-{}-close",
+                        self.execution_id, self.channel, self.episode_uid
+                    )
+                }
             }
         }
     }

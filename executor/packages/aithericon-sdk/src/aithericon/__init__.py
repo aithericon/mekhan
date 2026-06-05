@@ -31,9 +31,8 @@ from aithericon._files import File, file
 # Outputs
 from aithericon._outputs import set_output
 
-# Control-token emission into statically-declared channels (signal + scatter)
-from aithericon._emit import emit
-from aithericon._scatter import scatter
+# Control-plane episode emission into statically-declared channels (open/item/close)
+from aithericon._out import out
 
 # Data-plane streaming channels: producer writer + consumer reader
 from aithericon._open_output import open_output
@@ -64,8 +63,7 @@ __all__ = [
     "File",
     "file",
     "set_output",
-    "emit",
-    "scatter",
+    "out",
     "open_output",
     "stream",
     "log_artifact",

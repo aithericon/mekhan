@@ -822,18 +822,22 @@ pub(crate) fn warn_unmerged_fan_in(
 ///
 /// - **No duplicate names** on one node (the synthesized place id
 ///   `p_{id}_{name}` and the `channel_routes` map key must be unique).
-/// - **`Scatter` requires a positive `max_fanout`** — it sizes the counted
-///   gather barrier and bounds the loud over-fanout failure. A `Signal`
-///   channel must NOT carry one (no fan-out to bound).
-/// - **`contract` only on control channels** — a `Data`-plane channel has no
-///   firing contract (Phase 1b transport, not a control token).
+/// - **`max_fanout` is positive if present** — a uniform safety cap. There is
+///   no producer-side contract any more; the fold discipline lives on the
+///   consumer edge's [`ChannelJoin`].
+/// - **Data channels carry no control knobs** — a `Data`-plane channel must not
+///   set `max_fanout`, and no edge into/out of it may set a `join`.
 /// - **`Json` element schemas resolve + compile** against the workflow-level
 ///   `definitions` (same `$ref` resolution the executor `SchemaRegistry` uses).
 /// - **Plane/wiring coherence** — a `Data`-plane channel has no Phase-1a
 ///   lowering, so an edge wiring one (`sourceHandle == name`) is rejected loudly
 ///   rather than silently dropping the byte stream.
+/// - **Consumer-join coherence** — for each CONTROL out-channel, all consumer
+///   edges must agree on `join` (v1 = one discipline per channel); a `gather`
+///   consumer requires the producer channel to carry a positive `max_fanout`
+///   (the barrier cap). Data edges must not set `join`.
 pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
-    use crate::models::template::{ChannelPlane, ControlContract, ElementType};
+    use crate::models::template::{ChannelJoin, ChannelPlane, ElementType};
 
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
@@ -871,39 +875,23 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
 
             match ch.plane {
-                ChannelPlane::Control => match ch.contract {
-                    Some(ControlContract::Scatter) => {
-                        match ch.max_fanout {
-                            Some(n) if n > 0 => {}
-                            _ => {
-                                return Err(invalid(
-                                    "scatter channels require a positive max_fanout".to_string(),
-                                ))
-                            }
-                        }
-                    }
-                    Some(ControlContract::Signal) => {
-                        if ch.max_fanout.is_some() {
+                ChannelPlane::Control => {
+                    // No producer-side contract. `max_fanout` is a uniform
+                    // safety cap: positive if present. Whether a positive cap
+                    // is REQUIRED is decided by the consumer edge's join
+                    // (gather needs one) in the edge pass below.
+                    if let Some(n) = ch.max_fanout {
+                        if n == 0 {
                             return Err(invalid(
-                                "signal channels must not declare max_fanout".to_string(),
+                                "max_fanout must be positive when present".to_string(),
                             ));
                         }
                     }
-                    None => {
-                        return Err(invalid(
-                            "control channels require a contract (signal | scatter)".to_string(),
-                        ))
-                    }
-                },
+                }
                 ChannelPlane::Data => {
                     // Data channels carry out-of-band bytes; the net sees only
                     // the open/close bracket, never per-element tokens — so the
                     // control-only firing knobs are nonsensical and rejected.
-                    if ch.contract.is_some() {
-                        return Err(invalid(
-                            "data channels must not declare a control contract".to_string(),
-                        ));
-                    }
                     if ch.max_fanout.is_some() {
                         return Err(invalid(
                             "data channels must not declare max_fanout (control-plane only)"
@@ -945,30 +933,52 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
     // handle-name wiring (`wire.rs`) can't otherwise catch. Build a per-node
     // `(channel name → plane)` index, then check every edge whose
     // `source_handle`/`target_handle` both name a declared OUT/IN channel.
-    let mut node_channels: HashMap<&str, HashMap<&str, ChannelPlane>> = HashMap::new();
+    let mut node_channels: HashMap<&str, HashMap<&str, &crate::models::template::Channel>> =
+        HashMap::new();
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
             continue;
         };
         let entry = node_channels.entry(node.id.as_str()).or_default();
         for ch in channels {
-            entry.insert(ch.name.as_str(), ch.plane.clone());
+            entry.insert(ch.name.as_str(), ch);
         }
     }
+    // Per producer control OUT channel `(node, channel)`: the set of consumer
+    // edge joins observed. v1 requires a single discipline per channel.
+    let mut control_joins: HashMap<(&str, &str), ChannelJoin> = HashMap::new();
     for edge in &graph.edges {
         let (Some(src_h), Some(tgt_h)) =
             (edge.source_handle.as_deref(), edge.target_handle.as_deref())
         else {
+            // An edge that doesn't name both handles can't be a channel edge,
+            // but a stray `join` on it is still nonsensical — reject it so a
+            // misauthored data/non-channel edge can't silently carry a fold.
+            if edge.join.is_some() {
+                return Err(CompileError::ChannelInvalid {
+                    node_id: edge.source.clone(),
+                    channel: edge.source_handle.clone().unwrap_or_default(),
+                    message: "join may only be set on a control channel edge".to_string(),
+                });
+            }
             continue;
         };
-        let Some(src_plane) = node_channels.get(edge.source.as_str()).and_then(|m| m.get(src_h))
+        let Some(src_ch) = node_channels.get(edge.source.as_str()).and_then(|m| m.get(src_h))
+        else {
+            if edge.join.is_some() {
+                return Err(CompileError::ChannelInvalid {
+                    node_id: edge.source.clone(),
+                    channel: src_h.to_string(),
+                    message: "join may only be set on a control channel edge".to_string(),
+                });
+            }
+            continue;
+        };
+        let Some(tgt_ch) = node_channels.get(edge.target.as_str()).and_then(|m| m.get(tgt_h))
         else {
             continue;
         };
-        let Some(tgt_plane) = node_channels.get(edge.target.as_str()).and_then(|m| m.get(tgt_h))
-        else {
-            continue;
-        };
+        let (src_plane, tgt_plane) = (&src_ch.plane, &tgt_ch.plane);
         if !matches!(
             (src_plane, tgt_plane),
             (ChannelPlane::Data, ChannelPlane::Data)
@@ -987,6 +997,54 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
                     plane_name(tgt_plane),
                 ),
             });
+        }
+
+        // Consumer-join coherence (control plane only). Data edges must not set
+        // a join; control edges may, and all consumers of one producer channel
+        // must agree on the discipline.
+        match src_plane {
+            ChannelPlane::Data => {
+                if edge.join.is_some() {
+                    return Err(CompileError::ChannelInvalid {
+                        node_id: edge.source.clone(),
+                        channel: src_h.to_string(),
+                        message: "data channel edges must not set a join".to_string(),
+                    });
+                }
+            }
+            ChannelPlane::Control => {
+                let join = edge.join.unwrap_or_default();
+                let key = (edge.source.as_str(), src_h);
+                match control_joins.get(&key) {
+                    Some(existing) if *existing != join => {
+                        return Err(CompileError::ChannelInvalid {
+                            node_id: edge.source.clone(),
+                            channel: src_h.to_string(),
+                            message: format!(
+                                "consumer edges disagree on join for control channel '{src_h}': \
+                                 v1 requires a single discipline (each | gather) per channel"
+                            ),
+                        });
+                    }
+                    _ => {
+                        control_joins.insert(key, join);
+                    }
+                }
+                // A `gather` consumer needs the producer channel to size the
+                // counted barrier via a positive max_fanout.
+                if join == ChannelJoin::Gather
+                    && !matches!(src_ch.max_fanout, Some(n) if n > 0)
+                {
+                    return Err(CompileError::ChannelInvalid {
+                        node_id: edge.source.clone(),
+                        channel: src_h.to_string(),
+                        message: format!(
+                            "control channel '{src_h}' has a gather consumer but no positive \
+                             max_fanout (the gather barrier cap)"
+                        ),
+                    });
+                }
+            }
         }
     }
     Ok(())

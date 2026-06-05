@@ -177,51 +177,52 @@ message RetrieveFileResponse {
     string local_path = 3;
 }
 
-// Kind of control token a job emits into a channel's place.
+// Kind of control token a job emits into a channel's place. Collapsed (docs/25,
+// consumer-join refactor) to EXACTLY THREE uniform kinds; the producer emits one
+// bracketed episode (`OPEN` … `ITEM`* … `CLOSE`) and the CONSUMER edge's `join`
+// (each | gather) decides how it is folded — there is no producer-side contract
+// branch.
 //
-// CONTROL plane:
-//   `CONTROL_KIND_SIGNAL` fires a single control token (a one-shot downstream
-//   trigger). `CONTROL_KIND_SCATTER_ITEM` emits one instance-colored item of a
-//   fan-out; `CONTROL_KIND_SCATTER_CLOSE` ends the fan-out and stamps the total
-//   item count so the net's gather barrier knows when the scatter is complete.
-//
-// DATA plane (1b) — a data stream is bracketed by two control emissions:
-//   `CONTROL_KIND_OPEN` is emitted the moment `open_output(name)` is called
-//   (mid-job, EARLY) and carries the transport DESCRIPTOR as `payload_json`
-//   (see EmitControlRequest.payload_json) so the consumer can connect and start
-//   draining the out-of-band bytes while the producer still produces.
-//   `CONTROL_KIND_CLOSE` is emitted when the producer is done; `payload_json`
-//   carries `{count, status}` (elements written + terminal status). The bulk
-//   bytes themselves NEVER ride a control token — they flow over the transport
-//   subject named in the OPEN descriptor.
+//   `CONTROL_KIND_OPEN`  — episode lifecycle marker. On the DATA plane it carries
+//     the transport DESCRIPTOR as `payload_json` (emitted the moment
+//     `open_output(name)` is called, EARLY) so the consumer can connect and start
+//     draining out-of-band bytes while the producer still produces. On the CONTROL
+//     plane it is a harmless lifecycle marker (gather state is driven by the
+//     close/count coordinator, not open). Still emitted for uniformity.
+//   `CONTROL_KIND_ITEM`  — one element of the episode. Carries the payload, plus
+//     (control plane) `item_idx` + `episode_uid` so a gather barrier can re-order
+//     and correlate. Absorbs the old SIGNAL (a "signal"/alert is just one ITEM).
+//   `CONTROL_KIND_CLOSE` — end of the episode. On the CONTROL plane carries the
+//     item `count` (+ `episode_uid`) so a gather coordinator knows the fan-out is
+//     complete; on the DATA plane `payload_json` carries `{count, status}`. The
+//     bulk bytes NEVER ride a control token — they flow over the transport subject
+//     named in the OPEN descriptor.
 enum ControlKind {
-    CONTROL_KIND_SIGNAL = 0;
-    CONTROL_KIND_SCATTER_ITEM = 1;
-    CONTROL_KIND_SCATTER_CLOSE = 2;
-    CONTROL_KIND_OPEN = 3;
-    CONTROL_KIND_CLOSE = 4;
+    CONTROL_KIND_OPEN = 0;
+    CONTROL_KIND_ITEM = 1;
+    CONTROL_KIND_CLOSE = 2;
 }
 
 // A single control-token emission into a declared output channel.
 //
 // `channel` is the channel name (must match an `out` channel in the job's
-// channel manifest — a `control` channel for signal/scatter, a `data` channel
-// for open/close). `payload_json` is the JSON-serialized payload: the control
-// token value for SIGNAL/SCATTER_ITEM (empty for a bare signal / scatter-close);
-// the transport DESCRIPTOR `{transport, subject, content_type, credential?}` for
-// OPEN; `{count, status}` for CLOSE. `scatter_id` is the 0-based item index
-// within a scatter; `scatter_count` is the total item count, carried on
-// `CONTROL_KIND_SCATTER_CLOSE` (0 otherwise). `scatter_uid` is a per-fan-out
-// correlation id minted once per `with scatter(name)` block and stamped on every
-// item + the close so the engine's gather barrier can correlate all emits of one
-// invocation (empty for a bare signal / data open/close).
+// channel manifest — a `control` channel for item, a `data` channel for the
+// data-plane brackets). `payload_json` is the JSON-serialized payload: the
+// element value for ITEM; the transport DESCRIPTOR
+// `{transport, subject, content_type, credential?}` for OPEN; `{count, status}`
+// for a data-plane CLOSE. `item_idx` is the 0-based element index within the
+// episode (carried on ITEM). `count` is the total element count, carried on a
+// control-plane CLOSE (0 otherwise). `episode_uid` is a per-episode correlation
+// id minted once per producer episode and stamped on every item + the close so
+// the engine's gather barrier can correlate all emits of one invocation (empty
+// for a data open/close).
 message EmitControlRequest {
     string channel = 1;
     ControlKind kind = 2;
     string payload_json = 3;
-    uint64 scatter_id = 4;
-    uint64 scatter_count = 5;
-    string scatter_uid = 6;
+    uint64 item_idx = 4;
+    uint64 count = 5;
+    string episode_uid = 6;
 }
 
 // Request to open a data-plane inbound byte stream (the consumer read).
