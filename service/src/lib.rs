@@ -237,6 +237,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::model_replicas::scale_model_replica
         ))
         .routes(routes!(handlers::model_replicas::get_model_replica))
+        // Model-pool P5 (docs/29 §7') — inference metering audit-ledger read.
+        .routes(routes!(
+            handlers::inference_metering::list_inference_requests
+        ))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

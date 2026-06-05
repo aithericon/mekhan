@@ -181,6 +181,25 @@ impl ExecutionBackend for LlmBackend {
                 .or_insert_with(|| base_url.clone());
         }
 
+        // Stamp inference-attribution identity into env under well-known
+        // keys so the OpenAI-compatible adapter can forward them as
+        // `X-Instance-Id` / `X-Step-Id` request headers WITHOUT a
+        // signature change. The router (`internal_llm` pool) reads those
+        // headers into its MeterContext so each inference call in the audit
+        // ledger is attributable to the workflow instance + step that
+        // issued it. The engine stamps the running net id + place id into
+        // `run_context.metadata` under `petri_net_id` / `petri_place`
+        // (see scheduler-bridge `meta.rs`). A request id is optional — the
+        // router synthesizes one when the header is absent.
+        if let Some(v) = run_context.metadata.get("petri_net_id") {
+            env.entry("__inference_instance_id".into())
+                .or_insert_with(|| v.clone());
+        }
+        if let Some(v) = run_context.metadata.get("petri_place") {
+            env.entry("__inference_step_id".into())
+                .or_insert_with(|| v.clone());
+        }
+
         // Three-way select: cancellation, timeout, or LLM execution
         tokio::select! { biased;
             _ = cancel.cancelled() => {

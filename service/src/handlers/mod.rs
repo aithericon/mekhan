@@ -10,6 +10,7 @@ pub mod demos;
 pub mod executions;
 pub mod files;
 pub mod health;
+pub mod inference_metering;
 pub mod instances;
 pub mod job_templates;
 pub mod me;

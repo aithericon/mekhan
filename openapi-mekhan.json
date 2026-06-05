@@ -2408,6 +2408,58 @@
         }
       }
     },
+    "/api/v1/inference/requests": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/inference/requests` — the inference audit ledger, newest-first.",
+        "description": "NOT tenant-scoped yet (deliberate, MVP): the ledger's `tenant_id` is the\n*router's* Bearer tenant (a fixed dev-noop string until real router JWT auth\nlands — docs/29 Router-MVP deferral), which does NOT yet align with mekhan's\nworkspace UUID. Filtering by `caller_workspace` here would drop every row in\ndev. Auth is still required (`AuthUser`). When the router's tenant is mapped\nto the workspace, add a `WHERE tenant_id = $workspace` scope — otherwise this\nGDPR processing record is readable across tenants. Tracked as a P5 follow-up.",
+        "operationId": "list_inference_requests",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "query",
+            "description": "Restrict to one workflow instance's requests.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max rows (default 100, capped 500).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inference metering / GDPR processing records, newest-first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InferenceRequestLogRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/instances": {
       "get": {
         "tags": [
@@ -14042,6 +14094,92 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "InferenceRequestLogRow": {
+        "type": "object",
+        "description": "One `inference_request_log` row — the durable GDPR processing record + the\nControl-Plane audit-ledger read. Token counts are stored `BIGINT` (`i64`).",
+        "required": [
+          "request_id",
+          "tenant_id",
+          "model_id",
+          "replica_id",
+          "replica_base_url",
+          "status",
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens",
+          "started_at",
+          "finished_at",
+          "recorded_at"
+        ],
+        "properties": {
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "replica_base_url": {
+            "type": "string"
+          },
+          "replica_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slo_tier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

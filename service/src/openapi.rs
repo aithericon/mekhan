@@ -244,6 +244,8 @@ use utoipa::OpenApi;
             // manual scale DTOs.
             crate::models::model_replicas::ModelReplicaRow,
             crate::models::model_replicas::ModelReplicaScaleRequest,
+            // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
+            crate::models::inference_metering::InferenceRequestLogRow,
         ),
     ),
     tags(

@@ -11,6 +11,39 @@ use crate::port::{
 
 pub struct OpenAiAdapter;
 
+/// Inference-attribution identity forwarded as request headers to an
+/// OpenAI-compatible endpoint that audits calls (the in-cluster
+/// `internal_llm` pool router). Stamped into `env` by the LLM backend from
+/// `run_context.metadata` (`petri_net_id` → instance, `petri_place` → step).
+/// All fields are optional: a keyless/identity-less call sends no headers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IdentityHeaders {
+    pub instance_id: Option<String>,
+    pub step_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+impl IdentityHeaders {
+    /// Pull the three well-known identity keys out of the resolved env. The
+    /// backend deposits them under `__inference_{instance,step,request}_id`.
+    fn from_env(env: &HashMap<String, String>) -> Self {
+        Self {
+            instance_id: env.get("__inference_instance_id").cloned(),
+            step_id: env.get("__inference_step_id").cloned(),
+            request_id: env.get("__inference_request_id").cloned(),
+        }
+    }
+
+    /// True when there is nothing to stamp — the common keyless
+    /// public-OpenAI path. Used by the env-extraction unit tests; the
+    /// `stamp` closure short-circuits per-field so the live path doesn't
+    /// need to call this.
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.instance_id.is_none() && self.step_id.is_none() && self.request_id.is_none()
+    }
+}
+
 #[async_trait]
 impl CompletionPort for OpenAiAdapter {
     async fn complete(
@@ -29,7 +62,9 @@ impl CompletionPort for OpenAiAdapter {
             .cloned()
             .unwrap_or_else(|| "https://api.openai.com".into());
 
-        openai_complete(request, api_key.as_deref(), &base_url).await
+        let identity = IdentityHeaders::from_env(env);
+
+        openai_complete(request, api_key.as_deref(), &base_url, &identity).await
     }
 
     fn name(&self) -> &str {
@@ -260,6 +295,7 @@ async fn openai_complete(
     request: &CompletionRequest,
     api_key: Option<&str>,
     base_url: &str,
+    identity: &IdentityHeaders,
 ) -> Result<CompletionResponse, LlmError> {
     // Decide which json mode to try first based on what we've learned
     // about this model. Default = optimistic strict json_schema; if we
@@ -275,15 +311,34 @@ async fn openai_complete(
     let client = reqwest::Client::new();
 
     // Attach `Authorization: Bearer <key>` only when a key is present — a
-    // keyless self-hosted endpoint gets an unauthenticated request.
-    let bearer = |rb: reqwest::RequestBuilder| match api_key {
-        Some(key) => rb.header("Authorization", format!("Bearer {key}")),
-        None => rb,
+    // keyless self-hosted endpoint gets an unauthenticated request — and
+    // stamp the inference-attribution identity headers the audit-ledger
+    // router reads (`X-Instance-Id` / `X-Step-Id` / `X-Request-Id`). Each
+    // header is emitted only when its value is present, so the common
+    // public-OpenAI path stays header-free. Applied at BOTH post sites
+    // (first attempt + json_object retry).
+    let stamp = |rb: reqwest::RequestBuilder| {
+        let rb = match api_key {
+            Some(key) => rb.header("Authorization", format!("Bearer {key}")),
+            None => rb,
+        };
+        let rb = match &identity.instance_id {
+            Some(v) => rb.header("X-Instance-Id", v),
+            None => rb,
+        };
+        let rb = match &identity.step_id {
+            Some(v) => rb.header("X-Step-Id", v),
+            None => rb,
+        };
+        match &identity.request_id {
+            Some(v) => rb.header("X-Request-Id", v),
+            None => rb,
+        }
     };
 
     // First attempt — respect the cached/default capability.
     let body = build_request_body(request, initial_capability);
-    let response = bearer(client.post(&url))
+    let response = stamp(client.post(&url))
         .json(&body)
         .send()
         .await
@@ -309,7 +364,7 @@ async fn openai_complete(
                 );
             }
             let retry_body = build_request_body(request, JsonModeCapability::JsonObjectOnly);
-            bearer(client.post(&url))
+            stamp(client.post(&url))
                 .json(&retry_body)
                 .send()
                 .await
@@ -701,6 +756,34 @@ mod tests {
         assert_eq!(tool["role"], "tool");
         assert_eq!(tool["tool_call_id"], "call_1");
         assert_eq!(tool["content"], "{\"status\":\"In transit\"}");
+    }
+
+    #[test]
+    fn identity_headers_extracted_from_env() {
+        // The backend deposits engine meta (`petri_net_id` → instance,
+        // `petri_place` → step) under the `__inference_*` env keys; the
+        // adapter must lift them back out for header stamping.
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("__inference_instance_id".into(), "inst-1".into());
+        env.insert("__inference_step_id".into(), "step-2".into());
+
+        let id = IdentityHeaders::from_env(&env);
+        assert_eq!(id.instance_id.as_deref(), Some("inst-1"));
+        assert_eq!(id.step_id.as_deref(), Some("step-2"));
+        // No request id was staged — stays None so no `X-Request-Id` header
+        // is sent and the router synthesizes one.
+        assert_eq!(id.request_id, None);
+        assert!(!id.is_empty());
+    }
+
+    #[test]
+    fn identity_headers_empty_when_no_keys_present() {
+        // A plain public-OpenAI call carries no attribution env — the
+        // adapter must treat that as "stamp nothing".
+        let env: HashMap<String, String> = HashMap::new();
+        let id = IdentityHeaders::from_env(&env);
+        assert!(id.is_empty());
+        assert_eq!(id, IdentityHeaders::default());
     }
 
     #[test]

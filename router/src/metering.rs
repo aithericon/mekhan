@@ -8,35 +8,8 @@
 //! P5. Absent NATS, metering is a no-op.
 
 use chrono::{DateTime, Utc};
-use inference_core::Usage;
-use serde::{Deserialize, Serialize};
+use inference_core::{InferenceRequestLog, Usage};
 use tracing::warn;
-
-/// The metering record / processing-record shape (doc 11 §5.7, P5
-/// `inference_request_log`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InferenceRequestLog {
-    pub request_id: String,
-    pub tenant: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub step_id: Option<String>,
-    pub model: String,
-    pub replica_id: String,
-    pub replica_base_url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub residency_zone: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub slo_tier: Option<String>,
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_tokens: u64,
-    /// `completed` | `unmetered` | `cancelled` | `upstream_error`.
-    pub status: String,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
-}
 
 /// The terminal disposition of a request, before usage is known.
 #[derive(Debug, Clone, Copy)]

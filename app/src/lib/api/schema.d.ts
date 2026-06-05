@@ -855,6 +855,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inference/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/inference/requests` — the inference audit ledger, newest-first.
+         * @description NOT tenant-scoped yet (deliberate, MVP): the ledger's `tenant_id` is the
+         *     *router's* Bearer tenant (a fixed dev-noop string until real router JWT auth
+         *     lands — docs/29 Router-MVP deferral), which does NOT yet align with mekhan's
+         *     workspace UUID. Filtering by `caller_workspace` here would drop every row in
+         *     dev. Auth is still required (`AuthUser`). When the router's tenant is mapped
+         *     to the workspace, add a `WHERE tenant_id = $workspace` scope — otherwise this
+         *     GDPR processing record is readable across tenants. Tracked as a P5 follow-up.
+         */
+        get: operations["list_inference_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instances": {
         parameters: {
             query?: never;
@@ -5159,6 +5185,34 @@ export interface components {
             status: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /**
+         * @description One `inference_request_log` row — the durable GDPR processing record + the
+         *     Control-Plane audit-ledger read. Token counts are stored `BIGINT` (`i64`).
+         */
+        InferenceRequestLogRow: {
+            /** Format: int64 */
+            completion_tokens: number;
+            /** Format: date-time */
+            finished_at: string;
+            instance_id?: string | null;
+            model_id: string;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /** Format: date-time */
+            recorded_at: string;
+            replica_base_url: string;
+            replica_id: string;
+            request_id: string;
+            residency_zone?: string | null;
+            slo_tier?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            status: string;
+            step_id?: string | null;
+            tenant_id: string;
+            /** Format: int64 */
+            total_tokens: number;
         };
         /**
          * @description One spawned sub-workflow child run of a parent instance, returned by
@@ -10976,6 +11030,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_inference_requests: {
+        parameters: {
+            query?: {
+                /** @description Restrict to one workflow instance's requests. */
+                instance_id?: string | null;
+                /** @description Max rows (default 100, capped 500). */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Inference metering / GDPR processing records, newest-first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceRequestLogRow"][];
                 };
             };
         };
