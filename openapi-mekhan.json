@@ -3485,6 +3485,254 @@
         }
       }
     },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models` — the loaded-set projection (the editor model picker's\ndata source). Every `model_states` row in the workspace, AND-gated against the\nlive runner interface catalog. Session/human authed, workspace-scoped,\nfail-soft on the live half.",
+        "operationId": "list_loaded_models",
+        "responses": {
+          "200": {
+            "description": "Workspace model-pool state, loaded-set AND-gated against live runners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelSetView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/replicas": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/replicas` — list every replica row in the workspace.",
+        "operationId": "list_model_replicas",
+        "responses": {
+          "200": {
+            "description": "Per-policy model-replica reconciliation rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelReplicaRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/replicas/{policy_id}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/replicas/{policy_id}` — one policy's replica state.",
+        "operationId": "get_model_replica",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "description": "model_policy resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One policy's replica row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No replica row for that policy yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/replicas/{policy_id}/scale": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/models/replicas/{policy_id}/scale` — the L1 manual desired\noverride. Writes `desired_count`; the loop reconciles next tick. Upserts the\nrow off the `model_policy` resource so a scale before the first reconcile\nstill takes (404 if the policy resource itself doesn't exist).",
+        "operationId": "scale_model_replica",
+        "parameters": [
+          {
+            "name": "policy_id",
+            "in": "path",
+            "description": "model_policy resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelReplicaScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Desired count written; the updated row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model_policy resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/{model_id}` — one model + its state/replica/serving facts.\n404 when the workspace has no `model_states` row for that id.",
+        "operationId": "get_model",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id (router routes on this)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One model's loaded-set view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSetView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/transition": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/models/{model_id}/transition` — the operator state-machine step.\nValidated against [`ModelState::legal_transitions`]; an illegal edge → 409.\nSession/human authed, workspace-scoped. Returns the projected view after the\nmove (with the live-runner AND-gate recomputed).",
+        "operationId": "transition_model",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transition applied; the projected view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSetView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Illegal state-machine edge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-types": {
       "get": {
         "tags": [
@@ -14924,6 +15172,55 @@
           }
         }
       },
+      "ModelEntry": {
+        "type": "object",
+        "description": "One model a runner advertises in its interface catalog — the live half of the\nloaded-set AND-gate (docs/29). The canonical P2-superset shape: P1 only reads\n`model_id` (to confirm a `loaded` `model_states` row is actually served by a\nlive runner); `kind`/`max_num_seqs`/`base` are carried now so P2's node-agent\ncan populate them without a DTO churn. Grows the existing `catalog` JSONB\ncolumn — NO migration.",
+        "required": [
+          "model_id",
+          "kind"
+        ],
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a `Lora` entry, the base model id it layers on. `None` for `Base`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ModelInterfaceKind",
+            "description": "Whether this is a base model or a LoRA adapter."
+          },
+          "max_num_seqs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Configured per-engine concurrency `C` (vLLM `--max-num-seqs`). **Base-only**\n— `C` is per-ENGINE (per base), SHARED across that base's LoRA adapters, so it\nis populated only on `Base` entries and is `None` on every `Lora` entry. The\nrouter reads a Lora's slot budget from its `base` back-pointer.",
+            "minimum": 0
+          },
+          "model_id": {
+            "type": "string",
+            "description": "The model id the router routes on (e.g. `llama3`). Joins to\n`model_states.model_id` + `ApprovedModelConfig.model_id`."
+          },
+          "source_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a `Lora` entry, the adapter-weights URI the load command supplied (e.g.\n`hf://...`). `None` for `Base`."
+          }
+        }
+      },
+      "ModelInterfaceKind": {
+        "type": "string",
+        "description": "The kind of model an advertised [`ModelEntry`] is — a base model or a LoRA\nadapter (multi-LoRA serving rides one base). The canonical P2-superset shape\n(docs/29): P1 INTRODUCES it so the loaded-set projection has a typed entry to\nread; P2's node-agent populates it from the vLLM model surface.",
+        "enum": [
+          "base",
+          "lora"
+        ]
+      },
       "ModelRef": {
         "type": "object",
         "description": "LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors\nthe subset of `aithericon_executor_backend_configs::llm::LlmConfig` the\neditor authors directly (provider, model, optional creds / sampling\nknobs); the degenerate single-turn lowering reconstructs the full\n`LlmConfig` from these fields plus the Agent's prompts. Wire shape\nmatches the existing `LlmConfig` JSON one-for-one so the equivalence\ntest (PR 1) produces byte-identical `config_ref` blobs.",
@@ -14975,6 +15272,170 @@
             "format": "double"
           }
         }
+      },
+      "ModelReplicaRow": {
+        "type": "object",
+        "description": "One `model_replicas` row — the durable reconciliation target + Control-Plane\nread. `desired_count`/`observed_count` are stored `INT`; the loop works in\n`u32` and converts at the edges.",
+        "required": [
+          "id",
+          "workspace_id",
+          "policy_resource_id",
+          "model_id",
+          "datacenter_resource_id",
+          "desired_count",
+          "observed_count",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Resolved `datacenter` resource UUID (the policy carries an alias; the loop\nresolves it before the upsert)."
+          },
+          "desired_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Last desired COUNT the loop drove (or the scale endpoint's manual override)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_actuated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Anchors the durable cooldown gate (survives a mekhan restart)."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "observed_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live count from the fleet roster (runners advertising `model_id`). NOT the\nstaging effect result — that only proves \"registered\", not \"serving\"."
+          },
+          "policy_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `model_policy` resource this row reconciles (UNIQUE — one row/policy)."
+          },
+          "replica_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native job NAME registered on the cluster (Nomad service-job id). `None`\nuntil first actuation."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone recorded for the Control-Plane read + audit."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of `status::*`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ModelReplicaScaleRequest": {
+        "type": "object",
+        "description": "`POST /api/v1/models/replicas/{policy_id}/scale` body — the L1 manual desired\noverride. Writes `desired_count` on the row; the loop picks it up next tick\n(in `manual` mode the row's `desired_count` is the live control, seeded from\nthe policy's `desired_replicas`).",
+        "required": [
+          "desired_replicas"
+        ],
+        "properties": {
+          "desired_replicas": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ModelSetView": {
+        "type": "object",
+        "description": "One row of the loaded-set projection (`GET /api/v1/models` and\n`GET /api/v1/models/{model_id}`).\n\n`state` is the operator-curated `model_states` position; `available` is the\nAND-gate — `true` only when `state == Loaded` AND at least one LIVE runner's\ninterface catalog advertises `model_id`. `serving_runners` is the count of\nlive runners advertising it (the live half), surfaced so an operator can see\na `loaded`-but-unserved model.",
+        "required": [
+          "model_id",
+          "state",
+          "replicas",
+          "available",
+          "serving_runners"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "AND-gate: `state == Loaded` AND a live runner advertises `model_id`. This\nis the flag the editor model picker filters on."
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a LoRA model, the base model id it layers on."
+          },
+          "model_id": {
+            "type": "string",
+            "description": "The model id (router routes on this)."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional operator note from the last transition."
+          },
+          "replicas": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Operator-tracked replica count (rides the Nomad job-template; P1 manual)."
+          },
+          "serving_runners": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Count of LIVE runners whose interface catalog advertises `model_id`.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/ModelState",
+            "description": "The operator-curated lifecycle state."
+          }
+        }
+      },
+      "ModelState": {
+        "type": "string",
+        "description": "The operator-curated lifecycle position of a model in the pool. Persisted as\nthe free-text `model_states.state` column; validated against this enum on\nevery read/write (no DB CHECK).",
+        "enum": [
+          "approved",
+          "loading",
+          "loaded",
+          "draining",
+          "unloaded"
+        ]
       },
       "MoveConfig": {
         "type": "object",
@@ -17925,6 +18386,13 @@
               "$ref": "#/components/schemas/InterfaceEntry"
             }
           },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelEntry"
+            },
+            "description": "Self-hosted LLM models this runner's node-agent currently serves (docs/29).\nThe live half of the loaded-set AND-gate. Additive JSONB field — a runner\nthat serves no models simply reports an empty list."
+          },
           "services": {
             "type": "array",
             "items": {
@@ -19465,6 +19933,26 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "TransitionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/models/{model_id}/transition` — the operator\nstate-machine step. Validated against [`ModelState::legal_transitions`]; an\nillegal edge → 409.",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional operator note recorded with the transition."
+          },
+          "target": {
+            "$ref": "#/components/schemas/ModelState",
+            "description": "The state to move the model to."
           }
         }
       },
@@ -21087,6 +21575,13 @@
               "type"
             ],
             "properties": {
+              "assetBindings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AssetBinding"
+                },
+                "description": "Node-level asset bindings (docs/20 §5, feature B). When the Map's\n`itemsRef` is a bare identifier matching one of these aliases (and\nis NOT a producer slug — producer wins), the scatter draws its\nsource collection from the bound asset's records via the publish-time\n`let __assets = #{...}` splice (`let __src = __assets[\"<alias>\"]`),\ninstead of from an upstream producer read-arc. `#[serde(default)]` ⇒\nexisting templates (field absent → empty) round-trip unchanged (same\nprecedent as AutomatedStep's `asset_bindings`)."
+              },
               "description": {
                 "type": [
                   "string",
@@ -21778,6 +22273,10 @@
     {
       "name": "capacities",
       "description": "Capacity aggregator (docs/23 + docs/24) — the unified Control-Plane read: every `capacity` + `datacenter` resource classified by the SINGLE dispatch authority (`CapacityAxes::backend`) with live utilization (token holders / presence online / worker coverage / scheduler lease state)."
+    },
+    {
+      "name": "models",
+      "description": "Model-pool control plane (docs/28 + docs/29) — the loaded-set projection (operator-curated `model_states` AND-gated against live runner interface catalogs) that sources the editor model picker, plus the operator state-machine transition (`approved → loading → loaded → draining → unloaded`). Projection/control seam only: inference bypasses the engine net + presence net; no NATS subjects."
     }
   ]
 }

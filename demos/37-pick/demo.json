@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000370",
+  "name": "37 · xArm Pick (SubWorkflow, Path C Slice 4)",
+  "description": "Reusable PICK child SubWorkflow for the xArm 6 sample-handling stack. Start.initial takes a grasp_pose, an approach_pose (both geometry_msgs/Pose JSON) and the object_id of the collision object to attach. Body: plan_to_pose to the approach pose (call_service /plan_to_pose, the runner-side motion-bridge node returning the planned trajectory) → Decision gate (success && point_count>0 && total_duration<=30) → execute (send_action_goal /xarm6_traj_controller/follow_joint_trajectory, planned trajectory spliced verbatim as {{ plan_pose.trajectory }}) → grasp (call_service /grasp atomic close+attach of object_id). End maps picked=grasp.success, object_id=input.object_id; the rejected branch maps picked=false. The fake-sim grasp attaches from the pre-grasp (approach) pose — there is no cartesian descent into the collision object, which would fail IK with avoid_collisions. LIVE ONLY: requires `just dev xarm-up`."
+}

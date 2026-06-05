@@ -34,6 +34,51 @@ pub(crate) enum RefRoot {
     Qualified(String),
 }
 
+/// Feature B detection helper — the SINGLE predicate shared by `validate_maps`,
+/// `guard_readarc_plan`'s Map arm, and the `MapItemsRefAsset` borrow source, so
+/// the three sites cannot drift.
+///
+/// Returns `Some(alias)` iff a Map node's `itemsRef` is a bare own-assetBindings
+/// alias, requiring ALL of:
+/// 1. `node.data` is a `Map`.
+/// 2. `items_ref.trim()` is a single flat identifier: non-empty, contains no
+///    `.` and no `[*]` (every existing producer-ref form has a `.`).
+/// 3. The trimmed value is NOT a producer slug — `slugs.node_for(..)` is `None`.
+///    PRODUCER-WINS PRECEDENCE: an identifier that is both a producer slug AND a
+///    binding alias resolves as a producer (existing read-arc path), preserving
+///    byte-stability for any existing producer-ref Map.
+/// 4. Some `asset_bindings` entry on THIS Map has `alias.trim()` equal to the
+///    trimmed `items_ref` (case-sensitive).
+///
+/// A producer-ref `itemsRef` like `load_cells.items` contains a `.` so it fails
+/// rule (2) immediately and routes through the unchanged read-arc path.
+pub(crate) fn map_items_ref_asset_alias<'a>(
+    node: &'a WorkflowNode,
+    slugs: &SlugIndex,
+) -> Option<&'a str> {
+    let WorkflowNodeData::Map {
+        items_ref,
+        asset_bindings,
+        ..
+    } = &node.data
+    else {
+        return None;
+    };
+    let trimmed = items_ref.trim();
+    if trimmed.is_empty() || trimmed.contains('.') || trimmed.contains("[*]") {
+        return None;
+    }
+    // Producer wins: a bare identifier that names a producer slug is resolved as
+    // a producer, not as an asset binding.
+    if slugs.node_for(trimmed).is_some() {
+        return None;
+    }
+    asset_bindings
+        .iter()
+        .find(|b| b.alias.trim() == trimmed)
+        .map(|b| b.alias.trim())
+}
+
 /// One scope reference parsed out of a guard / result-mapping expression.
 pub(crate) struct GuardRef {
     pub(crate) root: RefRoot,
@@ -776,6 +821,21 @@ pub(crate) fn guard_readarc_plan(
                 .map(|m| m.expression.clone())
                 .filter(|s| !s.trim().is_empty())
                 .collect(),
+            // SubWorkflow `input_mapping` expressions are emitted verbatim into
+            // the `t_{id}_shape` "Prepare Sub-workflow" transition's rhai (via
+            // `result_mapping_rhai`, the SAME helper End uses), so they borrow
+            // upstream `<slug>.<field>` refs exactly like an End result-mapping.
+            // Without this arm a 2nd+ SubWorkflow in a sequential chain cannot
+            // reach the Start (or any non-adjacent producer) fields: `input.*`
+            // is the slim control token, which the first node's `split_outputs`
+            // strips of the Start leaves, so only a parked-producer read-arc
+            // reaches them. `apply_guard_borrows` walks `t_{id}_*` (incl.
+            // `t_{id}_shape`) and rewrites `<slug>.<field>` → `d_<slug>.<field>`.
+            WorkflowNodeData::SubWorkflow { input_mapping, .. } => input_mapping
+                .iter()
+                .map(|m| m.expression.clone())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
             // Delay/Timeout `durationMsExpr` is embedded verbatim in the
             // `t_{id}_prep` transition logic, so it borrows upstream
             // `<slug>.<field>` refs exactly like a Loop condition does.
@@ -795,7 +855,18 @@ pub(crate) fn guard_readarc_plan(
             // exactly like a Loop condition borrows its counter. Without this
             // arm no read-arc into the producer's parked place is synthesized
             // and the scatter resolves `__src` to `()` → zero items.
+            //
+            // Feature B: a bare `itemsRef` matching one of the Map's OWN
+            // assetBindings aliases is NOT a producer ref — it is rewritten to
+            // `__assets["<alias>"]` by the `MapItemsRefAsset` apply arm, sourced
+            // from the publish-time `__assets` splice. Short-circuit so the
+            // read-arc/resolve path never sees the bare alias (which would
+            // resolve Unresolved and hard-error). The producer-ref case
+            // (contains a `.`) falls through unchanged.
             WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
+                if map_items_ref_asset_alias(node, &slugs).is_some() {
+                    continue;
+                }
                 vec![items_ref.clone()]
             }
             // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease

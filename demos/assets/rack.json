@@ -1,0 +1,29 @@
+{
+  "asset_type": {
+    "name": "sample_rack",
+    "display_name": "Sample Rack",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "slot_id", "label": "Slot ID", "kind": "text", "required": true },
+      { "name": "grasp_pose", "label": "Grasp Pose", "kind": "json", "required": true },
+      { "name": "approach_pose", "label": "Approach Pose", "kind": "json", "required": true },
+      { "name": "occupied", "label": "Occupied", "kind": "bool", "required": true }
+    ]
+  },
+  "ref_key": "sample_rack",
+  "display_name": "Sample Rack",
+  "records": [
+    {
+      "slot_id": "A1",
+      "grasp_pose": { "position": { "x": 0.30, "y": -0.15, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "approach_pose": { "position": { "x": 0.30, "y": -0.15, "z": 0.42 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "occupied": true
+    },
+    {
+      "slot_id": "A2",
+      "grasp_pose": { "position": { "x": 0.30, "y": 0.00, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "approach_pose": { "position": { "x": 0.30, "y": 0.00, "z": 0.42 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "occupied": false
+    }
+  ]
+}

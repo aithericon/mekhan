@@ -47,10 +47,14 @@
 //!     collection at `p_<id>_data`, forwards a slim control token to `p_output`.
 //!
 //! `itemsRef` rides in `t_scatter`'s logic verbatim; the standard guard
-//! read-arc pass (`guard_readarc_plan`, extended with a Map arm) rewrites the
-//! `<slug>.<field>` reference onto the producer's parked place. Item-scope
-//! injection (`<itemVar>.<field>` into body children) is handled by the borrow
-//! resolver, not here.
+//! read-arc pass (`guard_readarc_plan`, extended with a Map arm) rewrites a
+//! producer-namespaced `<slug>.<field>` reference onto the producer's parked
+//! place. A bare `itemsRef` that matches one of THIS Map's own `assetBindings`
+//! aliases (feature B) is instead rewritten to `__assets["<alias>"]` by the
+//! `MapItemsRefAsset` borrow apply arm (NOT the read-arc pass) — the bound
+//! collection's records reach the scatter via the publish-time
+//! `let __assets = #{...}` splice. Item-scope injection (`<itemVar>.<field>`
+//! into body children) is handled by the borrow resolver, not here.
 
 use super::*;
 

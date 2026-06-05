@@ -1,0 +1,17 @@
+{
+  "name": "answers-through-router",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": { "question": "In one sentence, what is a Petri net?" }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.reply",
+      "op": "exists"
+    }
+  ]
+}

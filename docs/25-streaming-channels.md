@@ -79,8 +79,9 @@ Net-native `StreamFold` and streaming-`Map` per-chunk synthesis are **deleted**
 
 - **Fold** (stream → one value) was never a net concern — it is a reducer job:
   `acc = 0; for x in stream("frames"): acc += score(x); emit_output("total", acc)`.
-- **Map** (stream → fan out N) is subsumed by **job-driven emission rejoined with
-  a `gather` edge** (§4, §3 *Two axes*), which is strictly more expressive: the
+- **Streaming-`Map`** (the *per-chunk net synthesis* that minted one transition
+  per stream element) is subsumed by **job-driven emission rejoined with a
+  `gather` edge** (§4, §3 *Two axes*), which is strictly more expressive: the
   *job* decides which elements warrant a downstream token (filter, batch, debounce,
   enrich), putting the firing-rate decision in the author's hands rather than
   implicitly at 30fps.
@@ -88,6 +89,33 @@ Net-native `StreamFold` and streaming-`Map` per-chunk synthesis are **deleted**
 The Map **gather** machinery (`__map_id` / `__map_idx`, counted barrier) is
 **kept** and reused by the consumer-side `gather` `join`. We delete the front
 (per-chunk synthesis), not the back.
+
+> **What is *not* retired: the `Map` node.** Only the *streaming* flavor of Map
+> goes away. The **`Map` node remains a first-class primitive** for the orthogonal
+> case below — collapsing the two is a category error worth stating outright.
+
+### `gather` join vs. the `Map` node — two different fan-outs
+
+These look similar (both end at a counted barrier, and they literally **share**
+the `emit_gather_barrier` machinery) but they answer different questions, and the
+choice is about **where the per-element work runs**, not about cardinality alone:
+
+| | **Channel `gather` join** | **`Map` node** |
+|---|---|---|
+| Per-element work runs… | **inside one downstream job** (the job receives the whole array and iterates) | **as its own net-step** — one transition / SubWorkflow instance **per element** |
+| Net firings | **O(1)** — `open`+`close`, independent of N | **O(N)** — one body sub-net firing per element |
+| Element visibility to the net | opaque (folded in-job) | full — each element gets gating, retries, a SubWorkflow, a bridge/ROS call |
+| Right when… | high cardinality, in-job compute, throughput matters (AV frames, log lines) | bounded N, each element needs **its own net structure** |
+| Wrong when… | each element needs its own net-step → use Map | high-cardinality streaming → net cost explodes, use a channel |
+
+> **Decision rule.** Use a **channel `gather`** when per-element work is in-job and
+> you want net cost independent of N. Use the **`Map` node** when each element must
+> become its own net-step — a per-element AutomatedStep (e.g. one ROS `add_object`
+> bridge call per record) or a per-element SubWorkflow (e.g. a pick/place/swap per
+> job). `join: each` is **fire-and-forget per element with no reconverge**; it is
+> *not* a substitute for Map's barrier — bolting a barrier onto `each` would just
+> be a worse Map. A per-element batch op ("one bridge call handling N elements")
+> is an orthogonal ergonomic/perf optimization, not a third fan-out shape.
 
 ## 3. The unified `Channel`
 

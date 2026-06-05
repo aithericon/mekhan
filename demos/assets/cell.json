@@ -1,0 +1,34 @@
+{
+  "asset_type": {
+    "name": "lab_cell",
+    "display_name": "Lab Cell",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "object_id", "label": "Object ID", "kind": "text", "required": true },
+      {
+        "name": "primitive",
+        "label": "Primitive",
+        "kind": "select",
+        "required": true,
+        "options": [
+          { "value": "box", "label": "Box" },
+          { "value": "sphere", "label": "Sphere" },
+          { "value": "cylinder", "label": "Cylinder" }
+        ]
+      },
+      { "name": "dimensions", "label": "Dimensions", "kind": "json", "required": true },
+      { "name": "pose", "label": "Pose", "kind": "json", "required": true },
+      { "name": "mesh_uri", "label": "Mesh URI", "kind": "file", "required": false }
+    ]
+  },
+  "ref_key": "lab_cell",
+  "display_name": "Lab Cell",
+  "records": [
+    {
+      "object_id": "table",
+      "primitive": "box",
+      "dimensions": [0.6, 0.6, 0.02],
+      "pose": { "position": { "x": 0.3, "y": 0.0, "z": 0.10 }, "orientation": { "x": 0, "y": 0, "z": 0, "w": 1 } }
+    }
+  ]
+}

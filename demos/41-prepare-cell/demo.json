@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000410",
+  "name": "41 · Prepare Cell (MoveIt scene from lab_cell asset, Path C Slice 4)",
+  "description": "Path C Slice 4 on the SIMULATED xArm 6: reset the runner's MoveIt planning scene and rebuild it from a CURATED ASSET COLLECTION so the cell geometry is data-driven, not hard-coded. start → LeaseScope (xarm_fleet) holding: clear_scene (call_service /clear_scene — wipe move_group's persistent world + attached objects) → Map over the bound `lab_cell` asset collection (one body token per cell object) whose body is add_object (call_service /add_object — push each record's box/sphere/cylinder CollisionObject into the live scene, pose wrapped as a link_base PoseStamped) → End{scene_objects}. The Map binds the asset collection via assetBindings (alias `cell`, refKey `lab_cell`) and iterates it with itemsRef `cell`, mirroring demo 21 (asset binding) + demo 12 (Map itemsRef/itemVar/resultVar). LIVE ONLY: requires `just dev xarm-up`. NOTE: the exact asset-collection→Map binding form (assetBindings on the Map + itemsRef referencing the alias) is an assumption to live-verify — see graph.json notes."
+}

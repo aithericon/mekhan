@@ -72,6 +72,153 @@ pub struct OpenAI {
     pub base_url: Option<String>,
 }
 
+/// Internal self-hosted model-pool endpoint binding (docs/28 + docs/29 P1).
+///
+/// `base_url` points at the in-cluster inference **router** (the OpenAI-compatible
+/// proxy in front of the self-hosted model servers). This is a DISTINCT kind from
+/// [`OpenAI`] on purpose: it carries the IDENTICAL overlay shape
+/// (`api_key` + `base_url`, the only fields the provider-agnostic executor overlay
+/// `executor-llm/src/backend.rs::overlay_resource` reads), so the executor needs
+/// ZERO change — but the separate wire-name gives the frontend the router-backed
+/// signal it keys the model picker + the GDPR off-router LOCK off of (an
+/// `internal_llm` binding must never be able to silently escape off-router — doc 28
+/// §11), plus a DB-level audit marker.
+///
+/// Divergence from [`OpenAI`]: here `base_url` is **required + public** (the router
+/// endpoint is the whole point of the binding) and `api_key` is **optional** (an
+/// in-cluster router is frequently unauthenticated). When the router IS
+/// authenticated, stage an `api_key` so the overlay (whose `ResolvedOpenAiResource`
+/// requires it) deserializes cleanly.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "internal_llm",
+    display_name = "Internal Model Pool",
+    icon = "lucide-cpu"
+)]
+pub struct InternalLlm {
+    /// Base URL of the in-cluster inference router (OpenAI-compatible),
+    /// e.g. `http://router.internal:13200/v1`. Required: routing through the
+    /// router is the whole purpose of this kind.
+    pub base_url: String,
+    /// Optional bearer key for an authenticated router. Absent → no
+    /// `Authorization` header is sent (in-cluster routers are commonly open).
+    #[serde(default)]
+    #[resource(secret)]
+    pub api_key: Option<String>,
+}
+
+/// One operator-approved model in a [`ModelRegistry`]'s curated SET (docs/29 P1).
+///
+/// Defined here (not in `service/`) so the schema flows into the `model_registry`
+/// descriptor's `schemars` schema for free, and `mekhan-service` consumes the SAME
+/// type by re-export — no duplicate shape, no cyclic dep.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ApprovedModelConfig {
+    /// The model id the router routes on (e.g. `llama3`). Matches the
+    /// `ModelEntry.model_id` a runner advertises in its interface catalog.
+    pub model_id: String,
+    /// The provider wire-name the Agent/LLM step uses when calling the router
+    /// (`openai` for the OpenAI-compatible router path).
+    pub provider: String,
+    /// Optional base model id for a LoRA adapter (`None` for a base model).
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+/// Operator-curated model SET + the registry that backs the loaded-state machine
+/// (docs/29 P1). Not a credential surface itself — it references the
+/// [`InternalLlm`] resource (by `router_resource` alias) that carries the router
+/// endpoint, and enumerates the `approved_models` the operator allows to be
+/// loaded. The autoscaler (later phase) scales replica COUNT within this SET; the
+/// operator curates the SET.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "model_registry",
+    display_name = "Model Registry",
+    icon = "lucide-library"
+)]
+pub struct ModelRegistry {
+    /// Alias (`path`) of the `internal_llm` resource carrying the router endpoint.
+    pub router_resource: String,
+    /// The curated SET of models the operator approves for loading.
+    #[serde(default)]
+    pub approved_models: Vec<ApprovedModelConfig>,
+}
+
+/// Per-model autoscale POLICY (docs/28 + docs/29 P4). NOT a credential surface
+/// and NOT a capacity backend — it is a plain typed CONFIG kind the autoscaler
+/// control loop reads to drive the model-server replica COUNT on a target
+/// datacenter, residency-aware. The operator curates the approved model SET (via
+/// [`ModelRegistry`]); THIS policy scales the replica COUNT+placement within it.
+///
+/// Registered purely via the `ResourceType` derive (inventory submit at link
+/// time) exactly like [`InternalLlm`]/[`ModelRegistry`] — zero service-side code,
+/// zero migration. `axes_for_resource` returns `None` for `model_policy`, so
+/// `ensure_pool_net_for_resource` deploys NO admission net.
+///
+/// ## GDPR (doc 28 §11)
+///
+/// `residency_zone` is a HARD Nomad placement constraint. A non-empty zone the
+/// renderer cannot honor FAILS CLOSED (unplaceable allocation), never a silent
+/// fallback to unconstrained placement. The autoscaler additionally refuses to
+/// provision when a non-empty `residency_zone` targets a non-Nomad datacenter
+/// (the Slurm leg ignores residency).
+///
+/// ## Required vs optional
+///
+/// `model_id`, `datacenter_resource_id`, `residency_zone`, `min_replicas`,
+/// `max_replicas`, `mode`, `replica_spec` are plain fields ⇒ REQUIRED on create
+/// (schemars `required` array). `desired_replicas` (L1 manual COUNT) and the L2
+/// reactive knobs (`scale_up_threshold`/`scale_down_threshold`/`cooldown_secs`)
+/// are `Option<T> + #[serde(default)]` ⇒ OPTIONAL. No `#[resource(secret)]`
+/// fields — all public config.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "model_policy",
+    display_name = "Model Autoscale Policy",
+    icon = "lucide-gauge"
+)]
+pub struct ModelAutoscalePolicy {
+    /// Router model id this policy scales (matches [`ApprovedModelConfig::model_id`]
+    /// and the `ModelEntry.model_id` a runner advertises).
+    pub model_id: String,
+    /// Alias (`resources.path`) of the `datacenter` resource this policy
+    /// provisions replicas on. The autoscaler resolves it to the resource row
+    /// uuid before driving the replica net.
+    pub datacenter_resource_id: String,
+    /// HARD Nomad placement zone (GDPR §11). Non-empty ⇒ fail-closed if
+    /// unsatisfiable; the autoscaler refuses to provision a non-empty zone onto a
+    /// non-Nomad datacenter (the Slurm leg silently drops residency).
+    pub residency_zone: String,
+    /// Lower bound on replica COUNT.
+    pub min_replicas: u32,
+    /// Upper bound on replica COUNT.
+    pub max_replicas: u32,
+    /// One of `manual` | `scale_to_zero` | `keep_warm`. Plain String (matches the
+    /// `Capacity.liveness`/`dispatch` convention) — validated service-side, not by
+    /// a DB/schema enum.
+    pub mode: String,
+    /// L1 manual desired COUNT. Optional (L2 reactive modes omit it and derive
+    /// the count from demand).
+    #[serde(default)]
+    pub desired_replicas: Option<u32>,
+    /// L2 reactive scale-up demand threshold (HARD-BLOCKED on the router /metrics;
+    /// unused in L1).
+    #[serde(default)]
+    pub scale_up_threshold: Option<f64>,
+    /// L2 reactive scale-down demand threshold (unused in L1).
+    #[serde(default)]
+    pub scale_down_threshold: Option<f64>,
+    /// Cooldown between actuations (seconds). Gates off
+    /// `model_replicas.last_actuated_at` so it survives a mekhan restart.
+    #[serde(default)]
+    pub cooldown_secs: Option<u64>,
+    /// Opaque replica job spec threaded into `stage_template` (image / entrypoint
+    /// / env / gpus / gpu_type / mem_mb). Schemars renders it as an open schema —
+    /// downstream `build_model_replica_net` reads keys defensively.
+    pub replica_spec: serde_json::Value,
+}
+
 /// Anthropic API credentials + endpoint binding. Mirrors [`OpenAI`]'s shape
 /// minus the org id: `api_key` is the only secret, `base_url` lives on the
 /// resource so a corp proxy / Bedrock-Anthropic shim is paired with its key
@@ -132,7 +279,11 @@ pub struct Loki {
 /// absent means no `Authorization` header is sent. `org_id` is the multi-tenant
 /// `X-Scope-OrgID` header (Thanos/Cortex/Mimir), also optional.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "prometheus", display_name = "Prometheus", icon = "lucide-activity")]
+#[resource(
+    name = "prometheus",
+    display_name = "Prometheus",
+    icon = "lucide-activity"
+)]
 pub struct Prometheus {
     /// Base URL of the Prometheus HTTP API, e.g. `http://localhost:9090` (no
     /// trailing `/api/v1/query` — the backend appends the API path).
@@ -491,5 +642,58 @@ inventory::submit! {
             })
         },
         dynamic_fields: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::registry::{lookup, schema_json_cached};
+
+    /// The `ModelAutoscalePolicy` struct's `#[derive(ResourceType)]` must register
+    /// the `model_policy` kind in the inventory registry, with NO secret fields and
+    /// the schemars `required` array gating exactly the plain (non-Option) fields.
+    #[test]
+    fn model_policy_round_trips_through_registry() {
+        let d = lookup("model_policy").expect("model_policy registered via inventory");
+        assert_eq!(d.display_name, "Model Autoscale Policy");
+        assert_eq!(d.icon, "lucide-gauge");
+        assert!(!d.dynamic_fields, "model_policy is a typed kind, not kv");
+        // No secrets — all public config.
+        assert!(
+            d.secret_fields.is_empty(),
+            "model_policy has no secret fields, got {:?}",
+            d.secret_fields
+        );
+
+        // The schemars `required` array is what the resource create-handler's
+        // required-field gate keys off: plain fields required, Option fields not.
+        let schema = schema_json_cached(d);
+        let required: Vec<&str> = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        for req in [
+            "model_id",
+            "datacenter_resource_id",
+            "residency_zone",
+            "min_replicas",
+            "max_replicas",
+            "mode",
+            "replica_spec",
+        ] {
+            assert!(required.contains(&req), "{req} must be required, got {required:?}");
+        }
+        for opt in [
+            "desired_replicas",
+            "scale_up_threshold",
+            "scale_down_threshold",
+            "cooldown_secs",
+        ] {
+            assert!(
+                !required.contains(&opt),
+                "{opt} must be optional (Option + #[serde(default)]), got {required:?}"
+            );
+        }
     }
 }

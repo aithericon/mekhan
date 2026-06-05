@@ -592,6 +592,163 @@ mod scope_reachability_tests {
         );
     }
 
+    /// A ROS (Envelope-shaped) AutomatedStep that sits inside a Map body and
+    /// templates the bare per-element item var (`{{ cand.x }}`) must emit one
+    /// `MapItemVar` borrow so the element is staged as `cand.json` — without
+    /// it the Envelope backend's staged-file Tera context can't see the item
+    /// var (a Python body would read it as a runner global). Mirrors the guard
+    /// planner's item_var resolution: the body node's direct parent is the Map.
+    #[test]
+    fn ros_map_body_item_var_emits_borrow() {
+        use std::collections::HashMap;
+
+        // start → mp (Map, itemVar "cand") ⊃ ros_body (ROS, refs {{cand.x}})
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"mp","type":"map","slug":"mp","position":{"x":0,"y":0},
+             "data":{"type":"map","label":"Per cell","itemsRef":"start.cells","itemVar":"cand","resultVar":"obs"}},
+            {"id":"ros_body","type":"automated_step","slug":"ros_body","parentId":"mp","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Add object",
+                     "executionSpec":{"backendType":"ros","config":{
+                        "operation":"call_service","interface_name":"/add_object","interface_type":"demo_msgs/AddObject",
+                        "fields":{"pose":{"x":"{{ cand.x }}","y":"{{ cand.y }}"}}}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"mp","type":"sequence"},
+            {"id":"e2","source":"mp","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser ros-map graph");
+
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
+        // Two field refs ({{cand.x}}, {{cand.y}}) on the same item var collapse
+        // to one staged `cand.json`.
+        assert_eq!(borrows.len(), 1, "exactly one item-var borrow; got: {borrows:?}");
+        match &borrows[0] {
+            AutomatedStepDataBorrow::MapItemVar {
+                consumer_node_id,
+                item_var,
+            } => {
+                assert_eq!(consumer_node_id, "ros_body");
+                assert_eq!(item_var, "cand");
+            }
+            other => panic!("expected MapItemVar borrow, got: {other:?}"),
+        }
+    }
+
+    /// End-to-end apply proof: a ROS body inside a Map that templates the
+    /// item var compiles to AIR whose prepare transition stages `cand.json`
+    /// from the in-scope firing token (`input["cand"]`) — so the executor's
+    /// staged-file Tera context resolves `{{ cand.x }}`. Mirrors demo 12's
+    /// Map wiring with a (non-pooled, so it compiles offline) ROS body.
+    #[test]
+    fn ros_map_body_item_var_staged_in_air() {
+        use crate::compiler::compile_to_air;
+        use std::collections::HashMap;
+
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"producer","type":"automated_step","slug":"producer","position":{"x":120,"y":0},
+             "data":{"type":"automated_step","label":"Make cells",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "output":{"id":"out","label":"Cells","fields":[
+                       {"name":"cells","label":"Cells","kind":"json","required":true}]}}},
+            {"id":"mp","type":"map","slug":"cells_map","position":{"x":260,"y":0},
+             "data":{"type":"map","label":"Per cell","itemsRef":"producer.cells","itemVar":"cand","resultVar":"name",
+                     "output":{"id":"out","label":"Spawned","fields":[
+                       {"name":"name","label":"Name","kind":"text","required":true}]}}},
+            {"id":"spawn","type":"automated_step","slug":"spawn","parentId":"mp","position":{"x":40,"y":60},
+             "data":{"type":"automated_step","label":"Spawn turtle",
+                     "executionSpec":{"backendType":"ros","config":{
+                        "operation":"call_service","interface_name":"/spawn","interface_type":"turtlesim/Spawn",
+                        "fields":{"x":"{{ cand.x }}","y":"{{ cand.y }}","theta":"{{ cand.theta }}","name":"{{ cand.name }}"}}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "output":{"id":"out","label":"Spawned","fields":[
+                       {"name":"name","label":"Name","kind":"text","required":true}]}}},
+            {"id":"end","type":"end","slug":"end","position":{"x":420,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e0","source":"start","target":"producer","targetHandle":"in","type":"sequence"},
+            {"id":"e1","source":"producer","target":"mp","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"mp","sourceHandle":"body_in","target":"spawn","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"spawn","target":"mp","targetHandle":"body_out","type":"loop_back"},
+            {"id":"e4","source":"mp","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser ros-map graph");
+
+        use aithericon_executor_domain::InputSource;
+        let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+        let mut pf = HashMap::new();
+        pf.insert(
+            "main.py".to_string(),
+            InputSource::Raw {
+                content: "import aithericon\naithericon.set_output('cells', [])\n".to_string(),
+            },
+        );
+        files.insert("producer".to_string(), pf);
+
+        let air = compile_to_air(&g, "ros-map", "", &files)
+            .expect("ros-map graph compiles to AIR");
+        let air_str = serde_json::to_string(&air).expect("serialize AIR");
+
+        assert!(
+            air_str.contains("cand.json"),
+            "expected the item var to be staged as cand.json in the prepare transition"
+        );
+        assert!(
+            air_str.contains(r#"input[\"cand\"]"#),
+            "expected cand.json to be sourced from the in-scope token (input[\"cand\"])"
+        );
+    }
+
+    /// The same bare `{{ cand.x }}` ref in a ROS step that is NOT a Map body
+    /// child is a silent skip — no Map parent means `cand` is just an unknown
+    /// head (Tera built-in / typo), exactly as before the item-var fix.
+    #[test]
+    fn ros_item_var_ref_outside_map_is_ignored() {
+        use std::collections::HashMap;
+
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"ros","type":"automated_step","slug":"ros","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Publish",
+                     "executionSpec":{"backendType":"ros","config":{
+                        "operation":"publish_topic","interface_name":"/cmd","interface_type":"demo_msgs/Cmd",
+                        "fields":{"x":"{{ cand.x }}"}}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"ros","type":"sequence"},
+            {"id":"e2","source":"ros","target":"end","type":"sequence"}
+          ]
+        }"#;
+        let g: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+
+        let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
+        assert!(
+            borrows.is_empty(),
+            "a bare item-var ref with no Map parent must not borrow; got: {borrows:?}"
+        );
+    }
+
     /// One model: a HumanTask's `{{ <slug>.<field> }}` placeholder
     /// resolves to a single borrow against the upstream parked place,
     /// exactly like a Python AutomatedStep's `<slug>.<field>` source

@@ -73,6 +73,17 @@ pub(crate) fn apply_envelope_borrows(
                 }
                 (alias.clone(), format!(r#"__assets["{alias}"]"#))
             }
+            BorrowResolution::MapItemVarEnvelope { item_var } => {
+                // The Map scatter stamped `<item_var>` onto each body token;
+                // the prepare transition binds that token as `input` (both the
+                // inline and pooled lowerings open with `let d = input` /
+                // `let input = pending.input`). Stage the element as
+                // `<item_var>.json` so an Envelope backend's Tera context
+                // exposes the bare item var — matching how a Python body reads
+                // the runner global. No read-arc: the value is on the firing
+                // token, not a parked place.
+                (item_var.clone(), format!("input[{:?}]", item_var))
+            }
             _ => continue, // unreachable per `EnvelopeStageStrategy::handles`
         };
         pushes.push_str(&format!(

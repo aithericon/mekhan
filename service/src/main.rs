@@ -228,6 +228,41 @@ async fn main() -> anyhow::Result<()> {
     // handle stored in AppState.
     mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone());
 
+    // Model-pool replica autoscaler (P4, docs/29 §6'). A reconcile loop that
+    // drives the model-server replica COUNT per `model_policy` resource on its
+    // target datacenter (residency-aware, GDPR fail-closed), observing the live
+    // count off the fleet roster. Inference never touches the engine net or the
+    // presence net — the loop only provisions via the staging plane (a generated
+    // `model-replica-<row>` net firing `stage_template`).
+    //
+    // `AUTOSCALER_DEMAND_URL` (the Router base) flips it from L1 manual mode to
+    // L2 reactive: a `PrometheusDemandSource` scrapes the router `/metrics`
+    // per-model demand so `scale_to_zero`/`keep_warm` policies react to load.
+    // Unset ⇒ L1 (`demand = None`, only `manual` policies actuate).
+    let demand: Option<std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>> =
+        std::env::var("AUTOSCALER_DEMAND_URL").ok().filter(|u| !u.is_empty()).map(|url| {
+            tracing::info!(%url, "autoscaler L2 reactive mode: scraping router /metrics");
+            std::sync::Arc::new(mekhan_service::autoscaler::demand::PrometheusDemandSource::new(
+                url,
+            )) as std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>
+        });
+    mekhan_service::autoscaler::spawn_autoscaler(
+        db.clone(),
+        petri.clone(),
+        runner_presence.clone(),
+        demand,
+    );
+
+    // Model-replicas projection (PETRI_GLOBAL → model_replicas). Folds each
+    // `model-replica-<row>` net's terminal `stage_template` effect into its row's
+    // status/replica_slug/last_error (observed_count stays roster-driven).
+    tokio::spawn(
+        mekhan_service::projections::model_replicas::start_model_replicas_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

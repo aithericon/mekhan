@@ -1178,6 +1178,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/models` — the loaded-set projection (the editor model picker's
+         *     data source). Every `model_states` row in the workspace, AND-gated against the
+         *     live runner interface catalog. Session/human authed, workspace-scoped,
+         *     fail-soft on the live half.
+         */
+        get: operations["list_loaded_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/replicas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/models/replicas` — list every replica row in the workspace. */
+        get: operations["list_model_replicas"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/replicas/{policy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/models/replicas/{policy_id}` — one policy's replica state. */
+        get: operations["get_model_replica"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/replicas/{policy_id}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/replicas/{policy_id}/scale` — the L1 manual desired
+         *     override. Writes `desired_count`; the loop reconciles next tick. Upserts the
+         *     row off the `model_policy` resource so a scale before the first reconcile
+         *     still takes (404 if the policy resource itself doesn't exist).
+         */
+        post: operations["scale_model_replica"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/models/{model_id}` — one model + its state/replica/serving facts.
+         *     404 when the workspace has no `model_states` row for that id.
+         */
+        get: operations["get_model"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/{model_id}/transition` — the operator state-machine step.
+         *     Validated against [`ModelState::legal_transitions`]; an illegal edge → 409.
+         *     Session/human authed, workspace-scoped. Returns the projected view after the
+         *     move (with the live-runner AND-gate recomputed).
+         */
+        post: operations["transition_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-types": {
         parameters: {
             query?: never;
@@ -5621,6 +5741,46 @@ export interface components {
             };
         };
         /**
+         * @description One model a runner advertises in its interface catalog — the live half of the
+         *     loaded-set AND-gate (docs/29). The canonical P2-superset shape: P1 only reads
+         *     `model_id` (to confirm a `loaded` `model_states` row is actually served by a
+         *     live runner); `kind`/`max_num_seqs`/`base` are carried now so P2's node-agent
+         *     can populate them without a DTO churn. Grows the existing `catalog` JSONB
+         *     column — NO migration.
+         */
+        ModelEntry: {
+            /** @description For a `Lora` entry, the base model id it layers on. `None` for `Base`. */
+            base?: string | null;
+            /** @description Whether this is a base model or a LoRA adapter. */
+            kind: components["schemas"]["ModelInterfaceKind"];
+            /**
+             * Format: int32
+             * @description Configured per-engine concurrency `C` (vLLM `--max-num-seqs`). **Base-only**
+             *     — `C` is per-ENGINE (per base), SHARED across that base's LoRA adapters, so it
+             *     is populated only on `Base` entries and is `None` on every `Lora` entry. The
+             *     router reads a Lora's slot budget from its `base` back-pointer.
+             */
+            max_num_seqs?: number | null;
+            /**
+             * @description The model id the router routes on (e.g. `llama3`). Joins to
+             *     `model_states.model_id` + `ApprovedModelConfig.model_id`.
+             */
+            model_id: string;
+            /**
+             * @description For a `Lora` entry, the adapter-weights URI the load command supplied (e.g.
+             *     `hf://...`). `None` for `Base`.
+             */
+            source_uri?: string | null;
+        };
+        /**
+         * @description The kind of model an advertised [`ModelEntry`] is — a base model or a LoRA
+         *     adapter (multi-LoRA serving rides one base). The canonical P2-superset shape
+         *     (docs/29): P1 INTRODUCES it so the loaded-set projection has a typed entry to
+         *     read; P2's node-agent populates it from the vLLM model surface.
+         * @enum {string}
+         */
+        ModelInterfaceKind: "base" | "lora";
+        /**
          * @description LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
          *     the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
          *     editor authors directly (provider, model, optional creds / sampling
@@ -5653,6 +5813,111 @@ export interface components {
             /** Format: double */
             temperature?: number | null;
         };
+        /**
+         * @description One `model_replicas` row — the durable reconciliation target + Control-Plane
+         *     read. `desired_count`/`observed_count` are stored `INT`; the loop works in
+         *     `u32` and converts at the edges.
+         */
+        ModelReplicaRow: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Resolved `datacenter` resource UUID (the policy carries an alias; the loop
+             *     resolves it before the upsert).
+             */
+            datacenter_resource_id: string;
+            /**
+             * Format: int32
+             * @description Last desired COUNT the loop drove (or the scale endpoint's manual override).
+             */
+            desired_count: number;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Anchors the durable cooldown gate (survives a mekhan restart).
+             */
+            last_actuated_at?: string | null;
+            last_error?: string | null;
+            model_id: string;
+            /**
+             * Format: int32
+             * @description Live count from the fleet roster (runners advertising `model_id`). NOT the
+             *     staging effect result — that only proves "registered", not "serving".
+             */
+            observed_count: number;
+            /**
+             * Format: uuid
+             * @description The `model_policy` resource this row reconciles (UNIQUE — one row/policy).
+             */
+            policy_resource_id: string;
+            /**
+             * @description Native job NAME registered on the cluster (Nomad service-job id). `None`
+             *     until first actuation.
+             */
+            replica_slug?: string | null;
+            /** @description HARD residency zone recorded for the Control-Plane read + audit. */
+            residency_zone?: string | null;
+            /** @description One of `status::*`. */
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description `POST /api/v1/models/replicas/{policy_id}/scale` body — the L1 manual desired
+         *     override. Writes `desired_count` on the row; the loop picks it up next tick
+         *     (in `manual` mode the row's `desired_count` is the live control, seeded from
+         *     the policy's `desired_replicas`).
+         */
+        ModelReplicaScaleRequest: {
+            /** Format: int32 */
+            desired_replicas: number;
+        };
+        /**
+         * @description One row of the loaded-set projection (`GET /api/v1/models` and
+         *     `GET /api/v1/models/{model_id}`).
+         *
+         *     `state` is the operator-curated `model_states` position; `available` is the
+         *     AND-gate — `true` only when `state == Loaded` AND at least one LIVE runner's
+         *     interface catalog advertises `model_id`. `serving_runners` is the count of
+         *     live runners advertising it (the live half), surfaced so an operator can see
+         *     a `loaded`-but-unserved model.
+         */
+        ModelSetView: {
+            /**
+             * @description AND-gate: `state == Loaded` AND a live runner advertises `model_id`. This
+             *     is the flag the editor model picker filters on.
+             */
+            available: boolean;
+            /** @description For a LoRA model, the base model id it layers on. */
+            base?: string | null;
+            /** @description The model id (router routes on this). */
+            model_id: string;
+            /** @description Optional operator note from the last transition. */
+            note?: string | null;
+            /**
+             * Format: int32
+             * @description Operator-tracked replica count (rides the Nomad job-template; P1 manual).
+             */
+            replicas: number;
+            /**
+             * Format: int32
+             * @description Count of LIVE runners whose interface catalog advertises `model_id`.
+             */
+            serving_runners: number;
+            /** @description The operator-curated lifecycle state. */
+            state: components["schemas"]["ModelState"];
+        };
+        /**
+         * @description The operator-curated lifecycle position of a model in the pool. Persisted as
+         *     the free-text `model_states.state` column; validated against this enum on
+         *     every read/write (no DB CHECK).
+         * @enum {string}
+         */
+        ModelState: "approved" | "loading" | "loaded" | "draining" | "unloaded";
         MoveConfig: {
             compress?: null | components["schemas"]["Compression"];
             decompress?: null | components["schemas"]["Compression"];
@@ -7021,6 +7286,12 @@ export interface components {
          */
         RunnerInterfaceCatalog: {
             actions?: components["schemas"]["InterfaceEntry"][];
+            /**
+             * @description Self-hosted LLM models this runner's node-agent currently serves (docs/29).
+             *     The live half of the loaded-set AND-gate. Additive JSONB field — a runner
+             *     that serves no models simply reports an empty list.
+             */
+            models?: components["schemas"]["ModelEntry"][];
             services?: components["schemas"]["InterfaceEntry"][];
             topics?: components["schemas"]["InterfaceEntry"][];
         };
@@ -7877,6 +8148,17 @@ export interface components {
             input_schema: unknown;
             name: string;
         };
+        /**
+         * @description Request body for `POST /api/v1/models/{model_id}/transition` — the operator
+         *     state-machine step. Validated against [`ModelState::legal_transitions`]; an
+         *     illegal edge → 409.
+         */
+        TransitionRequest: {
+            /** @description Optional operator note recorded with the transition. */
+            note?: string | null;
+            /** @description The state to move the model to. */
+            target: components["schemas"]["ModelState"];
+        };
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -8554,6 +8836,17 @@ export interface components {
             /** @enum {string} */
             type: "lease_scope";
         } | {
+            /**
+             * @description Node-level asset bindings (docs/20 §5, feature B). When the Map's
+             *     `itemsRef` is a bare identifier matching one of these aliases (and
+             *     is NOT a producer slug — producer wins), the scatter draws its
+             *     source collection from the bound asset's records via the publish-time
+             *     `let __assets = #{...}` splice (`let __src = __assets["<alias>"]`),
+             *     instead of from an upstream producer read-arc. `#[serde(default)]` ⇒
+             *     existing templates (field absent → empty) round-trip unchanged (same
+             *     precedent as AutomatedStep's `asset_bindings`).
+             */
+            assetBindings?: components["schemas"]["AssetBinding"][];
             description?: string | null;
             /**
              * @description Identifier the per-item element is bound to on each body token.
@@ -11467,6 +11760,191 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_loaded_models: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace model-pool state, loaded-set AND-gated against live runners */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"][];
+                };
+            };
+        };
+    };
+    list_model_replicas: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-policy model-replica reconciliation rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReplicaRow"][];
+                };
+            };
+        };
+    };
+    get_model_replica: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description model_policy resource id */
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One policy's replica row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReplicaRow"];
+                };
+            };
+            /** @description No replica row for that policy yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    scale_model_replica: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description model_policy resource id */
+                policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelReplicaScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description Desired count written; the updated row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReplicaRow"];
+                };
+            };
+            /** @description No such model_policy resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id (router routes on this) */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One model's loaded-set view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    transition_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Transition applied; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Illegal state-machine edge */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };

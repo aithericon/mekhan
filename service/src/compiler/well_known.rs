@@ -41,6 +41,20 @@ pub fn materialize_net_id(materialize_id: uuid::Uuid) -> String {
     format!("materialize-{materialize_id}")
 }
 
+/// Net id for a one-shot **model-replica actuation** run (model-pool P4, docs/29
+/// §6'). The autoscaler reconciles one `model_replicas` row per `model_policy`
+/// resource; on every provision / scale / teardown it (re)deploys a short-lived
+/// net (`build_model_replica_net`) that fires the engine's `stage_template`
+/// effect once — registering / scaling / stopping a long-running `service` job on
+/// the target datacenter. Keyed by the `model_replicas` row id so the
+/// effect_result's echoed correlation id maps back to the row the
+/// `model_replicas` projection updates, and so re-actuating the same policy
+/// upserts the row → reuses its id → re-deploys the same net id (engine replaces
+/// it). Pure function of the row id ⇒ replay-safe + unique per policy.
+pub fn model_replica_net_id(replica_id: uuid::Uuid) -> String {
+    format!("model-replica-{replica_id}")
+}
+
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
 /// A `ClaimRequest { grant_id }` deposited here is matched against a free
 /// capacity token by `t_grant`, which replies a `Grant { grant_id, gpu_id }`

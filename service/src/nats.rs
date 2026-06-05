@@ -459,4 +459,26 @@ impl MekhanNats {
             .await?;
         Ok(consumer)
     }
+
+    /// Durable consumer for the `model_replicas` projection (model-pool P4,
+    /// docs/29 §6'). Same `petri.events.>` firehose as staging; pre-filters to
+    /// `model-replica-*` nets in-process (see
+    /// `service/src/projections/model_replicas/`).
+    pub async fn model_replicas_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-model-replicas");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
 }

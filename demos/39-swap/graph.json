@@ -1,0 +1,145 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Swap {{ occupant_id }} ↔ {{ new_id }}",
+        "initial": {
+          "id": "in",
+          "label": "Swap Input",
+          "fields": [
+            { "name": "occupant_id", "label": "Occupant Object ID (currently in port)", "kind": "text", "required": true },
+            { "name": "new_id", "label": "New Object ID (from rack)", "kind": "text", "required": true },
+            { "name": "port_grasp_pose", "label": "Port Grasp Pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "port_approach_pose", "label": "Port Approach Pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "temp_grasp_pose", "label": "Temp Slot Grasp Pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "temp_approach_pose", "label": "Temp Slot Approach Pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "rack_grasp_pose", "label": "Rack Grasp Pose (geometry_msgs/Pose)", "kind": "json", "required": true },
+            { "name": "rack_approach_pose", "label": "Rack Approach Pose (geometry_msgs/Pose)", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pick_occupant",
+      "type": "sub_workflow",
+      "position": { "x": 340, "y": 200 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Pick Occupant (from port)",
+        "description": "Pick the current occupant out of the instrument port via the 37-pick sub-template.",
+        "templateId": "00000000-0000-0000-0000-000000000370",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "grasp_pose", "expression": "start.port_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.port_approach_pose" },
+          { "targetField": "object_id", "expression": "start.occupant_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Pick Result",
+          "fields": [
+            { "name": "picked", "label": "Picked", "kind": "bool", "required": true },
+            { "name": "object_id", "label": "Object ID", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "place_occupant",
+      "type": "sub_workflow",
+      "position": { "x": 640, "y": 200 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Place Occupant (into temp slot)",
+        "description": "Place the occupant into the temporary rack slot via the 38-place sub-template.",
+        "templateId": "00000000-0000-0000-0000-000000000380",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "insert_pose", "expression": "start.temp_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.temp_approach_pose" },
+          { "targetField": "object_id", "expression": "start.occupant_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Place Result",
+          "fields": [
+            { "name": "placed", "label": "Placed", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pick_new",
+      "type": "sub_workflow",
+      "position": { "x": 940, "y": 200 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Pick New (from rack)",
+        "description": "Pick the new sample off the rack via the 37-pick sub-template.",
+        "templateId": "00000000-0000-0000-0000-000000000370",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "grasp_pose", "expression": "start.rack_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.rack_approach_pose" },
+          { "targetField": "object_id", "expression": "start.new_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Pick Result",
+          "fields": [
+            { "name": "picked", "label": "Picked", "kind": "bool", "required": true },
+            { "name": "object_id", "label": "Object ID", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "place_new",
+      "type": "sub_workflow",
+      "position": { "x": 1240, "y": 200 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Place New (into port)",
+        "description": "Place the new sample into the now-empty instrument port via the 38-place sub-template.",
+        "templateId": "00000000-0000-0000-0000-000000000380",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "insert_pose", "expression": "start.port_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.port_approach_pose" },
+          { "targetField": "object_id", "expression": "start.new_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Place Result",
+          "fields": [
+            { "name": "placed", "label": "Placed", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1540, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Swapped",
+        "resultMapping": [
+          { "targetField": "swapped", "expression": "place_new.placed" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_pick_occupant", "source": "start", "target": "pick_occupant", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_pick_occupant_place_occupant", "source": "pick_occupant", "target": "place_occupant", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_place_occupant_pick_new", "source": "place_occupant", "target": "pick_new", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_pick_new_place_new", "source": "pick_new", "target": "place_new", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_place_new_end", "source": "place_new", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

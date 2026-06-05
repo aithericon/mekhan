@@ -509,6 +509,16 @@ pub enum WorkflowNodeData {
         /// element. Drives the `<map_slug>[*].<field>` borrow surface.
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<Port>,
+        /// Node-level asset bindings (docs/20 §5, feature B). When the Map's
+        /// `itemsRef` is a bare identifier matching one of these aliases (and
+        /// is NOT a producer slug — producer wins), the scatter draws its
+        /// source collection from the bound asset's records via the publish-time
+        /// `let __assets = #{...}` splice (`let __src = __assets["<alias>"]`),
+        /// instead of from an upstream producer read-arc. `#[serde(default)]` ⇒
+        /// existing templates (field absent → empty) round-trip unchanged (same
+        /// precedent as AutomatedStep's `asset_bindings`).
+        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        asset_bindings: Vec<AssetBinding>,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token

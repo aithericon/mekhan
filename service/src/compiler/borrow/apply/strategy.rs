@@ -79,10 +79,31 @@ impl ApplyStrategy for EnvelopeStageStrategy {
             BorrowResolution::PythonEnvelope
                 | BorrowResolution::ResourceEnvelope { .. }
                 | BorrowResolution::AssetStaging { .. }
+                | BorrowResolution::MapItemVarEnvelope { .. }
         )
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
         super::envelope::apply_envelope_borrows(ctx.scenario, ctx.interfaces, consumer, group);
+    }
+}
+
+/// Feature B: bare-itemsRef-on-Map asset binding. Rewrites the scatter's
+/// `let __src = <alias>` to `let __src = __assets["<alias>"]`. Deliberately NOT
+/// folded into [`EnvelopeStageStrategy`] — that arm's body pushes `job_inputs`
+/// at `BORROW_MARKER`, which the marker-less pure-Rhai scatter doesn't have (the
+/// push would be silently dropped AND no in-logic rewrite would happen, leaving
+/// `__src` bare → `()`). The records still ride the same publish-time `__assets`
+/// splice; this strategy only performs the in-logic rewrite.
+pub(crate) struct MapItemsRefAssetStrategy;
+impl ApplyStrategy for MapItemsRefAssetStrategy {
+    fn name(&self) -> &'static str {
+        "map_items_ref_asset"
+    }
+    fn handles(&self, r: &BorrowResolution) -> bool {
+        matches!(r, BorrowResolution::MapItemsRefAsset { .. })
+    }
+    fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
+        super::map_items_ref::apply_map_items_ref_borrows(ctx.scenario, consumer, group);
     }
 }
 
@@ -127,6 +148,7 @@ impl ApplyStrategy for BackendFieldStrategy {
 pub(crate) const STRATEGIES: &[&(dyn ApplyStrategy + Sync)] = &[
     &GuardRewriteStrategy,
     &EnvelopeStageStrategy,
+    &MapItemsRefAssetStrategy,
     &super::constant::ConstantInlineStrategy,
     &HumanTaskStrategy,
     &BackendFieldStrategy,

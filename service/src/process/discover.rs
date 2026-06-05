@@ -324,11 +324,24 @@ async fn discover_resource_globals(
         //   - pooled `Executor { capacity }` + `Scheduled`: their NON-lease
         //     default route lands on the workspace's `default` group, so the
         //     `default` head must resolve for them too.
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model,
-            ..
-        } = &node.data
-        {
+        //
+        // BOTH `AutomatedStep` AND `Agent` route this way: a degenerate Agent
+        // lowers byte-identically to an `AutomatedStep(Llm)` via
+        // `lower_automated_step` (which resolves this head → the group UUID), and
+        // a multi-turn Agent inlines one `executor_lifecycle` per turn on the
+        // default group. Without the Agent arm the group head is never injected,
+        // so the lowering falls back to the literal `default` token and the
+        // executor's UUID-filtered grouped consumer never drains the job.
+        let group_deployment = match &node.data {
+            WorkflowNodeData::AutomatedStep {
+                deployment_model, ..
+            }
+            | WorkflowNodeData::Agent {
+                deployment_model, ..
+            } => Some(deployment_model),
+            _ => None,
+        };
+        if let Some(deployment_model) = group_deployment {
             match deployment_model {
                 crate::models::template::DeploymentModel::Executor {
                     capacity: None,
@@ -512,6 +525,11 @@ async fn discover_asset_globals(
         let bindings: &[AssetBinding] = match &node.data {
             WorkflowNodeData::AutomatedStep { asset_bindings, .. } => asset_bindings,
             WorkflowNodeData::Agent { asset_bindings, .. } => asset_bindings,
+            // Feature B: a Map's own assetBindings make the bound COLLECTION an
+            // envelope-used asset global (so it lands in the publish-time
+            // `__assets` splice the scatter indexes). Same collection-staging
+            // path as the step bindings above.
+            WorkflowNodeData::Map { asset_bindings, .. } => asset_bindings,
             _ => continue,
         };
         for b in bindings {

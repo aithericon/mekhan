@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod auth;
+pub mod autoscaler;
 pub mod backends;
 pub mod catalogue;
 pub mod causality;
@@ -220,6 +221,22 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // `capacity` + `datacenter` resource classified by the SINGLE dispatch
         // authority (`CapacityAxes::backend`) with live utilization.
         .routes(routes!(handlers::capacities::list_capacities))
+        // Model-pool (docs/28 + docs/29 P1) — loaded-set projection + the
+        // operator state-machine step. Projection/control seam only: inference
+        // bypasses the engine net + presence net, no NATS subjects added.
+        .routes(routes!(
+            handlers::model_pool::list_loaded_models,
+            handlers::model_pool::transition_model
+        ))
+        .routes(routes!(handlers::model_pool::get_model))
+        // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
+        // manual scale. The autoscaler loop reconciles `model_replicas` rows;
+        // these surface them + the L1 manual desired override.
+        .routes(routes!(
+            handlers::model_replicas::list_model_replicas,
+            handlers::model_replicas::scale_model_replica
+        ))
+        .routes(routes!(handlers::model_replicas::get_model_replica))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

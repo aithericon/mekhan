@@ -45,6 +45,10 @@ aithericon-executor-postgres = { workspace = true, optional = true }
 aithericon-executor-loki = { workspace = true, optional = true }
 aithericon-executor-prometheus = { workspace = true, optional = true }
 aithericon-executor-ros = { workspace = true, optional = true }
+# `futures::StreamExt` for the model-pool node agent's NATS command listener
+# (`model_agent.rs`, `vllm` feature) — mirrors the cancel listener's
+# `subscription.next()`. Optional; pulled in only by the `vllm` feature.
+futures = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
 aithericon-backends = { workspace = true }
@@ -70,6 +74,13 @@ postgres = ["dep:aithericon-executor-postgres"]
 loki = ["dep:aithericon-executor-loki"]
 prometheus = ["dep:aithericon-executor-prometheus"]
 ros = ["dep:aithericon-executor-ros"]
+# Model-pool node agent (P2). Pulls in executor-llm with ITS `vllm` feature
+# (the vLLM admin client + load/unload wire DTOs) + `futures` for the NATS
+# command listener. A GPU-host build opts in with `--features vllm`. NOTE: the
+# agent reuses `catalog_publish::publish_catalog`, lifted out of `ros_catalog`
+# into a shared mod (gated `any(ros, vllm)`), so a `vllm`-only build needs NO
+# ROS deps.
+vllm = ["dep:aithericon-executor-llm", "aithericon-executor-llm/vllm", "dep:futures"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }
