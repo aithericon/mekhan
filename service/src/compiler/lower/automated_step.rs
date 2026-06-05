@@ -1014,6 +1014,19 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         unreachable!("lower_pooled_body on non-AutomatedStep node")
     };
     let label = label.clone();
+    // Map-body-terminal gate (computed before the `&mut *cx.ctx` reborrow, same
+    // as the inline path). A pooled AutomatedStep that terminates a Map body must
+    // forward its FULL completed envelope so the Map's `t_<map>_collect` can read
+    // `body.detail.outputs.<resultVar>` + the preserved `__map_idx`/`__map_id`
+    // correlation leaves — the slim `split_outputs` control token carries neither.
+    // The `out` envelope built by `t_<id>_to_output` already IS that shape (`done`
+    // carries `detail.outputs.*`, and the executor lifecycle preserves the
+    // `_`-prefixed `__map_*` leaves threaded in via `pending.input`), so only the
+    // foundation tail differs: `park_outputs` (fork: park data AND forward the
+    // whole token) instead of `split_outputs`. Shared gate — see
+    // `super::is_map_body_terminal` (same one the inline path + SubWorkflow use).
+    let is_map_body_terminal =
+        super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
     // Streaming-channel manifest + synthesis data, cloned out before the
     // `&mut *cx.ctx` reborrow. Same handling as the inline path.
     let channels = channels.clone();
@@ -1505,8 +1518,16 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         &p_input,
     );
 
-    // Foundation split + port registration tail — mirrors the inline path.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    // Foundation tail — mirrors the inline path. A Map body terminal forks the
+    // FULL completed envelope (`park_outputs`) so the Map collect can lift
+    // `body.detail.outputs.<resultVar>` + the `__map_*` leaves; otherwise the
+    // slim `split_outputs` control token. Either way the parked data place is
+    // produced, so any downstream `<slug>.<field>` borrow is unaffected.
+    let (data_place_id, p_ctrl) = if is_map_body_terminal {
+        park_outputs(ctx, &id, &label, &p_output)
+    } else {
+        split_outputs(ctx, &id, &label, &p_output)
+    };
     let mut output_places = vec![(None, p_ctrl)];
     if let Some(p_error) = p_error {
         output_places.push((Some("error".to_string()), p_error));
