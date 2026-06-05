@@ -249,9 +249,13 @@
 			type: 'deletable' as const,
 			animated: e.type === 'loop_back',
 			deletable: !isReadonly,
-			// Tint the edge to match its source port so it reads as a lane out of
-			// that socket. View-only — not part of the serialized graph.
-			data: { laneColor: edgeLaneColor(byId.get(e.source), e.sourceHandle) }
+			// Tint the edge to match the ports it connects so it reads as a lane:
+			// a gradient from the source port's color to the target port's color.
+			// View-only — not part of the serialized graph.
+			data: {
+				laneFrom: edgeLaneColor(byId.get(e.source), e.sourceHandle),
+				laneTo: edgeLaneColor(byId.get(e.target), e.targetHandle)
+			}
 		}));
 	}
 
@@ -331,9 +335,13 @@
 			type: 'deletable',
 			animated: isBodyReturn,
 			data: {
-				laneColor: edgeLaneColor(
+				laneFrom: edgeLaneColor(
 					nodes.find((n) => n.id === connection.source),
 					connection.sourceHandle
+				),
+				laneTo: edgeLaneColor(
+					nodes.find((n) => n.id === connection.target),
+					connection.targetHandle
 				)
 			}
 		};
