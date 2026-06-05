@@ -19,8 +19,8 @@ pub use cancel::{CancellationRegistry, NatsCancelListener};
 pub use chunks::{datastream_subject, JetStreamTransport, StreamTransport};
 pub use completion::CompletionTracker;
 pub use config::{
-    CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, PythonCacheConfig,
-    RunnerIdentity, SandboxSettings, WorkerIdentity,
+    CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, ModelAgentSettings,
+    PythonCacheConfig, RunnerIdentity, SandboxSettings, WorkerIdentity,
 };
 pub use drain::{drain_signal, DrainConfig};
 pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};
@@ -30,6 +30,7 @@ pub use ipc_sidecar::{start_ipc_sidecar, SidecarLogConfig, SidecarResult};
 pub use nix::{NixConfig, NixEnvironmentHook};
 pub use presence::{
     presence_subject, spawn_presence_task, spawn_worker_presence_task, worker_presence_subject,
+    LiveModelState,
 };
 pub use registry::BackendRegistry;
 pub use reporter::StatusReporter;

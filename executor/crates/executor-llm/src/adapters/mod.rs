@@ -1,6 +1,10 @@
 pub mod anthropic;
 pub mod ollama;
 pub mod openai;
+/// vLLM control-plane admin client (P2 — model-pool node agent). NOT an
+/// inference adapter; see [`vllm`]. Gated behind the `vllm` feature.
+#[cfg(feature = "vllm")]
+pub mod vllm;
 
 use std::sync::Arc;
 

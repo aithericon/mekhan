@@ -302,6 +302,18 @@ pub struct ExecutorConfig {
     #[serde(default)]
     pub ros: Option<RosSettings>,
 
+    /// Model-pool node-agent configuration (P2 — model-pool control plane).
+    ///
+    /// When set (alongside `runner_id` + `mekhan_url`), this daemon runs the
+    /// vLLM node agent: it probes a local vLLM engine's served models, publishes
+    /// them to mekhan as a runner interface catalog, subscribes to
+    /// `runner.{id}.load`/`unload` control commands, and presence-reports the
+    /// per-engine concurrency C + loaded model ids. The agent NEVER serves
+    /// inference (that is conventional OpenAI HTTP straight to vLLM).
+    /// Config file: `[model_agent]` section in `executor.toml`.
+    #[serde(default)]
+    pub model_agent: Option<ModelAgentSettings>,
+
     /// Mekhan control-plane base URL (e.g. `https://mekhan.example.com`). Used
     /// by the worker self-enroll path (`worker_reg_token`) to POST
     /// `/api/v1/workers/enroll` on boot, AND by the runner-side ROS interface-
@@ -385,6 +397,41 @@ pub struct RosSettings {
     /// helper defaults to `ws://localhost:9090` (rosbridge's default port).
     #[serde(default)]
     pub ws_url: Option<String>,
+}
+
+/// Model-pool node-agent settings (P2 — model-pool control plane).
+///
+/// A nested struct (not flat fields) so the documented `EXECUTOR_MODEL_AGENT__*`
+/// env vars bind — config-rs uses `__` as the nesting separator (see the
+/// builder's `.separator("__")`), so a flat `model_agent_vllm_url` field would
+/// only catch `EXECUTOR_MODEL_AGENT_VLLM_URL` and the documented form would
+/// silently no-op. Mirrors [`RosSettings`] / [`SandboxSettings`].
+///
+/// Environment variables:
+/// - `EXECUTOR_MODEL_AGENT__VLLM_URL=http://localhost:8000`
+/// - `EXECUTOR_MODEL_AGENT__SERVED_BASE_MODEL=meta-llama/Llama-3-8B`
+/// - `EXECUTOR_MODEL_AGENT__MAX_NUM_SEQS=256`
+///
+/// Config file: `[model_agent]` section in `executor.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelAgentSettings {
+    /// vLLM OpenAI server base URL (e.g. `http://localhost:8000`). The agent
+    /// drives this server's ADMIN surface only (LoRA load/unload, sleep/wake,
+    /// `/v1/models` probe) — never inference. Required for the agent to run.
+    pub vllm_url: String,
+
+    /// The served base model id, for labelling/override when the `/v1/models`
+    /// probe is ambiguous or unavailable. Advisory.
+    #[serde(default)]
+    pub served_base_model: Option<String>,
+
+    /// The per-engine concurrency budget C (`=--max-num-seqs`). C is NOT in
+    /// `/v1/models` (it is a vLLM launch arg), so the agent sources it from here
+    /// and attributes it to the served base only (LoRA adapters share the
+    /// base's budget). Reported on the presence heartbeat + the base catalog
+    /// entry.
+    #[serde(default)]
+    pub max_num_seqs: Option<u32>,
 }
 
 /// On-disk runner identity persisted by `aithericon-executor register`.
@@ -778,6 +825,14 @@ impl ExecutorConfig {
             .map(|u| u.trim_end_matches('/').to_string())
             .filter(|u| !u.is_empty())
     }
+
+    /// The model-pool node-agent settings, or `None` when no `[model_agent]`
+    /// block is configured (the agent is then a no-op, never fatal). Gating
+    /// mirrors `ros_ws_url`/`mekhan_url`: the agent only runs when this AND
+    /// `runner_id` AND `mekhan_url()` all resolve.
+    pub fn model_agent(&self) -> Option<&ModelAgentSettings> {
+        self.model_agent.as_ref()
+    }
 }
 
 fn default_base_dir() -> String {
@@ -905,6 +960,7 @@ mod tests {
             runner_token_path: None,
             presence_interval_secs: default_presence_interval_secs(),
             ros: None,
+            model_agent: None,
             mekhan_url: None,
             worker_id: None,
             worker_group: None,

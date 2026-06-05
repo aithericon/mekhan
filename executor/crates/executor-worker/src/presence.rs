@@ -27,10 +27,54 @@
 //! supplied `CancellationToken` fires (same token the cancel/chunk listeners
 //! use), so it stops cleanly on Ctrl+C.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
+
+/// Live, mutable model state a runner presence-reports (P2 — model-pool).
+///
+/// The model-pool node agent writes this on every load/unload command; the
+/// presence task re-reads it each heartbeat tick so `{concurrency, models}`
+/// reflect the current vLLM state without a re-enroll. A cheap-clone shared
+/// handle (`Arc<Mutex<…>>`) — contention is trivial (a write per load/unload, a
+/// read per heartbeat interval).
+///
+/// `concurrency` is the per-engine budget C (`=--max-num-seqs`); `models` is the
+/// served model ids (base + loaded LoRA adapters). Both are advisory wire-truth
+/// — mekhan keeps caps/namespace DB-authoritative.
+#[derive(Clone, Default)]
+pub struct LiveModelState {
+    inner: Arc<Mutex<ModelStateInner>>,
+}
+
+#[derive(Default)]
+struct ModelStateInner {
+    concurrency: Option<u32>,
+    models: Vec<String>,
+}
+
+impl LiveModelState {
+    /// A new handle with no concurrency reported and an empty model set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the reported state (called by the node agent after a probe /
+    /// load / unload). The next heartbeat re-serializes from here.
+    pub fn set(&self, concurrency: Option<u32>, models: Vec<String>) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.concurrency = concurrency;
+        guard.models = models;
+    }
+
+    /// Snapshot the current `(concurrency, models)` for one heartbeat.
+    pub fn snapshot(&self) -> (Option<u32>, Vec<String>) {
+        let guard = self.inner.lock().unwrap();
+        (guard.concurrency, guard.models.clone())
+    }
+}
 
 /// The NATS subject a runner publishes its presence heartbeat to.
 ///
@@ -44,27 +88,30 @@ pub fn presence_subject(runner_id: &str) -> String {
 ///
 /// Reuses `client` (the daemon's already-connected, runner-scoped NATS client)
 /// — does **not** open a second connection. Publishes a
-/// `{"runner_id": "<id>", "backends": ["python", ...]}` payload to
-/// [`presence_subject`] every `interval`, starting immediately, until `shutdown`
-/// is cancelled. `backends` is the daemon's registered `ExecutorJob` wire-names
-/// (self-reported wire-truth; see module docs) — caps/pool/namespace remain
-/// mekhan-authoritative. Publish failures are logged at `warn` and do not abort
-/// the loop or the daemon.
+/// `{"runner_id": "<id>", "backends": ["python", ...], "concurrency": C,
+/// "models": [...]}` payload to [`presence_subject`] every `interval`, starting
+/// immediately, until `shutdown` is cancelled.
+///
+/// `backends` is the daemon's registered `ExecutorJob` wire-names (self-reported
+/// wire-truth; see module docs) — caps/pool/namespace remain
+/// mekhan-authoritative. `models` carries the optional live model-pool state
+/// (P2): when `Some`, the per-engine concurrency C + served model ids are
+/// re-read from the shared [`LiveModelState`] on EACH tick (so a load/unload
+/// between heartbeats is reflected without a re-enroll) and added to the
+/// payload; when `None` the payload omits both fields and the legacy
+/// `{runner_id, backends}` shape is published. Both are advisory — mekhan reads
+/// caps/namespace from the DB and ignores unknown fields, so this is additive.
+/// Publish failures are logged at `warn` and do not abort the loop or the
+/// daemon.
 pub fn spawn_presence_task(
     client: async_nats::Client,
     runner_id: String,
     backends: Vec<String>,
+    models: Option<LiveModelState>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
     let subject = presence_subject(&runner_id);
-    // caps/pool/namespace are authoritative on mekhan's side; `backends` is the
-    // runner's self-reported set-membership dimension (advisory; see module docs).
-    let payload: Vec<u8> = serde_json::to_vec(&serde_json::json!({
-        "runner_id": runner_id,
-        "backends": backends,
-    }))
-    .unwrap_or_else(|_| b"{}".to_vec());
 
     tokio::spawn(async move {
         debug!(
@@ -84,7 +131,23 @@ pub fn spawn_presence_task(
                     break;
                 }
                 _ = ticker.tick() => {
-                    match client.publish(subject.clone(), payload.clone().into()).await {
+                    // Re-serialize INSIDE the tick so live model state (mutated
+                    // by the node agent's load/unload between heartbeats) is
+                    // picked up each cycle. caps/pool/namespace stay
+                    // mekhan-authoritative; backends/concurrency/models are the
+                    // runner's advisory self-report (see module docs).
+                    let mut body = serde_json::json!({
+                        "runner_id": runner_id,
+                        "backends": backends,
+                    });
+                    if let Some(state) = &models {
+                        let (concurrency, model_ids) = state.snapshot();
+                        body["concurrency"] = serde_json::json!(concurrency);
+                        body["models"] = serde_json::json!(model_ids);
+                    }
+                    let payload: Vec<u8> =
+                        serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
+                    match client.publish(subject.clone(), payload.into()).await {
                         Ok(()) => debug!(%subject, "published runner presence"),
                         Err(e) => warn!(
                             %subject,
@@ -182,6 +245,77 @@ mod tests {
     #[test]
     fn presence_subject_matches_contract() {
         assert_eq!(presence_subject("rnr-abc"), "runner.rnr-abc.presence");
+    }
+
+    /// The runner presence payload carries the additive model-pool fields
+    /// `{concurrency, models}` (P2) AND still parses as the legacy
+    /// `{runner_id, backends}` shape — mekhan ignores the extra fields. This is
+    /// the same forward-compat property `worker_presence_payload_carries_group`
+    /// asserts for the worker path. We assert against the body the heartbeat
+    /// serializes per tick (re-built from a `LiveModelState` snapshot).
+    #[test]
+    fn runner_presence_payload_carries_concurrency_and_models() {
+        let state = LiveModelState::new();
+        state.set(Some(256), vec!["base-x".to_string(), "lora-a".to_string()]);
+        let (concurrency, model_ids) = state.snapshot();
+
+        let mut body = serde_json::json!({
+            "runner_id": "rnr-abc",
+            "backends": ["python", "vllm"],
+        });
+        body["concurrency"] = serde_json::json!(concurrency);
+        body["models"] = serde_json::json!(model_ids);
+
+        // Additive fields present and correct.
+        assert_eq!(body["runner_id"], "rnr-abc");
+        assert_eq!(body["backends"][0], "python");
+        assert_eq!(body["concurrency"], 256);
+        assert_eq!(body["models"], serde_json::json!(["base-x", "lora-a"]));
+
+        // Still parses as the legacy {runner_id, backends} shape (extra fields
+        // ignored), proving the change is forward-compatible.
+        #[derive(serde::Deserialize)]
+        struct Legacy {
+            runner_id: String,
+            backends: Vec<String>,
+        }
+        let legacy: Legacy = serde_json::from_value(body).unwrap();
+        assert_eq!(legacy.runner_id, "rnr-abc");
+        assert_eq!(legacy.backends, vec!["python", "vllm"]);
+    }
+
+    /// With no live model state the payload omits `{concurrency, models}` —
+    /// exactly the legacy shape, so non-model runners are unaffected.
+    #[test]
+    fn runner_presence_payload_omits_model_fields_when_absent() {
+        let models: Option<LiveModelState> = None;
+        let mut body = serde_json::json!({
+            "runner_id": "rnr-abc",
+            "backends": ["python"],
+        });
+        if let Some(state) = &models {
+            let (c, m) = state.snapshot();
+            body["concurrency"] = serde_json::json!(c);
+            body["models"] = serde_json::json!(m);
+        }
+        assert!(body.get("concurrency").is_none());
+        assert!(body.get("models").is_none());
+    }
+
+    /// A live load/unload between heartbeats mutates the shared handle and the
+    /// next snapshot reflects it — the seam that lets presence track vLLM state
+    /// without a re-enroll.
+    #[test]
+    fn live_model_state_reflects_latest_write() {
+        let state = LiveModelState::new();
+        state.set(Some(128), vec!["base".to_string()]);
+        assert_eq!(state.snapshot(), (Some(128), vec!["base".to_string()]));
+        // load adds an adapter:
+        state.set(Some(128), vec!["base".to_string(), "lora".to_string()]);
+        assert_eq!(
+            state.snapshot(),
+            (Some(128), vec!["base".to_string(), "lora".to_string()])
+        );
     }
 
     #[test]
