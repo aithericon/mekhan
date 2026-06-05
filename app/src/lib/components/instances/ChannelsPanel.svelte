@@ -7,12 +7,9 @@
 	import AudioLines from '@lucide/svelte/icons/audio-lines';
 	import { authFetch } from '$lib/auth/fetch';
 	import { isRawPcm, parsePcmParams, pcmToWavBlob } from '$lib/audio/pcmWav';
-	import {
-		playLivePcm,
-		parseSampleRate,
-		type LivePcmHandle,
-		type LivePcmStatus
-	} from '$lib/audio/livePcmPlayer';
+	import { playLivePcm, parseSampleRate } from '$lib/audio/livePcmPlayer';
+	import { planLiveRender, planFileRender, type LiveRenderPlan } from '$lib/channels/renderers';
+	import { playMseStream } from '$lib/channels/mseStreamPlayer';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
 	import type { Channel } from '$lib/api/client';
 	import type { ChannelRuntime } from '$lib/stores/instance-marking.svelte';
@@ -43,17 +40,29 @@
 		return el.type; // 'json' | 'any'
 	}
 
-	// A channel is playable when it's an OUT data channel carrying a binary
-	// element whose content_type is audio/video/image (PCM included — we wrap it
+	// All playback is for OUT data channels — the producer side carries bytes.
+	function isOutData(ch: Channel): boolean {
+		return ch.direction === 'out' && ch.plane === 'data';
+	}
+
+	// Dispatch through the render-adapter registry (the presentation-side analog
+	// of the wire transport dispatch): the element content_type selects the
+	// renderer, so the panel never re-derives "is this playable?" ad hoc.
+
+	// A channel is whole-file previewable when it's an OUT data channel whose
+	// binary element content_type is audio/video/image (PCM included — WAV-wrapped
 	// client-side below).
 	function isPlayable(ch: Channel): boolean {
-		const ct = elementContentType(ch);
-		return (
-			ch.direction === 'out' &&
-			ch.plane === 'data' &&
-			ct !== null &&
-			/^(audio|video|image)\//.test(ct)
-		);
+		return isOutData(ch) && planFileRender(elementContentType(ch)) !== null;
+	}
+
+	// The LIVE render plan for a channel (pcm → Web Audio, mse → MediaSource), or
+	// null when there's no live path. Computed off the element content_type; the
+	// per-envelope tap content-type (which may add runtime params like a sample
+	// rate) refines it at play time.
+	function livePlan(ch: Channel): LiveRenderPlan | null {
+		if (!isOutData(ch)) return null;
+		return planLiveRender(elementContentType(ch));
 	}
 
 	// Per-channel media-preview state (lazy, fetched on click). Keyed by name.
@@ -116,46 +125,93 @@
 		}
 	}
 
-	// A raw-PCM audio channel can be played LIVE through Web Audio while the
-	// producing step is still running (the tap's `?follow=1` streams as it lands).
-	function isLivePcm(ch: Channel): boolean {
-		return (
-			ch.direction === 'out' &&
-			ch.plane === 'data' &&
-			isRawPcm(elementContentType(ch) ?? '')
-		);
-	}
-
+	// ── Live playback (Web Audio for PCM, MSE for fragmented audio/video) ──────
+	// Both live renderers share a `stop()`-able handle + the same status union,
+	// so one state map drives them uniformly.
+	type LiveStatus = 'streaming' | 'ended' | 'stopped' | 'error';
 	type Live = {
-		status: LivePcmStatus;
+		status: LiveStatus;
 		seconds: number;
 		bytes: number;
 		error: string | null;
-		handle: LivePcmHandle | null;
+		handle: { stop(): void } | null;
 	};
 	let lives = $state<Record<string, Live>>({});
+	// MSE renders into a real media element; bound per channel below.
+	let mediaEls = $state<Record<string, HTMLMediaElement | null>>({});
 
-	async function playLive(ch: Channel) {
+	function startLive(ch: Channel, status: LiveStatus = 'streaming') {
+		lives[ch.name] = { status, seconds: 0, bytes: 0, error: null, handle: null };
+	}
+
+	function onLiveStatus(ch: Channel) {
+		return (status: LiveStatus, error?: string) => {
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, status, error: error ?? cur.error };
+		};
+	}
+
+	function onLiveProgress(ch: Channel) {
+		return (seconds: number, bytes: number) => {
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, seconds, bytes };
+		};
+	}
+
+	// Open the live tap (`?follow=1`) and return the streaming response.
+	async function openLiveTap(ch: Channel): Promise<Response> {
+		const r = await authFetch(
+			`/api/v1/executions/${executionId}/channels/${encodeURIComponent(ch.name)}/data?follow=1`
+		);
+		if (!r.ok || !r.body) throw new Error(`live tap failed: ${r.status}`);
+		return r;
+	}
+
+	// PCM → schedule on a Web Audio timeline.
+	async function playLivePcmChannel(ch: Channel) {
 		if (!executionId) return;
 		stopLive(ch);
-		lives[ch.name] = { status: 'streaming', seconds: 0, bytes: 0, error: null, handle: null };
+		startLive(ch);
 		try {
-			const r = await authFetch(
-				`/api/v1/executions/${executionId}/channels/${encodeURIComponent(ch.name)}/data?follow=1`
-			);
-			if (!r.ok || !r.body) throw new Error(`live tap failed: ${r.status}`);
+			const r = await openLiveTap(ch);
 			const ct = r.headers.get('content-type') ?? elementContentType(ch);
 			const handle = playLivePcm({
-				stream: r.body,
+				stream: r.body!,
 				sampleRate: parseSampleRate(ct),
-				onStatus: (status, error) => {
-					const cur = lives[ch.name];
-					if (cur) lives[ch.name] = { ...cur, status, error: error ?? cur.error };
-				},
-				onProgress: (seconds, bytes) => {
-					const cur = lives[ch.name];
-					if (cur) lives[ch.name] = { ...cur, seconds, bytes };
-				}
+				onStatus: onLiveStatus(ch),
+				onProgress: onLiveProgress(ch)
+			});
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, handle };
+		} catch (e) {
+			lives[ch.name] = {
+				status: 'error',
+				seconds: 0,
+				bytes: 0,
+				error: e instanceof Error ? e.message : String(e),
+				handle: null
+			};
+		}
+	}
+
+	// Fragmented audio/video → append into a MediaSource on the bound element.
+	async function playLiveMse(ch: Channel, plan: LiveRenderPlan) {
+		if (!executionId) return;
+		const media = mediaEls[ch.name];
+		if (!media) return;
+		stopLive(ch);
+		startLive(ch);
+		try {
+			const r = await openLiveTap(ch);
+			// Prefer the per-envelope content-type (it may refine codecs); fall
+			// back to the registry's plan mime.
+			const mimeType = r.headers.get('content-type') ?? plan.mime;
+			const handle = playMseStream({
+				stream: r.body!,
+				mimeType,
+				media,
+				onStatus: onLiveStatus(ch),
+				onProgress: onLiveProgress(ch)
 			});
 			const cur = lives[ch.name];
 			if (cur) lives[ch.name] = { ...cur, handle };
@@ -190,6 +246,11 @@
 		if (rt.closed) parts.push('closed');
 		return parts.join(' · ');
 	}
+
+	// Live activity is "in progress" for the Play/Stop toggle.
+	function isLiveActive(live: Live | undefined): boolean {
+		return !!live && (live.status === 'streaming' || live.status === 'ended');
+	}
 </script>
 
 <section data-testid="channels-panel">
@@ -203,6 +264,8 @@
 			{@const rt = runtime?.[ch.name]}
 			{@const status = statusLabel(rt)}
 			{@const preview = previews[ch.name]}
+			{@const live = lives[ch.name]}
+			{@const lplan = livePlan(ch)}
 			<div class="px-3 py-2 text-sm">
 				<div class="flex flex-wrap items-center gap-1.5">
 					<span class="font-mono font-medium text-foreground break-all">{ch.name}</span>
@@ -239,17 +302,19 @@
 					</div>
 				{/if}
 
-				{#if isLivePcm(ch)}
-					{@const live = lives[ch.name]}
+				{#if lplan}
 					<div class="mt-2 flex flex-wrap items-center gap-2">
-						{#if !live || live.status === 'ended' || live.status === 'stopped' || live.status === 'error'}
+						{#if !isLiveActive(live)}
 							<Button
 								variant="outline"
 								size="sm"
 								disabled={!executionId}
-								onclick={() => playLive(ch)}
+								onclick={() =>
+									lplan.kind === 'pcm' ? playLivePcmChannel(ch) : playLiveMse(ch, lplan)}
 								title={executionId
-									? 'Stream and play this channel live (Web Audio) while the step produces'
+									? `Stream and play this channel live (${
+											lplan.kind === 'pcm' ? 'Web Audio' : 'Media Source'
+										}) while the step produces`
 									: 'Execution id unavailable — cannot tap this channel'}
 							>
 								<AudioLines class="size-4" />
@@ -273,6 +338,23 @@
 							<span class="text-sm text-red-500">{live.error}</span>
 						{/if}
 					</div>
+
+					{#if lplan.kind === 'mse'}
+						<!-- MSE renders into a real element; kept mounted so the
+						     MediaSource can attach the moment Play live is clicked. -->
+						<div class="mt-2" class:hidden={!isLiveActive(live)}>
+							{#if lplan.mediaKind === 'video'}
+								<!-- svelte-ignore a11y_media_has_caption -->
+								<video
+									bind:this={mediaEls[ch.name]}
+									controls
+									class="max-h-64 w-full rounded-md bg-black"
+								></video>
+							{:else}
+								<audio bind:this={mediaEls[ch.name]} controls class="w-full"></audio>
+							{/if}
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/each}
