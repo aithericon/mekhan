@@ -131,6 +131,17 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         // correlates this map's items at the gather barrier so overlapping
         // maps never mix. Each element is stamped with `<itemVar>`
         // (namespace-on-token) + `__map_idx`.
+        //
+        // `__map_item` is a SECOND, `_`-prefixed copy of the element. The bare
+        // `<itemVar>` is dropped on any executor round-trip (the lifecycle's
+        // `t_success` keeps only `_`-prefixed control leaves — see
+        // executor_lifecycle.rs), so a downstream itemVar consumer in the same
+        // body (a Decision guard / SubWorkflow input mapping on
+        // `<itemVar>.<field>`) would otherwise be stranded after the first
+        // executor step. The preserved copy survives the round-trip; the
+        // map-body yield reconstructs the bare `<itemVar>` from it (see
+        // `yield_logic_keeping_item`). Same nested-map limitation as
+        // `__map_idx`/`__map_id` (namespace-on-token, v1).
         ctx.transition(format!("t_{id}_scatter"), format!("{label} - Scatter"))
             .auto_input("input", &p_input)
             .auto_output("count", &p_count)
@@ -141,7 +152,7 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                  let __items = []; \
                  let __i = 0; \
                  while __i < __arr.len() {{ \
-                     __items.push(#{{ {item_var_key}: __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
+                     __items.push(#{{ {item_var_key}: __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
                      __i += 1; \
                  }} \
                  #{{ count: #{{ expected: __arr.len(), \"__map_id\": \"{id_lit}\" }}, items: __items }}"

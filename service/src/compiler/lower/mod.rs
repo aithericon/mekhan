@@ -543,6 +543,37 @@ pub(super) fn split_outputs(
     (format!("p_{id}_data"), p_ctrl)
 }
 
+/// Map-body variant of [`split_outputs`]: identical park-data/forward-control
+/// split, but the slim control token ALSO carries the Map `item_var` key so a
+/// downstream itemVar consumer inside the same body (a Decision guard on
+/// `<itemVar>.<field>`, a SubWorkflow `<itemVar>.<field>` input mapping) still
+/// finds it. The default slim drops the itemVar (not `_`-prefixed), which strands
+/// any non-terminal body step that splits before such a consumer. See
+/// [`yield_logic_keeping_item`].
+pub(super) fn split_outputs_keep_item(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+    item_var: &str,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_ctrl: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_ctrl"), format!("{label} - Control Token"));
+    ctx.transition(
+        format!("t_{id}_yield"),
+        format!("{label} - Yield (park data, forward control + item)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("ctrl", &p_ctrl)
+    .logic(crate::compiler::token_shape::yield_logic_keeping_item(item_var));
+    (format!("p_{id}_data"), p_ctrl)
+}
+
 /// Foundation (Start variant): park a write-once copy of the producer's
 /// output as `p_{id}_data` so downstream guards / result-mappings can borrow
 /// `<slug>.<field>` via the same read-arc synthesis as `split_outputs` —
@@ -612,6 +643,38 @@ pub(super) fn error_path_wired(outgoing_edges: &[&WorkflowEdge]) -> bool {
 /// sit at such a terminal (AutomatedStep inline, SubWorkflow).
 ///
 /// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
+/// Qualify bare Map-itemVar references in a runtime Rhai script with the input
+/// port. A node's guard / input-mapping is evaluated with only the transition's
+/// PORT names bound in scope (`engine`'s `build_scope` — one var per input port,
+/// e.g. `input`), so a bare `<itemVar>.<field>` reference resolves to an UNBOUND
+/// variable and the script errors (a Decision guard that errors is treated as
+/// not-enabled → the token dead-ends; a SubWorkflow shape that errors strands the
+/// spawn). The itemVar rides token-resident on the `input` port (the scatter
+/// stamps it; `yield_logic_keeping_item` keeps it across executor steps), so the
+/// correct reference is `input.<itemVar>.<field>`. We qualify the `<itemVar>.`
+/// prefix; `replace_word_boundary` skips occurrences already preceded by `.` /
+/// identifier chars, so this is idempotent and never touches `input.<itemVar>` or
+/// an unrelated `<itemVar>_suffix` identifier.
+pub(super) fn qualify_map_item_refs(src: &str, item_var: &str) -> String {
+    let needle = format!("{item_var}.");
+    let repl = format!("input.{item_var}.");
+    crate::compiler::compile::replace_word_boundary(src, &needle, &repl)
+        .unwrap_or_else(|| src.to_string())
+}
+
+/// The `item_var` of the enclosing Map, when `parent_id` names a Map node.
+/// Body steps stamp this key onto the scattered token (namespace-on-token, v1);
+/// non-terminal split-producing body steps must preserve it on the slim control
+/// token (see [`split_outputs_keep_item`]) so downstream itemVar consumers in the
+/// same body still resolve `<itemVar>.<field>`.
+pub(super) fn map_item_var(graph: &WorkflowGraph, parent_id: Option<&str>) -> Option<String> {
+    let pid = parent_id?;
+    graph.nodes.iter().find_map(|n| match &n.data {
+        WorkflowNodeData::Map { item_var, .. } if n.id == pid => Some(item_var.clone()),
+        _ => None,
+    })
+}
+
 pub(super) fn is_map_body_terminal(
     graph: &WorkflowGraph,
     parent_id: Option<&str>,

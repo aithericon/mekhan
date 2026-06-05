@@ -129,6 +129,10 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // `super::is_map_body_terminal`.
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+    // The enclosing Map's itemVar (when this step is a non-terminal Map body
+    // step) — preserved on the slim control token so a downstream itemVar
+    // consumer in the same body still resolves `<itemVar>.<field>`.
+    let map_item_var = super::map_item_var(cx.graph, cx.node.parent_id.as_deref());
 
     // Validate and transform editor config → executor format (before closure)
     let backend_type = &execution_spec.backend_type;
@@ -502,6 +506,11 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // unaffected; only the token handed to the container's `body_out` changes.
     let (data_place_id, p_ctrl) = if is_map_body_terminal {
         park_outputs(ctx, id, label, &p_output)
+    } else if let Some(item_var) = &map_item_var {
+        // Non-terminal Map body step: keep the itemVar on the slim control token
+        // so a downstream Decision guard / SubWorkflow input mapping on
+        // `<itemVar>.<field>` inside the same body still resolves it.
+        split_outputs_keep_item(ctx, id, label, &p_output, item_var)
     } else {
         split_outputs(ctx, id, label, &p_output)
     };
@@ -1055,6 +1064,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // `super::is_map_body_terminal` (same one the inline path + SubWorkflow use).
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+    let map_item_var = super::map_item_var(cx.graph, cx.node.parent_id.as_deref());
     // Streaming-channel manifest + synthesis data, cloned out before the
     // `&mut *cx.ctx` reborrow. Same handling as the inline path.
     let channels = channels.clone();
@@ -1634,6 +1644,8 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // produced, so any downstream `<slug>.<field>` borrow is unaffected.
     let (data_place_id, p_ctrl) = if is_map_body_terminal {
         park_outputs(ctx, &id, &label, &p_output)
+    } else if let Some(item_var) = &map_item_var {
+        split_outputs_keep_item(ctx, &id, &label, &p_output, item_var)
     } else {
         split_outputs(ctx, &id, &label, &p_output)
     };

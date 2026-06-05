@@ -79,6 +79,31 @@ pub(crate) const YIELD_LOGIC: &str = "let d = tok; let c = #{}; \
      for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" \
      { c[k] = d[k]; } } #{ data: d, ctrl: c }";
 
+/// Map-body variant of [`YIELD_LOGIC`]: reconstructs the Map itemVar onto the
+/// slim control token. A node whose `parent_id` is a Map runs once per scattered
+/// element; the scatter stamps `#{ <itemVar>: <element>, __map_item: <element>, .. }`
+/// onto each body token (namespace-on-token, v1) and the guard/borrow planner
+/// resolves `<itemVar>.<field>` as token-resident (`RefResolution::Control`, no
+/// read-arc). The bare `<itemVar>` does NOT survive an executor round-trip (the
+/// lifecycle's `t_success` keeps only `_`-prefixed leaves), so a downstream
+/// itemVar consumer in the same body (a Decision guard, a SubWorkflow input
+/// mapping) would be stranded. The preserved `_`-prefixed `__map_item` copy DOES
+/// survive, so we restore the bare `<itemVar>` from it here — keeping the
+/// analyzer's "itemVar is always token-resident in the body" invariant true at
+/// runtime. The data plane stays parked; this is one small routing leaf, not the
+/// business payload.
+pub(crate) fn yield_logic_keeping_item(item_var: &str) -> String {
+    // itemVar names are validated identifiers, but escape defensively.
+    let iv = item_var.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "let d = tok; let c = #{{}}; \
+         for k in d.keys() {{ if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" \
+         {{ c[k] = d[k]; }} }} \
+         let __it = d[\"__map_item\"]; if __it != () {{ c[\"{iv}\"] = __it; }} \
+         #{{ data: d, ctrl: c }}"
+    )
+}
+
 impl ScalarTy {
     fn to_field_kind(&self) -> FieldKind {
         match self {

@@ -36,6 +36,11 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // `super::is_map_body_terminal` (the same one AutomatedStep/Agent use).
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+    // When this SubWorkflow is a Map body step, its `input_mapping` expressions
+    // may reference the Map itemVar (`<itemVar>.<field>`). Those run in the shape
+    // transition's port-name scope (`input`), so the bare itemVar must be
+    // qualified — see `super::qualify_map_item_refs`.
+    let map_item_var = super::map_item_var(cx.graph, cx.node.parent_id.as_deref());
 
     // Lease propagation (runner-based lease): a SubWorkflow nested in a lease
     // holder spawns a child net whose steps can't see the parent's LeaseScope
@@ -102,6 +107,13 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // input_mapping → the token bridged into the child's Start. Empty ⇒ the
     // inbound accumulating token passes through unchanged.
     let (im_lets, im_val) = result_mapping_rhai(input_mapping);
+    // Qualify bare `<itemVar>.<field>` refs in the mapping's `let __rvN = (...)`
+    // bindings with the `input` port (the borrow apply rewrites `<slug>.<field>`
+    // refs separately; the itemVar is token-resident and gets no read-arc).
+    let im_lets = match &map_item_var {
+        Some(iv) => super::qualify_map_item_refs(&im_lets, iv),
+        None => im_lets,
+    };
     let init_expr = if input_mapping.is_empty() {
         "input".to_string()
     } else {
