@@ -5,13 +5,18 @@
 	// resolution on the list endpoints and the owner-scope on create.
 	//
 	// There is no single reusable "scope picker" in the codebase — this builds
-	// a flat workspace ▸ project cascade from the workspace store + listProjects.
+	// a flat workspace ▸ folder cascade from the workspace store + listFolders.
 	// (Template-level scoping is reachable from the editor, where the template id
-	// is in context; the standalone /assets page exposes workspace + project.)
+	// is in context; the standalone /assets page exposes workspace + folder.)
+	//
+	// NOTE: the asset-layer `ScopeContext` still uses `kind: 'project'` (the
+	// backend `scope_kind` for assets is independent of the template-folder
+	// rename). We surface folders as the selectable grouping but keep the
+	// existing scope token shape until the asset scope is rationalized.
 	import { onMount } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { auth } from '$lib/auth/store.svelte';
-	import { listProjects, type Project } from '$lib/api/client';
+	import { listFolders, type Folder } from '$lib/api/client';
 	import type { ScopeContext } from '$lib/api/assets';
 
 	type Props = {
@@ -22,16 +27,16 @@
 
 	let { value, onChange, readonly = false }: Props = $props();
 
-	let projects = $state<Project[]>([]);
+	let folders = $state<Folder[]>([]);
 
 	const workspaceId = $derived(auth.session?.user.workspaceId ?? '');
 
 	onMount(async () => {
 		if (!workspaceId) return;
 		try {
-			projects = await listProjects(workspaceId);
+			folders = await listFolders(workspaceId);
 		} catch {
-			projects = [];
+			folders = [];
 		}
 	});
 
@@ -55,8 +60,8 @@
 	const selectedLabel = $derived.by(() => {
 		if (value.kind === 'workspace') return 'Workspace';
 		if (value.kind === 'project') {
-			const p = projects.find((p) => p.id === value.id);
-			return `Project: ${p?.display_name ?? value.id}`;
+			const f = folders.find((f) => f.id === value.id);
+			return `Folder: ${f?.display_name ?? value.id}`;
 		}
 		return `Template: ${value.id}`;
 	});
@@ -70,8 +75,8 @@
 		</Select.Trigger>
 		<Select.Content>
 			<Select.Item value="workspace" label="Workspace" />
-			{#each projects as p (p.id)}
-				<Select.Item value={`project:${p.id}`} label={`Project: ${p.display_name}`} />
+			{#each folders as f (f.id)}
+				<Select.Item value={`project:${f.id}`} label={`Folder: ${f.display_name}`} />
 			{/each}
 		</Select.Content>
 	</Select.Root>

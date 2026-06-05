@@ -236,9 +236,9 @@ pub async fn visible_scopes_for(
             template: None,
         }),
         ScopeKind::Project => {
-            // project -> its workspace
+            // `Project` scope is now backed by a folder -> its workspace.
             let ws: Option<(Uuid,)> =
-                sqlx::query_as("SELECT workspace_id FROM projects WHERE id = $1")
+                sqlx::query_as("SELECT workspace_id FROM folders WHERE id = $1")
                     .bind(scope_id)
                     .fetch_optional(db)
                     .await?;
@@ -272,8 +272,10 @@ pub async fn visible_scopes_for(
                 }
             };
 
+            // A template now has at most ONE home folder (filesystem model),
+            // which maps to a single `Project`-scope owner.
             let projects: Vec<(Uuid,)> = sqlx::query_as(
-                "SELECT project_id FROM project_templates WHERE base_template_id = $1",
+                "SELECT folder_id FROM template_folders WHERE base_template_id = $1",
             )
             .bind(base_id)
             .fetch_all(db)

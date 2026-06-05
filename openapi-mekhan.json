@@ -2408,6 +2408,135 @@
         }
       }
     },
+    "/api/v1/folders/{id}": {
+      "delete": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "DELETE /api/v1/folders/{id}",
+        "description": "Delete a folder WITHOUT destroying content. Child folders are reparented\nto the deleted folder's parent (subtree paths rewritten); templates homed\nin this folder are repointed to the parent (or moved to root when the\ndeleted folder was a root folder). Templates are never deleted.",
+        "operationId": "delete_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (content reparented)"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "PATCH /api/v1/folders/{id}",
+        "description": "Rename (`display_name`/`description`) and/or MOVE (`slug` and/or\n`parent_id`) a folder. A move rewrites the entire subtree's materialized\npaths in one transaction and is cycle-guarded.",
+        "operationId": "update_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Illegal move (cycle) or bad parent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sibling slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inference/requests": {
       "get": {
         "tags": [
@@ -4778,217 +4907,6 @@
         }
       }
     },
-    "/api/v1/projects/{id}": {
-      "delete": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "DELETE /api/v1/projects/{id}",
-        "operationId": "delete_project",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Project id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "403": {
-            "description": "Editor role required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Project not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "PATCH /api/v1/projects/{id}",
-        "description": "Rename / re-describe a project. `slug` is immutable (it's the stable\nfilter key the templates list and OpenAPI bundle route hang off of), so\nonly `display_name` and `description` are mutable. Omitted fields are\nleft untouched via COALESCE.",
-        "operationId": "update_project",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Project id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateProjectRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Updated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Project"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Editor role required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Project not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{id}/templates": {
-      "post": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "POST /api/v1/projects/{id}/templates",
-        "description": "Attach a template (by *base* id — the chain root). The caller must be\nan editor on the project's workspace AND able to read the template\n(workspace member OR template is public).",
-        "operationId": "attach_template",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Project id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AttachTemplateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Attached"
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Project or template not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{id}/templates/{base_template_id}": {
-      "delete": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "DELETE /api/v1/projects/{id}/templates/{base_template_id}",
-        "operationId": "detach_template",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Project id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "base_template_id",
-            "in": "path",
-            "description": "Base template id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Detached"
-          },
-          "403": {
-            "description": "Editor role required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
       "get": {
         "tags": [
@@ -6413,7 +6331,7 @@
           "templates"
         ],
         "summary": "GET /api/v1/templates",
-        "description": "Latest-version catalogue listing driven by the generic list DSL:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-updated_at`, `name`, `version`\n  - `search` — free-text across name + description\n  - `filter[field][op]=value` — typed filters over direct columns\n    (published, version, visibility, created_at, …)\n\nplus the template-specific relational/security params in\n[`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,\n`owner_template_id`).",
+        "description": "Latest-version catalogue listing driven by the generic list DSL:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-updated_at`, `name`, `version`\n  - `search` — free-text across name + description\n  - `filter[field][op]=value` — typed filters over direct columns\n    (published, version, visibility, created_at, …)\n\nplus the template-specific relational/security params in\n[`TemplateListExtras`] (`folder_id` + `recursive`, `tag`,\n`base_template_id`, `owner_template_id`).",
         "operationId": "list_templates",
         "parameters": [
           {
@@ -6430,9 +6348,9 @@
             }
           },
           {
-            "name": "project_id",
+            "name": "folder_id",
             "in": "query",
-            "description": "Restrict to templates attached to a project (M:N via\n`project_templates.base_template_id`). The join is non-restrictive\nw.r.t. version chain — the live `is_latest` row wins.",
+            "description": "Restrict to templates homed in this folder (via\n`template_folders.base_template_id`). With `recursive=true` the filter\ncovers the whole subtree rooted at the folder; otherwise only direct\nmembers. The live `is_latest` row wins.",
             "required": false,
             "schema": {
               "type": [
@@ -6440,6 +6358,15 @@
                 "null"
               ],
               "format": "uuid"
+            }
+          },
+          {
+            "name": "recursive",
+            "in": "query",
+            "description": "When a `folder_id` is supplied, include templates homed anywhere in the\nfolder's subtree (matched by materialized-path prefix) rather than only\nits direct members.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           },
           {
@@ -7020,6 +6947,132 @@
         }
       }
     },
+    "/api/v1/templates/{id}/folder": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "GET /api/v1/templates/{id}/folder",
+        "description": "The template's current home folder (by chain root), or `null` when it\nlives at the workspace root. Read-gated like the tags endpoint so the\nmove dialog can show the current home without a fan-out.",
+        "operationId": "get_template_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Home folder, or null at root",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Folder"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No read access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "PUT /api/v1/templates/{id}/folder",
+        "description": "Set (or clear) a template's home folder. `folder_id = Some` upserts the\n`template_folders` row (validating the folder is in the template's\nworkspace); `folder_id = None` deletes the row (moves the template to the\nworkspace root). Keyed on the chain root so it follows the live version.",
+        "operationId": "set_template_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetFolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Folder set / cleared"
+          },
+          "400": {
+            "description": "Folder not in template's workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/io-contract": {
       "get": {
         "tags": [
@@ -7244,63 +7297,6 @@
           },
           "500": {
             "description": "Server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/templates/{id}/projects": {
-      "get": {
-        "tags": [
-          "templates"
-        ],
-        "summary": "GET /api/v1/templates/{id}/projects",
-        "description": "Projects this template (by chain root) is currently attached to, within\nits workspace. Read-gated like the tags endpoint so the assign dialog can\nshow membership and offer a detach toggle without a fan-out.",
-        "operationId": "list_template_projects",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Template id (any version)",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Projects containing this template",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Project"
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "No read access",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Template not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -8994,6 +8990,125 @@
         }
       }
     },
+    "/api/v1/workspaces/{id}/folders": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/folders",
+        "description": "Flat list of every folder in the workspace, ordered by `path`. The\nfrontend reconstructs the tree from `parent_id`.",
+        "operationId": "list_folders",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Folders in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Folder"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/folders",
+        "description": "Create a folder under an optional parent. `path` is derived from the\nparent's path + the new slug. A sibling-slug or root-slug collision maps\nto 409.",
+        "operationId": "create_folder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Folder created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Parent not in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sibling slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{id}/members": {
       "get": {
         "tags": [
@@ -9169,117 +9284,10 @@
         }
       }
     },
-    "/api/v1/workspaces/{id}/projects": {
-      "get": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "GET /api/v1/workspaces/{id}/projects",
-        "operationId": "list_projects",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Workspace id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Projects in this workspace",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Project"
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Not a member",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "POST /api/v1/workspaces/{id}/projects",
-        "operationId": "create_project",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Workspace id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateProjectRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Project created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Project"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Editor role required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Slug already exists",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/workspaces/{id}/tags": {
       "get": {
         "tags": [
-          "projects"
+          "templates"
         ],
         "summary": "GET /api/v1/workspaces/{id}/tags",
         "description": "Distinct tags across every template in the workspace. Drives the tag\nfilter chips in the templates list — one round trip, no per-template\nfan-out.",
@@ -9323,14 +9331,14 @@
         }
       }
     },
-    "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json": {
+    "/api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json": {
       "get": {
         "tags": [
-          "projects"
+          "folders"
         ],
-        "summary": "GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json",
-        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every callable\ntrigger in the project's attached templates. The shape is suitable for\nfeeding into `openapi-typescript`, `openapi-generator`, or any OAS3\nviewer.",
-        "operationId": "project_openapi_bundle",
+        "summary": "GET /api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json",
+        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every callable\ntrigger in the templates homed anywhere in the folder's subtree. The shape\nis suitable for feeding into `openapi-typescript`, `openapi-generator`, or\nany OAS3 viewer.",
+        "operationId": "folder_openapi_bundle",
         "parameters": [
           {
             "name": "workspace_id",
@@ -9343,9 +9351,9 @@
             }
           },
           {
-            "name": "project_id",
+            "name": "folder_id",
             "in": "path",
-            "description": "Project id",
+            "description": "Folder id",
             "required": true,
             "schema": {
               "type": "string",
@@ -9355,7 +9363,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Project OpenAPI bundle",
+            "description": "Folder OpenAPI bundle",
             "content": {
               "application/json": {
                 "schema": {}
@@ -9373,7 +9381,7 @@
             }
           },
           "404": {
-            "description": "Project not found or not in workspace",
+            "description": "Folder not found or not in workspace",
             "content": {
               "application/json": {
                 "schema": {
@@ -10159,19 +10167,6 @@
             "type": "integer",
             "format": "int32",
             "description": "The asset version this run pinned (immutable for the life of the run)."
-          }
-        }
-      },
-      "AttachTemplateRequest": {
-        "type": "object",
-        "required": [
-          "template_id"
-        ],
-        "properties": {
-          "template_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The *base* template id (the first version's id, which the\n`is_latest`-chained version graph hangs off of). Project membership\nfollows the live version chain so attaching once survives version\nbumps."
           }
         }
       },
@@ -11810,6 +11805,32 @@
           }
         }
       },
+      "CreateFolderRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "display_name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent folder; `None` creates a root-level folder."
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
       "CreateInstanceRequest": {
         "type": "object",
         "required": [
@@ -11909,24 +11930,6 @@
             ],
             "format": "uuid",
             "description": "Optional workspace scoping. `None` resolves to the caller's workspace."
-          }
-        }
-      },
-      "CreateProjectRequest": {
-        "type": "object",
-        "required": [
-          "slug",
-          "display_name"
-        ],
-        "properties": {
-          "description": {
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "slug": {
-            "type": "string"
           }
         }
       },
@@ -13613,6 +13616,59 @@
           },
           "fleet_total": {
             "$ref": "#/components/schemas/ClusterMetrics"
+          }
+        }
+      },
+      "Folder": {
+        "type": "object",
+        "description": "A folder node in a workspace's single-parent template tree (filesystem\nmodel). `path` is the materialized path ('/a/b/c'); the frontend builds the\ntree from `parent_id`.",
+        "required": [
+          "id",
+          "workspace_id",
+          "slug",
+          "display_name",
+          "description",
+          "path",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Parent folder, or `None` for a root-level folder."
+          },
+          "path": {
+            "type": "string",
+            "description": "Materialized path, e.g. `/research/q3`. Unique within a workspace."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -17654,45 +17710,6 @@
           }
         }
       },
-      "Project": {
-        "type": "object",
-        "required": [
-          "id",
-          "workspace_id",
-          "slug",
-          "display_name",
-          "description",
-          "created_at",
-          "created_by"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "created_by": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "description": {
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "workspace_id": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      },
       "PrometheusConfig": {
         "type": "object",
         "description": "Configuration for a single Prometheus query job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.",
@@ -18758,6 +18775,19 @@
             "type": "string",
             "format": "uuid",
             "description": "Target workspace id. The caller must already be a member."
+          }
+        }
+      },
+      "SetFolderRequest": {
+        "type": "object",
+        "description": "Set (or clear) the home folder of a template. `None` moves the template to\nthe workspace root (deletes its `template_folders` row).",
+        "properties": {
+          "folder_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -20492,6 +20522,38 @@
           }
         }
       },
+      "UpdateFolderRequest": {
+        "type": "object",
+        "description": "Partial update for a folder. All fields optional. Supplying `slug` and/or\n`parent_id` performs a MOVE (subtree paths are rewritten); `display_name` /\n`description` are COALESCE renames.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "New parent folder (move). Present-and-`null` is ambiguous with absent in\nflat JSON, so a move-to-root is expressed via `slug` change or by the\ncaller setting a different parent; `Some(id)` reparents under `id`."
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateJobTemplateRequest": {
         "type": "object",
         "description": "Request body for `PUT /api/v1/job-templates/{id}`. A change to any of\n`common_spec` / `escape_hatch` / `parameters` BUMPS a new version;\nmetadata-only changes (`display_name` / `visibility` / `consumer_locked`)\ndo not.",
@@ -20546,24 +20608,6 @@
             }
           },
           "visibility": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "UpdateProjectRequest": {
-        "type": "object",
-        "description": "Partial update for a project. Both fields optional — omitted fields are\nleft untouched (COALESCE). `slug` is immutable (stable filter key).",
-        "properties": {
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "display_name": {
             "type": [
               "string",
               "null"
@@ -22386,8 +22430,8 @@
       "description": "Tenant boundaries — membership + member admin (Phase A2)."
     },
     {
-      "name": "projects",
-      "description": "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."
+      "name": "folders",
+      "description": "Workspace-scoped hierarchical template grouping (single-parent tree) + tag/visibility surface + per-folder OpenAPI bundle."
     },
     {
       "name": "me",

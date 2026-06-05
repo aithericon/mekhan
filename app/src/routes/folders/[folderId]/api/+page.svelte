@@ -9,15 +9,15 @@
 		CardContent,
 		CardDescription
 	} from '$lib/components/ui/card';
-	import ProjectApiContract from '$lib/components/projects/ProjectApiContract.svelte';
-	import { getProjectContext } from '$lib/components/projects/project-context';
+	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
+	import { getFolderContext } from '$lib/components/folders/folder-context';
 
-	const ctx = getProjectContext();
-	const project = $derived(ctx.project);
+	const ctx = getFolderContext();
+	const folder = $derived(ctx.folder);
 
-	// Bundle URL keys on the project's own workspace, robust to switching.
+	// Bundle URL keys on the folder's own workspace, robust to switching.
 	const bundleUrl = $derived(
-		project ? `/api/v1/workspaces/${project.workspace_id}/projects/${project.id}/openapi.json` : ''
+		folder ? `/api/v1/workspaces/${folder.workspace_id}/folders/${folder.id}/openapi.json` : ''
 	);
 
 	async function copyBundleUrl() {
@@ -35,9 +35,9 @@
 		<div class="flex items-start justify-between gap-2">
 			<div>
 				<CardTitle>API</CardTitle>
-				<CardDescription>Callable trigger contract synthesized from this project's templates.</CardDescription>
+				<CardDescription>Callable trigger contract synthesized from this folder's templates.</CardDescription>
 			</div>
-			{#if project}
+			{#if folder}
 				<div class="flex gap-1">
 					<Button variant="ghost" size="sm" title="Copy OpenAPI bundle URL" onclick={copyBundleUrl}>
 						<Copy class="size-3.5" />
@@ -56,8 +56,8 @@
 		</div>
 	</CardHeader>
 	<CardContent>
-		{#if project}
-			<ProjectApiContract workspaceId={project.workspace_id} projectId={project.id} />
+		{#if folder}
+			<FolderApiContract workspaceId={folder.workspace_id} folderId={folder.id} />
 		{:else}
 			<p class="text-sm text-muted-foreground">Loading…</p>
 		{/if}

@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { CopyButton } from '$lib/components/ui/copy-button';
-	import { getProjectOpenApiBundle } from '$lib/api/client';
+	import { getFolderOpenApiBundle } from '$lib/api/client';
 	import { parseBundle, type ParsedBundle, type Endpoint } from '$lib/api/openapi-bundle';
 	import TriggerInvokePanel from './TriggerInvokePanel.svelte';
 	import Shield from '@lucide/svelte/icons/shield';
@@ -12,26 +12,26 @@
 
 	type Props = {
 		workspaceId: string;
-		projectId: string;
+		folderId: string;
 	};
-	let { workspaceId, projectId }: Props = $props();
+	let { workspaceId, folderId }: Props = $props();
 
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let bundle = $state<ParsedBundle | null>(null);
-	let rawUrl = $derived(`/api/v1/workspaces/${workspaceId}/projects/${projectId}/openapi.json`);
+	let rawUrl = $derived(`/api/v1/workspaces/${workspaceId}/folders/${folderId}/openapi.json`);
 	let expanded = $state<Record<string, boolean>>({});
 
-	// Re-fetch whenever the target project changes.
+	// Re-fetch whenever the target folder changes.
 	let loadedFor = $state<string | null>(null);
 	$effect(() => {
-		if (loadedFor === projectId && bundle) return;
+		if (loadedFor === folderId && bundle) return;
 		loading = true;
 		error = null;
-		getProjectOpenApiBundle(workspaceId, projectId)
+		getFolderOpenApiBundle(workspaceId, folderId)
 			.then((doc) => {
 				bundle = parseBundle(doc);
-				loadedFor = projectId;
+				loadedFor = folderId;
 			})
 			.catch((e) => {
 				error = e instanceof Error ? e.message : 'Failed to load API bundle';
@@ -91,7 +91,7 @@
 		{#if bundle.endpoints.length === 0}
 			<p class="text-sm text-muted-foreground">
 				No callable triggers. Add an enabled Manual or Webhook trigger to a published
-				template attached to this project.
+				template homed in this folder.
 			</p>
 		{/if}
 

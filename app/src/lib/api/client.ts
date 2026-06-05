@@ -143,9 +143,10 @@ export type CreateTokenRequest = components['schemas']['CreateTokenRequest'];
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 export type WorkspaceMember = components['schemas']['WorkspaceMember'];
 export type AddMemberRequest = components['schemas']['AddMemberRequest'];
-export type Project = components['schemas']['Project'];
-export type CreateProjectRequest = components['schemas']['CreateProjectRequest'];
-export type AttachTemplateRequest = components['schemas']['AttachTemplateRequest'];
+export type Folder = components['schemas']['Folder'];
+export type CreateFolderRequest = components['schemas']['CreateFolderRequest'];
+export type UpdateFolderRequest = components['schemas']['UpdateFolderRequest'];
+export type SetFolderRequest = components['schemas']['SetFolderRequest'];
 export type SetTagsRequest = components['schemas']['SetTagsRequest'];
 export type SetVisibilityRequest = components['schemas']['SetVisibilityRequest'];
 export type SetActiveWorkspaceRequest =
@@ -226,7 +227,11 @@ export async function listTemplates(
 		search?: string;
 		sort?: string;
 		published?: boolean;
-		projectId?: string;
+		/** Home folder filter — the new hierarchical analog of `projectId`. */
+		folderId?: string;
+		/** When `folderId` is set, extend the filter to the whole subtree
+		 *  (materialized-path prefix) instead of only direct members. */
+		recursive?: boolean;
 		tag?: string;
 		ownerTemplateId?: string;
 		baseTemplateId?: string;
@@ -238,7 +243,8 @@ export async function listTemplates(
 	if (opts.search) qs.set('search', opts.search);
 	if (opts.sort) qs.set('sort', opts.sort);
 	if (opts.published !== undefined) qs.set('filter[published][eq]', String(opts.published));
-	if (opts.projectId) qs.set('project_id', opts.projectId);
+	if (opts.folderId) qs.set('folder_id', opts.folderId);
+	if (opts.recursive) qs.set('recursive', 'true');
 	if (opts.tag) qs.set('tag', opts.tag);
 	if (opts.ownerTemplateId) qs.set('owner_template_id', opts.ownerTemplateId);
 	if (opts.baseTemplateId) qs.set('base_template_id', opts.baseTemplateId);
@@ -1100,7 +1106,7 @@ export async function revokeAccessToken(id: string): Promise<void> {
 	}
 }
 
-// ── Workspaces / projects / tags / visibility / me / users ─────────────────
+// ── Workspaces / folders / tags / visibility / me / users ─────────────────
 
 export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
 	return unwrap(await client.GET('/api/v1/workspaces', {}));
@@ -1148,76 +1154,83 @@ export async function listWorkspaceTags(workspaceId: string): Promise<string[]> 
 	);
 }
 
-export async function listProjects(workspaceId: string): Promise<Project[]> {
+// ── Folders (hierarchical template grouping; replaces flat projects) ────────
+//
+// A folder tree per workspace, addressed by materialized `path`. A template
+// has at most ONE home folder (set via `setTemplateFolder`), unlike the old
+// many-to-many project membership.
+
+export async function listFolders(workspaceId: string): Promise<Folder[]> {
 	return unwrap(
-		await client.GET('/api/v1/workspaces/{id}/projects', {
+		await client.GET('/api/v1/workspaces/{id}/folders', {
 			params: { path: { id: workspaceId } }
 		})
 	);
 }
 
-export async function createProject(
+export async function createFolder(
 	workspaceId: string,
-	body: CreateProjectRequest
-): Promise<Project> {
+	body: CreateFolderRequest
+): Promise<Folder> {
 	return unwrap(
-		await client.POST('/api/v1/workspaces/{id}/projects', {
+		await client.POST('/api/v1/workspaces/{id}/folders', {
 			params: { path: { id: workspaceId } },
 			body
 		})
 	);
 }
 
-export async function updateProject(
-	projectId: string,
-	body: { display_name?: string; description?: string }
-): Promise<Project> {
+/** PATCH /api/v1/folders/{id}. Supplying `slug` and/or `parent_id` triggers a
+ *  MOVE (re-roots the subtree's materialized path). */
+export async function updateFolder(
+	folderId: string,
+	body: UpdateFolderRequest
+): Promise<Folder> {
 	return unwrap(
-		await client.PATCH('/api/v1/projects/{id}', {
-			params: { path: { id: projectId } },
+		await client.PATCH('/api/v1/folders/{id}', {
+			params: { path: { id: folderId } },
 			body
 		})
 	);
 }
 
-export async function deleteProject(projectId: string): Promise<void> {
-	const res = await client.DELETE('/api/v1/projects/{id}', {
-		params: { path: { id: projectId } }
+/** DELETE /api/v1/folders/{id}. Content is preserved — child folders are
+ *  reparented to this folder's parent. */
+export async function deleteFolder(folderId: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/folders/{id}', {
+		params: { path: { id: folderId } }
 	});
 	if (res.response.ok) return;
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }
 
-export async function attachTemplateToProject(
-	projectId: string,
-	templateId: string
+/** PUT /api/v1/templates/{id}/folder. `folder_id = null` moves the template to
+ *  the workspace root (deletes its `template_folders` row). */
+export async function setTemplateFolder(
+	templateId: string,
+	body: SetFolderRequest
 ): Promise<void> {
-	const res = await client.POST('/api/v1/projects/{id}/templates', {
-		params: { path: { id: projectId } },
-		body: { template_id: templateId }
+	const res = await client.PUT('/api/v1/templates/{id}/folder', {
+		params: { path: { id: templateId } },
+		body
 	});
 	if (res.response.ok) return;
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }
 
-export async function detachTemplateFromProject(
-	projectId: string,
-	baseTemplateId: string
-): Promise<void> {
-	const res = await client.DELETE(
-		'/api/v1/projects/{id}/templates/{base_template_id}',
-		{ params: { path: { id: projectId, base_template_id: baseTemplateId } } }
-	);
-	if (res.response.ok) return;
-	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
-}
-
-export async function listTemplateProjects(templateId: string): Promise<Project[]> {
-	return unwrap(
-		await client.GET('/api/v1/templates/{id}/projects', {
-			params: { path: { id: templateId } }
-		})
-	);
+/** GET /api/v1/templates/{id}/folder — the template's home folder, or `null`
+ *  when it lives at the workspace root. */
+export async function getTemplateFolder(templateId: string): Promise<Folder | null> {
+	const res = await client.GET('/api/v1/templates/{id}/folder', {
+		params: { path: { id: templateId } }
+	});
+	if (res.error !== undefined) {
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
+	}
+	return (res.data ?? null) as Folder | null;
 }
 
 export async function getTemplateTags(templateId: string): Promise<string[]> {
@@ -1271,15 +1284,15 @@ export async function resolveUserByEmail(email: string): Promise<ResolveEmailRes
 	return unwrap(await client.POST('/api/v1/users/resolve', { body: { email } }));
 }
 
-/// GET /api/v1/workspaces/{ws}/projects/{p}/openapi.json — synthesized
-/// webhook spec for the project. Body is a raw OpenAPI 3.0.3 document
+/// GET /api/v1/workspaces/{ws}/folders/{id}/openapi.json — synthesized
+/// webhook spec for the folder. Body is a raw OpenAPI 3.0.3 document
 /// (free-form JSON), surfaced via `rawJson` so we don't fight openapi-fetch
 /// over a hand-built schema.
-export async function getProjectOpenApiBundle(
+export async function getFolderOpenApiBundle(
 	workspaceId: string,
-	projectId: string
+	folderId: string
 ): Promise<Record<string, unknown>> {
-	return rawJson(`/workspaces/${workspaceId}/projects/${projectId}/openapi.json`);
+	return rawJson(`/workspaces/${workspaceId}/folders/${folderId}/openapi.json`);
 }
 
 /// Result of a `/fire` or `/invoke` call. `status` distinguishes the response

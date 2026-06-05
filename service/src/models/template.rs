@@ -2639,18 +2639,24 @@ pub struct UpdateTemplateRequest {
 /// Template-specific list parameters layered on top of the generic
 /// `crate::query::QueryParams` extractor (which owns `page`/`page_size`/`sort`/
 /// `search`/`filter[field][op]`). These are the relational & security filters
-/// that don't reduce to a plain column predicate: `project_id`/`tag` are M:N
-/// joins, `base_template_id` switches the listing into version-chain mode, and
-/// `owner_template_id` toggles private sub-workflow visibility.
+/// that don't reduce to a plain column predicate: `folder_id`/`tag` are
+/// relational joins, `base_template_id` switches the listing into version-chain
+/// mode, and `owner_template_id` toggles private sub-workflow visibility.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct TemplateListExtras {
     /// Version-chain mode: list every version of this base family (ignoring
     /// `is_latest`) instead of the default latest-only catalogue listing.
     pub base_template_id: Option<Uuid>,
-    /// Restrict to templates attached to a project (M:N via
-    /// `project_templates.base_template_id`). The join is non-restrictive
-    /// w.r.t. version chain — the live `is_latest` row wins.
-    pub project_id: Option<Uuid>,
+    /// Restrict to templates homed in this folder (via
+    /// `template_folders.base_template_id`). With `recursive=true` the filter
+    /// covers the whole subtree rooted at the folder; otherwise only direct
+    /// members. The live `is_latest` row wins.
+    pub folder_id: Option<Uuid>,
+    /// When a `folder_id` is supplied, include templates homed anywhere in the
+    /// folder's subtree (matched by materialized-path prefix) rather than only
+    /// its direct members.
+    #[serde(default)]
+    pub recursive: bool,
     /// Restrict to templates carrying this tag in the user's workspace.
     pub tag: Option<String>,
     /// Enumerate the private sub-workflow children owned by this parent

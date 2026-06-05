@@ -1,21 +1,23 @@
 <script lang="ts">
-	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
+	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import Tag from '@lucide/svelte/icons/tag';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import { Button } from '$lib/components/ui/button';
-	import { listProjects, listWorkspaceTags, type Project } from '$lib/api/client';
+	import { listFolders, listWorkspaceTags, type Folder } from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
-	import ManageProjectsDialog from '$lib/components/templates/ManageProjectsDialog.svelte';
+	import FolderTree from '$lib/components/FolderTree.svelte';
+	import ManageFoldersDialog from '$lib/components/templates/ManageFoldersDialog.svelte';
 
 	interface Props {
-		projectId: string | null;
+		folderId: string | null;
+		recursive: boolean;
 		tag: string | null;
-		onChange: (next: { projectId: string | null; tag: string | null }) => void;
+		onChange: (next: { folderId: string | null; recursive: boolean; tag: string | null }) => void;
 	}
 
-	let { projectId, tag, onChange }: Props = $props();
+	let { folderId, recursive, tag, onChange }: Props = $props();
 
-	let projects = $state<Project[]>([]);
+	let folders = $state<Folder[]>([]);
 	let tags = $state<string[]>([]);
 	let loading = $state(false);
 	let manageOpen = $state(false);
@@ -28,9 +30,9 @@
 	async function loadFilters(workspaceId: string) {
 		loading = true;
 		try {
-			projects = await listProjects(workspaceId);
+			folders = await listFolders(workspaceId);
 		} catch {
-			projects = [];
+			folders = [];
 		}
 		try {
 			tags = await listWorkspaceTags(workspaceId);
@@ -45,12 +47,16 @@
 		if (ws) loadFilters(ws);
 	});
 
-	function selectProject(id: string | null) {
-		onChange({ projectId: id, tag });
+	function selectFolder(id: string | null) {
+		onChange({ folderId: id, recursive, tag });
+	}
+
+	function toggleRecursive(next: boolean) {
+		onChange({ folderId, recursive: next, tag });
 	}
 
 	function selectTag(t: string | null) {
-		onChange({ projectId, tag: t });
+		onChange({ folderId, recursive, tag: t });
 	}
 </script>
 
@@ -59,50 +65,38 @@
 		<section>
 			<div class="mb-2 flex items-center justify-between gap-2">
 				<div class="flex items-center gap-2 text-sm font-medium text-foreground">
-					<FolderKanban class="size-4 text-muted-foreground" />
-					Projects
+					<FolderTreeIcon class="size-4 text-muted-foreground" />
+					Folders
 				</div>
 				<Button
 					variant="ghost"
 					size="sm"
 					class="size-7 p-0 text-muted-foreground"
-					title="Manage projects"
-					aria-label="Manage projects"
+					title="Manage folders"
+					aria-label="Manage folders"
 					onclick={() => (manageOpen = true)}
-					data-testid="btn-manage-projects"
+					data-testid="btn-manage-folders"
 				>
 					<Settings2 class="size-4" />
 				</Button>
 			</div>
-			<ul class="space-y-0.5">
-				<li>
-					<button
-						type="button"
-						class="w-full rounded px-2 py-1 text-left text-sm hover:bg-accent {projectId === null ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground'}"
-						onclick={() => selectProject(null)}
-						data-testid="filter-project-all"
-					>
-						All templates
-					</button>
-				</li>
-				{#each projects as p (p.id)}
-					<li>
-						<button
-							type="button"
-							class="w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent {projectId === p.id ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground'}"
-							onclick={() => selectProject(p.id)}
-							data-testid={`filter-project-${p.slug}`}
-							title={p.description || p.display_name}
-						>
-							{p.display_name}
-						</button>
-					</li>
-				{:else}
-					<li class="px-2 py-1 text-sm text-muted-foreground/60 italic">
-						No projects yet
-					</li>
-				{/each}
-			</ul>
+
+			<FolderTree {folders} selectedId={folderId} onSelect={selectFolder} />
+
+			<label
+				class="mt-2 flex items-center gap-1.5 px-2 text-sm text-muted-foreground"
+				title="Include templates in nested subfolders of the selected folder"
+			>
+				<input
+					type="checkbox"
+					class="size-3.5"
+					checked={recursive}
+					disabled={folderId === null}
+					onchange={(e) => toggleRecursive((e.currentTarget as HTMLInputElement).checked)}
+					data-testid="filter-folder-recursive"
+				/>
+				Include subfolders
+			</label>
 		</section>
 
 		{#if tags.length > 0}
@@ -132,4 +126,4 @@
 	</div>
 </aside>
 
-<ManageProjectsDialog bind:open={manageOpen} onChanged={refreshFilters} />
+<ManageFoldersDialog bind:open={manageOpen} onChanged={refreshFilters} />

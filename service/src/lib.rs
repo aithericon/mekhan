@@ -476,29 +476,30 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::add_member
         ))
         .routes(routes!(handlers::workspaces::remove_member))
-        // Projects (Phase A2) — M:N grouping of templates within a
-        // workspace. Not an ACL boundary.
-        .routes(routes!(handlers::projects::list_workspace_tags))
+        // Folders — single-parent hierarchical grouping of templates within
+        // a workspace (filesystem model). Not an ACL boundary.
+        .routes(routes!(handlers::folders::list_workspace_tags))
         .routes(routes!(
-            handlers::projects::list_projects,
-            handlers::projects::create_project
+            handlers::folders::list_folders,
+            handlers::folders::create_folder
         ))
         .routes(routes!(
-            handlers::projects::delete_project,
-            handlers::projects::update_project
+            handlers::folders::delete_folder,
+            handlers::folders::update_folder
         ))
-        .routes(routes!(handlers::projects::attach_template))
-        .routes(routes!(handlers::projects::detach_template))
-        // Template tags + visibility (Phase A2; GET added Phase B).
         .routes(routes!(
-            handlers::projects::get_template_tags,
-            handlers::projects::set_template_tags
+            handlers::folders::set_template_folder,
+            handlers::folders::get_template_folder
         ))
-        .routes(routes!(handlers::projects::set_template_visibility))
-        .routes(routes!(handlers::projects::list_template_projects))
-        // Per-project OpenAPI bundle (Phase B) — synthesized webhook spec
-        // for SDK generators + API doc viewers.
-        .routes(routes!(handlers::openapi_bundle::project_openapi_bundle))
+        // Template tags + visibility (tags are a separate cross-cutting system).
+        .routes(routes!(
+            handlers::folders::get_template_tags,
+            handlers::folders::set_template_tags
+        ))
+        .routes(routes!(handlers::folders::set_template_visibility))
+        // Per-folder OpenAPI bundle — synthesized trigger spec for SDK
+        // generators + API doc viewers, gathered across the folder subtree.
+        .routes(routes!(handlers::openapi_bundle::folder_openapi_bundle))
         // Active-workspace switcher (Phase B) — per-session override cookie.
         .routes(routes!(
             handlers::me::set_active_workspace,
