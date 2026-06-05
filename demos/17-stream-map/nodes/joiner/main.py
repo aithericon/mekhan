@@ -1,6 +1,7 @@
-# Joiner — concatenate the scatter-gathered collection (docs/25).
+# Joiner — concatenate the gathered collection (docs/25).
 #
-# The producer's Control/Scatter channel "items" parks its gathered collection
+# The producer's Control channel "items" is consumed by this edge with
+# `join: gather`, so the compiler's gather barrier parks the gathered collection
 # as the envelope `{ output: [<word>, ...] }` on the channel's gathered place.
 # The graph wires that place (sourceHandle "items") straight into this node, so
 # the gathered envelope IS this step's input token — read the list off

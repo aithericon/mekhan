@@ -1540,21 +1540,33 @@ pub enum ElementType {
     Any,
 }
 
-/// The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token
-/// per emission (fire-and-forget downstream); `Scatter` fans out instance-
-/// colored items closed by a count, sized at the gather barrier by `max_fanout`.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// How a CONSUMER edge folds a CONTROL channel's bracketed episode (the
+/// producer emits one uniform `open | item* | close` stream; the consumer's
+/// `join` decides the fold). `Each` fires downstream once per `item`
+/// (the old `signal` behaviour, generalised); `Gather` is the counted
+/// barrier (the old `scatter` path) that collects all items, sorts by
+/// `__map_idx`, and projects a single array — requiring the producer
+/// channel to carry a positive `max_fanout` (the barrier cap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ControlContract {
-    Signal,
-    Scatter,
+pub enum ChannelJoin {
+    Each,
+    Gather,
+}
+
+impl Default for ChannelJoin {
+    fn default() -> Self {
+        ChannelJoin::Each
+    }
 }
 
 /// A statically-declared, typed port on an [`AutomatedStep`]. The job emits
 /// (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
-/// place at runtime; the net wires edges to it by `name`. `contract` is set
-/// only on `Control`-plane channels (the firing semantics); `max_fanout` caps
-/// a `Scatter`'s fan-out width.
+/// place at runtime; the net wires edges to it by `name`. A control OUT
+/// channel lowers uniformly to one accumulating place; the fold discipline
+/// lives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a
+/// uniform safety cap (positive if present); a `gather` consumer REQUIRES the
+/// producer channel to set it (the barrier cap).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Channel {
@@ -1562,8 +1574,6 @@ pub struct Channel {
     pub direction: ChannelDirection,
     pub plane: ChannelPlane,
     pub element: ElementType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract: Option<ControlContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_fanout: Option<u32>,
 }
@@ -2477,6 +2487,14 @@ pub struct WorkflowEdge {
     pub target_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// CONSUMER-side fold discipline for a CONTROL channel edge (see
+    /// [`ChannelJoin`]). Applies only when this edge's `target_handle` names a
+    /// control IN channel fed by a control OUT channel: `each` fires the
+    /// downstream once per emitted item, `gather` collects the whole episode
+    /// into one array at a counted barrier. Absent/`None` ⇒ `Each`. Must NOT
+    /// be set on data-plane edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<ChannelJoin>,
     #[serde(rename = "type")]
     pub edge_type: String,
 }
@@ -2687,6 +2705,7 @@ impl WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             }],
             viewport: None,

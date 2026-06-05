@@ -260,10 +260,10 @@ impl EventStream for StreamContext {
         .await;
     }
 
-    async fn scatter_item(
+    async fn item(
         &self,
         channel: String,
-        scatter_uid: String,
+        episode_uid: String,
         idx: u64,
         payload: serde_json::Value,
     ) {
@@ -271,29 +271,29 @@ impl EventStream for StreamContext {
         // the job's `metadata` (petri net id + control_emit event route), so it
         // is NOT category-gated like `maybe_emit`. Build it directly and publish
         // through the emitter's control path (same wire the IPC `EmitControl`
-        // uses for the Python SDK's `scatter`).
+        // uses for the Python SDK's episode emit).
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
             channel,
-            kind: ControlKind::ScatterItem,
+            kind: ControlKind::Item,
             payload_json: serde_json::to_string(&payload).unwrap_or_default(),
-            scatter_id: idx,
-            scatter_count: 0,
-            scatter_uid,
+            item_idx: idx,
+            count: 0,
+            episode_uid,
             metadata: self.metadata.clone(),
         };
         self.emitter.emit_control(&event).await;
     }
 
-    async fn scatter_close(&self, channel: String, scatter_uid: String, count: u64) {
+    async fn close(&self, channel: String, episode_uid: String, count: u64) {
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
             channel,
-            kind: ControlKind::ScatterClose,
+            kind: ControlKind::Close,
             payload_json: String::new(),
-            scatter_id: 0,
-            scatter_count: count,
-            scatter_uid,
+            item_idx: 0,
+            count,
+            episode_uid,
             metadata: self.metadata.clone(),
         };
         self.emitter.emit_control(&event).await;

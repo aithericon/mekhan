@@ -61,32 +61,33 @@ pub trait EventStream: Send + Sync {
     /// HTTP, …) are unaffected; gated on `"output"` ∈ `stream_events`.
     async fn output(&self, _name: String, _value: Value) {}
 
-    /// Emit one streaming-channel `scatter_item` control token (docs/25) — the
-    /// in-process equivalent of the Python SDK's `with scatter(name) as s:
-    /// s.emit(payload)` (which reaches the net through the IPC `EmitControl`).
-    /// `scatter_uid` correlates every item + the close of ONE fan-out;
-    /// `idx` is the 0-based item index. The engine's gather barrier re-orders
-    /// items by `idx` and sizes itself on the matching `scatter_close` count.
+    /// Emit one streaming-channel `item` control token (docs/25, consumer-join) —
+    /// the in-process equivalent of the Python SDK's per-element emit (which
+    /// reaches the net through the IPC `EmitControl`). `episode_uid` correlates
+    /// every item + the close of ONE episode; `idx` is the 0-based item index.
+    /// The producer emits a uniform episode; the CONSUMER edge's `join`
+    /// (each | gather) decides how it is folded — a `gather` barrier re-orders
+    /// items by `idx` and sizes itself on the matching `close` count.
     ///
     /// Default no-op so non-streaming in-process backends are unaffected. The
     /// ROS action backend calls this once per DISTINCT action feedback message
-    /// when its node declares a Control/Scatter `out` channel. Fire-and-forget:
-    /// the engine never gates the emit (it rides JetStream).
-    async fn scatter_item(
+    /// when its node declares a Control `out` channel. Fire-and-forget: the
+    /// engine never gates the emit (it rides JetStream).
+    async fn item(
         &self,
         _channel: String,
-        _scatter_uid: String,
+        _episode_uid: String,
         _idx: u64,
         _payload: Value,
     ) {
     }
 
-    /// Emit one streaming-channel `scatter_close` control token (docs/25) — the
-    /// in-process equivalent of the Python SDK's `scatter` context manager
-    /// exit, stamping `count` (the total items emitted) so the engine's gather
-    /// barrier knows the fan-out is complete. `scatter_uid` must match the uid
+    /// Emit one streaming-channel `close` control token (docs/25, consumer-join)
+    /// — the in-process equivalent of the Python SDK's episode context exit,
+    /// stamping `count` (the total items emitted) so a downstream `gather`
+    /// barrier knows the episode is complete. `episode_uid` must match the uid
     /// the items were emitted under. Default no-op.
-    async fn scatter_close(&self, _channel: String, _scatter_uid: String, _count: u64) {}
+    async fn close(&self, _channel: String, _episode_uid: String, _count: u64) {}
 }
 
 /// Trait for execution backends. Each backend knows how to execute

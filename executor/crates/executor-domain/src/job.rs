@@ -86,11 +86,12 @@ pub struct ExecutionJob {
 /// One entry in a job's channel manifest — the executor-visible projection of
 /// a compiler-declared streaming `Channel`.
 ///
-/// `plane` is `"control"` or `"data"`; `contract` is `"signal"` or `"scatter"`
-/// for control channels (`None` for data channels); `element_kind` is the
-/// element shape tag (`"json"`, `"binary"`, or `"any"`). The executor only
-/// needs these flat strings to validate an `EmitControl` against the manifest —
-/// the rich `Channel` enum lives on the service side.
+/// `plane` is `"control"` or `"data"`; `element_kind` is the element shape tag
+/// (`"json"`, `"binary"`, or `"any"`). The executor only needs these flat
+/// strings to validate an `EmitControl` against the manifest — the rich
+/// `Channel` enum lives on the service side. (The producer-side `signal |
+/// scatter` contract was removed in docs/25: the fold discipline is now a
+/// consumer-edge `join`, invisible to the runner.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChannelManifestEntry {
@@ -99,10 +100,6 @@ pub struct ChannelManifestEntry {
 
     /// `"control"` or `"data"`.
     pub plane: String,
-
-    /// `"signal"` or `"scatter"` for control channels; `None` for data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract: Option<String>,
 
     /// Element shape tag: `"json"`, `"binary"`, or `"any"`.
     pub element_kind: String,

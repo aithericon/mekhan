@@ -9,6 +9,15 @@ streaming-`Map` per-chunk net synthesis is **retired** here. Builds on
 in a way compatible with a future
 [`19-shape-as-typed-ir.md`](19-shape-as-typed-ir.md).
 
+> **Revision note.** An earlier iteration of the agreed design (and the built
+> Phase 1) used a producer-side **`signal | scatter` contract** — the producer
+> declared up front whether its emissions were fire-and-forget triggers or a
+> counted scatter set. This revision **supersedes** that: a producer cannot know
+> whether a downstream node rejoins its emissions (that is a topology fact, not a
+> producer fact), so the only producer-owned thing is the **count**. The fold
+> discipline moves **consumer-side** (the edge's `join`). The producer now has one
+> uniform bracketed primitive; `signal` / `scatter` evaporate as producer concepts.
+
 ## 1. Motivation — three modelling flaws
 
 The shipped streaming model (docs/18) carries a stream chunk's **actual value**
@@ -48,7 +57,11 @@ drives the whole design.
 
 There is exactly one new primitive — **dynamic control-token emission into a
 statically-declared, typed port** — and the data plane is built on top of it.
-The net sees stream **lifecycle only** by default:
+The producer has **one shape for both control and data**: `open → element* →
+close(count)`. A control element becomes a net token; a data element is
+out-of-band bytes; the *lifecycle bracket* is identical either way. That single
+producer lifecycle is what makes this **one mechanism** rather than two. The net
+sees stream **lifecycle only** by default:
 
 ```
 producer ──open{descriptor}──▶ [net] ──close{count,status}──▶
@@ -66,14 +79,15 @@ Net-native `StreamFold` and streaming-`Map` per-chunk synthesis are **deleted**
 
 - **Fold** (stream → one value) was never a net concern — it is a reducer job:
   `acc = 0; for x in stream("frames"): acc += score(x); emit_output("total", acc)`.
-- **Map** (stream → fan out N) is subsumed by job-driven `scatter` (§4), which is
-  strictly more expressive: the *job* decides which elements warrant a downstream
-  token (filter, batch, debounce, enrich), putting the firing-rate decision in
-  the author's hands rather than implicitly at 30fps.
+- **Map** (stream → fan out N) is subsumed by **job-driven emission rejoined with
+  a `gather` edge** (§4, §3 *Two axes*), which is strictly more expressive: the
+  *job* decides which elements warrant a downstream token (filter, batch, debounce,
+  enrich), putting the firing-rate decision in the author's hands rather than
+  implicitly at 30fps.
 
 The Map **gather** machinery (`__map_id` / `__map_idx`, counted barrier) is
-**kept** and reused by `scatter`. We delete the front (per-chunk synthesis), not
-the back.
+**kept** and reused by the consumer-side `gather` `join`. We delete the front
+(per-chunk synthesis), not the back.
 
 ## 3. The unified `Channel`
 
@@ -85,7 +99,7 @@ Channel {
   name:      "frames" | "on_detection" | ...
   direction: in | out
   plane:     data      // bulk bytes, out-of-band; net sees only opened/closed
-           | control   // flows as net tokens; + { contract, max_fanout }
+           | control   // each element flows as a net token
   element:   Json(schema)          // structured, compiler-validated
            | Binary(content_type)  // opaque blob + MIME hint, e.g. "image/jpeg"
            | Any                   // untyped escape hatch (opaque JSON, no validation)
@@ -104,6 +118,26 @@ Channel {
   referenced `decoder.frames`, `decoder.audio`, `decoder.on_scene_change`. This
   kills flaw #3.
 
+### Two axes: plane (producer) vs join (consumer)
+
+The old `signal | scatter` contract collapsed two orthogonal decisions into one
+producer-side selector. They separate cleanly along **who owns them**:
+
+| Axis    | Values            | Owned by   | Decides |
+|---------|-------------------|------------|---------|
+| `plane` | `control \| data` | **producer** | Does each element become a net token (`control`) or out-of-band bytes (`data`)? |
+| `join`  | `each \| gather \| …` | **consumer / edge** | How is the producer's counted set folded into the downstream node? |
+
+The producer always emits a **counted set** (`open → element* → close(count)`);
+it has no opinion on how that set is rejoined, because rejoining is a fact of the
+*downstream wiring*, not of the producer. The same producer node feeds an alert
+edge (`join: each` → fires per element) or a fan-out/rejoin edge (`join: gather`
+→ one counted barrier over the whole set) with **zero code change**.
+
+> **`join` applies to control channels only.** Data channels are always
+> edge-wired bytes — never value-referenceable, so there is no set to fold into a
+> downstream field. `join` on a data edge is meaningless.
+
 ### The continuum
 
 The auto-spill bridges the planes: a control token whose payload exceeds the
@@ -116,17 +150,32 @@ A running job emits tokens into a **statically-declared** place at will. The
 *count and timing* are dynamic; the *port* is not — so the borrow-checker still
 types every downstream ref and the static-net invariant survives.
 
-Each control-output channel adds:
+### One uniform producer primitive
+
+Every control emission is the **same bracketed episode**, regardless of what the
+downstream does with it:
 
 ```
-contract:   signal    // fire-and-forget downstream trigger; downstream must be
-                       // idempotent / re-entrant. The common "raise an alert" case.
-          | scatter    // tokens are colored with an instance id; close() stamps a
-                       // count → a downstream gather fires the counted barrier
-                       // (reusing the kept Map gather machinery).
-max_fanout: N          // safety valve: scatter beyond N ERRORS the job (loud),
-                       // never silent-drops, never blocks. Guards fan-out explosion.
+open                 // begin an episode; sets up any consumer-side gather state
+  → item(value)      // 0, 1, or N elements — emitted as the job decides
+  → item(value)
+  → ...
+close(count)         // end the episode; the count is the running tally
 ```
+
+- The **count is stamped live at `close`** (a running tally accumulated as items
+  are emitted), **never declared up front**. The producer commits to a count only
+  once it actually knows it — which is exactly why it cannot also commit to a
+  rejoin discipline.
+- **`open` is explicit on purpose.** A `gather` consumer sets up its barrier state
+  *before* items arrive, and the **`count = 0`** case fires `gather` once with an
+  empty array `[]` (rather than never firing). An `each` consumer simply ignores
+  `open` / `close` and reacts per `item`.
+- **One-shot sugar.** The sparse single-alert case ("raise an alert") would cost
+  three events through the full open/item/close cycle. A **`send()`** sugar
+  **fuses `open + item(1) + close(1)` into ONE event / ONE firing**, so that case
+  keeps its 1-firing efficiency — the same efficiency the retired `signal`
+  contract gave it, but without a producer-side contract.
 
 ### Engine path — the engine never gates
 
@@ -136,8 +185,17 @@ emit() → IPC sidecar → executor → publish to NATS (JetStream)
        → transition deposits a token into p_{node}_{channel}
 ```
 
-`control_emit { channel, kind: open|close|signal|scatter_item|scatter_close,
-payload_or_ref }` generalises today's `stream_output` (which already copies
+```
+control_emit {
+  channel,
+  kind:     open | item | close,   // was: open | close | signal | scatter_item | scatter_close
+  payload,                         // item payload (or descriptor on open)
+  __map_idx, __map_id,             // gather correlation (reuses the kept Map machinery)
+  count?,                          // present on `close`: the live running tally
+}
+```
+
+This generalises today's `stream_output` (which already copies
 output events into a Signal place) into a named, flowing, payload-carrying
 emission. JetStream durably accepts the publish; the engine drains into the
 place at eval-loop rate. **There is no "place full, reject the producer"** — the
@@ -148,7 +206,10 @@ JetStream one layer up.
 
 - **Control plane = fire-and-forget, sparse by design.** The producer never
   blocks. Nothing to back-pressure (sporadic triggers, not 30fps). The only
-  safety knob is `max_fanout` (loud error on runaway scatter).
+  safety knob is `max_fanout` (loud error on runaway emission, **per
+  `open → close` episode**). It is **not** a semantic selector — it is an optional
+  per-channel safety cap with a workspace default: exceed it and the job errors
+  loudly, never silent-drops, never blocks.
 - **Data plane = transport-level backpressure**, via the `delivery` axis (§6):
   - `reliable-ordered` (JetStream): the consumer's ack window / bounded stream
     naturally slows the producer's `write()` — the transport pushes back, below
@@ -199,39 +260,53 @@ Falls out of the model; no separate decision:
   `{{producer.frames}}` in a Rhai guard — it is bytes. It is a handle→handle edge
   (`sourceHandle` / `targetHandle`, which the wiring already does).
 - **Control channels: edge-wired *and* referenceable** — the emitted payload
-  lands as the downstream node's input, where it is a normal field. The single
-  resolver therefore shows control-token payloads downstream in the variable
-  picker, and never raw data streams.
+  lands as the downstream node's input, where it is a normal field. The reference
+  **type is a function of the edge's `join`**: `each` → the downstream ref is a
+  single `element`; `gather` → the downstream ref is `array<element>` (the counted
+  set folded into one value). The **single resolver consults the edge's `join`** to
+  decide which type to surface — so the variable picker, diagnostics, and read-arc
+  synthesis cannot drift on it. It shows control-token payloads downstream, and
+  never raw data streams.
 
-## 8. Python SDK — model-unified, verbs distinct per plane
+## 8. Python SDK — one output handle, one lifecycle
 
-The model is one `Channel`, but the SDK verbs stay **distinct per plane** —
-conflating them is exactly how someone emits a control token per frame and melts
-the engine.
+The model is one `Channel` with one producer lifecycle, so the SDK has **one
+output verb**, not a `signal` / `scatter` pair. The job decides the count by what
+it emits; it does **not** declare a contract.
 
 ```python
-from aithericon import stream, open_output, emit, scatter
+from aithericon import stream, out
 
 # DATA read — transport-abstracted; yields bytes (Binary) or dict (Json)
 for frame in stream("frames"):
     ...
 
-# DATA write
-with open_output("thumbnails") as out:
-    out.write(jpeg_bytes, content_type="image/jpeg")
+# CONTROL emit — general form; count decided LIVE; close fires on block exit
+with out("detections") as ch:
+    for f in stream("frames"):
+        if interesting(f):
+            ch.emit(detect(f))          # 0, 1, or N items — the job decides
 
-# CONTROL signal — fire one downstream token
-emit("on_alert", {"level": "high"})
+# CONTROL one-shot sugar — the old "signal" case
+out("on_alert").send({"level": "high"})  # == open + item(1) + close(1), fused
 
-# CONTROL scatter — N tokens + a gather count on close()
-with scatter("detections") as s:
-    for obj in detected:
-        s.emit({"bbox": obj.box})
+# DATA write — the data-plane analog of `out`: out-of-band bytes
+with open_output("thumbnails") as data:
+    data.write(jpeg_bytes, content_type="image/jpeg")
 ```
 
+- `out(name)` is the **control** output handle: `with out(...) as ch` brackets the
+  episode (`open` on entry, `close(count)` on clean exit) and `ch.emit(value)`
+  appends one `item`. `out(name).send(value)` is the fused one-shot.
+- `open_output(name)` is the **data-plane analog of `out`**: same bracketed
+  lifecycle, but `write(bytes, content_type=...)` sends out-of-band bytes rather
+  than net tokens. No extra verbs beyond these.
+- **Emission is all-or-nothing on clean block exit.** A crash mid-stream fires **no
+  `close`**, so a downstream `gather` never sees a bogus `count` — the partial set
+  is **abandoned, not committed**. The `with` block's exit is the commit point.
 - **String-keyed names, validated against a job manifest** the compiler bakes
-  into the job spec. The SDK errors at `open` / `emit` on an undeclared name or an
-  element-type mismatch. Full typed-stub codegen is deferred.
+  into the job spec. The SDK errors at `out` / `emit` / `send` on an undeclared
+  name or an element-type mismatch. Full typed-stub codegen is deferred.
 - **The sync generator must wrap an async core**, so `async for` / `select()` /
   multi-input reading are *added surface* later, not a rewrite — even though only
   the sync face ships in v1.
@@ -240,9 +315,12 @@ with scatter("detections") as s:
 
 **Phase 1 — AutomatedStep (Python) only.**
 - `Channel` model (declaration + typing + `Any`).
-- Control plane: `signal` / `scatter` + `max_fanout`.
-- `control_emit` engine path (new event → declared place).
-- SDK verbs (`stream` / `open_output` / `emit` / `scatter`), sync over async core.
+- Uniform bracketed emission (`open` / `item` / `close`) + consumer-side `join`
+  disciplines (`each` | `gather`) + `max_fanout` safety cap.
+- `control_emit` engine path (new event → declared place); `kind: open | item |
+  close`.
+- SDK verbs (`stream` / `out` / `open_output`, plus `out(...).send` sugar), sync
+  over async core.
 - JetStream data adapter + binary envelope + descriptor/credential.
 - **Retire** Fold / Map per-chunk synthesis; **migrate** demos 14/15/17/18.
 
@@ -262,8 +340,15 @@ with scatter("detections") as s:
 Not yet pinned to the byte level; resolve at build time:
 
 - Exact descriptor-token schema (transport coordinates + credential envelope).
-- Exact `control_emit` event schema and the `scatter_close` ↔ gather
-  reconciliation against the retired Map front.
-- Whether `max_fanout` is per-port only or also a workspace default.
+- Exact `control_emit` event schema and the `close(count)` ↔ `gather` barrier
+  reconciliation against the kept Map `gather` front (`__map_id` / `__map_idx`).
+- **v1 keeps ONE consumer discipline per channel.** A producer's accumulating
+  place feeds a single `join` (`each` *or* `gather`). Multi-discipline fan-out —
+  the same emission set folded `each` for one edge and `gather` for another off the
+  same accumulating place — is additive later, not a v1 requirement.
+- **Is `each` the right DEFAULT `join`?** Argued **yes**: a forgotten-to-wire
+  `gather` then degrades into "fires N times" (visible, debuggable) rather than a
+  **silent stall** waiting on a barrier whose count never arrives. The failure mode
+  of the default should be loud-and-wrong, not silent-and-stuck.
 - Typed-stub codegen from declared channels (vs. string-keys + runtime
   validation, which v1 ships).

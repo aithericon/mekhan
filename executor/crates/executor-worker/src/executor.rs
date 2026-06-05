@@ -168,7 +168,7 @@ impl JobExecutor {
         // Build StreamContext for real-time event streaming. Opted in by EITHER
         // a non-empty `stream_events` set (category-gated log/output/agent_turn)
         // OR a declared streaming channel (docs/25): an in-process backend (ROS
-        // action feedback) emits `scatter_item`/`scatter_close` control tokens
+        // action feedback) emits `item`/`close` control tokens
         // through this context's `emit_control` path, which is route-driven and
         // NOT category-gated — so a channels-only job still needs the context
         // even though its `categories` set is empty.

@@ -486,10 +486,8 @@ fn make_response(
 /// event.
 fn convert_control_kind(kind: proto::ControlKind) -> ControlKind {
     match kind {
-        proto::ControlKind::Signal => ControlKind::Signal,
-        proto::ControlKind::ScatterItem => ControlKind::ScatterItem,
-        proto::ControlKind::ScatterClose => ControlKind::ScatterClose,
         proto::ControlKind::Open => ControlKind::Open,
+        proto::ControlKind::Item => ControlKind::Item,
         proto::ControlKind::Close => ControlKind::Close,
     }
 }
@@ -530,20 +528,27 @@ async fn handle_emit_control(
         );
     };
 
-    // Plane is selected by the emit kind: signal/scatter are control-plane;
-    // the data-plane brackets (open/close) target a `data` channel. A kind that
+    // Plane validation. `item` is a control-plane element (it carries a payload
+    // into a `control` channel's place). `open`/`close` are episode brackets that
+    // are valid on BOTH planes — the data plane uses them to bracket an
+    // out-of-band byte stream, the control plane uses them as the (uniform)
+    // episode lifecycle markers a `gather` consumer correlates on. A kind that
     // doesn't match the declared channel's plane is a category error.
     let kind = convert_control_kind(req.kind());
-    let expected_plane = match kind {
-        ControlKind::Open | ControlKind::Close => "data",
-        ControlKind::Signal | ControlKind::ScatterItem | ControlKind::ScatterClose => "control",
+    let plane_ok = match kind {
+        // open/close are uniform episode brackets — valid on either plane.
+        ControlKind::Open | ControlKind::Close => {
+            entry.plane == "data" || entry.plane == "control"
+        }
+        // item carries a payload element — control plane only.
+        ControlKind::Item => entry.plane == "control",
     };
-    if entry.plane != expected_plane {
+    if !plane_ok {
         return (
             proto::ResponseStatus::InvalidArgument,
             Some(format!(
-                "emit_control: {kind:?} emit targets a '{expected_plane}' channel, but \
-                 channel '{channel}' is declared on the '{}' plane",
+                "emit_control: {kind:?} emit is not valid against channel '{channel}' \
+                 declared on the '{}' plane",
                 entry.plane
             )),
         );
@@ -554,9 +559,9 @@ async fn handle_emit_control(
         channel: channel.to_string(),
         kind,
         payload_json: req.payload_json.clone(),
-        scatter_id: req.scatter_id,
-        scatter_count: req.scatter_count,
-        scatter_uid: req.scatter_uid.clone(),
+        item_idx: req.item_idx,
+        count: req.count,
+        episode_uid: req.episode_uid.clone(),
         metadata: metadata.clone(),
     };
 

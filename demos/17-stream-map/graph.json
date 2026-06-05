@@ -18,14 +18,13 @@
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Scatters one word per emit onto its Control/Out channel 'items' (contract=Scatter, max_fanout=8). The channel's gather barrier re-orders the fan-out into a single gathered collection.",
+        "description": "Emits one word per item onto its Control/Out channel 'items' (max_fanout=8), as a uniform open → items → close episode. The consumer edge's `join: gather` drives the gather barrier that re-orders the fan-out into a single gathered collection.",
         "channels": [
           {
             "name": "items",
             "direction": "out",
             "plane": "control",
             "element": { "type": "any" },
-            "contract": "scatter",
             "max_fanout": 8
           }
         ],
@@ -51,7 +50,7 @@
       "data": {
         "type": "automated_step",
         "label": "Joiner",
-        "description": "Reads the scatter-gathered collection (the channel's `{ output: [...] }` envelope merged onto its input token), uppercases each word, and concatenates them in stream order into the final transcript.",
+        "description": "Reads the gathered collection (the channel's `{ output: [...] }` envelope merged onto its input token via the consumer edge's `join: gather`), uppercases each word, and concatenates them in stream order into the final transcript.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -86,7 +85,7 @@
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_items_joiner", "source": "producer", "sourceHandle": "items", "target": "joiner", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_items_joiner", "source": "producer", "sourceHandle": "items", "target": "joiner", "targetHandle": "in", "type": "sequence", "join": "gather" },
     { "id": "e_joiner_end", "source": "joiner", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

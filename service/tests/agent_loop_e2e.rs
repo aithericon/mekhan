@@ -70,6 +70,7 @@ fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
         source_handle: None,
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     }
 }
@@ -86,6 +87,7 @@ fn edge_with_handle(id: &str, source: &str, target: &str, handle: &str) -> Workf
         source_handle: Some(handle.to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "sequence".to_string(),
     }
 }
@@ -185,6 +187,7 @@ fn tools_edge(id: &str, agent_id: &str, tool_id: &str) -> WorkflowEdge {
         source_handle: Some("tools".to_string()),
         target_handle: Some("in".to_string()),
         label: None,
+        join: None,
         edge_type: "tools".to_string(),
     }
 }

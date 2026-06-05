@@ -60,6 +60,10 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "15-stream-python-body",
     "17-stream-map",
     "18-stream-pipeline",
+    // 36-audio-transcribe: Start File borrow → binary DATA channel → consumer.
+    // Compiles offline (no Python run / model download needed at compile time);
+    // RUNNING it is live-only (faster-whisper), documented in demo.json.
+    "36-audio-transcribe",
 ];
 
 fn repo_root() -> PathBuf {
@@ -267,6 +271,11 @@ fn snapshot_17_stream_map() {
 #[test]
 fn snapshot_18_stream_pipeline() {
     run("18-stream-pipeline");
+}
+
+#[test]
+fn snapshot_36_audio_transcribe() {
+    run("36-audio-transcribe");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
