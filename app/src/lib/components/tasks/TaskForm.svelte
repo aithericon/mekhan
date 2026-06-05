@@ -467,7 +467,7 @@
 						<FieldWidget
 							spec={toFieldSpec(field)}
 							value={getTextValue(field.name)}
-							class="min-h-[120px] rounded-xl bg-white/80"
+							class="min-h-[120px] rounded-xl"
 							onchange={(v) => setTextValue(field.name, typeof v === 'string' ? v : String(v ?? ''))}
 						/>
 					{:else if field.kind === 'select'}
@@ -479,7 +479,7 @@
 							<Select.Trigger
 								id={fieldId}
 								data-testid={`field-${field.name}`}
-								class="w-full rounded-xl bg-white/80"
+								class="w-full rounded-xl"
 							>
 								{#if getTextValue(field.name)}
 									{getTextValue(field.name)}
@@ -663,7 +663,7 @@
 							data-testid={`field-${field.name}`}
 							type="number"
 							placeholder={field.placeholder}
-							class="rounded-xl bg-white/80"
+							class="rounded-xl"
 							value={getTextValue(field.name)}
 							oninput={(event) =>
 								setTextValue(field.name, (event.currentTarget as HTMLInputElement).value)}
@@ -675,7 +675,7 @@
 						<FieldWidget
 							spec={toFieldSpec(field)}
 							value={getTextValue(field.name)}
-							class="rounded-xl bg-white/80"
+							class="rounded-xl"
 							onchange={(v) => setTextValue(field.name, typeof v === 'string' ? v : String(v ?? ''))}
 						/>
 					{/if}

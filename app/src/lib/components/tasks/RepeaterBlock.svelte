@@ -138,7 +138,7 @@
 				data-testid={`field-${errKey}`}
 				rows={3}
 				placeholder={field.placeholder}
-				class="min-h-[80px] rounded-lg bg-white/80"
+				class="min-h-[80px] rounded-lg"
 				value={getText(output_slug, rowIndex, field.name)}
 				oninput={(event) =>
 					setValue(
@@ -172,7 +172,7 @@
 				<Select.Trigger
 					id={fieldId}
 					data-testid={`field-${errKey}`}
-					class="w-full rounded-lg bg-white/80"
+					class="w-full rounded-lg"
 				>
 					{#if getText(output_slug, rowIndex, field.name)}
 						{getText(output_slug, rowIndex, field.name)}
@@ -195,7 +195,7 @@
 				data-testid={`field-${errKey}`}
 				type={canonicalKind === 'number' ? 'number' : 'text'}
 				placeholder={field.placeholder}
-				class="rounded-lg bg-white/80"
+				class="rounded-lg"
 				value={getText(output_slug, rowIndex, field.name)}
 				oninput={(event) =>
 					setValue(

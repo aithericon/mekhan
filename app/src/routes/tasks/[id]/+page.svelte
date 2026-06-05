@@ -2,7 +2,7 @@
 	import { page } from '$app/stores';
 	import { getTask, completeTask, cancelTask, getProcess } from '$lib/api/client';
 	import type { HumanTask, ProcessState } from '$lib/types/tasks';
-	import { HumanTaskPanel, TaskForm } from '$lib/components/tasks';
+	import { HumanTaskPanel, TaskForm, SuccessOverlay } from '$lib/components/tasks';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
@@ -14,6 +14,7 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let submitting = $state(false);
+	let showSuccess = $state(false);
 
 	const taskId = $derived($page.params.id as string);
 
@@ -60,6 +61,7 @@
 		submitting = true;
 		try {
 			await completeTask(task.task_id, data);
+			showSuccess = true;
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to complete task';
@@ -165,3 +167,5 @@
 		{/if}
 	</div>
 </div>
+
+<SuccessOverlay visible={showSuccess} onDismiss={() => (showSuccess = false)} />
