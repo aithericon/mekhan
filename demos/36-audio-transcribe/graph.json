@@ -71,13 +71,20 @@
       "data": {
         "type": "automated_step",
         "label": "Transcribe (faster-whisper)",
-        "description": "Declares a Data/In channel `speech` wired from the VAD step's open handle. `aithericon.stream('speech')` drains the out-of-band voiced-audio byte stream (starting EARLY, while the VAD step is still producing), reassembles the raw 16-bit PCM, and runs faster-whisper (`tiny`, CPU/int8) over it. Sets the recognized text as `transcript`. LIVE-ONLY: first run pip-installs faster-whisper (ctranslate2/numpy) and downloads the `tiny` model (~75 MB) into the venv/HF cache — slow + network-dependent, exceeds the 60 s `mekhan test` cap on a cold run.",
+        "description": "Declares a Data/In channel `speech` wired from the VAD step's open handle. `aithericon.stream('speech')` drains the out-of-band voiced-audio byte stream (starting EARLY, while the VAD step is still producing), reassembles the raw 16-bit PCM, and runs faster-whisper (`tiny`, CPU/int8) over it. Instead of returning one transcript, it EMITS each recognized segment as it is produced onto the Control/Out channel `parts` (`aithericon.out('parts')` → open → item* → close): one bracketed episode, one tiny `{index,text,start,end}` token per segment. The producer does NOT decide the fold — the consumer edge (`join: gather`) collects them in the `collect` step. LIVE-ONLY: first run pip-installs faster-whisper (ctranslate2/numpy) and downloads the `tiny` model (~75 MB) into the venv/HF cache — slow + network-dependent, exceeds the 60 s `mekhan test` cap on a cold run.",
         "channels": [
           {
             "name": "speech",
             "direction": "in",
             "plane": "data",
             "element": { "type": "binary", "content_type": "audio/L16" }
+          },
+          {
+            "name": "parts",
+            "direction": "out",
+            "plane": "control",
+            "element": { "type": "any" },
+            "max_fanout": 256
           }
         ],
         "executionSpec": {
@@ -94,9 +101,42 @@
         },
         "output": {
           "id": "out",
+          "label": "Transcribe stats",
+          "fields": [
+            { "name": "segment_count", "label": "Segments emitted", "kind": "number" },
+            { "name": "seconds", "label": "Audio seconds", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "collect",
+      "type": "automated_step",
+      "slug": "collect",
+      "position": { "x": 980, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Collect transcript",
+        "description": "Consumes the transcribe step's Control channel `parts` with `join: gather`, so the compiler's gather barrier re-orders the emitted segments by index and parks the whole collection as `{ output: [<segment>, ...] }` — fed in as this step's input token. Reads the list off `input.output`, concatenates the segment texts in order, and emits the complete `transcript` (plus `segment_count` and total `seconds`). This is the consumer-side fold: the producer just emitted a stream, the join discipline lives on the edge.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
           "label": "Transcript",
           "fields": [
             { "name": "transcript", "label": "Transcript", "kind": "text" },
+            { "name": "segment_count", "label": "Segments", "kind": "number" },
             { "name": "seconds", "label": "Audio seconds", "kind": "number" }
           ]
         }
@@ -105,12 +145,13 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 980, "y": 160 },
+      "position": { "x": 1300, "y": 160 },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "transcript", "expression": "transcribe.transcript" },
+          { "targetField": "transcript", "expression": "collect.transcript" },
+          { "targetField": "segment_count", "expression": "collect.segment_count" },
           { "targetField": "frames_voiced", "expression": "vad.frames_voiced" }
         ]
       }
@@ -119,6 +160,7 @@
   "edges": [
     { "id": "e_start_vad", "source": "start", "target": "vad", "targetHandle": "in", "type": "sequence" },
     { "id": "e_vad_speech_transcribe", "source": "vad", "sourceHandle": "speech", "target": "transcribe", "targetHandle": "speech", "type": "sequence" },
-    { "id": "e_transcribe_end", "source": "transcribe", "target": "end", "targetHandle": "in", "type": "sequence" }
+    { "id": "e_transcribe_parts_collect", "source": "transcribe", "sourceHandle": "parts", "target": "collect", "targetHandle": "in", "type": "sequence", "join": "gather" },
+    { "id": "e_collect_end", "source": "collect", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }
