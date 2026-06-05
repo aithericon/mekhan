@@ -542,15 +542,31 @@ fn operation_label(op: RosOperation) -> &'static str {
 fn render_value(value: &Value, ctx: &tera::Context) -> Result<Value, ExecutorError> {
     match value {
         Value::String(s) => {
+            // A *single* placeholder means "this field IS that ref". A STRUCTURED
+            // producer value (object/array) — e.g. a `geometry_msgs/Pose` spliced
+            // as `"{{ start.approach_pose }}"` — must be adopted VERBATIM: Tera
+            // stringifies a nested object to the literal `"[object]"`, which is not
+            // valid JSON, so the render+reparse path below would silently fall back
+            // to that broken string. Resolve the raw context value first and adopt
+            // any object/array directly. (Scalars and JSON-encoded *strings* still
+            // flow through the render path so they keep their existing semantics.)
+            if is_pure_placeholder(s) {
+                if let Some(raw @ (Value::Object(_) | Value::Array(_))) =
+                    resolve_pure_placeholder(s, ctx)
+                {
+                    return Ok(raw.clone());
+                }
+            }
             let rendered = render_str(s, ctx)?;
             // ROS messages are TYPED — a numeric field (e.g. Twist.linear.x, a
             // double) authored as a pure ref `"{{ start.speed }}"` must reach the
             // wire as a JSON number, not the string `"2.0"` (which rosbridge would
             // reject/mis-coerce). When the leaf is a *single* placeholder with no
             // surrounding literal text, re-parse the rendered output as JSON and
-            // adopt the typed value (number/bool/object/array). Plain literals and
-            // interpolations embedded in larger strings (e.g. `"turtle {{ n }}"`)
-            // keep string semantics.
+            // adopt the typed value (number/bool, or an opaque JSON-encoded string
+            // such as a serialized trajectory). Plain literals and interpolations
+            // embedded in larger strings (e.g. `"turtle {{ n }}"`) keep string
+            // semantics.
             if is_pure_placeholder(s) {
                 if let Ok(typed) = serde_json::from_str::<Value>(&rendered) {
                     if !typed.is_string() {
@@ -587,6 +603,29 @@ fn is_pure_placeholder(s: &str) -> bool {
         && t.len() > 4
         && t.matches("{{").count() == 1
         && t.matches("}}").count() == 1
+}
+
+/// Resolve a pure `{{ a.b.c }}` placeholder to its raw context value, when the
+/// inner expression is a simple dotted identifier path (`slug.field…`). Returns
+/// `None` for anything more complex (filters, function calls, arithmetic, array
+/// indexing) so the caller falls back to Tera string rendering. This lets a
+/// STRUCTURED producer value (object/array) be adopted verbatim — Tera would
+/// otherwise stringify a nested object to the literal `"[object]"`.
+fn resolve_pure_placeholder<'a>(s: &str, ctx: &'a tera::Context) -> Option<&'a Value> {
+    let inner = s.trim().strip_prefix("{{")?.strip_suffix("}}")?.trim();
+    if inner.is_empty()
+        || !inner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    let mut segs = inner.split('.');
+    let mut cur = ctx.get(segs.next()?)?;
+    for seg in segs {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
 }
 
 /// Render one template string. A string containing no `{{ … }}` round-trips
@@ -872,6 +911,39 @@ mod tests {
         assert!(rendered["enabled"].is_boolean());
         assert_eq!(rendered["label"], "speed=2.5");
         assert_eq!(rendered["who"], "leo");
+    }
+
+    /// A pure-placeholder leaf bound to a STRUCTURED producer value (a nested
+    /// object such as a `geometry_msgs/Pose`, or an array) is adopted verbatim —
+    /// NOT Tera-stringified to the literal `"[object]"`. This is the whole-object
+    /// splice a SubWorkflow uses to forward a typed Start input
+    /// (`"{{ start.approach_pose }}"`) into a ROS service field.
+    #[test]
+    fn render_value_adopts_structured_object_placeholder() {
+        let td = tempfile::TempDir::new().unwrap();
+        let mut c = ctx(&td);
+        let pose = serde_json::json!({
+            "position": { "x": 0.3, "y": 0.0, "z": 0.4 },
+            "orientation": { "x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0 }
+        });
+        stage_envelope(
+            &mut c,
+            "start",
+            serde_json::json!({ "approach_pose": pose, "names": ["a", "b"] }),
+        );
+        let context = shared_ctx::build_template_context(&c, &[]).unwrap();
+
+        let fields = serde_json::json!({
+            "target": "{{ start.approach_pose }}", // pure ref → object verbatim
+            "joint_names": "{{ start.names }}",     // pure ref → array verbatim
+            "group": "xarm6",
+        });
+        let rendered = render_value(&fields, &context).unwrap();
+        assert_eq!(rendered["target"], pose);
+        assert!(rendered["target"].is_object());
+        assert_eq!(rendered["target"]["position"]["x"], serde_json::json!(0.3));
+        assert_eq!(rendered["joint_names"], serde_json::json!(["a", "b"]));
+        assert_eq!(rendered["group"], "xarm6");
     }
 
     #[test]

@@ -776,6 +776,21 @@ pub(crate) fn guard_readarc_plan(
                 .map(|m| m.expression.clone())
                 .filter(|s| !s.trim().is_empty())
                 .collect(),
+            // SubWorkflow `input_mapping` expressions are emitted verbatim into
+            // the `t_{id}_shape` "Prepare Sub-workflow" transition's rhai (via
+            // `result_mapping_rhai`, the SAME helper End uses), so they borrow
+            // upstream `<slug>.<field>` refs exactly like an End result-mapping.
+            // Without this arm a 2nd+ SubWorkflow in a sequential chain cannot
+            // reach the Start (or any non-adjacent producer) fields: `input.*`
+            // is the slim control token, which the first node's `split_outputs`
+            // strips of the Start leaves, so only a parked-producer read-arc
+            // reaches them. `apply_guard_borrows` walks `t_{id}_*` (incl.
+            // `t_{id}_shape`) and rewrites `<slug>.<field>` → `d_<slug>.<field>`.
+            WorkflowNodeData::SubWorkflow { input_mapping, .. } => input_mapping
+                .iter()
+                .map(|m| m.expression.clone())
+                .filter(|s| !s.trim().is_empty())
+                .collect(),
             // Delay/Timeout `durationMsExpr` is embedded verbatim in the
             // `t_{id}_prep` transition logic, so it borrows upstream
             // `<slug>.<field>` refs exactly like a Loop condition does.

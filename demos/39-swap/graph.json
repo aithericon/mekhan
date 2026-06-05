@@ -35,9 +35,9 @@
         "templateId": "00000000-0000-0000-0000-000000000370",
         "versionPin": { "mode": "latest" },
         "inputMapping": [
-          { "targetField": "grasp_pose", "expression": "input.port_grasp_pose" },
-          { "targetField": "approach_pose", "expression": "input.port_approach_pose" },
-          { "targetField": "object_id", "expression": "input.occupant_id" }
+          { "targetField": "grasp_pose", "expression": "start.port_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.port_approach_pose" },
+          { "targetField": "object_id", "expression": "start.occupant_id" }
         ],
         "output": {
           "id": "out",
@@ -60,9 +60,9 @@
         "templateId": "00000000-0000-0000-0000-000000000380",
         "versionPin": { "mode": "latest" },
         "inputMapping": [
-          { "targetField": "insert_pose", "expression": "input.temp_grasp_pose" },
-          { "targetField": "approach_pose", "expression": "input.temp_approach_pose" },
-          { "targetField": "object_id", "expression": "input.occupant_id" }
+          { "targetField": "insert_pose", "expression": "start.temp_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.temp_approach_pose" },
+          { "targetField": "object_id", "expression": "start.occupant_id" }
         ],
         "output": {
           "id": "out",
@@ -84,9 +84,9 @@
         "templateId": "00000000-0000-0000-0000-000000000370",
         "versionPin": { "mode": "latest" },
         "inputMapping": [
-          { "targetField": "grasp_pose", "expression": "input.rack_grasp_pose" },
-          { "targetField": "approach_pose", "expression": "input.rack_approach_pose" },
-          { "targetField": "object_id", "expression": "input.new_id" }
+          { "targetField": "grasp_pose", "expression": "start.rack_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.rack_approach_pose" },
+          { "targetField": "object_id", "expression": "start.new_id" }
         ],
         "output": {
           "id": "out",
@@ -109,9 +109,9 @@
         "templateId": "00000000-0000-0000-0000-000000000380",
         "versionPin": { "mode": "latest" },
         "inputMapping": [
-          { "targetField": "insert_pose", "expression": "input.port_grasp_pose" },
-          { "targetField": "approach_pose", "expression": "input.port_approach_pose" },
-          { "targetField": "object_id", "expression": "input.new_id" }
+          { "targetField": "insert_pose", "expression": "start.port_grasp_pose" },
+          { "targetField": "approach_pose", "expression": "start.port_approach_pose" },
+          { "targetField": "object_id", "expression": "start.new_id" }
         ],
         "output": {
           "id": "out",

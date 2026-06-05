@@ -1,0 +1,25 @@
+{
+  "name": "places-a-sample",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "insert_pose": {
+          "position": { "x": 0.3, "y": 0.2, "z": 0.4 },
+          "orientation": { "x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0 }
+        },
+        "approach_pose": {
+          "position": { "x": 0.3, "y": 0.2, "z": 0.4 },
+          "orientation": { "x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0 }
+        },
+        "object_id": "sample_tube_A"
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.placed", "op": "eq", "value": true },
+    { "path": "result.value.object_id", "op": "eq", "value": "sample_tube_A" }
+  ]
+}
