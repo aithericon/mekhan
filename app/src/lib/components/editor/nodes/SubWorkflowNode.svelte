@@ -131,6 +131,7 @@
 	id="error"
 	type="source"
 	position={Position.Bottom}
+	class="!h-3 !w-3 !border-2"
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On child failure"
 />
