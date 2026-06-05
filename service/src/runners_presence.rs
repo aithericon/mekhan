@@ -7,19 +7,27 @@
 //!
 //! 1. **SUBSCRIBE** to `runner.*.presence`. Each message is a liveness ping from
 //!    a runner's data plane (Phase 2 JWT already grants `runner.{id}.presence`).
-//!    The `runner_id` is parsed from the SUBJECT, never the payload. On the
-//!    ABSENT→PRESENT edge we inject ONE `presence_acquire` token
-//!    `{ runner_id, executor_namespace, caps }` into the runner's pool net via
-//!    the cross-net bridge subject `petri.bridge.pool-<rid>.presence_acquire`.
+//!    The `runner_id` is parsed from the SUBJECT, never the payload. The payload
+//!    carries an advisory `concurrency: C` (default 1; P3) — the number of
+//!    simultaneous leases the runner can serve. On the ABSENT→PRESENT edge we
+//!    inject **C** `presence_acquire` tokens
+//!    `{ unit_id: "{runner_id}#{slot}", runner_id, executor_namespace, caps }`
+//!    (slot 0..C) into the runner's pool net via the cross-net bridge subject
+//!    `petri.bridge.pool-<rid>.presence_acquire` — one per slot, each with a
+//!    per-slot dedup id so a redelivery suppresses exactly that slot.
 //!    `executor_namespace` + `caps` come from the TRUSTED `runners` DB row,
-//!    NEVER from the wire payload.
+//!    NEVER from the wire payload. GROW-EAGER: on a later heartbeat whose wire C
+//!    exceeds the applied C, the new slots are injected immediately; SHRINK is
+//!    LAZY (the surplus drains on release / full expire).
 //!
-//! 2. **SWEEP** a background loop tracks the last-renewal instant per runner_id
-//!    in memory. On a TTL miss the runner is marked absent and a BARE
-//!    `presence_expired { runner_id }` SIGNAL is injected via
-//!    `petri.signal.pool-<rid>.presence_expired`. The net's `t_reap_free` /
-//!    `t_reap_held` discriminate free-vs-held by input place, so mekhan keeps
-//!    NO holder tracking.
+//! 2. **SWEEP** a background loop tracks the last-renewal instant + applied C per
+//!    runner_id in memory. On a TTL miss the runner is marked absent and
+//!    **applied-C** BARE `presence_expired { runner_id }` SIGNALS are injected via
+//!    `petri.signal.pool-<rid>.presence_expired` — one per slot, since each
+//!    signal is consumed once and reaps exactly one of the runner's C slots
+//!    (reap-ALL-by-runner_id). The net's `t_reap_free` / `t_reap_held`
+//!    discriminate free-vs-held by input place, so mekhan keeps NO holder
+//!    tracking.
 //!
 //! ## Idempotency + false-positive avoidance
 //!
@@ -83,6 +91,15 @@ fn presence_ttl() -> Duration {
 pub(crate) struct PresenceEntry {
     /// Most recent presence heartbeat instant.
     last_seen: Instant,
+    /// The number of pool slots mekhan has APPLIED for this runner — the count
+    /// of `presence_acquire` tokens injected (and not yet fully expired). Drives
+    /// the grow-eager / shrink-lazy delta (P3): a heartbeat whose wire C exceeds
+    /// this eagerly injects the new slots and bumps it; a smaller wire C just
+    /// lowers the stored target (the surplus drains on release / full expire).
+    /// The sweep injects exactly this many expire signals on a TTL miss so every
+    /// applied slot is reaped (reap-all-by-runner_id). `0` for a liveness-only
+    /// runner with no pool to admit into.
+    concurrency: u32,
     /// Pool net id (`pool-<resource_id>`) the runner's presence is admitted to.
     /// Resolved once on the acquire edge and cached so the sweep can inject the
     /// expire signal without another DB round-trip.
@@ -237,36 +254,48 @@ async fn load_live_runner(db: &PgPool, runner_id: Uuid) -> Option<RunnerRow> {
     Some(row)
 }
 
-/// Inject a `presence_acquire` token into the pool net's `presence_acquire`
-/// bridge_in place via `petri.bridge.<pool_net_id>.presence_acquire`.
+/// Inject ONE slot's `presence_acquire` token into the pool net's
+/// `presence_acquire` bridge_in place via
+/// `petri.bridge.<pool_net_id>.presence_acquire`.
 ///
-/// Wire shape is the engine's [`CrossNetTokenTransfer`] envelope (what the
-/// engine's global bridge listener deserializes): `token_color` carries the
-/// `{ runner_id, executor_namespace, caps }` unit, and we set NO reply routing
-/// (acquire is one-way — the unit lives in the pool until granted/reaped).
+/// With C-unit concurrency (P3) the controller calls this once per slot
+/// (`slot = 0..C`): each token mints one distinct pool unit with
+/// `unit_id = "{runner_id}#{slot}"` (the granular per-slot identity that becomes
+/// an independently grantable lease) and the shared `runner_id` (the reap key —
+/// `t_reap_*` correlate on it). Wire shape is the engine's
+/// [`CrossNetTokenTransfer`] envelope (what the engine's global bridge listener
+/// deserializes): `token_color` carries the `{ unit_id, runner_id,
+/// executor_namespace, caps }` unit, and we set NO reply routing (acquire is
+/// one-way — the unit lives in the pool until granted/reaped).
 async fn inject_acquire(
     nats: &MekhanNats,
     pool_net_id: &str,
     runner_id: Uuid,
+    slot: u32,
     executor_namespace: &str,
     caps: &serde_json::Value,
 ) {
     let subject = format!("petri.bridge.{pool_net_id}.{}", well_known::POOL_PRESENCE_ACQUIRE_INBOX);
+    let unit_id = format!("{runner_id}#{slot}");
     // `CrossNetTokenTransfer` shape (engine `cross_net_bridge.rs`). source_* are
     // informational; we tag them so causality/tracing attributes the unit to the
-    // presence controller. `dedup_id` keys on the runner so a redelivered acquire
-    // is suppressed at the engine while the runner stays present.
+    // presence controller. `dedup_id` keys on the runner AND the slot
+    // (`presence-acquire:{runner_id}#{slot}`) so a redelivered acquire for a
+    // given slot is suppressed at the engine while the runner stays present —
+    // CRITICAL: keying on the runner alone would make the engine suppress all
+    // C-1 extra slots as duplicates and only ONE unit would ever mint.
     let envelope = json!({
         "source_net_id": "mekhan-presence-controller",
         "source_place_name": "presence",
         "token_color": {
+            "unit_id": unit_id,
             "runner_id": runner_id.to_string(),
             "executor_namespace": executor_namespace,
             "caps": caps,
         },
-        "signal_key": format!("presence-acquire-{runner_id}"),
+        "signal_key": format!("presence-acquire-{unit_id}"),
         "timestamp": Utc::now().to_rfc3339(),
-        "dedup_id": format!("presence-acquire:{runner_id}"),
+        "dedup_id": format!("presence-acquire:{unit_id}"),
     });
     publish_jetstream(nats, &subject, &envelope, "presence acquire").await;
 }
@@ -327,21 +356,32 @@ async fn handle_presence(
     fleet: &FleetLiveness,
     runner_id: Uuid,
     backends: Vec<String>,
+    concurrency: u32,
 ) {
-    // Mirror the runner's advisory facet (its self-reported backends) into the
-    // shared fleet-liveness registry on EVERY heartbeat — telemetry only (docs/24
-    // S1). This feeds the unified publish-time `serves_backend` eligibility query
-    // alongside the worker pool; it has NO bearing on the pool-net control binding
-    // injected below (caps stay authoritative there). The runner controller owns
-    // this entry's lifecycle, so it is removed only by `drop_runner` on expiry —
-    // the fleet module's worker sweep never touches it.
+    // Mirror the runner's advisory facet (its self-reported backends +
+    // concurrency) into the shared fleet-liveness registry on EVERY heartbeat —
+    // telemetry only (docs/24 S1). This feeds the unified publish-time
+    // `serves_backend` eligibility query alongside the worker pool (and surfaces
+    // C as advisory telemetry for the model-pool router); it has NO bearing on
+    // the pool-net control binding injected below (caps stay authoritative
+    // there). The runner controller owns this entry's lifecycle, so it is removed
+    // only by `drop_runner` on expiry — the fleet module's worker sweep never
+    // touches it.
     fleet
-        .upsert_runner(runner_id.to_string(), backends.clone())
+        .upsert_runner(runner_id.to_string(), backends.clone(), concurrency)
         .await;
 
-    // Fast path: already present → just bump last_seen under the lock and return.
-    // We still re-touch last_seen_at periodically below, but avoid a DB lookup on
-    // every heartbeat of an already-admitted runner.
+    // Fast path: already present → bump last_seen + reconcile the C delta under
+    // the lock. We still re-touch last_seen_at periodically below, but avoid a DB
+    // lookup on every heartbeat of an already-admitted runner.
+    //
+    // GROW-EAGER / SHRINK-LAZY: if the wire C exceeds the applied C, we EAGERLY
+    // inject the new slots (`applied..wire`) so the extra capacity is available
+    // immediately, then bump the stored applied C. If the wire C is smaller, we
+    // only lower the stored target (SHRINK is lazy — a held surplus slot must
+    // finish its lease; it drains on release or at the next full expire). We need
+    // the pool_net_id + namespace/caps to inject grow slots, so collect what we
+    // need under the lock, then inject outside it.
     {
         let mut map = presence.lock().await;
         if let Some(entry) = map.get_mut(&runner_id) {
@@ -351,9 +391,40 @@ async fn handle_presence(
             // a full re-acquire (caps still come from the DB, untouched here).
             entry.backends = backends.clone();
             if entry.present {
-                // Already admitted — nothing to inject. Drop the lock and do a
-                // best-effort last_seen_at touch outside it.
+                // Compute the grow delta. SHRINK is lazy (just lower the target);
+                // GROW eagerly injects the new slots below. A pool-less
+                // (liveness-only) entry never injects.
+                let new_slots = grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
+                let grow = new_slots.map(|s| (entry.pool_net_id.clone(), s));
+                // Always record the new target C (grow OR shrink).
+                entry.concurrency = concurrency;
                 drop(map);
+
+                if let Some((pool_net_id, new_slots)) = grow {
+                    // Re-resolve the trusted namespace + caps from the DB row to
+                    // mint the new slots (never from the wire payload).
+                    if let Some(runner) = load_live_runner(db, runner_id).await {
+                        let executor_namespace = format!("runner-jobs/{runner_id}");
+                        let caps = runner.capabilities.clone();
+                        for slot in new_slots {
+                            inject_acquire(
+                                nats,
+                                &pool_net_id,
+                                runner_id,
+                                slot,
+                                &executor_namespace,
+                                &caps,
+                            )
+                            .await;
+                        }
+                        tracing::info!(
+                            %runner_id, pool_net_id, concurrency,
+                            "presence concurrency grew; minted new slots"
+                        );
+                    }
+                }
+
+                // Already admitted — best-effort last_seen_at touch.
                 touch_last_seen(db, runner_id).await;
                 return;
             }
@@ -388,6 +459,10 @@ async fn handle_presence(
                     pool_net_id: String::new(),
                     pool_alias: runner.group.clone(),
                     backends: backends.clone(),
+                    // No pool to admit into → no slots applied. The sweep injects
+                    // 0 expires for a liveness-only entry (its empty pool_net_id
+                    // already short-circuits the engine reap).
+                    concurrency: 0,
                     present: true,
                 },
             );
@@ -410,10 +485,18 @@ async fn handle_presence(
     let executor_namespace = format!("runner-jobs/{runner_id}");
     let caps = runner.capabilities.clone();
 
-    inject_acquire(nats, &pool_net_id, runner_id, &executor_namespace, &caps).await;
+    // Mint C distinct slots (slot 0..C), one bridge token each. `unit_id` is
+    // per-slot (`"{runner_id}#{slot}"`) so each is an independently grantable
+    // lease; they share `runner_id` so the reap-all-by-runner_id signals match
+    // any of them.
+    for slot in 0..concurrency {
+        inject_acquire(nats, &pool_net_id, runner_id, slot, &executor_namespace, &caps).await;
+    }
 
     // Commit the present edge AFTER injecting so a crash between inject + map
-    // update simply re-injects (idempotent at the engine via dedup_id).
+    // update simply re-injects (idempotent at the engine via the per-slot
+    // dedup_id). Record the applied C so the sweep knows how many expire signals
+    // to inject and the grow path knows the current slot count.
     {
         let mut map = presence.lock().await;
         map.insert(
@@ -423,13 +506,14 @@ async fn handle_presence(
                 pool_net_id: pool_net_id.clone(),
                 pool_alias: runner.group.clone(),
                 backends: backends.clone(),
+                concurrency,
                 present: true,
             },
         );
     }
     touch_last_seen(db, runner_id).await;
 
-    tracing::info!(%runner_id, pool_net_id, "presence acquired (runner admitted to pool)");
+    tracing::info!(%runner_id, pool_net_id, concurrency, "presence acquired (runner admitted to pool with C slots)");
 }
 
 /// Best-effort `runners.last_seen_at = now()` bump. A failed update is logged at
@@ -455,22 +539,60 @@ fn parse_runner_subject(subject: &str) -> Option<Uuid> {
     Uuid::parse_str(parts[1]).ok()
 }
 
-/// Extract the runner's advertised `backends` from a presence payload. The
-/// `runner_id` is authoritative from the SUBJECT (never the payload); `backends`
-/// is the one advisory field we read from the wire (see [`PresenceEntry::backends`]).
+/// Extract the runner's advertised `backends` + `concurrency` from a presence
+/// payload. The `runner_id` is authoritative from the SUBJECT (never the
+/// payload); `backends` + `concurrency` are advisory wire-truth (see
+/// [`PresenceEntry::backends`] / [`PresenceEntry::concurrency`]).
+///
 /// A missing/malformed `backends` field yields an empty set — the runner is
 /// still tracked as present (liveness is subject-driven), it just advertises no
-/// coverage until a well-formed heartbeat arrives.
-fn parse_backends(payload: &[u8]) -> Vec<String> {
+/// coverage until a well-formed heartbeat arrives. A missing/zero `concurrency`
+/// (older runner, or a malformed payload) defaults to **1** so a runner that
+/// doesn't report C still gets one slot (the pre-P3 behaviour). The value is
+/// CLAMPED to a conservative ceiling ([`MAX_RUNNER_CONCURRENCY`]) so a lying
+/// runner reporting C=10000 can't mint 10000 pool units.
+//
+// TODO(P3 §6 residual): clamp against the group `capacity` resource's
+// `public_config` per-runner ceiling once that field is specified, rather than
+// the global `MAX_RUNNER_CONCURRENCY` constant.
+fn parse_presence(payload: &[u8]) -> (Vec<String>, u32) {
     #[derive(serde::Deserialize)]
     struct PresencePayload {
         #[serde(default)]
         backends: Vec<String>,
+        #[serde(default)]
+        concurrency: Option<u32>,
     }
-    serde_json::from_slice::<PresencePayload>(payload)
-        .map(|p| p.backends)
-        .unwrap_or_default()
+    match serde_json::from_slice::<PresencePayload>(payload) {
+        Ok(p) => {
+            let c = p.concurrency.filter(|&c| c > 0).unwrap_or(1);
+            (p.backends, c.min(MAX_RUNNER_CONCURRENCY))
+        }
+        Err(_) => (Vec::new(), 1),
+    }
 }
+
+/// The grow-eager / shrink-lazy slot delta for an already-present runner: given
+/// it is `pool_less` (a liveness-only entry with no pool to admit into), its
+/// `applied` slot count, and the new `wire` count, return the half-open range of
+/// NEW slot indices to inject — `Some(applied..wire)` only on a true GROW into a
+/// real pool, `None` on shrink/no-change/pool-less. Pure so the delta math is
+/// unit-testable without NATS/DB. SHRINK is intentionally `None`: a held surplus
+/// slot must finish its lease (it drains on release or at the next full expire),
+/// so we never proactively reap on shrink — the caller just lowers the target.
+fn grow_slots(pool_less: bool, applied: u32, wire: u32) -> Option<std::ops::Range<u32>> {
+    if pool_less || wire <= applied {
+        return None;
+    }
+    Some(applied..wire)
+}
+
+/// Conservative upper bound on a runner's self-reported concurrency. `concurrency`
+/// is advisory wire-truth (like `backends`) from the UNTRUSTED presence payload;
+/// without a cap a runner reporting an absurd C would mint that many pool units.
+/// A real lab instrument serves a handful of simultaneous leases at most, so this
+/// ceiling is generous while bounding the blast radius of a lying/buggy runner.
+const MAX_RUNNER_CONCURRENCY: u32 = 256;
 
 /// Start the presence subscriber: a core-NATS subscription to `runner.*.presence`.
 ///
@@ -497,8 +619,8 @@ pub(crate) async fn start_presence_subscriber(
             tracing::debug!(subject = %msg.subject, "ignoring non-presence subject");
             continue;
         };
-        let backends = parse_backends(&msg.payload);
-        handle_presence(&db, &nats, &presence, &fleet, runner_id, backends).await;
+        let (backends, concurrency) = parse_presence(&msg.payload);
+        handle_presence(&db, &nats, &presence, &fleet, runner_id, backends, concurrency).await;
     }
 
     tracing::warn!("presence subscriber stream ended");
@@ -530,19 +652,23 @@ pub(crate) async fn start_presence_sweep(
         // Collect the expired set under the lock, flipping them to absent in the
         // same critical section so a concurrent heartbeat racing past here either
         // re-bumps last_seen (no expiry) or is cleanly re-acquired afterwards.
-        let expired: Vec<(Uuid, String)> = {
+        let expired: Vec<(Uuid, String, u32)> = {
             let mut map = presence.lock().await;
             let mut out = Vec::new();
             for (rid, entry) in map.iter_mut() {
                 if entry.present && now.duration_since(entry.last_seen) > ttl {
                     entry.present = false;
-                    out.push((*rid, entry.pool_net_id.clone()));
+                    // Snapshot applied C BEFORE we zero it so the reap injects
+                    // exactly as many expire signals as there are live slots.
+                    let applied_c = entry.concurrency;
+                    entry.concurrency = 0;
+                    out.push((*rid, entry.pool_net_id.clone(), applied_c));
                 }
             }
             out
         };
 
-        for (runner_id, pool_net_id) in expired {
+        for (runner_id, pool_net_id, applied_c) in expired {
             // Telemetry plane: a TTL-missed runner is offline, so drop its
             // advisory mirror from the shared fleet-liveness registry (docs/24
             // S1). This runs for BOTH pool-backed and liveness-only entries — it
@@ -556,8 +682,17 @@ pub(crate) async fn start_presence_sweep(
                 tracing::debug!(%runner_id, "presence TTL miss; runner offline (no pool to expire)");
                 continue;
             }
-            tracing::info!(%runner_id, pool_net_id, "presence TTL miss; reaping runner unit");
-            inject_expire(&nats, &pool_net_id, runner_id).await;
+            // Inject one bare `{ runner_id }` expire signal PER applied slot:
+            // each signal is consumed once and reaps exactly one of the runner's
+            // C slots (reap-ALL-by-runner_id). `applied_c == 0` (shouldn't happen
+            // for a pool-backed entry, but be defensive) means nothing to reap.
+            tracing::info!(
+                %runner_id, pool_net_id, applied_c,
+                "presence TTL miss; reaping runner's slots"
+            );
+            for _ in 0..applied_c {
+                inject_expire(&nats, &pool_net_id, runner_id).await;
+            }
         }
     }
 }
@@ -634,6 +769,7 @@ mod tests {
                     pool_net_id: "pool-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
+                    concurrency: 1,
                     present: true,
                 },
             );
@@ -662,14 +798,69 @@ mod tests {
     }
 
     #[test]
-    fn parse_backends_reads_payload_set() {
-        assert_eq!(
-            parse_backends(br#"{"runner_id":"x","backends":["python","docker"]}"#),
-            vec!["python".to_string(), "docker".to_string()]
-        );
-        // Missing/malformed → empty (still tracked present; advertises nothing).
-        assert!(parse_backends(br#"{"runner_id":"x"}"#).is_empty());
-        assert!(parse_backends(b"not json").is_empty());
+    fn parse_presence_reads_backends_and_concurrency() {
+        // Backends + an explicit C.
+        let (b, c) =
+            parse_presence(br#"{"runner_id":"x","backends":["python","docker"],"concurrency":4}"#);
+        assert_eq!(b, vec!["python".to_string(), "docker".to_string()]);
+        assert_eq!(c, 4);
+
+        // Missing concurrency → default 1 (pre-P3 behaviour: one slot).
+        let (b, c) = parse_presence(br#"{"runner_id":"x","backends":["python"]}"#);
+        assert_eq!(b, vec!["python".to_string()]);
+        assert_eq!(c, 1);
+
+        // Missing/malformed backends → empty (still tracked present); C defaults.
+        let (b, c) = parse_presence(br#"{"runner_id":"x"}"#);
+        assert!(b.is_empty());
+        assert_eq!(c, 1);
+        let (b, c) = parse_presence(b"not json");
+        assert!(b.is_empty());
+        assert_eq!(c, 1);
+
+        // Zero concurrency is coerced to 1 (a present runner always gets ≥1 slot).
+        let (_b, c) = parse_presence(br#"{"concurrency":0}"#);
+        assert_eq!(c, 1);
+
+        // A lying runner is clamped to the conservative ceiling.
+        let (_b, c) = parse_presence(br#"{"concurrency":100000}"#);
+        assert_eq!(c, MAX_RUNNER_CONCURRENCY);
+    }
+
+    #[test]
+    fn c_units_mint_distinct_unit_ids_sharing_one_runner_id() {
+        // The controller mints slot 0..C, each with a distinct per-slot unit_id
+        // `"{runner_id}#{slot}"` and the SHARED runner_id (the reap key). Mirror
+        // the inject_acquire identity + dedup formatting exactly.
+        let rid = Uuid::new_v4();
+        let c = 4u32;
+        let unit_ids: Vec<String> = (0..c).map(|slot| format!("{rid}#{slot}")).collect();
+        let dedup_ids: Vec<String> = (0..c)
+            .map(|slot| format!("presence-acquire:{rid}#{slot}"))
+            .collect();
+
+        // C distinct unit_ids ...
+        let distinct: std::collections::HashSet<&String> = unit_ids.iter().collect();
+        assert_eq!(distinct.len(), c as usize, "C distinct slot unit_ids");
+        // ... and C distinct dedup ids (the highest-risk line: keying dedup on the
+        // runner alone would collapse all C-1 extra acquires to one).
+        let distinct_dedup: std::collections::HashSet<&String> = dedup_ids.iter().collect();
+        assert_eq!(distinct_dedup.len(), c as usize, "per-slot dedup keys distinct");
+        // ... all sharing the one runner_id prefix.
+        assert!(unit_ids.iter().all(|u| u.starts_with(&format!("{rid}#"))));
+    }
+
+    #[test]
+    fn grow_eager_shrink_lazy_delta() {
+        // GROW into a real pool → inject the NEW slots only.
+        assert_eq!(grow_slots(false, 2, 5), Some(2..5));
+        assert_eq!(grow_slots(false, 0, 3), Some(0..3));
+        // No change / SHRINK → inject nothing (shrink is lazy; the surplus drains
+        // naturally).
+        assert_eq!(grow_slots(false, 3, 3), None);
+        assert_eq!(grow_slots(false, 5, 2), None);
+        // A pool-less (liveness-only) entry never injects, even on a "grow".
+        assert_eq!(grow_slots(true, 1, 4), None);
     }
 
     #[tokio::test]
@@ -685,6 +876,7 @@ mod tests {
                     pool_net_id: "pool-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
+                    concurrency: 1,
                     present: true,
                 },
             );

@@ -161,7 +161,7 @@ async fn introspect_and_publish(
     let actions = catalog["actions"].as_array().map_or(0, Vec::len);
     info!(topics, services, actions, "ROS interface catalog introspected");
 
-    publish_catalog(runner_id, mekhan_url, &token, &catalog).await
+    crate::catalog_publish::publish_catalog(runner_id, mekhan_url, &token, &catalog).await
 }
 
 /// Build the catalog Value from the three rosapi list services. A failure to
@@ -415,36 +415,6 @@ fn str_array(value: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// POST the catalog to mekhan's runner-interfaces endpoint with the `rnr_`
-/// bearer. mekhan replies 204 (No Content) on success.
-async fn publish_catalog(
-    runner_id: &str,
-    mekhan_url: &str,
-    token: &str,
-    catalog: &Value,
-) -> Result<(), String> {
-    let url = format!("{mekhan_url}/api/v1/runners/{runner_id}/interfaces");
-    let body = json!({ "catalog": catalog });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("POST {url}: {e}"))?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("mekhan rejected catalog at {url}: HTTP {status}\n{text}"));
-    }
-
-    info!(%runner_id, %url, "ROS interface catalog published to mekhan");
-    Ok(())
 }
 
 #[cfg(test)]

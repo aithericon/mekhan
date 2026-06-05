@@ -102,6 +102,14 @@ kreuzberg = [
     "kreuzberg/pdf",
     "kreuzberg/bundled-pdfium",
 ]
+# vLLM control-plane node agent (P2 — model-pool). Compiles the vLLM admin
+# client (`adapters/vllm.rs`) + the load/unload wire DTOs (`model_command.rs`).
+# Pure additive on already-present deps (reqwest/serde/serde_json) — no new
+# crates. This is NOT an inference path: the adapter only drives vLLM's admin
+# surface (LoRA load/unload, sleep/wake, /v1/models probe) so the node agent can
+# report served models + C. Inference is conventional OpenAI HTTP straight to
+# vLLM. Surfaced on executor-service so a GPU-host build opts in.
+vllm = []
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

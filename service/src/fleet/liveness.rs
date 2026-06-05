@@ -114,6 +114,11 @@ struct LivenessEntry {
     /// for a worker, its compiled-in backends; for a runner, its self-reported
     /// presence `backends`. Advisory wire-truth only.
     caps: Vec<String>,
+    /// The capacity's reported concurrency — for a runner, its self-reported C
+    /// (number of simultaneous leases it serves, P3); for a worker, 1 (a worker
+    /// is a single competing consumer). Advisory telemetry only — surfaced to the
+    /// model-pool router via the snapshot, never used to gate dispatch.
+    concurrency: u32,
     /// Most recent presence heartbeat instant; drives the (worker-only) TTL sweep.
     last_seen: Instant,
 }
@@ -144,6 +149,9 @@ pub struct FleetSnapshotEntry {
     pub id: String,
     /// Advertised backend wire-names (`["python", …]`).
     pub caps: Vec<String>,
+    /// The capacity's reported concurrency (runner C; 1 for a worker). Advisory
+    /// telemetry — the model-pool router reads C off this snapshot.
+    pub concurrency: u32,
     /// Milliseconds since this capacity's last presence heartbeat.
     pub last_seen_ms_ago: u64,
 }
@@ -202,6 +210,7 @@ impl FleetLiveness {
                 kind: *kind,
                 id: id.clone(),
                 caps: e.caps.clone(),
+                concurrency: e.concurrency,
                 last_seen_ms_ago: now.duration_since(e.last_seen).as_millis() as u64,
             })
             .collect()
@@ -209,16 +218,18 @@ impl FleetLiveness {
 
     /// Mirror a runner's advisory facet into the registry (called from
     /// [`crate::runners_presence`] on every present heartbeat). `id` is the
-    /// runner UUID as a string; `backends` is its self-reported presence set.
-    /// Upserts under the `Runner` key, refreshing `last_seen`. This is telemetry
-    /// only — it has NO bearing on the runner's pool-net control binding.
-    pub async fn upsert_runner(&self, id: String, backends: Vec<String>) {
+    /// runner UUID as a string; `backends` is its self-reported presence set;
+    /// `concurrency` is its self-reported C (P3). Upserts under the `Runner` key,
+    /// refreshing `last_seen`. This is telemetry only — it has NO bearing on the
+    /// runner's pool-net control binding.
+    pub async fn upsert_runner(&self, id: String, backends: Vec<String>, concurrency: u32) {
         let mut map = self.0.lock().await;
         map.insert(
             (CapacityKind::Runner, id),
             LivenessEntry {
                 kind: CapacityKind::Runner,
                 caps: backends,
+                concurrency,
                 last_seen: Instant::now(),
             },
         );
@@ -251,6 +262,9 @@ async fn handle_presence(liveness: &LivenessMap, payload: &[u8]) {
         LivenessEntry {
             kind: CapacityKind::Worker,
             caps: parsed.backends,
+            // A worker is a single competing consumer — concurrency is N/A; we
+            // record 1 so the advisory snapshot is uniform across kinds.
+            concurrency: 1,
             last_seen: Instant::now(),
         },
     );
@@ -383,11 +397,25 @@ mod tests {
         let liveness = FleetLiveness::new();
         handle_presence(liveness.map(), br#"{"worker_id":"w1","backends":["python"]}"#).await;
         liveness
-            .upsert_runner("r1".to_string(), vec!["xrd".to_string()])
+            .upsert_runner("r1".to_string(), vec!["xrd".to_string()], 3)
             .await;
 
         assert!(liveness.serves_backend("python").await); // worker
         assert!(liveness.serves_backend("xrd").await); // runner
+
+        // Concurrency is surfaced advisorily on the snapshot: the runner reports
+        // its C (3), the worker is normalised to 1.
+        let snap = liveness.snapshot().await;
+        let runner_c = snap
+            .iter()
+            .find(|e| matches!(e.kind, CapacityKind::Runner))
+            .map(|e| e.concurrency);
+        let worker_c = snap
+            .iter()
+            .find(|e| matches!(e.kind, CapacityKind::Worker))
+            .map(|e| e.concurrency);
+        assert_eq!(runner_c, Some(3), "runner C surfaced on snapshot");
+        assert_eq!(worker_c, Some(1), "worker normalised to C=1");
         assert_eq!(
             liveness.covered_backends().await,
             HashSet::from(["python".to_string(), "xrd".to_string()])

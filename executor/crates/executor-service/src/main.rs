@@ -48,12 +48,19 @@ use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
     BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker,
     DrainConfig, ExecutorConfig, JetStreamTransport, JobExecutor, JobSource, Lifetime,
-    NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    LiveModelState, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
     StreamTransport,
 };
 use tokio_util::sync::CancellationToken;
 
 mod register;
+// `publish_catalog` shared by the ROS catalog publisher and the model-pool node
+// agent — compiled when either consumer is built (a `vllm`-only GPU host pulls
+// no ROS deps).
+#[cfg(any(feature = "ros", feature = "vllm"))]
+mod catalog_publish;
+#[cfg(feature = "vllm")]
+mod model_agent;
 #[cfg(feature = "ros")]
 mod ros_catalog;
 
@@ -362,12 +369,24 @@ async fn run_nats_daemon(
     // wire set is known. mekhan uses it for fleet visibility + a best-effort
     // publish-time coverage warning on presence-pool steps (it never hard-gates
     // placement — caps remain the authoritative grant guard).
+    // P2 (model-pool): the live `{models, C}` state the model agent mutates on
+    // load/unload and the presence task re-reads each heartbeat. Created BEFORE
+    // the presence spawn and handed to BOTH so a load/unload reflects on the
+    // wire without a re-enroll. `None` for a non-model runner (presence then
+    // omits the `{concurrency, models}` fields — legacy shape).
+    let model_state: Option<LiveModelState> = if cfg!(feature = "vllm") {
+        config.model_agent().map(|_| LiveModelState::new())
+    } else {
+        None
+    };
+
     if let Some(runner_id) = config.runner_id.clone() {
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
         spawn_presence_task(
             nats_client_for_cancel.clone(),
             runner_id.clone(),
             backends.clone(),
+            model_state.clone(),
             config.presence_interval(),
             cancel_shutdown.clone(),
         );
@@ -386,6 +405,24 @@ async fn run_nats_daemon(
     // daemon. No-op unless `runner_id` + `[mekhan].url` are configured.
     #[cfg(feature = "ros")]
     ros_catalog::spawn_catalog_publish(&config);
+
+    // P2 (model-pool node agent): when this daemon is a runner with a mekhan URL
+    // + a `[model_agent].vllm_url`, probe the local vLLM engine's served models,
+    // publish them as a runner interface catalog, and subscribe to
+    // `runner.{id}.load`/`unload` control commands — mapping each onto vLLM's
+    // admin surface, re-pushing the catalog, and updating the live presence
+    // state. Inference NEVER crosses this path (control-plane only). Reuses the
+    // runner-scoped NATS client + the shared shutdown token. No-op unless the
+    // `[model_agent]` block + `runner_id` + `[mekhan].url` all resolve.
+    #[cfg(feature = "vllm")]
+    if let Some(state) = model_state.clone() {
+        model_agent::spawn_model_agent(
+            &config,
+            nats_client_for_cancel.clone(),
+            state,
+            cancel_shutdown.clone(),
+        );
+    }
 
     let mut monitor = Monitor::new();
 
