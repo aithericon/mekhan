@@ -5677,15 +5677,22 @@ export interface components {
             kind: components["schemas"]["ModelInterfaceKind"];
             /**
              * Format: int32
-             * @description Configured presence concurrency for this model on this runner — the `C`
-             *     units the node-agent admits per replica (vLLM `max_num_seqs`).
+             * @description Configured per-engine concurrency `C` (vLLM `--max-num-seqs`). **Base-only**
+             *     — `C` is per-ENGINE (per base), SHARED across that base's LoRA adapters, so it
+             *     is populated only on `Base` entries and is `None` on every `Lora` entry. The
+             *     router reads a Lora's slot budget from its `base` back-pointer.
              */
-            max_num_seqs: number;
+            max_num_seqs?: number | null;
             /**
              * @description The model id the router routes on (e.g. `llama3`). Joins to
              *     `model_states.model_id` + `ApprovedModelConfig.model_id`.
              */
             model_id: string;
+            /**
+             * @description For a `Lora` entry, the adapter-weights URI the load command supplied (e.g.
+             *     `hf://...`). `None` for `Base`.
+             */
+            source_uri?: string | null;
         };
         /**
          * @description The kind of model an advertised [`ModelEntry`] is — a base model or a LoRA

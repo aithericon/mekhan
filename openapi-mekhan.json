@@ -15007,8 +15007,7 @@
         "description": "One model a runner advertises in its interface catalog — the live half of the\nloaded-set AND-gate (docs/29). The canonical P2-superset shape: P1 only reads\n`model_id` (to confirm a `loaded` `model_states` row is actually served by a\nlive runner); `kind`/`max_num_seqs`/`base` are carried now so P2's node-agent\ncan populate them without a DTO churn. Grows the existing `catalog` JSONB\ncolumn — NO migration.",
         "required": [
           "model_id",
-          "kind",
-          "max_num_seqs"
+          "kind"
         ],
         "properties": {
           "base": {
@@ -15023,14 +15022,24 @@
             "description": "Whether this is a base model or a LoRA adapter."
           },
           "max_num_seqs": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "Configured presence concurrency for this model on this runner — the `C`\nunits the node-agent admits per replica (vLLM `max_num_seqs`).",
+            "description": "Configured per-engine concurrency `C` (vLLM `--max-num-seqs`). **Base-only**\n— `C` is per-ENGINE (per base), SHARED across that base's LoRA adapters, so it\nis populated only on `Base` entries and is `None` on every `Lora` entry. The\nrouter reads a Lora's slot budget from its `base` back-pointer.",
             "minimum": 0
           },
           "model_id": {
             "type": "string",
             "description": "The model id the router routes on (e.g. `llama3`). Joins to\n`model_states.model_id` + `ApprovedModelConfig.model_id`."
+          },
+          "source_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a `Lora` entry, the adapter-weights URI the load command supplied (e.g.\n`hf://...`). `None` for `Base`."
           }
         }
       },

@@ -320,12 +320,19 @@ pub struct ModelEntry {
     pub model_id: String,
     /// Whether this is a base model or a LoRA adapter.
     pub kind: ModelInterfaceKind,
-    /// Configured presence concurrency for this model on this runner — the `C`
-    /// units the node-agent admits per replica (vLLM `max_num_seqs`).
-    pub max_num_seqs: u32,
+    /// Configured per-engine concurrency `C` (vLLM `--max-num-seqs`). **Base-only**
+    /// — `C` is per-ENGINE (per base), SHARED across that base's LoRA adapters, so it
+    /// is populated only on `Base` entries and is `None` on every `Lora` entry. The
+    /// router reads a Lora's slot budget from its `base` back-pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_num_seqs: Option<u32>,
     /// For a `Lora` entry, the base model id it layers on. `None` for `Base`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// For a `Lora` entry, the adapter-weights URI the load command supplied (e.g.
+    /// `hf://...`). `None` for `Base`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
 }
 
 /// The agreed topics/services/actions catalog a runner self-reports. Stored
@@ -503,5 +510,111 @@ mod tests {
         // Missing secret half.
         assert!(parse_token(RUNNER_TOKEN_PREFIX, &format!("rnr_{id}.")).is_none());
         assert!(parse_token(RUNNER_TOKEN_PREFIX, &format!("rnr_{id}")).is_none());
+    }
+
+    #[test]
+    fn model_interface_kind_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ModelInterfaceKind::Base).unwrap(),
+            serde_json::json!("base")
+        );
+        assert_eq!(
+            serde_json::to_value(ModelInterfaceKind::Lora).unwrap(),
+            serde_json::json!("lora")
+        );
+        let parsed: ModelInterfaceKind = serde_json::from_value(serde_json::json!("lora")).unwrap();
+        assert_eq!(parsed, ModelInterfaceKind::Lora);
+    }
+
+    #[test]
+    fn base_entry_omits_lora_fields() {
+        // A Base entry carries C (max_num_seqs) and omits base/source_uri from the
+        // wire shape (skip_serializing_if = None).
+        let base = ModelEntry {
+            model_id: "llama3".into(),
+            kind: ModelInterfaceKind::Base,
+            max_num_seqs: Some(256),
+            base: None,
+            source_uri: None,
+        };
+        let v = serde_json::to_value(&base).unwrap();
+        assert_eq!(v["model_id"], "llama3");
+        assert_eq!(v["kind"], "base");
+        assert_eq!(v["max_num_seqs"], 256);
+        assert!(v.get("base").is_none(), "base must be omitted on Base");
+        assert!(
+            v.get("source_uri").is_none(),
+            "source_uri must be omitted on Base"
+        );
+    }
+
+    #[test]
+    fn lora_entry_has_no_max_num_seqs_but_carries_base_and_source() {
+        // HARD INVARIANT: C is per-engine/per-base — a Lora leaves max_num_seqs None
+        // and instead carries a base back-pointer + the adapter source_uri.
+        let lora = ModelEntry {
+            model_id: "my-lora".into(),
+            kind: ModelInterfaceKind::Lora,
+            max_num_seqs: None,
+            base: Some("llama3".into()),
+            source_uri: Some("hf://acme/my-lora".into()),
+        };
+        let v = serde_json::to_value(&lora).unwrap();
+        assert_eq!(v["kind"], "lora");
+        assert!(
+            v.get("max_num_seqs").is_none(),
+            "Lora must omit max_num_seqs (C is base-only)"
+        );
+        assert_eq!(v["base"], "llama3");
+        assert_eq!(v["source_uri"], "hf://acme/my-lora");
+    }
+
+    #[test]
+    fn catalog_with_models_round_trips() {
+        let catalog = RunnerInterfaceCatalog {
+            models: vec![
+                ModelEntry {
+                    model_id: "llama3".into(),
+                    kind: ModelInterfaceKind::Base,
+                    max_num_seqs: Some(256),
+                    base: None,
+                    source_uri: None,
+                },
+                ModelEntry {
+                    model_id: "my-lora".into(),
+                    kind: ModelInterfaceKind::Lora,
+                    max_num_seqs: None,
+                    base: Some("llama3".into()),
+                    source_uri: Some("hf://acme/my-lora".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        // Round-trip through the opaque JSONB shape (serde_json::Value mirrors the
+        // `catalog` column storage path in runners.rs).
+        let as_json = serde_json::to_value(&catalog).unwrap();
+        let back: RunnerInterfaceCatalog = serde_json::from_value(as_json).unwrap();
+        assert_eq!(back.models.len(), 2);
+        assert_eq!(back.models[0].kind, ModelInterfaceKind::Base);
+        assert_eq!(back.models[0].max_num_seqs, Some(256));
+        assert_eq!(back.models[0].base, None);
+        assert_eq!(back.models[0].source_uri, None);
+        assert_eq!(back.models[1].kind, ModelInterfaceKind::Lora);
+        assert_eq!(back.models[1].max_num_seqs, None);
+        assert_eq!(back.models[1].base.as_deref(), Some("llama3"));
+        assert_eq!(
+            back.models[1].source_uri.as_deref(),
+            Some("hf://acme/my-lora")
+        );
+    }
+
+    #[test]
+    fn empty_catalog_has_empty_models() {
+        let catalog = RunnerInterfaceCatalog::default();
+        assert!(catalog.models.is_empty());
+        // A runner reporting no models round-trips with an empty list (serde default).
+        let v = serde_json::json!({});
+        let back: RunnerInterfaceCatalog = serde_json::from_value(v).unwrap();
+        assert!(back.models.is_empty());
     }
 }
