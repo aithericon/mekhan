@@ -791,9 +791,14 @@ export interface paths {
          *     data-plane channel. The response `Content-Type` is taken from the channel's
          *     first envelope (default `application/octet-stream`). The stream ends at the
          *     `is_eof` envelope, or — for a never-closed / nonexistent channel — when no
-         *     further envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an
+         *     further envelope arrives within the idle window (returns what was seen; an
          *     empty channel yields a 200 with no body). The ephemeral consumer is reaped
          *     by NATS via `inactive_threshold` once this response future is dropped.
+         *
+         *     `?follow=1` tails a live, still-producing stream: it widens the idle window
+         *     to `FOLLOW_IDLE` so long quiet gaps don't end the stream early. Either mode
+         *     yields envelopes the moment they land (the body is HTTP-chunked), so a client
+         *     can play / render audio-video while the producer is still emitting.
          */
         get: operations["tap_channel_data"];
         put?: never;
@@ -10906,7 +10911,10 @@ export interface operations {
     };
     tap_channel_data: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Live-tail an in-progress stream: `follow=1` widens the idle patience so long gaps don't end it early (ends at EOF or client disconnect). */
+                follow?: string;
+            };
             header?: never;
             path: {
                 /** @description AutomatedStep execution id (the `execution_id` stamped on the parked output envelope). */

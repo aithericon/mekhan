@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { BaseEdge, EdgeToolbar, getBezierPath, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import { EDGE_LANE_WIDTH_PX } from '$lib/editor/edge-lane';
 
 	let {
 		id,
@@ -16,7 +17,9 @@
 		markerStart,
 		markerEnd,
 		deletable,
-		interactionWidth
+		interactionWidth,
+		data,
+		selected
 	}: EdgeProps = $props();
 
 	const { deleteElements } = useSvelteFlow();
@@ -25,14 +28,28 @@
 		getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
 	);
 
+	// Lane styling: tint the edge to its source port's color (stashed in
+	// `data.laneColor` by toFlowEdges) and draw it as wide as the port circle so
+	// it reads as a lane out of the socket. Kept subtle (translucent) when idle,
+	// stronger when the edge is selected.
+	const laneColor = $derived((data as { laneColor?: string } | undefined)?.laneColor);
+	const laneStyle = $derived.by(() => {
+		const base = laneColor ?? 'var(--border)';
+		const tint = selected
+			? `color-mix(in oklch, ${base} 85%, transparent)`
+			: `color-mix(in oklch, ${base} 38%, transparent)`;
+		return `stroke: ${tint}; stroke-width: ${EDGE_LANE_WIDTH_PX}px; stroke-linecap: round;`;
+	});
+
 	// Phase 2 typed-ports: subscribe to the publish-error store and override
 	// the stroke when this edge's id is flagged. Read at render time — no top-
-	// level state mutation, so no feedback loop with xyflow's bind:edges.
+	// level state mutation, so no feedback loop with xyflow's bind:edges. The
+	// error state keeps the lane width but paints it solid destructive.
 	const compileError = $derived(compileErrors.byEdgeId.get(id));
 	const effectiveStyle = $derived(
 		compileError
-			? `${style ?? ''}; stroke: hsl(var(--destructive)); stroke-width: 2.5;`
-			: style
+			? `${style ?? ''}; ${laneStyle}; stroke: hsl(var(--destructive));`
+			: `${style ?? ''}; ${laneStyle}`
 	);
 
 	function handleDelete(event: MouseEvent) {
