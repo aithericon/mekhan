@@ -11,6 +11,7 @@
 	import PortsSection from './PortsSection.svelte';
 	import OutputSchemaSection from './OutputSchemaSection.svelte';
 	import DeploymentSection from './DeploymentSection.svelte';
+	import ChannelsSection from './ChannelsSection.svelte';
 	import { portToSchemaNode } from '$lib/schema/model';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
 	import {
@@ -252,3 +253,9 @@
 		<OutputSchemaSection node={portToSchemaNode(outputPort)} />
 	{/if}
 </div>
+
+<ChannelsSection
+	channels={data.channels ?? []}
+	{readonly}
+	onchange={(channels) => onchange({ ...data, channels })}
+/>
