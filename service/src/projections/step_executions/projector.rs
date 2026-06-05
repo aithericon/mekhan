@@ -525,6 +525,25 @@ impl State {
         }
         row.last_sequence = sequence;
 
+        // 3b. Capture the executor `execution_id` the moment it appears. The
+        // submit effect stamps it onto its OUTPUT token at DISPATCH — early,
+        // while the step is still RUNNING — long before the business outputs are
+        // parked at completion (5a, which hoists the same field). Without this a
+        // running step has no `execution_id`, so the live datastream tap
+        // (`/executions/{execution_id}/channels/{c}/data?follow=1`) can't address
+        // a still-producing channel. Top-level only, mirroring the 5a hoist.
+        if row.execution_id.is_none() {
+            for (_place_id, token) in produced_tokens.iter().chain(read_tokens.iter()) {
+                if let Some(eid) = token_color_to_json(&token.color)
+                    .get("execution_id")
+                    .and_then(|v| v.as_str())
+                {
+                    row.execution_id = Some(eid.to_string());
+                    break;
+                }
+            }
+        }
+
         // 4. Capture inputs from read_tokens, grouped by producer node.
         //    Merge into any existing inputs (set by the inbound-control-
         //    token capture in step 1, or by an earlier owned fire); the

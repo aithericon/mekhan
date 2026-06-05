@@ -3,8 +3,16 @@
 	import { Button } from '$lib/components/ui/button';
 	import Radio from '@lucide/svelte/icons/radio';
 	import Play from '@lucide/svelte/icons/play';
+	import Square from '@lucide/svelte/icons/square';
+	import AudioLines from '@lucide/svelte/icons/audio-lines';
 	import { authFetch } from '$lib/auth/fetch';
 	import { isRawPcm, parsePcmParams, pcmToWavBlob } from '$lib/audio/pcmWav';
+	import {
+		playLivePcm,
+		parseSampleRate,
+		type LivePcmHandle,
+		type LivePcmStatus
+	} from '$lib/audio/livePcmPlayer';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
 	import type { Channel } from '$lib/api/client';
 	import type { ChannelRuntime } from '$lib/stores/instance-marking.svelte';
@@ -108,10 +116,69 @@
 		}
 	}
 
+	// A raw-PCM audio channel can be played LIVE through Web Audio while the
+	// producing step is still running (the tap's `?follow=1` streams as it lands).
+	function isLivePcm(ch: Channel): boolean {
+		return (
+			ch.direction === 'out' &&
+			ch.plane === 'data' &&
+			isRawPcm(elementContentType(ch) ?? '')
+		);
+	}
+
+	type Live = {
+		status: LivePcmStatus;
+		seconds: number;
+		bytes: number;
+		error: string | null;
+		handle: LivePcmHandle | null;
+	};
+	let lives = $state<Record<string, Live>>({});
+
+	async function playLive(ch: Channel) {
+		if (!executionId) return;
+		stopLive(ch);
+		lives[ch.name] = { status: 'streaming', seconds: 0, bytes: 0, error: null, handle: null };
+		try {
+			const r = await authFetch(
+				`/api/v1/executions/${executionId}/channels/${encodeURIComponent(ch.name)}/data?follow=1`
+			);
+			if (!r.ok || !r.body) throw new Error(`live tap failed: ${r.status}`);
+			const ct = r.headers.get('content-type') ?? elementContentType(ch);
+			const handle = playLivePcm({
+				stream: r.body,
+				sampleRate: parseSampleRate(ct),
+				onStatus: (status, error) => {
+					const cur = lives[ch.name];
+					if (cur) lives[ch.name] = { ...cur, status, error: error ?? cur.error };
+				},
+				onProgress: (seconds, bytes) => {
+					const cur = lives[ch.name];
+					if (cur) lives[ch.name] = { ...cur, seconds, bytes };
+				}
+			});
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, handle };
+		} catch (e) {
+			lives[ch.name] = {
+				status: 'error',
+				seconds: 0,
+				bytes: 0,
+				error: e instanceof Error ? e.message : String(e),
+				handle: null
+			};
+		}
+	}
+
+	function stopLive(ch: Channel) {
+		lives[ch.name]?.handle?.stop();
+	}
+
 	$effect(() => {
 		return () => {
 			for (const u of objectUrls) URL.revokeObjectURL(u);
 			objectUrls = [];
+			for (const l of Object.values(lives)) l.handle?.stop();
 		};
 	});
 
@@ -168,6 +235,42 @@
 							<div class="text-sm text-red-500">{preview.error}</div>
 						{:else if preview.ref}
 							<MediaPlayer value={preview.ref} ctx={{ position: 'output' }} />
+						{/if}
+					</div>
+				{/if}
+
+				{#if isLivePcm(ch)}
+					{@const live = lives[ch.name]}
+					<div class="mt-2 flex flex-wrap items-center gap-2">
+						{#if !live || live.status === 'ended' || live.status === 'stopped' || live.status === 'error'}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={!executionId}
+								onclick={() => playLive(ch)}
+								title={executionId
+									? 'Stream and play this channel live (Web Audio) while the step produces'
+									: 'Execution id unavailable — cannot tap this channel'}
+							>
+								<AudioLines class="size-4" />
+								<span class="ml-1.5">Play live</span>
+							</Button>
+						{:else}
+							<Button variant="outline" size="sm" onclick={() => stopLive(ch)}>
+								<Square class="size-4" />
+								<span class="ml-1.5">Stop</span>
+							</Button>
+						{/if}
+						{#if live && (live.status === 'streaming' || live.status === 'ended')}
+							<span
+								class="font-mono text-sm text-muted-foreground"
+								class:text-foreground={live.status === 'streaming'}
+							>
+								{#if live.status === 'streaming'}<span class="text-red-500">●</span> live{:else}ended{/if}
+								· {live.seconds.toFixed(1)}s · {(live.bytes / 1024).toFixed(0)} KB
+							</span>
+						{:else if live && live.status === 'error'}
+							<span class="text-sm text-red-500">{live.error}</span>
 						{/if}
 					</div>
 				{/if}
