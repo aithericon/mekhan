@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use aithericon_sdk::scenario::{ScenarioDefinition, TransitionLogic};
 
 use crate::compiler::borrow::apply::{
-    borrow_input_name, find_prepare_transition_mut, rewrite_placeholders_in_value, sanitize_ident,
+    borrow_input_name, prepare_transition_indices, rewrite_placeholders_in_value, sanitize_ident,
 };
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution, BORROW_MARKER};
 use crate::compiler::compile::wire_read_arc;
@@ -38,9 +38,13 @@ pub(crate) fn apply_backend_borrows(
         }
     }
 
-    let Some(t) = find_prepare_transition_mut(scenario, consumer_id) else {
-        return;
-    };
+    // A pooled lease body has TWO prepare transitions (claim `t_<id>_acquire` +
+    // inherit-bypass `t_<id>_inherit`); both carry the BORROW_MARKER and both must
+    // be staged. Iterate over all of them (the common non-lease case has exactly
+    // one, so this stays byte-identical there).
+    let prepare_idxs = prepare_transition_indices(scenario, consumer_id);
+    for t_idx in prepare_idxs {
+        let t = &mut scenario.transitions[t_idx];
     let mut pushes = String::new();
     for b in &unique {
         let BorrowResolution::BackendFieldStage {
@@ -149,5 +153,6 @@ pub(crate) fn apply_backend_borrows(
             }
             t.logic = TransitionLogic::Rhai { source: new_source };
         }
+    }
     }
 }

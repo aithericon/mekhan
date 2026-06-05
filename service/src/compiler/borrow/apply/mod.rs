@@ -111,6 +111,7 @@ pub(crate) fn is_prepare_transition_id(transition_id: &str, consumer_id: &str) -
         || transition_id == format!("t_{consumer_id}_prepare")
         || transition_id == format!("t_{consumer_id}_prepare_call")
         || transition_id == format!("t_{consumer_id}_acquire")
+        || transition_id == format!("t_{consumer_id}_inherit")
 }
 
 /// Same predicate, without a known consumer id — for the publish-time
@@ -120,6 +121,14 @@ pub(crate) fn has_prepare_transition_suffix(transition_id: &str) -> bool {
         || transition_id.ends_with("_prepare")
         || transition_id.ends_with("_prepare_call")
         || transition_id.ends_with("_acquire")
+        // The lease INHERIT-BYPASS terminal (`lower_pooled_body`'s `t_<id>_inherit`)
+        // builds the SAME executor job spec as `t_<id>_acquire` but sources it from
+        // the inherited namespace instead of a claim/grant. It carries the
+        // `BORROW_MARKER` too, so envelope/resource/asset/backend-field borrows must
+        // splice into it as well — otherwise a pooled step that inherits a lease
+        // (e.g. a ROS plan inside a SubWorkflow spawned under a cell LeaseScope)
+        // stages no borrow and fails at render with "variable not found in context".
+        || transition_id.ends_with("_inherit")
         // Feature B: `t_<map>_scatter` is a publish-time `__assets` splice target
         // when its bare itemsRef was rewritten to `__assets["<alias>"]`. The
         // splice body still only mutates a transition whose source actually
@@ -147,6 +156,25 @@ pub(crate) fn find_prepare_transition_mut<'a>(
         .transitions
         .iter_mut()
         .find(|t| is_prepare_transition_id(&t.id, consumer_id))
+}
+
+/// Indices of EVERY prepare transition for `consumer_id`. A pooled lease body
+/// has TWO (`t_<id>_acquire` for the claim path + `t_<id>_inherit` for the
+/// lease-inherit-bypass path) — both carry the `BORROW_MARKER` and BOTH must be
+/// staged, so borrow-apply arms iterate over all of them rather than only the
+/// first (`find_prepare_transition_mut`). Returns indices (not `&mut`) so the
+/// caller can re-borrow each transition mutably one at a time.
+pub(crate) fn prepare_transition_indices(
+    scenario: &ScenarioDefinition,
+    consumer_id: &str,
+) -> Vec<usize> {
+    scenario
+        .transitions
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| is_prepare_transition_id(&t.id, consumer_id))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Stable input-declaration name for a given `(slug, attr)` borrow. Used
