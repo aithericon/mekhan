@@ -263,6 +263,16 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Inference-metering audit ledger (INFERENCE_METERING → inference_request_log).
+    // The router publishes one complete InferenceRequestLog per request; this
+    // projector upserts each idempotently keyed by request_id (model-pool P5).
+    tokio::spawn(
+        mekhan_service::projections::inference_metering::start_inference_metering_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

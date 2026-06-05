@@ -1,11 +1,13 @@
 <script lang="ts">
 	// Fleet → Interfaces catalog.
-	// A runner picker (left) → on select, GET the runner's self-reported ROS
-	// interface catalog (topics/services/actions) and render it read-only,
-	// grouped into three tables (name + type columns). Mirrors the data-loading
-	// idiom of RunnerList/PresenceBoard: load the runner list on mount, then
-	// fetch the catalog on selection. A 404 (no catalog ever pushed) surfaces as
-	// a friendly "no catalog reported yet" state, not an error.
+	// A runner picker (left) → on select, GET the runner's self-reported
+	// interface catalog and render it read-only. ROS interfaces
+	// (topics/services/actions) render as name+type tables; a model-server
+	// runner's loaded LLM models render as a separate first-class "Models"
+	// section. Mirrors the data-loading idiom of RunnerList/PresenceBoard: load
+	// the runner list on mount, then fetch the catalog on selection. A 404 (no
+	// catalog ever pushed) surfaces as a friendly "no catalog reported yet"
+	// state, not an error.
 	import Server from '@lucide/svelte/icons/server';
 	import Radio from '@lucide/svelte/icons/radio';
 	import { Badge } from '$lib/components/ui/badge';
@@ -15,9 +17,15 @@
 		getRunnerInterfaces,
 		type RunnerSummary,
 		type RunnerPresenceSnapshot,
-		type RunnerInterfaces,
-		type InterfaceEntry
+		type RunnerInterfaces
 	} from '$lib/api/runners';
+	import {
+		interfaceGroups,
+		catalogModels,
+		rosEntryCount,
+		totalCatalogEntries,
+		modelCapacityLabel
+	} from './interfaces-catalog';
 	import { fmtDate } from './format';
 	import { filterFleetByGroup } from './grouping';
 	import StatusDot from './StatusDot.svelte';
@@ -48,18 +56,19 @@
 
 	const selectedRunner = $derived(runners.find((r) => r.id === selectedId) ?? null);
 
-	/** The three interface groups in render order, with their entries. */
-	const groups = $derived<{ label: string; entries: InterfaceEntry[] }[]>(
-		catalog
-			? [
-					{ label: 'Topics', entries: catalog.catalog.topics ?? [] },
-					{ label: 'Services', entries: catalog.catalog.services ?? [] },
-					{ label: 'Actions', entries: catalog.catalog.actions ?? [] }
-				]
-			: []
-	);
+	// All catalog derivations live in the pure `./interfaces-catalog` helpers so
+	// they can be unit-tested without a DOM mount.
+	const groups = $derived(interfaceGroups(catalog?.catalog));
 
-	const totalEntries = $derived(groups.reduce((n, g) => n + g.entries.length, 0));
+	/** Loaded LLM models a model-server runner self-reports — a different shape
+	 *  (model_id + kind + base + max_num_seqs) than InterfaceEntry, so rendered
+	 *  in its own section rather than the name/type interface tables. */
+	const models = $derived(catalogModels(catalog?.catalog));
+
+	// The empty state must account for model-only runners (no ROS ifaces), so
+	// models count toward "has the runner reported anything?".
+	const rosEntries = $derived(rosEntryCount(groups));
+	const totalEntries = $derived(totalCatalogEntries(groups, models));
 
 	// ── Load ───────────────────────────────────────────────────────────────────
 
@@ -177,44 +186,95 @@
 					{:else if !catalog || totalEntries === 0}
 						<FleetEmpty
 							message="No catalog reported yet."
-							hint="This runner has not self-reported any ROS topics, services, or actions."
+							hint="This runner has not self-reported any ROS topics, services, or actions, or any loaded models."
 						>
 							{#snippet icon()}<Radio class="size-10 text-muted-foreground/40" />{/snippet}
 						</FleetEmpty>
 					{:else}
 						<div class="space-y-6">
-							{#each groups as group (group.label)}
-								<div data-testid="interfaces-group-{group.label.toLowerCase()}">
+							<!-- ── Models (model-server runners) ──────────────────────────── -->
+							{#if models.length > 0}
+								<div data-testid="interfaces-group-models">
 									<div class="mb-2 flex items-center gap-2">
-										<h3 class="text-sm font-medium text-foreground">{group.label}</h3>
-										<Badge variant="secondary" class="text-sm">{group.entries.length}</Badge>
+										<h3 class="text-sm font-medium text-foreground">Models</h3>
+										<Badge variant="secondary" class="text-sm">{models.length}</Badge>
 									</div>
-									{#if group.entries.length === 0}
-										<p class="px-1 py-1 text-sm text-muted-foreground">
-											No {group.label.toLowerCase()} advertised.
-										</p>
-									{:else}
-										<div class="overflow-hidden rounded-lg border border-border">
-											<table class="w-full text-sm">
-												<thead class="bg-muted/50 text-muted-foreground">
-													<tr>
-														<th class="px-3 py-2 text-left font-medium">Name</th>
-														<th class="px-3 py-2 text-left font-medium">Type</th>
+									<div class="overflow-hidden rounded-lg border border-border">
+										<table class="w-full text-sm">
+											<thead class="bg-muted/50 text-muted-foreground">
+												<tr>
+													<th class="px-3 py-2 text-left font-medium">Model</th>
+													<th class="px-3 py-2 text-left font-medium">Kind</th>
+													<th class="px-3 py-2 text-left font-medium">Capacity</th>
+													<th class="px-3 py-2 text-left font-medium">Base</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each models as model (model.model_id)}
+													<tr class="border-t border-border">
+														<td class="px-3 py-2 font-mono text-foreground">{model.model_id}</td>
+														<td class="px-3 py-2">
+															<Badge variant={model.kind === 'base' ? 'outline' : 'secondary'}>
+																{model.kind}
+															</Badge>
+														</td>
+														<td class="px-3 py-2 font-mono text-muted-foreground">
+															{#if modelCapacityLabel(model)}
+																{modelCapacityLabel(model)}
+															{:else}
+																<span class="text-muted-foreground/50">—</span>
+															{/if}
+														</td>
+														<td class="px-3 py-2 font-mono text-muted-foreground">
+															{#if model.base}
+																{model.base}
+															{:else}
+																<span class="text-muted-foreground/50">—</span>
+															{/if}
+														</td>
 													</tr>
-												</thead>
-												<tbody>
-													{#each group.entries as entry (entry.name)}
-														<tr class="border-t border-border">
-															<td class="px-3 py-2 font-mono text-foreground">{entry.name}</td>
-															<td class="px-3 py-2 font-mono text-muted-foreground">{entry.type}</td>
-														</tr>
-													{/each}
-												</tbody>
-											</table>
-										</div>
-									{/if}
+												{/each}
+											</tbody>
+										</table>
+									</div>
 								</div>
-							{/each}
+							{/if}
+
+							<!-- ── ROS interfaces ─────────────────────────────────────────── -->
+							{#if rosEntries > 0}
+								{#each groups as group (group.label)}
+									<div data-testid="interfaces-group-{group.label.toLowerCase()}">
+										<div class="mb-2 flex items-center gap-2">
+											<h3 class="text-sm font-medium text-foreground">{group.label}</h3>
+											<Badge variant="secondary" class="text-sm">{group.entries.length}</Badge>
+										</div>
+										{#if group.entries.length === 0}
+											<p class="px-1 py-1 text-sm text-muted-foreground">
+												No {group.label.toLowerCase()} advertised.
+											</p>
+										{:else}
+											<div class="overflow-hidden rounded-lg border border-border">
+												<table class="w-full text-sm">
+													<thead class="bg-muted/50 text-muted-foreground">
+														<tr>
+															<th class="px-3 py-2 text-left font-medium">Name</th>
+															<th class="px-3 py-2 text-left font-medium">Type</th>
+														</tr>
+													</thead>
+													<tbody>
+														{#each group.entries as entry (entry.name)}
+															<tr class="border-t border-border">
+																<td class="px-3 py-2 font-mono text-foreground">{entry.name}</td>
+																<td class="px-3 py-2 font-mono text-muted-foreground">{entry.type}</td>
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+											</div>
+										{/if}
+									</div>
+								{/each}
+							{/if}
 						</div>
 					{/if}
 				{/if}

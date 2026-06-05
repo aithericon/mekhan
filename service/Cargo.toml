@@ -94,6 +94,11 @@ aithericon-resources = { path = "../shared/resources", features = ["vault"] }
 # compile-time decl (validate/ref_scan/default_editor_config fn pointers)
 # layers on top in `mekhan_service::backends::BackendDecl`.
 aithericon-backends = { path = "../shared/backends" }
+# Shared inference DTOs — the SINGLE source of truth for the metering record
+# (`InferenceRequestLog`). The router publishes it; the inference-metering
+# projector deserializes the SAME struct off the INFERENCE_METERING stream
+# (model-pool P5, docs/29 §7').
+inference-core = { path = "../shared/inference-core" }
 
 # Path-format regex for the B.9 Resource CRUD validator
 # (`POST /api/v1/resources`).

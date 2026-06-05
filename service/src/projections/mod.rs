@@ -7,6 +7,9 @@
 
 pub mod allocations;
 pub mod image_materializations;
+pub mod inference_metering;
 pub mod model_replicas;
 pub mod step_executions;
 pub mod template_stagings;
+
+pub use inference_metering::start_inference_metering_ingest;

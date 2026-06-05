@@ -40,6 +40,7 @@ export type PaginatedRegistrationTokens =
 export type RunnerInterfaces = components['schemas']['RunnerInterfaces'];
 export type RunnerInterfaceCatalog = components['schemas']['RunnerInterfaceCatalog'];
 export type InterfaceEntry = components['schemas']['InterfaceEntry'];
+export type ModelEntry = components['schemas']['ModelEntry'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

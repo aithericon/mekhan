@@ -4,6 +4,7 @@ pub mod capability;
 pub mod capacity;
 pub mod error;
 pub mod image_materialization;
+pub mod inference_metering;
 pub mod instance;
 pub mod job_template;
 pub mod model_pool;
