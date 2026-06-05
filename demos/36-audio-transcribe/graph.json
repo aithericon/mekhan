@@ -13,10 +13,11 @@
           "label": "Audio Input",
           "fields": [
             {
-              "name": "audio_b64",
-              "label": "Audio (base64-encoded 16 kHz mono WAV)",
-              "kind": "textarea",
-              "required": true
+              "name": "audio",
+              "label": "Audio (16 kHz mono WAV)",
+              "kind": "file",
+              "required": true,
+              "accept": "audio/wav,audio/x-wav,audio/wave"
             }
           ]
         }

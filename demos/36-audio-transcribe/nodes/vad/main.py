@@ -1,9 +1,11 @@
 # VAD filter — decode the input WAV, energy-gate it, re-emit voiced audio on a
 # Data/Out channel (docs/25).
 #
-# The audio arrives base64-encoded in the Start field `audio_b64` (passed inline
-# in the start token — no file upload / object store in the loop, so the demo
-# runs off plain JSON). Accessing `start.audio_b64` is the upstream borrow.
+# The audio is a real uploaded file: the Start `audio` field is `kind: file`, so
+# `start.audio` is a `FileRef` (`{key, url, filename, content_type, size}`). The
+# bytes live in the object store — `aithericon.file(start.audio["key"]).retrieve()`
+# brokers the download through the sidecar (the child holds no storage creds) and
+# returns a local path. No base64 in a token, no multi-MB string on the wire.
 #
 # The "VAD" here is a deliberately tiny pure-Python energy gate (stdlib
 # `audioop` RMS per 30 ms frame, with a little hangover so word edges aren't
@@ -15,18 +17,19 @@
 # transport, NOT the net marking — the net sees only the channel's open + close.
 
 import audioop
-import base64
-import io
 import wave
 
+import aithericon
 from aithericon import open_output, set_output
 
 FRAME_MS = 30
 HANGOVER = 3  # frames kept on each side of a voiced frame
 
-raw_wav = base64.b64decode(start.audio_b64)  # noqa: F821 — runner-injected Start borrow
+# `start.audio` is the runner-injected Start borrow (a FileRef map). Retrieve the
+# bytes to a local path through the sidecar, then read it as a plain WAV file.
+wav_path = aithericon.file(start.audio["key"]).retrieve()  # noqa: F821
 
-with wave.open(io.BytesIO(raw_wav), "rb") as w:
+with wave.open(wav_path, "rb") as w:
     assert w.getsampwidth() == 2, "expect 16-bit PCM WAV"
     rate = w.getframerate()
     channels = w.getnchannels()

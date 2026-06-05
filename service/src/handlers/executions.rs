@@ -182,36 +182,30 @@ pub async fn tap_channel_data(
     let mut reorder = Reorder::new();
     let mut content_type = "application/octet-stream".to_string();
     let mut ended = false;
-    loop {
-        match tokio::time::timeout(IDLE_TIMEOUT, messages.next()).await {
-            Ok(Some(item)) => {
-                let msg = item
-                    .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("datastream read: {e}")))?;
-                let (seq, ct, is_eof) = parse_headers(msg.headers.as_ref());
-                let payload = Bytes::from(msg.payload.to_vec());
-                let _ = msg.ack().await;
-                if let Some(ct) = ct {
-                    if !ct.is_empty() {
-                        content_type = ct;
-                    }
+    // Single-shot peek (not a loop — every outcome is terminal): take exactly one
+    // envelope to settle the Content-Type, or fall through to a 200-empty response.
+    match tokio::time::timeout(IDLE_TIMEOUT, messages.next()).await {
+        Ok(Some(item)) => {
+            let msg = item
+                .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("datastream read: {e}")))?;
+            let (seq, ct, is_eof) = parse_headers(msg.headers.as_ref());
+            let payload = Bytes::from(msg.payload.to_vec());
+            let _ = msg.ack().await;
+            if let Some(ct) = ct {
+                if !ct.is_empty() {
+                    content_type = ct;
                 }
-                if is_eof {
-                    // EOF before any data — empty channel; respond 200, no body.
-                    ended = true;
-                    break;
-                }
+            }
+            if is_eof {
+                // EOF before any data — empty channel; respond 200, no body.
+                ended = true;
+            } else {
                 reorder.insert(seq, payload);
-                break;
             }
-            Ok(None) => {
-                ended = true;
-                break;
-            }
-            Err(_) => {
-                // Idle: nothing to serve (unknown execution_id / control channel).
-                ended = true;
-                break;
-            }
+        }
+        // Idle (unknown execution_id / control channel) or stream end: nothing to serve.
+        Ok(None) | Err(_) => {
+            ended = true;
         }
     }
 

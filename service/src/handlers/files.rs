@@ -38,6 +38,21 @@ const ALLOWED_TYPES: &[&str] = &[
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    // Audio/video — the docs/25 data plane carries real media, and a `file`-kind
+    // Start field is the clean way to feed a sample in (see demo 36, which stages
+    // its bundled WAV instead of base64-stuffing a token).
+    "audio/wav",
+    "audio/x-wav",
+    "audio/wave",
+    "audio/vnd.wave",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/webm",
+    "audio/flac",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
     "application/octet-stream",
 ];
 
