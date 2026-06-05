@@ -3924,6 +3924,13 @@ export interface components {
             element: components["schemas"]["ElementType"];
             name: string;
             plane: components["schemas"]["ChannelPlane"];
+            /**
+             * @description Out-of-band transport for a `Data` channel's bytes (default
+             *     `Jetstream`). Ignored for `Control` channels. Baked into the manifest so
+             *     the producer SDK stamps it into the `open` descriptor and both executors
+             *     dispatch the right [`StreamTransport`] adapter off it.
+             */
+            transport?: components["schemas"]["ChannelTransport"];
         };
         /**
          * @description Which way a [`Channel`] flows relative to its owning node: `In` consumes
@@ -3950,6 +3957,29 @@ export interface components {
          * @enum {string}
          */
         ChannelPlane: "data" | "control";
+        /**
+         * @description Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This
+         *     is the single source of truth the producer SDK stamps into the `open`
+         *     descriptor and both executors dispatch on: the producer's executor picks the
+         *     publish adapter, the consumer's executor picks the subscribe adapter off the
+         *     descriptor it lifted. Ignored for `Control` channels (their payloads ride the
+         *     net, not a transport).
+         *
+         *     * `Jetstream` — the v1 default: reliable, ordered, replayable JetStream
+         *       stream with per-element ack backpressure. The tappable durable log.
+         *     * `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a
+         *       late/slow consumer misses early elements (live frames / drop-stale). The
+         *       semantic opposite of JetStream — what proves the dispatch seam is real.
+         *     * `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each
+         *       element is one object, the consumer polls keys in order. Lossless, ordered,
+         *       and fully **replayable** from element zero long after the producer finished
+         *       — the right transport for large/durable blobs (checkpoints, datasets,
+         *       archived media). A different transport SHAPE (key/value, not pub/sub),
+         *       proving the dispatch port is genuinely store-agnostic. Requires the worker
+         *       to have a `[storage]` backend configured.
+         * @enum {string}
+         */
+        ChannelTransport: "jetstream" | "nats-latest" | "s3";
         /**
          * @description A single message in conversation history.
          *

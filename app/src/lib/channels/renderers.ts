@@ -1,0 +1,112 @@
+/**
+ * Channel render-adapter registry — the PRESENTATION-side analog of the
+ * data-plane transport dispatch (docs/25 §6).
+ *
+ * On the wire, the producer's `open` descriptor carries a `transport` tag and
+ * both executors dispatch their byte adapter off it (JetStream / nats-latest /
+ * s3). Here the SAME idea runs one layer up, in the browser: a data channel's
+ * element **content_type** is the descriptor, and we dispatch the matching
+ * *render* adapter off it — raw PCM plays through Web Audio, fragmented
+ * audio/video plays live through Media Source Extensions, and an
+ * already-complete blob plays through a native `<audio>`/`<video>`/`<img>`
+ * element. One classifier, three renderers, selected by data — not an
+ * ever-growing `if` ladder in the panel.
+ *
+ * This module is the single, pure, unit-tested place that classification lives,
+ * so the panel never re-derives "is this playable?" ad hoc. Adding a new render
+ * path (e.g. a future HLS adapter) is a new arm here, not a new branch there.
+ */
+
+import { isRawPcm } from '$lib/audio/pcmWav';
+
+/** A live (follow-the-stream) renderer choice for a data channel. */
+export type LiveRenderKind =
+	/** Headerless little-endian PCM → schedule on a Web Audio timeline. */
+	| 'pcm'
+	/** Fragmented audio/video the browser's MSE can append progressively. */
+	| 'mse';
+
+export interface LiveRenderPlan {
+	kind: LiveRenderKind;
+	/** Which media element the bytes drive (MSE needs one; PCM uses AudioContext). */
+	mediaKind: 'audio' | 'video';
+	/** The content_type to hand the renderer (the full MIME incl. any `codecs=`
+	 *  param — MSE's `addSourceBuffer`/`isTypeSupported` require codecs). */
+	mime: string;
+}
+
+/** A whole-file (already-complete) renderer choice: a native media element. */
+export interface FileRenderPlan {
+	mediaKind: 'audio' | 'video' | 'image';
+}
+
+/** The base (pre-`;param`) MIME, lower-cased and trimmed. */
+function baseType(contentType: string): string {
+	return contentType.split(';', 1)[0].trim().toLowerCase();
+}
+
+/**
+ * The default MSE capability probe — `MediaSource.isTypeSupported`, or a
+ * never-supported stub when MSE is absent (SSR, jsdom, or a browser without it).
+ * Injectable in {@link planLiveRender} so the classifier is unit-testable
+ * without a real `MediaSource`.
+ */
+export function defaultMseSupported(mime: string): boolean {
+	if (typeof MediaSource === 'undefined' || typeof MediaSource.isTypeSupported !== 'function') {
+		return false;
+	}
+	return MediaSource.isTypeSupported(mime);
+}
+
+/**
+ * Classify how a data channel's `content_type` should be played LIVE (streamed
+ * as it lands via the `?follow=1` tap), or `null` when it has no live renderer.
+ *
+ * Dispatch order:
+ *  1. raw PCM (`audio/L16` / `audio/pcm`) → Web Audio (`kind: 'pcm'`). `<audio>`
+ *     can't progressively decode headerless PCM, so we schedule samples
+ *     ourselves.
+ *  2. an `audio/*` or `video/*` MIME the browser's MSE supports (it must carry a
+ *     `codecs=` param the UA can decode — e.g. `audio/webm;codecs="opus"`,
+ *     `video/mp4;codecs="avc1.42E01E,mp4a.40.2"`) → MSE (`kind: 'mse'`).
+ *  3. otherwise → `null` (no live path; a whole-file preview may still apply —
+ *     see {@link planFileRender}).
+ *
+ * `mseSupported` is injected for testability; production passes
+ * {@link defaultMseSupported}.
+ */
+export function planLiveRender(
+	contentType: string | null | undefined,
+	mseSupported: (mime: string) => boolean = defaultMseSupported
+): LiveRenderPlan | null {
+	if (!contentType) return null;
+	// PCM first — it overlaps `audio/*` but has its own (non-MSE) renderer.
+	if (isRawPcm(contentType)) {
+		return { kind: 'pcm', mediaKind: 'audio', mime: contentType };
+	}
+	const base = baseType(contentType);
+	const isAudio = base.startsWith('audio/');
+	const isVideo = base.startsWith('video/');
+	if ((isAudio || isVideo) && mseSupported(contentType)) {
+		return { kind: 'mse', mediaKind: isVideo ? 'video' : 'audio', mime: contentType };
+	}
+	return null;
+}
+
+/**
+ * Classify how a data channel's `content_type` should be played as a
+ * whole FILE (fetched complete, then handed to a native element), or `null`
+ * when it isn't a media type a native element renders.
+ *
+ * This is the refactor of the panel's old ad-hoc `isPlayable` regex: any
+ * `audio/*` / `video/*` / `image/*` content_type is previewable (raw PCM
+ * included — the caller WAV-wraps it before handing it to `<audio>`).
+ */
+export function planFileRender(contentType: string | null | undefined): FileRenderPlan | null {
+	if (!contentType) return null;
+	const base = baseType(contentType);
+	if (base.startsWith('audio/')) return { mediaKind: 'audio' };
+	if (base.startsWith('video/')) return { mediaKind: 'video' };
+	if (base.startsWith('image/')) return { mediaKind: 'image' };
+	return null;
+}

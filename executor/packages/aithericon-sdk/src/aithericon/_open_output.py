@@ -37,12 +37,14 @@ otherwise).
 import json
 import os
 
-from aithericon._channels import resolve_data_channel
+from aithericon._channels import resolve_data_channel, transport_for
 from aithericon._client import get_stub
 
-#: The transport tag a v1 descriptor advertises. Only JetStream ships in v1
-#: (docs/25 §6); the field exists so an S3 / live adapter is additive.
-_TRANSPORT_JETSTREAM = "jetstream"
+#: Default transport tag when the channel manifest is not exposed to this
+#: process (offline / no-sidecar). The compiler-declared per-channel transport
+#: (``jetstream`` | ``nats-latest``) is the real source of truth — see
+#: :func:`aithericon._channels.transport_for`.
+_TRANSPORT_DEFAULT = "jetstream"
 
 
 def _datastream_subject(name):
@@ -174,15 +176,18 @@ class open_output:
     def _descriptor(self):
         """Build the JSON transport descriptor the ``open`` token carries.
 
-        ``{transport, subject, content_type, credential?}`` (docs/25 §6). v1
-        emits ``transport: "jetstream"`` and no ``credential`` (the dev NATS path
-        is open; the engine wraps a scoped grant at submit when one is required —
-        the consumer's executor unwraps it, never the SDK). ``content_type`` is
-        the channel-level default hint; per-element content types override it on
-        each envelope.
+        ``{transport, subject, content_type, credential?}`` (docs/25 §6). The
+        ``transport`` tag comes from the channel manifest (the compiler-declared
+        per-channel choice — ``jetstream`` | ``nats-latest``), NOT a hardcode, so
+        the consumer's executor dispatches a subscribe adapter that matches the
+        producer's publish adapter. No ``credential`` on the dev NATS path (the
+        engine wraps a scoped grant at submit when one is required — the
+        consumer's executor unwraps it, never the SDK). ``content_type`` is the
+        channel-level default hint; per-element content types override it on each
+        envelope.
         """
         descriptor = {
-            "transport": _TRANSPORT_JETSTREAM,
+            "transport": transport_for(self._name, _TRANSPORT_DEFAULT),
             "subject": _datastream_subject(self._name),
         }
         if self._content_type:

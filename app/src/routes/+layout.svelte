@@ -56,7 +56,11 @@
 <TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
-		<a href="/" class="text-sm font-semibold uppercase tracking-[0.18em] text-foreground" data-testid="nav-home">Mekhan</a>
+		<a
+			href="/"
+			class="-ml-4 flex self-stretch items-center bg-foreground pl-5 pr-12 text-sm font-semibold uppercase tracking-[0.18em] text-background transition-opacity hover:opacity-90"
+			style="clip-path: polygon(0 0, 100% 0, calc(100% - 1.6rem) 100%, 0 100%)"
+			data-testid="nav-home">Mekhan</a>
 		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/folders" data-testid="nav-folders">Folders</Button>

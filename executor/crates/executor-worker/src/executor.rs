@@ -15,7 +15,7 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::cancel::CancellationRegistry;
-use crate::chunks::StreamTransport;
+use crate::chunks::TransportRegistry;
 use crate::completion::CompletionTracker;
 use crate::config::CleanupPolicy;
 use crate::event_emitter::StreamContext;
@@ -44,12 +44,13 @@ pub struct JobExecutor {
     pub log_config: SidecarLogConfig,
     /// Completion tracker for drain-mode shutdown. `None` in daemon/manifest modes.
     pub completion_tracker: Option<Arc<CompletionTracker>>,
-    /// Data-plane byte transport (docs/25 §6), handed to each job's IPC sidecar
-    /// so a producer's `PublishChunk` publishes binary envelopes onto its
-    /// channel's datastream subject AND a consumer's `StreamChunks` subscribes to
-    /// the producer's subject and relays its envelopes back. `None` when NATS is
-    /// not wired (some test harnesses), in which case both validate + no-op.
-    pub transport: Option<Arc<dyn StreamTransport>>,
+    /// Data-plane byte transport REGISTRY (docs/25 §6), handed to each job's IPC
+    /// sidecar. A producer's `PublishChunk` selects its adapter off the channel's
+    /// declared transport and publishes binary envelopes onto its subject; a
+    /// consumer's `StreamChunks` selects the adapter off the producer's `open`
+    /// descriptor and relays its envelopes back. `None` when NATS is not wired
+    /// (some test harnesses), in which case both validate + no-op.
+    pub transports: Option<TransportRegistry>,
 }
 
 impl JobExecutor {
@@ -225,7 +226,7 @@ impl JobExecutor {
             stream_ctx,
             job.channels.clone(),
             Some(self.reporter.event_emitter()),
-            self.transport.clone(),
+            self.transports.clone(),
         )
         .await
         {

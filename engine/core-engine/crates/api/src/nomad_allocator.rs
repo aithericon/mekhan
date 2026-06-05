@@ -504,11 +504,6 @@ impl NomadAllocatorClient {
             "Name": args.slug,
             "Type": job_type,
             "Datacenters": datacenters,
-            "ParameterizedJob": {
-                "Payload": "optional",
-                "MetaRequired": [],
-                "MetaOptional": meta_optional,
-            },
             "TaskGroups": [{
                 "Name": "main",
                 "Count": count,
@@ -517,6 +512,20 @@ impl NomadAllocatorClient {
                 "Tasks": [task],
             }],
         });
+
+        // `ParameterizedJob` is a BATCH-only stanza — Nomad rejects it on a
+        // `service` job ("Parameterized job can only be used with batch or
+        // sysbatch scheduler"). The batch lease-executor path is dispatched
+        // per-run, so it keeps the stanza (and stays byte-identical to today).
+        // The service replica path (job_type=service) is NOT dispatched: it runs
+        // at a fixed Count, so it omits the stanza entirely.
+        if !is_service {
+            job["ParameterizedJob"] = json!({
+                "Payload": "optional",
+                "MetaRequired": [],
+                "MetaOptional": meta_optional,
+            });
+        }
 
         // Residency pin: a node Constraint on `${meta.compliance_zone}`, mirroring
         // the GPU-Device `if let Some(...).filter(non-empty)` idiom above. Inserted
@@ -1035,6 +1044,15 @@ mod tests {
         let r = client.render_parameterized_job(&svc);
         assert_eq!(r["Job"]["Type"], "service");
         assert_eq!(r["Job"]["TaskGroups"][0]["Count"], 3);
+        // A `service` job MUST NOT carry the `ParameterizedJob` stanza — Nomad
+        // rejects the register with 500 "Parameterized job can only be used with
+        // batch or sysbatch scheduler". (Regression guard: a live Nomad register
+        // of a residency-pinned model replica caught this; the shape-only checks
+        // above did not.)
+        assert!(
+            r["Job"].get("ParameterizedJob").is_none(),
+            "service job must omit ParameterizedJob (Nomad rejects it on non-batch): {r:#}"
+        );
 
         // service + replicas None ⇒ Count 1.
         let svc_default = StageTemplateArgs {
@@ -1066,6 +1084,12 @@ mod tests {
         let bw = client.render_parameterized_job(&batch_with_replicas);
         assert_eq!(bw["Job"]["Type"], "batch");
         assert_eq!(bw["Job"]["TaskGroups"][0]["Count"], 1);
+        // The batch (dispatched lease-executor) path KEEPS the parameterized
+        // stanza — it is dispatched per-run.
+        assert!(
+            bw["Job"]["ParameterizedJob"].is_object(),
+            "batch job must keep ParameterizedJob: {bw:#}"
+        );
     }
 
     #[tokio::test]

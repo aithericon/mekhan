@@ -68,6 +68,24 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // UNCONSUMED (no consumer edge) — the UI taps it live via ?follow=1. Pins
     // that an unwired data OUT channel compiles; running it is live-only (paced).
     "42-live-audio-stream",
+    // 43-lossy-frame-stream: producer → consumer over a `nats-latest` (lossy
+    // core-NATS) DATA channel — pins that the per-channel `transport` tag lowers
+    // into the manifest; running it (live-only) proves the executor dispatches
+    // the lossy adapter off the descriptor with zero SDK change.
+    "43-lossy-frame-stream",
+    // 44-durable-blob-stream: producer → consumer over an `s3` (durable
+    // object-store) DATA channel — a different transport SHAPE (key/value, not
+    // pub/sub). Pins that the `s3` transport tag lowers into the manifest;
+    // running it (live-only) proves the executor dispatches the object-store
+    // adapter off the descriptor, lossless + replayable, with zero SDK change.
+    "44-durable-blob-stream",
+    // 45-live-fmp4-stream: producer (PyAV-muxed fragmented MP4) → validator over
+    // a default-transport DATA channel whose element content_type is
+    // `audio/mp4;codecs="mp4a.40.2"`. Pins that an audio/mp4 element type lowers
+    // cleanly; the point is the PRESENTATION-side render-adapter dispatch (the UI
+    // routes this channel to the MSE player off the content_type), live-verified
+    // in the browser, not in the AIR snapshot.
+    "45-live-fmp4-stream",
 ];
 
 fn repo_root() -> PathBuf {
@@ -285,6 +303,21 @@ fn snapshot_36_audio_transcribe() {
 #[test]
 fn snapshot_42_live_audio_stream() {
     run("42-live-audio-stream");
+}
+
+#[test]
+fn snapshot_43_lossy_frame_stream() {
+    run("43-lossy-frame-stream");
+}
+
+#[test]
+fn snapshot_44_durable_blob_stream() {
+    run("44-durable-blob-stream");
+}
+
+#[test]
+fn snapshot_45_live_fmp4_stream() {
+    run("45-live-fmp4-stream");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

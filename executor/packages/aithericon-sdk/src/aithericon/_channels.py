@@ -110,3 +110,19 @@ def element_kind_for(name, default="any"):
     if entry is None:
         return default
     return entry.get("element_kind", default)
+
+
+def transport_for(name, default="jetstream"):
+    """Return the declared out-of-band ``transport`` tag for data channel ``name``.
+
+    ``"jetstream"`` (default) / ``"nats-latest"`` — the single source of truth
+    the compiler baked into the manifest. The producer stamps this into the
+    ``open`` descriptor so the consumer's executor dispatches a matching
+    subscribe adapter; the producer's own executor dispatches its publish adapter
+    off the same manifest entry. When the manifest is not exposed, returns
+    ``default`` (the reliable JetStream path).
+    """
+    entry = resolve_data_channel(name)
+    if entry is None:
+        return default
+    return entry.get("transport", default)

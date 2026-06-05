@@ -26,6 +26,7 @@
 		type WorkflowGraph
 	} from '$lib/types/editor';
 	import type { XYPosition } from '@xyflow/svelte';
+	import { edgeLaneColor } from '$lib/editor/edge-lane';
 
 	type Props = {
 		graph: WorkflowGraph;
@@ -237,6 +238,7 @@
 	}
 
 	function toFlowEdges(g: WorkflowGraph, isReadonly: boolean): Edge[] {
+		const byId = new Map(g.nodes.map((n) => [n.id, n]));
 		return g.edges.map((e) => ({
 			id: e.id,
 			source: e.source,
@@ -246,7 +248,14 @@
 			label: e.label ?? undefined,
 			type: 'deletable' as const,
 			animated: e.type === 'loop_back',
-			deletable: !isReadonly
+			deletable: !isReadonly,
+			// Tint the edge to match the ports it connects so it reads as a lane:
+			// a gradient from the source port's color to the target port's color.
+			// View-only — not part of the serialized graph.
+			data: {
+				laneFrom: edgeLaneColor(byId.get(e.source), e.sourceHandle),
+				laneTo: edgeLaneColor(byId.get(e.target), e.targetHandle)
+			}
 		}));
 	}
 
@@ -324,7 +333,17 @@
 			sourceHandle: connection.sourceHandle,
 			targetHandle: connection.targetHandle,
 			type: 'deletable',
-			animated: isBodyReturn
+			animated: isBodyReturn,
+			data: {
+				laneFrom: edgeLaneColor(
+					nodes.find((n) => n.id === connection.source),
+					connection.sourceHandle
+				),
+				laneTo: edgeLaneColor(
+					nodes.find((n) => n.id === connection.target),
+					connection.targetHandle
+				)
+			}
 		};
 		edges = [...edges, newEdge];
 

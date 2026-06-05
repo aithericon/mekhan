@@ -180,6 +180,7 @@
 	id="error"
 	type="source"
 	position={Position.Bottom}
+	class="!h-3 !w-3 !border-2"
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On error (retries exhausted)"
 />
@@ -194,6 +195,7 @@
 		id={channel.name}
 		type="source"
 		position={Position.Right}
+		class="!h-3 !w-3 !border-2"
 		style="top:{handleTop(i, outChannels.length)};{channelStyle(channel.plane)}"
 		title={`Channel ${channel.name} — ${channelTitle(channel)}`}
 	/>
@@ -203,6 +205,7 @@
 		id={channel.name}
 		type="target"
 		position={Position.Left}
+		class="!h-3 !w-3 !border-2"
 		style="top:{handleTop(i, inChannels.length)};{channelStyle(channel.plane)}"
 		title={`Channel ${channel.name} — ${channelTitle(channel)}`}
 	/>
