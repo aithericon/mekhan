@@ -2236,7 +2236,7 @@
           "executions"
         ],
         "summary": "GET /api/v1/executions/{execution_id}/channels/{channel}/data",
-        "description": "Stream the raw, reordered, concatenated payload bytes of one execution's\ndata-plane channel. The response `Content-Type` is taken from the channel's\nfirst envelope (default `application/octet-stream`). The stream ends at the\n`is_eof` envelope, or — for a never-closed / nonexistent channel — when no\nfurther envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an\nempty channel yields a 200 with no body). The ephemeral consumer is reaped\nby NATS via `inactive_threshold` once this response future is dropped.",
+        "description": "Stream the raw, reordered, concatenated payload bytes of one execution's\ndata-plane channel. The response `Content-Type` is taken from the channel's\nfirst envelope (default `application/octet-stream`). The stream ends at the\n`is_eof` envelope, or — for a never-closed / nonexistent channel — when no\nfurther envelope arrives within the idle window (returns what was seen; an\nempty channel yields a 200 with no body). The ephemeral consumer is reaped\nby NATS via `inactive_threshold` once this response future is dropped.\n\n`?follow=1` tails a live, still-producing stream: it widens the idle window\nto `FOLLOW_IDLE` so long quiet gaps don't end the stream early. Either mode\nyields envelopes the moment they land (the body is HTTP-chunked), so a client\ncan play / render audio-video while the producer is still emitting.",
         "operationId": "tap_channel_data",
         "parameters": [
           {
@@ -2253,6 +2253,15 @@
             "in": "path",
             "description": "Data-plane channel name (Rhai-identifier-safe slug).",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "description": "Live-tail an in-progress stream: `follow=1` widens the idle patience so long gaps don't end it early (ends at EOF or client disconnect).",
+            "required": false,
             "schema": {
               "type": "string"
             }
