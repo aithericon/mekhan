@@ -28,6 +28,23 @@ use crate::AppState;
 const FOLDER_COLS: &str =
     "id, workspace_id, parent_id, slug, display_name, description, path, created_at, created_by";
 
+/// Reject folder slugs that aren't kebab-safe (`[a-z0-9-]+`). The slug is the
+/// path segment in the materialized `path` column, so it MUST contain neither a
+/// `/` (segment separator) nor a SQL-LIKE metacharacter (`%`/`_`/`\`): the
+/// subtree move/delete rewrites match descendants with `path LIKE $self || '/%'`,
+/// and a metacharacter in a stored path would turn into a wildcard there.
+/// Display names stay free-form (`display_name`); only the path key is locked
+/// down. Matches the existing kebab convention (`materials-lab`, `online-clinic`).
+fn validate_slug(slug: &str) -> Result<(), ApiError> {
+    if slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err(ApiError::bad_request(format!(
+            "invalid folder slug '{slug}' — use lowercase letters, digits, and hyphens only"
+        )));
+    }
+    Ok(())
+}
+
 const VISIBILITY_WORKSPACE: &str = "workspace";
 const VISIBILITY_PUBLIC: &str = "public";
 const VISIBILITY_PRIVATE: &str = "private";
@@ -123,6 +140,8 @@ pub async fn create_folder(
         .await
         .map_err(map_to_api_error)?;
 
+    validate_slug(&req.slug)?;
+
     // Resolve the parent's materialized path. The parent must belong to the
     // same workspace, otherwise a caller could splice a folder into another
     // tenant's tree.
@@ -216,6 +235,9 @@ pub async fn update_folder(
 
     // Decide whether this update relocates the node. A move happens when slug
     // changes OR parent changes.
+    if let Some(ref s) = req.slug {
+        validate_slug(s)?;
+    }
     let new_slug = req.slug.clone().unwrap_or_else(|| current.slug.clone());
     let new_parent = match req.parent_id {
         Some(p) => Some(p),

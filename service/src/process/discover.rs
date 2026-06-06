@@ -514,7 +514,7 @@ async fn discover_asset_globals(
     use crate::compiler::token_shape::references_head_token;
     use crate::models::asset::{Cardinality, ScopeKind};
     use crate::models::template::AssetBinding;
-    use crate::scope::{resolve_one, visible_scopes_for, Scope, ScopedItem};
+    use crate::scope::{resolve_one_visible, visible_scopes_for, Scope, ScopedItem};
 
     // Pass 1a: node-data binding ref-keys, indexed `ref_key -> alias` so the
     // registry keys by the alias the node code reads (`<alias>.json`). `declared`
@@ -678,7 +678,7 @@ async fn discover_asset_globals(
         .collect();
 
     for ref_key in &ref_keys {
-        let resolved = resolve_one(ref_key, candidates.clone()).map_err(|clash| {
+        let resolved = resolve_one_visible(&visible, ref_key, candidates.clone()).map_err(|clash| {
             let view = crate::compiler::CompileError::AssetBindingAmbiguous {
                 node_id: String::new(),
                 ref_key: ref_key.clone(),
