@@ -2325,6 +2325,68 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/channels/{channel}/livekit": {
+      "get": {
+        "tags": [
+          "executions"
+        ],
+        "summary": "GET /api/v1/executions/{execution_id}/channels/{channel}/livekit",
+        "description": "Mint a subscribe-only LiveKit viewer token so the browser can join the room\nthe executor publishes this execution+channel's video frames to. The room\nname (`lk_{execution_id}__{channel}`) is the integration seam with the\nexecutor's `LiveKitTransport` publisher — they MUST agree.\n\nThe token grants `room_join` + `can_subscribe` only (`can_publish = false`),\nso a viewer can watch but never inject media. Each call uses a fresh random\nparticipant identity so multiple browser tabs don't collide on identity.\n\nReturns 503 when `[livekit]` is unconfigured (no server URL / credentials);\nthe data-plane `…/data` tap remains the configuration-free fallback.",
+        "operationId": "livekit_viewer_token",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "AutomatedStep execution id (the `execution_id` stamped on the parked output envelope).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "Data-plane channel name (Rhai-identifier-safe slug).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscribe-only viewer token + the room/server the executor publishes to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveKitViewerToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed execution_id or channel path component.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "LiveKit is not configured on this mekhan instance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -11342,11 +11404,12 @@
       },
       "ChannelTransport": {
         "type": "string",
-        "description": "Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This\nis the single source of truth the producer SDK stamps into the `open`\ndescriptor and both executors dispatch on: the producer's executor picks the\npublish adapter, the consumer's executor picks the subscribe adapter off the\ndescriptor it lifted. Ignored for `Control` channels (their payloads ride the\nnet, not a transport).\n\n* `Jetstream` — the v1 default: reliable, ordered, replayable JetStream\n  stream with per-element ack backpressure. The tappable durable log.\n* `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a\n  late/slow consumer misses early elements (live frames / drop-stale). The\n  semantic opposite of JetStream — what proves the dispatch seam is real.\n* `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each\n  element is one object, the consumer polls keys in order. Lossless, ordered,\n  and fully **replayable** from element zero long after the producer finished\n  — the right transport for large/durable blobs (checkpoints, datasets,\n  archived media). A different transport SHAPE (key/value, not pub/sub),\n  proving the dispatch port is genuinely store-agnostic. Requires the worker\n  to have a `[storage]` backend configured.",
+        "description": "Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This\nis the single source of truth the producer SDK stamps into the `open`\ndescriptor and both executors dispatch on: the producer's executor picks the\npublish adapter, the consumer's executor picks the subscribe adapter off the\ndescriptor it lifted. Ignored for `Control` channels (their payloads ride the\nnet, not a transport).\n\n* `Jetstream` — the v1 default: reliable, ordered, replayable JetStream\n  stream with per-element ack backpressure. The tappable durable log.\n* `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a\n  late/slow consumer misses early elements (live frames / drop-stale). The\n  semantic opposite of JetStream — what proves the dispatch seam is real.\n* `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each\n  element is one object, the consumer polls keys in order. Lossless, ordered,\n  and fully **replayable** from element zero long after the producer finished\n  — the right transport for large/durable blobs (checkpoints, datasets,\n  archived media). A different transport SHAPE (key/value, not pub/sub),\n  proving the dispatch port is genuinely store-agnostic. Requires the worker\n  to have a `[storage]` backend configured.\n* `LiveKit` — an EGRESS / presentation transport: the producer publishes the\n  channel's frames as a WebRTC video track into a LiveKit room for live\n  in-browser viewing. Unlike the other transports it has **no node-side\n  consumer** — nothing on the net subscribes to it; the only subscriber is a\n  browser viewer that mints a room token from mekhan. Data plane only.",
         "enum": [
           "jetstream",
           "nats-latest",
-          "s3"
+          "s3",
+          "livekit"
         ]
       },
       "ChatMessage": {
@@ -15166,6 +15229,29 @@
             ]
           },
           "user_metadata": {}
+        }
+      },
+      "LiveKitViewerToken": {
+        "type": "object",
+        "description": "Response of the LiveKit viewer-token endpoint: everything a browser needs to\njoin the room the executor publishes annotated frames to.",
+        "required": [
+          "server_url",
+          "token",
+          "room"
+        ],
+        "properties": {
+          "room": {
+            "type": "string",
+            "description": "Room name — must match what the executor publishes to:\n`lk_{execution_id}__{channel}`."
+          },
+          "server_url": {
+            "type": "string",
+            "description": "LiveKit WebSocket signalling URL the browser connects to."
+          },
+          "token": {
+            "type": "string",
+            "description": "Subscribe-only JWT (room_join + can_subscribe, no publish)."
+          }
         }
       },
       "LiveLogEvent": {

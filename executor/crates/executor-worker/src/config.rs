@@ -146,6 +146,18 @@ pub struct ExecutorConfig {
     #[serde(default)]
     pub storage: Option<StorageConfig>,
 
+    /// LiveKit egress configuration (data channels tagged `transport: "livekit"`).
+    ///
+    /// When present, the executor mints a publish token and publishes JPEG frames
+    /// as a WebRTC VP8 video track into the room `lk_{execution_id}__{channel}`.
+    /// `None` (the default) leaves the `livekit` transport absent from the
+    /// registry — a `transport: "livekit"` channel then fails loudly at dispatch
+    /// rather than silently mis-routing. This struct ALWAYS parses (config is not
+    /// feature-gated); the transport itself is gated behind the `livekit` feature.
+    /// Config file: `[livekit]` section / `EXECUTOR_LIVEKIT__*` env vars.
+    #[serde(default)]
+    pub livekit: Option<LiveKitConfig>,
+
     /// Metrics collection and forwarding configuration.
     ///
     /// Controls which metric sinks are active and buffer limits.
@@ -379,6 +391,30 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_WORKER_ROUTING_PARTITION=<uuid>`.
     #[serde(default)]
     pub worker_routing_partition: Option<String>,
+}
+
+/// LiveKit egress connection settings (`transport: "livekit"`).
+///
+/// A nested struct (not flat fields) so the documented `EXECUTOR_LIVEKIT__*`
+/// env vars bind — config-rs uses `__` as the nesting separator. Holds the
+/// LiveKit server WS URL plus the API key/secret the executor uses to mint a
+/// publish-scoped room token. Always parses (not feature-gated); the
+/// `LiveKitTransport` that consumes it is gated behind the `livekit` feature.
+///
+/// Environment variables:
+/// - `EXECUTOR_LIVEKIT__URL=ws://localhost:7880`
+/// - `EXECUTOR_LIVEKIT__API_KEY=devkey`
+/// - `EXECUTOR_LIVEKIT__API_SECRET=secret`
+///
+/// Config file: `[livekit]` section in `executor.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LiveKitConfig {
+    /// LiveKit server WebSocket URL (e.g. `ws://localhost:7880`).
+    pub url: String,
+    /// LiveKit API key used to mint room tokens.
+    pub api_key: String,
+    /// LiveKit API secret used to sign room tokens.
+    pub api_secret: String,
 }
 
 /// ROS backend connection settings.
@@ -951,6 +987,7 @@ mod tests {
             status_replicas: default_status_replicas(),
             cleanup_policy: CleanupPolicy::default(),
             storage: None,
+            livekit: None,
             metrics: None,
             logs: None,
             nix: None,

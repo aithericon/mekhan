@@ -18,13 +18,15 @@ pub use batch::BatchRunner;
 pub use cancel::{CancellationRegistry, NatsCancelListener};
 #[cfg(feature = "opendal")]
 pub use chunks::S3Transport;
+#[cfg(feature = "livekit")]
+pub use chunks::LiveKitTransport;
 pub use chunks::{
     datastream_subject, JetStreamTransport, NatsLatestTransport, StreamTransport, TransportRegistry,
 };
 pub use completion::CompletionTracker;
 pub use config::{
-    CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, ModelAgentSettings,
-    PythonCacheConfig, RunnerIdentity, SandboxSettings, WorkerIdentity,
+    CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, LiveKitConfig,
+    ModelAgentSettings, PythonCacheConfig, RunnerIdentity, SandboxSettings, WorkerIdentity,
 };
 pub use drain::{drain_signal, DrainConfig};
 pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};

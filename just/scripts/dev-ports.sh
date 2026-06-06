@@ -64,6 +64,9 @@ if [[ "$slot" -eq 0 ]]; then
     MEKHAN_MAILPIT_SMTP_PORT=1025
     MEKHAN_MAILPIT_UI_PORT=8025
     MEKHAN_HTTPBIN_PORT=13110
+    MEKHAN_LIVEKIT_PORT=7880
+    MEKHAN_LIVEKIT_RTC_TCP_PORT=7881
+    MEKHAN_LIVEKIT_RTC_UDP_PORT=7882
     # No COMPOSE_PROJECT_NAME override — compose defaults to the dir basename
     # (aithericon-platform), matching the pre-existing stack's volumes.
 else
@@ -89,6 +92,9 @@ else
     MEKHAN_MAILPIT_SMTP_PORT=$(( base + 30 ))
     MEKHAN_MAILPIT_UI_PORT=$(( base + 31 ))
     MEKHAN_HTTPBIN_PORT=$(( base + 32 ))
+    MEKHAN_LIVEKIT_PORT=$(( base + 40 ))
+    MEKHAN_LIVEKIT_RTC_TCP_PORT=$(( base + 41 ))
+    MEKHAN_LIVEKIT_RTC_UDP_PORT=$(( base + 42 ))
     # Private compose project → containers, networks, AND named volumes are all
     # prefixed `mekhan-s<slot>_…`, so `up`/`down`/`reset` only ever touch this
     # worktree's infra.
@@ -107,6 +113,27 @@ MEKHAN_NATS_MON_URL="http://localhost:${MEKHAN_NATS_MON_PORT}"
 MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:${MEKHAN_PG_PORT}/mekhan"
 MEKHAN_S3_ENDPOINT="http://localhost:${MEKHAN_S3_PORT}"
 MEKHAN_VAULT_ADDR="http://localhost:${MEKHAN_VAULT_PORT}"
+MEKHAN_LIVEKIT_URL="ws://localhost:${MEKHAN_LIVEKIT_PORT}"
+
+# LiveKit advertises MEKHAN_LIVEKIT_NODE_IP as its single ICE candidate. It MUST
+# be a non-loopback address the viewer's browser will actually probe: Firefox
+# silently drops a loopback (127.0.0.1) REMOTE candidate, so with node_ip set to
+# 127.0.0.1 the SFU never learns the browser's NAT-reflexive address, the
+# subscriber PeerConnection never establishes, and the live video stays black
+# (Chromium and the native executor publisher tolerate loopback, which is why
+# they worked). Advertising the host's LAN IP makes every browser probe it; the
+# packet still lands on the 0.0.0.0-published UDP port and the prflx return path
+# forms identically. Honour a caller-supplied override; else autodetect the
+# primary LAN IP (macOS `ipconfig`, Linux `ip route`), falling back to loopback.
+if [[ -z "${MEKHAN_LIVEKIT_NODE_IP:-}" ]]; then
+    if command -v ipconfig >/dev/null 2>&1; then
+        MEKHAN_LIVEKIT_NODE_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
+    fi
+    if [[ -z "${MEKHAN_LIVEKIT_NODE_IP:-}" ]] && command -v ip >/dev/null 2>&1; then
+        MEKHAN_LIVEKIT_NODE_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    fi
+    MEKHAN_LIVEKIT_NODE_IP=${MEKHAN_LIVEKIT_NODE_IP:-127.0.0.1}
+fi
 
 export \
     WORKTREE_SLOT \
@@ -116,8 +143,10 @@ export \
     MEKHAN_S3_PORT MEKHAN_S3_CONSOLE_PORT \
     MEKHAN_ZITADEL_DB_PORT MEKHAN_ZITADEL_PORT \
     MEKHAN_MAILPIT_SMTP_PORT MEKHAN_MAILPIT_UI_PORT MEKHAN_HTTPBIN_PORT \
+    MEKHAN_LIVEKIT_PORT MEKHAN_LIVEKIT_RTC_TCP_PORT MEKHAN_LIVEKIT_RTC_UDP_PORT \
+    MEKHAN_LIVEKIT_NODE_IP \
     MEKHAN_SERVICE_URL MEKHAN_ENGINE_URL MEKHAN_ROUTER_URL MEKHAN_NATS_URL MEKHAN_NATS_MON_URL \
-    MEKHAN_DATABASE_URL MEKHAN_S3_ENDPOINT MEKHAN_VAULT_ADDR
+    MEKHAN_DATABASE_URL MEKHAN_S3_ENDPOINT MEKHAN_VAULT_ADDR MEKHAN_LIVEKIT_URL
 
 if [[ "${1:-}" == "--print" ]]; then
     cat <<EOF
@@ -142,5 +171,9 @@ MEKHAN_ZITADEL_PORT=${MEKHAN_ZITADEL_PORT}
 MEKHAN_MAILPIT_SMTP_PORT=${MEKHAN_MAILPIT_SMTP_PORT}
 MEKHAN_MAILPIT_UI_PORT=${MEKHAN_MAILPIT_UI_PORT}
 MEKHAN_HTTPBIN_PORT=${MEKHAN_HTTPBIN_PORT}
+MEKHAN_LIVEKIT_PORT=${MEKHAN_LIVEKIT_PORT}    (${MEKHAN_LIVEKIT_URL})
+MEKHAN_LIVEKIT_RTC_TCP_PORT=${MEKHAN_LIVEKIT_RTC_TCP_PORT}
+MEKHAN_LIVEKIT_RTC_UDP_PORT=${MEKHAN_LIVEKIT_RTC_UDP_PORT}
+MEKHAN_LIVEKIT_NODE_IP=${MEKHAN_LIVEKIT_NODE_IP}    (ICE candidate the browser probes)
 EOF
 fi

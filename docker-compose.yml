@@ -80,6 +80,46 @@ services:
       - mekhan-rustfs-data:/data
       - mekhan-rustfs-logs:/logs
 
+  # ── LiveKit: WebRTC SFU for live media stream presentation ───────────────
+  # Single-node dev mode with static keys devkey/secret. The RTC media ports
+  # MUST be mapped 1:1 host<->container so the ICE candidates LiveKit advertises
+  # (node_ip 127.0.0.1, use_external_ip=false) are actually reachable from the
+  # browser — a remapped host port would hand the browser a candidate pointing
+  # at a port nothing is listening on. The whole server config is passed inline
+  # via LIVEKIT_CONFIG (the image's documented `--config-body` env), with the
+  # rtc tcp/udp ports interpolated from the same env vars used for the host
+  # mapping so the two can never drift.
+  livekit:
+    image: livekit/livekit-server:latest
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: [""]
+        rtc:
+          tcp_port: ${MEKHAN_LIVEKIT_RTC_TCP_PORT:-7881}
+          udp_port: ${MEKHAN_LIVEKIT_RTC_UDP_PORT:-7882}
+          use_external_ip: false
+          # node_ip is the address the server advertises as its ICE candidate.
+          # 127.0.0.1 works for native clients (executor publisher) and Chromium,
+          # but Firefox refuses to send ICE checks to a loopback REMOTE candidate
+          # — so the SFU never learns the browser's NAT-reflexive address and the
+          # subscriber connection never establishes (black video). Advertising the
+          # host's LAN IP instead makes Firefox probe it; the packet still hits the
+          # 0.0.0.0-published UDP port and the prflx return path forms exactly as it
+          # does for Chromium. dev-ports.sh computes the LAN IP into this var.
+          node_ip: ${MEKHAN_LIVEKIT_NODE_IP:-127.0.0.1}
+        keys:
+          devkey: secret
+    ports:
+      - "${MEKHAN_LIVEKIT_PORT:-7880}:7880"                                              # signaling (ws)
+      - "${MEKHAN_LIVEKIT_RTC_TCP_PORT:-7881}:${MEKHAN_LIVEKIT_RTC_TCP_PORT:-7881}"       # rtc/tcp (1:1)
+      - "${MEKHAN_LIVEKIT_RTC_UDP_PORT:-7882}:${MEKHAN_LIVEKIT_RTC_UDP_PORT:-7882}/udp"   # rtc/udp (1:1)
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # ── Zitadel: local OIDC/SSO provider for the auth integration ────────────
   # First-instance bootstrap creates:
   #   - org "Mekhan"

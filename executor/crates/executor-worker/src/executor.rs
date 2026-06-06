@@ -375,7 +375,7 @@ impl JobExecutor {
                                 match upload_output(
                                     &local_path,
                                     &decl.name,
-                                    &execution_id,
+                                    execution_id,
                                     upload_config,
                                     resolved_storage.as_ref(),
                                 )

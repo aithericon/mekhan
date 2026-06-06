@@ -35,7 +35,7 @@ nomad_jobs_dir := ".dev/nomad-jobs"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,vllm,kreuzberg,smtp,postgres,loki,prometheus,ros,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,vllm,kreuzberg,smtp,postgres,loki,prometheus,ros,vault,livekit"
 
 # Local infra + daemon endpoints. These read the per-worktree env exported by
 # just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical
@@ -64,6 +64,7 @@ s3_port      := env_var_or_default("MEKHAN_S3_PORT", "19005")
 mailpit_smtp_port := env_var_or_default("MEKHAN_MAILPIT_SMTP_PORT", "1025")
 mailpit_ui_port   := env_var_or_default("MEKHAN_MAILPIT_UI_PORT", "8025")
 httpbin_port := env_var_or_default("MEKHAN_HTTPBIN_PORT", "13110")
+livekit_port := env_var_or_default("MEKHAN_LIVEKIT_PORT", "7880")
 
 # ── Entrypoints ──────────────────────────────────────────────────────────────
 
@@ -284,7 +285,7 @@ demos-reseed:
 # ── Infra ────────────────────────────────────────────────────────────────────
 
 _infra-up:
-    @echo "▶ infra up (postgres + nats + rustfs + vault)…"
+    @echo "▶ infra up (postgres + nats + rustfs + vault + livekit)…"
     @docker compose up -d
 
 _infra-down:
@@ -699,6 +700,11 @@ up-executor:
     [python]
     enabled    = true
     prefer_uv  = true
+
+    [livekit]
+    url        = "ws://localhost:{{livekit_port}}"
+    api_key    = "devkey"
+    api_secret = "secret"
 
     [cancel]
     nats      = true
@@ -2034,6 +2040,9 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__S3__SECRET_KEY="rustfsadmin" \
         MEKHAN__DEMOS__SEED="true" \
         MEKHAN__DEMOS__DIR="$PWD/demos" \
+        MEKHAN__LIVEKIT__URL="ws://localhost:{{livekit_port}}" \
+        MEKHAN__LIVEKIT__API_KEY="devkey" \
+        MEKHAN__LIVEKIT__API_SECRET="secret" \
         AUTOSCALER_DEMAND_URL="{{router_url}}" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \

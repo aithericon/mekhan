@@ -11,6 +11,7 @@
 	import { planLiveRender, planFileRender, type LiveRenderPlan } from '$lib/channels/renderers';
 	import { playMseStream } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
+	import { playLiveKitStream } from '$lib/channels/livekitStreamPlayer';
 	import { subscribe as subscribeLiveTap } from '$lib/channels/liveTapRegistry';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
 	import type { Channel } from '$lib/api/client';
@@ -65,6 +66,16 @@
 	function livePlan(ch: Channel): LiveRenderPlan | null {
 		if (!isOutData(ch)) return null;
 		return planLiveRender(elementContentType(ch));
+	}
+
+	// A `livekit` transport channel plays as a live WebRTC video track (the
+	// real-time analog of the byte-stream live renderers). This branch takes
+	// precedence over the content-type-derived `livePlan` (a livekit data channel
+	// is image/jpeg element-typed, which would otherwise resolve to mjpeg). Compared
+	// as a plain string: the generated `ChannelTransport` union doesn't yet carry
+	// `'livekit'` (openapi regen — owned by the main agent — adds it).
+	function isLiveKit(ch: Channel): boolean {
+		return isOutData(ch) && (ch.transport as string) === 'livekit';
 	}
 
 	// Per-channel media-preview state (lazy, fetched on click). Keyed by name.
@@ -147,6 +158,8 @@
 	let mediaEls = $state<Record<string, HTMLMediaElement | null>>({});
 	// MJPEG swaps each decoded frame into an <img>; bound per channel below.
 	let imgEls = $state<Record<string, HTMLImageElement | null>>({});
+	// LiveKit attaches a subscribed WebRTC video track into a <video>; bound below.
+	let livekitVideoEls = $state<Record<string, HTMLVideoElement | null>>({});
 
 	function startLive(ch: Channel, status: LiveStatus = 'streaming') {
 		lives[ch.name] = { status, seconds: 0, bytes: 0, error: null, handle: null, release: null };
@@ -266,6 +279,48 @@
 		}
 	}
 
+	// LiveKit → mint a subscribe-only token via mekhan, then join the room and
+	// attach the published video track into the bound <video> element. The media
+	// never transits mekhan; mekhan only hands back the server URL, JWT, and room.
+	async function playLiveKitChannel(ch: Channel) {
+		if (!executionId) return;
+		const video = livekitVideoEls[ch.name];
+		if (!video) return;
+		stopLive(ch);
+		startLive(ch);
+		try {
+			const r = await authFetch(
+				`/api/v1/executions/${executionId}/channels/${encodeURIComponent(ch.name)}/livekit`
+			);
+			if (!r.ok) throw new Error(`livekit token failed: ${r.status}`);
+			const { server_url, token, room } = (await r.json()) as {
+				server_url: string;
+				token: string;
+				room: string;
+			};
+			const handle = playLiveKitStream({
+				serverUrl: server_url,
+				token,
+				room,
+				video,
+				onStatus: onLiveStatus(ch)
+			});
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, handle };
+		} catch (e) {
+			lives[ch.name] = {
+				status: 'error',
+				seconds: 0,
+				bytes: 0,
+				error: e instanceof Error ? e.message : String(e),
+				handle: null,
+				// LiveKit owns its own Room lifecycle (stop() closes it); it doesn't
+				// go through the shared ref-counted tap registry, so no release fn.
+				release: null
+			};
+		}
+	}
+
 	function stopLive(ch: Channel) {
 		const cur = lives[ch.name];
 		cur?.handle?.stop();
@@ -310,7 +365,8 @@
 			{@const status = statusLabel(rt)}
 			{@const preview = previews[ch.name]}
 			{@const live = lives[ch.name]}
-			{@const lplan = livePlan(ch)}
+			{@const lk = isLiveKit(ch)}
+			{@const lplan = lk ? null : livePlan(ch)}
 			<div class="px-3 py-2 text-sm">
 				<div class="flex flex-wrap items-center gap-1.5">
 					<span class="font-mono font-medium text-foreground break-all">{ch.name}</span>
@@ -322,7 +378,62 @@
 					{/if}
 				</div>
 
-				{#if isPlayable(ch)}
+				{#if lk}
+					<!-- LiveKit transport: a live WebRTC video track. Takes precedence
+					     over the content-type-derived live renderers (an image/jpeg
+					     element type would otherwise dispatch to mjpeg). -->
+					<div class="mt-2 flex flex-wrap items-center gap-2">
+						{#if !isLiveActive(live)}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={!executionId}
+								onclick={() => playLiveKitChannel(ch)}
+								title={executionId
+									? 'Join the LiveKit room and play the published video track live'
+									: 'Execution id unavailable — cannot tap this channel'}
+							>
+								<AudioLines class="size-4" />
+								<span class="ml-1.5">Play live</span>
+							</Button>
+						{:else}
+							<Button variant="outline" size="sm" onclick={() => stopLive(ch)}>
+								<Square class="size-4" />
+								<span class="ml-1.5">Stop</span>
+							</Button>
+						{/if}
+						{#if live && (live.status === 'streaming' || live.status === 'ended')}
+							<span
+								class="font-mono text-sm text-muted-foreground"
+								class:text-foreground={live.status === 'streaming'}
+							>
+								{#if live.status === 'streaming'}<span class="text-red-500">●</span> live{:else}ended{/if}
+								· WebRTC
+							</span>
+						{:else if live && live.status === 'error'}
+							<span class="text-sm text-red-500">{live.error}</span>
+						{/if}
+					</div>
+					<!-- The subscribed video track attaches here; kept mounted so the
+					     track can target it the moment Play live runs. -->
+					<div class="mt-2" class:hidden={!isLiveActive(live)}>
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<!-- `muted` is required: the track is video-only and browsers
+						     (notably Firefox) block autoplay of a non-muted media
+						     element, leaving the <video> paused on a black frame even
+						     though the WebRTC track is attached and flowing. -->
+						<video
+							bind:this={livekitVideoEls[ch.name]}
+							autoplay
+							playsinline
+							muted
+							controls
+							class="max-h-64 w-full rounded-md bg-black"
+						></video>
+					</div>
+				{/if}
+
+				{#if !lk && isPlayable(ch)}
 					<div class="mt-2">
 						{#if !preview || (!preview.loading && !preview.ref && !preview.error)}
 							<Button
