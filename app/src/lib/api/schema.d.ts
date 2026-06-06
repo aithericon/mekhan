@@ -1187,6 +1187,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inventory/reconcile-batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/inventory/reconcile-batch
+         * @description Classify a crawl batch against the legacy baseline (inherit hash by
+         *     `(file_server_id, path)`, compare sizes) and upsert `file_inventory` rows.
+         *     Returns per-class counts.
+         */
+        post: operations["reconcile_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inventory/register": {
         parameters: {
             query?: never;
@@ -1886,6 +1908,82 @@ export interface paths {
          *     produced it, what tokens those events consumed, and recurse.
          */
         get: operations["token_provenance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reconcile/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/reconcile/duplicates — paginated duplicate content groups. */
+        get: operations["reconcile_duplicates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reconcile/mark-canonical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/reconcile/mark-canonical
+         * @description For every content hash with >1 copy, pick exactly one canonical copy
+         *     deterministically and clear the rest. Returns rows changed.
+         */
+        post: operations["mark_canonical"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reconcile/orphans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/reconcile/orphans — paginated legacy rows never observed on disk. */
+        get: operations["reconcile_orphans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reconcile/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/reconcile/summary
+         * @description Inventory counts by status PLUS the staging-side `orphan_db` count and the
+         *     number of duplicate content groups.
+         */
+        get: operations["reconcile_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4477,6 +4575,39 @@ export interface components {
             source: string;
             source_storage: components["schemas"]["StorageConfig"];
         };
+        /**
+         * @description Recursive, streaming directory walk — `list`'s checkpointable sibling.
+         *
+         *     Drives an OpenDAL recursive lister as a stream (never buffering the whole
+         *     listing), `stat()`ing each file for `{path, size, mtime}` and emitting
+         *     fixed-size batches over the job's [`EventStream`](aithericon_executor_backend)
+         *     `item()`/`close()` channel. Mandatory at the ~4M-file scale of the legacy
+         *     migration: `list` buffers the entire `Vec` and the `fs` lister returns no
+         *     size/mtime, so crawl streams + per-entry stats instead.
+         */
+        CrawlConfig: {
+            /** @description Number of `{path,size,mtime}` entries per emitted `item` batch. */
+            batch_size?: number;
+            /** @description Prefix (relative to the storage root) to walk recursively. */
+            prefix: string;
+            /**
+             * @description Optional resume cursor: the walk resumes *after* this path
+             *     (`lister_with(...).start_after(resume_from)`). Best-effort; true
+             *     idempotency comes from the inventory `UNIQUE(file_server_id, path)`
+             *     upsert downstream.
+             */
+            resume_from?: string | null;
+            /**
+             * @description Whether to `stat()` each entry for size+mtime. Defaults to `true` because
+             *     the OpenDAL `fs` lister omits `content_length`/`last_modified`.
+             */
+            stat?: boolean;
+            /**
+             * @description Storage the walk targets — typically an `fs://` mount co-located with a
+             *     file server.
+             */
+            storage: components["schemas"]["StorageConfig"];
+        };
         /** @description Request body for `POST /api/v1/assets`. */
         CreateAssetRequest: {
             display_name?: string | null;
@@ -4880,6 +5011,16 @@ export interface components {
             thumbnail_url?: string | null;
             url: string;
         };
+        /** @description One row of [`reconcile_duplicates`] — a content hash with >1 physical copy. */
+        DuplicateGroup: {
+            content_hash: string;
+            /** Format: int64 */
+            copies: number;
+            /** @description Whether any copy in the group is already flagged canonical. */
+            has_canonical: boolean;
+            /** @description `file_server_id:path` for each copy, deterministically ordered. */
+            locations: string[];
+        };
         /**
          * @description The element type a [`Channel`] carries. `Json` declares a schema the
          *     compiler typechecks against the `SchemaRegistry`; `Binary` carries opaque
@@ -5134,6 +5275,9 @@ export interface components {
         }) | (components["schemas"]["StatConfig"] & {
             /** @enum {string} */
             operation: "stat";
+        }) | (components["schemas"]["CrawlConfig"] & {
+            /** @enum {string} */
+            operation: "crawl";
         });
         /**
          * @description Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.
@@ -6160,6 +6304,11 @@ export interface components {
              */
             form?: components["schemas"]["TaskFieldConfig"][];
         };
+        /** @description `{ updated }` — rows whose `is_canonical` flag actually changed. */
+        MarkCanonicalResponse: {
+            /** Format: int64 */
+            updated: number;
+        };
         /**
          * @description Body for `POST /api/v1/container-images/{id}/materialize`.
          *
@@ -6586,6 +6735,21 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /** @description A single crawl-observed item: metadata only, no hash. */
+        ObservedItem: {
+            /**
+             * Format: date-time
+             * @description Observed modification time (RFC 3339). Carried through to provenance;
+             *     not used for classification.
+             */
+            mtime?: string | null;
+            path: string;
+            /**
+             * Format: int64
+             * @description Observed physical size in bytes.
+             */
+            size: number;
+        };
         OcrSettings: {
             /** @description OCR backend: "tesseract" (default) or "paddle-ocr". */
             backend?: string;
@@ -6593,6 +6757,17 @@ export interface components {
             enable_table_detection?: boolean;
             /** @description Language code (ISO 639-3). Default: "eng". */
             language?: string;
+        };
+        /** @description A legacy-baseline row never observed on disk. */
+        OrphanDbRow: {
+            file_server_id?: string | null;
+            hash?: string | null;
+            legacy_key: string;
+            /** Format: date-time */
+            modified?: string | null;
+            path?: string | null;
+            /** Format: int64 */
+            size?: number | null;
         };
         /**
          * @description Who owns the AutomatedStep's output port shape — the user (free
@@ -6974,6 +7149,28 @@ export interface components {
             total_pages: number;
         };
         /** @description Paginated response wrapper. */
+        Paginated_DuplicateGroup: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                content_hash: string;
+                /** Format: int64 */
+                copies: number;
+                /** @description Whether any copy in the group is already flagged canonical. */
+                has_canonical: boolean;
+                /** @description `file_server_id:path` for each copy, deterministically ordered. */
+                locations: string[];
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
         Paginated_HpiLog: {
             has_next: boolean;
             has_previous: boolean;
@@ -7054,6 +7251,29 @@ export interface components {
                 status: string;
                 /** Format: date-time */
                 updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
+        Paginated_OrphanDbRow: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                file_server_id?: string | null;
+                hash?: string | null;
+                legacy_key: string;
+                /** Format: date-time */
+                modified?: string | null;
+                path?: string | null;
+                /** Format: int64 */
+                size?: number | null;
             }[];
             /** Format: int64 */
             page: number;
@@ -7329,6 +7549,16 @@ export interface components {
             source: components["schemas"]["TriggerSource"];
         };
         ProbeConfig: {
+            /**
+             * @description Optional checksum algorithm override. When set, probe forces this
+             *     algorithm for the emitted `checksum`/`checksum_digest` instead of the
+             *     `extract_metadata_async` default (SHA-256). Set to `sha256` for the
+             *     legacy-migration reconcile path, whose join key is the bare-lowercase-hex
+             *     SHA-256 digest (`legacy_file_index.hash`, `"SHA256:"` stripped). The
+             *     emitted `checksum_digest` is always bare lowercase hex so it can be
+             *     compared directly against catalogue content hashes.
+             */
+            checksum_algo?: string | null;
             include_statistics?: boolean;
             path: string;
             storage?: null | components["schemas"]["StorageConfig"];
@@ -7542,6 +7772,42 @@ export interface components {
             virtualenv?: boolean;
             /** @description Working directory (defaults to run_dir root). */
             working_dir?: string | null;
+        };
+        /**
+         * @description Body of `POST /api/v1/inventory/reconcile-batch`.
+         *
+         *     The FOLD TARGET a crawl driver calls with one server's observed batch
+         *     (`{path,size,mtime}` — no hash). The live crawl→driver transport is Phase 6.
+         */
+        ReconcileBatchRequest: {
+            file_server_id: string;
+            items: components["schemas"]["ObservedItem"][];
+        };
+        /** @description Counts returned by [`reconcile_batch`], one bucket per classification. */
+        ReconcileCounts: {
+            /** Format: int64 */
+            mismatch: number;
+            /** Format: int64 */
+            orphan_disk: number;
+            /** Format: int64 */
+            verified: number;
+        };
+        /**
+         * @description Full reconcile summary: inventory counts by status PLUS the staging-side
+         *     `orphan_db` count and the number of duplicate content groups.
+         */
+        ReconcileSummary: {
+            by_status: components["schemas"]["StatusCount"][];
+            /**
+             * Format: int64
+             * @description Content hashes observed on more than one copy (`reconcile_duplicates`).
+             */
+            duplicate_groups: number;
+            /**
+             * Format: int64
+             * @description Legacy rows with no observed physical copy (`reconcile_orphan_db`).
+             */
+            orphan_db: number;
         };
         /** @description Compact list-row for registration tokens. MUST NOT carry `token_hash`. */
         RegistrationTokenSummary: {
@@ -8281,6 +8547,12 @@ export interface components {
         StatConfig: {
             path: string;
             storage: components["schemas"]["StorageConfig"];
+        };
+        /** @description One bucket of [`reconcile_summary`] — an inventory status and its count. */
+        StatusCount: {
+            /** Format: int64 */
+            n: number;
+            status: string;
         };
         /**
          * @description Response shape for `GET /api/v1/instances/{id}/step-executions`.
@@ -12324,6 +12596,39 @@ export interface operations {
             };
         };
     };
+    reconcile_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Per-class reconcile counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileCounts"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     register: {
         parameters: {
             query?: never;
@@ -13659,6 +13964,122 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconcile_duplicates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated duplicate groups */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Paginated_DuplicateGroup"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mark_canonical: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rows whose canonical flag changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkCanonicalResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconcile_orphans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated orphan_db rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Paginated_OrphanDbRow"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconcile_summary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reconcile summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileSummary"];
+                };
+            };
+            /** @description Bad request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -275,6 +275,15 @@ use utoipa::OpenApi;
             crate::inventory::model::InventoryRegisterResponse,
             crate::inventory::model::InventoryStats,
             crate::inventory::model::InventoryCount,
+            // Reconcile (docs/32 §4/§5) — crawl-vs-baseline classification DTOs.
+            crate::inventory::reconcile::ObservedItem,
+            crate::inventory::reconcile::ReconcileCounts,
+            crate::inventory::reconcile::DuplicateGroup,
+            crate::inventory::reconcile::StatusCount,
+            crate::inventory::reconcile::ReconcileSummary,
+            crate::inventory::reconcile::OrphanDbRow,
+            crate::inventory::handlers::ReconcileBatchRequest,
+            crate::inventory::handlers::MarkCanonicalResponse,
         ),
     ),
     tags(

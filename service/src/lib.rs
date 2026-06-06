@@ -334,6 +334,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(inventory::handlers::register))
         .routes(routes!(inventory::handlers::stats))
         .routes(routes!(inventory::handlers::list_entries))
+        // Reconcile (docs/32 §4/§5) — classify crawl-observed copies against the
+        // legacy baseline; canonical-pick; orphan/duplicate reports.
+        .routes(routes!(inventory::handlers::reconcile_batch))
+        .routes(routes!(inventory::handlers::mark_canonical))
+        .routes(routes!(inventory::handlers::reconcile_summary))
+        .routes(routes!(inventory::handlers::reconcile_orphans))
+        .routes(routes!(inventory::handlers::reconcile_duplicates))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))
