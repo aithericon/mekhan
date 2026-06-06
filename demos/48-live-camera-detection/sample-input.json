@@ -1,0 +1,10 @@
+[
+  {
+    "start_block_id": "start",
+    "token": {
+      "source": "0",
+      "duration_s": 20,
+      "fps": 8
+    }
+  }
+]

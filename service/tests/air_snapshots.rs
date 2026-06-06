@@ -99,6 +99,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // in `summary`. Pins that consume-data-channel + emit-control-channel + gather
     // all lower together in one node graph; the YOLO inference itself is live-only.
     "47-stream-object-detection",
+    // 48-live-camera-detection: the live-viz loop closed — a live source (webcam
+    // index / RTSP-HTTP URL / file path) streams per-frame JPEGs over a lossy
+    // `nats-latest` DATA channel, a YOLO26 detector CONSUMES it per frame and
+    // produces BOTH a CONTROL stream of detections (gathered in `summary`) AND a
+    // box-annotated `image/jpeg` DATA channel the UI plays as a live MJPEG feed.
+    // Pins per-frame data-in + dual data/control-out (one with no consumer, UI
+    // tapped) + gather lowering together; inference + camera are live-only.
+    "48-live-camera-detection",
 ];
 
 fn repo_root() -> PathBuf {
@@ -341,6 +349,11 @@ fn snapshot_46_live_video_stream() {
 #[test]
 fn snapshot_47_stream_object_detection() {
     run("47-stream-object-detection");
+}
+
+#[test]
+fn snapshot_48_live_camera_detection() {
+    run("48-live-camera-detection");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
