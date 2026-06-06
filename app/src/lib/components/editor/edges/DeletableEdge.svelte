@@ -1,7 +1,16 @@
 <script lang="ts">
-	import { BaseEdge, EdgeToolbar, getBezierPath, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
+	import {
+		BaseEdge,
+		EdgeLabel,
+		EdgeToolbar,
+		getBezierPath,
+		useSvelteFlow,
+		type EdgeProps
+	} from '@xyflow/svelte';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import { EDGE_LANE_WIDTH_PX } from '$lib/editor/edge-lane';
+	import { useEdgeFeeds } from '$lib/components/instances/edge-feed-context';
+	import EdgeMediaWidget from '$lib/components/instances/EdgeMediaWidget.svelte';
 
 	let {
 		id,
@@ -56,6 +65,12 @@
 			: `${style ?? ''}; ${laneStyle} stroke: url(#${gradientId});`
 	);
 
+	// In the instance/run view, the surrounding `WorkflowGraphView` provides an
+	// edge-feed lookup; in the plain template editor there's NO provider, so
+	// `feedGetter` is undefined and nothing extra renders (editor unchanged).
+	const feedGetter = useEdgeFeeds();
+	const feed = $derived(feedGetter ? feedGetter(id) : null);
+
 	function handleDelete(event: MouseEvent) {
 		event.stopPropagation();
 		deleteElements({ edges: [{ id }] });
@@ -90,6 +105,12 @@
 />
 {#if compileError}
 	<title>{compileError.message}</title>
+{/if}
+
+{#if feed}
+	<EdgeLabel x={pathResult[1]} y={pathResult[2]} width={240} height={136}>
+		<EdgeMediaWidget {feed} />
+	</EdgeLabel>
 {/if}
 
 {#if deletable !== false}
