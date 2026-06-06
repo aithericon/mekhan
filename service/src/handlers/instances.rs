@@ -587,10 +587,11 @@ pub async fn list_step_executions(
         Option<chrono::DateTime<chrono::Utc>>,
         Option<chrono::DateTime<chrono::Utc>>,
         Option<serde_json::Value>,
+        Option<String>,
     )> = sqlx::query_as(
         "SELECT node_id, iteration_index, node_kind, status, \
                 inputs, outputs, branch_taken, \
-                started_at, completed_at, error \
+                started_at, completed_at, error, execution_id \
          FROM step_execution \
          WHERE instance_id = $1 \
          ORDER BY started_at NULLS LAST, node_id, iteration_index",
@@ -613,6 +614,7 @@ pub async fn list_step_executions(
                 started_at,
                 completed_at,
                 error,
+                execution_id,
             )| {
                 let duration_ms = match (started_at, completed_at) {
                     (Some(s), Some(c)) => Some((c - s).num_milliseconds()),
@@ -625,6 +627,7 @@ pub async fn list_step_executions(
                     status,
                     inputs,
                     outputs,
+                    execution_id,
                     branch_taken,
                     started_at,
                     completed_at,
@@ -780,8 +783,10 @@ pub async fn list_instance_allocations(
     .fetch_all(&state.db)
     .await?;
 
-    let response: Vec<AllocationResponse> =
-        rows.into_iter().map(AllocationResponse::with_duration).collect();
+    let response: Vec<AllocationResponse> = rows
+        .into_iter()
+        .map(AllocationResponse::with_duration)
+        .collect();
 
     Ok(Json(response))
 }

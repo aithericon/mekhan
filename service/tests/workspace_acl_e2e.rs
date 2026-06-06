@@ -254,25 +254,25 @@ async fn cannot_remove_last_owner() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Project attach filter — list_templates?project_id=X returns only attached
+// 6. Folder filter — list_templates?folder_id=X returns only the folder's homes
 // ---------------------------------------------------------------------------
 #[tokio::test]
-async fn project_attach_filters_listing() {
+async fn folder_filing_filters_listing() {
     let (app, db) = header_driven_app().await;
 
-    let ws = seed_workspace(&db, &format!("ws-proj-{}", Uuid::new_v4().simple())).await;
+    let ws = seed_workspace(&db, &format!("ws-folder-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws, "alice", "owner").await;
 
-    let tpl_in = seed_template_in_workspace(&db, ws, "in-project", "workspace").await;
-    let _tpl_out = seed_template_in_workspace(&db, ws, "out-of-project", "workspace").await;
+    let tpl_in = seed_template_in_workspace(&db, ws, "in-folder", "workspace").await;
+    let _tpl_out = seed_template_in_workspace(&db, ws, "out-of-folder", "workspace").await;
 
-    // Create a project
+    // Create a folder
     let resp = app
         .clone()
         .oneshot(
             req_as("alice", Some(ws))
                 .method("POST")
-                .uri(format!("/api/v1/workspaces/{ws}/projects"))
+                .uri(format!("/api/v1/workspaces/{ws}/folders"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "slug": "q4", "display_name": "Q4" }).to_string(),
@@ -283,31 +283,29 @@ async fn project_attach_filters_listing() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
     let body = body_json(resp.into_body()).await;
-    let project_id = body["id"].as_str().unwrap().to_string();
+    let folder_id = body["id"].as_str().unwrap().to_string();
 
-    // Attach tpl_in
+    // File tpl_in into the folder (its single home)
     let resp = app
         .clone()
         .oneshot(
             req_as("alice", Some(ws))
-                .method("POST")
-                .uri(format!("/api/v1/projects/{project_id}/templates"))
+                .method("PUT")
+                .uri(format!("/api/v1/templates/{tpl_in}/folder"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "template_id": tpl_in.to_string() }).to_string(),
-                ))
+                .body(Body::from(json!({ "folder_id": folder_id }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    // Filter listing by project
+    // Filter listing by folder
     let resp = app
         .oneshot(
             req_as("alice", Some(ws))
                 .method("GET")
-                .uri(format!("/api/v1/templates?project_id={project_id}"))
+                .uri(format!("/api/v1/templates?folder_id={folder_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -321,8 +319,8 @@ async fn project_attach_filters_listing() {
         .iter()
         .map(|t| t["name"].as_str().unwrap_or("").to_string())
         .collect();
-    assert!(names.contains(&"in-project".to_string()));
-    assert!(!names.contains(&"out-of-project".to_string()));
+    assert!(names.contains(&"in-folder".to_string()));
+    assert!(!names.contains(&"out-of-folder".to_string()));
 }
 
 // ---------------------------------------------------------------------------

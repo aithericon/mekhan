@@ -2291,7 +2291,7 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if injections.lock().await.len() >= 1 {
+            if !injections.lock().await.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -2573,7 +2573,7 @@ async fn test_net_metadata_discovery_across_lifecycle() {
         };
         kv.put(net_id, serde_json::to_vec(&metadata).unwrap().into())
             .await
-            .expect(&format!("put metadata for {}", net_id));
+            .unwrap_or_else(|_| panic!("put metadata for {}", net_id));
     }
 
     // ── Read all entries from KV and deserialize ──

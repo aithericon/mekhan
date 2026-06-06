@@ -1,8 +1,8 @@
 # Producer — emit the words onto a Control/Out channel (docs/25).
 #
-# The producer declares a Control channel "items" with max_fanout=8
-# (graph.json). It emits ONE uniform bracketed episode — open → N items →
-# close — and does NOT decide how that episode folds. The CONSUMER edge
+# The producer declares a Control channel "items" (graph.json). It emits ONE
+# uniform bracketed episode — open → N items → close — and does NOT decide how
+# that episode folds. The CONSUMER edge
 # (sourceHandle "items") carries `join: gather`, so the compiler synthesizes a
 # per-channel gather barrier (sized on the close count) that re-orders the items
 # by emit index and parks the gathered collection as `{ output: [<word>, ...] }`

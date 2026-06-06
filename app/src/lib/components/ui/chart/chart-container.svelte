@@ -17,6 +17,8 @@
 		config: ChartConfig;
 	} = $props();
 
+	// Stable id computed once at mount; `id` never changes for a chart instance.
+	// svelte-ignore state_referenced_locally
 	const chartId = `chart-${id || uid.replace(/:/g, '')}`;
 
 	setChartContext({

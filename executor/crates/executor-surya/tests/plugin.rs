@@ -33,7 +33,10 @@ static REGISTRY_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone)]
 enum MockBehaviour {
-    Success { full_text: String, page_count: usize },
+    Success {
+        full_text: String,
+        page_count: usize,
+    },
     InternalError(String),
 }
 
@@ -50,7 +53,10 @@ async fn spawn_mock_surya(behaviour: MockBehaviour) -> (String, CancellationToke
                 let behaviour = Arc::clone(&behaviour);
                 async move {
                     match behaviour.as_ref() {
-                        MockBehaviour::Success { full_text, page_count } => {
+                        MockBehaviour::Success {
+                            full_text,
+                            page_count,
+                        } => {
                             let pages = (0..*page_count)
                                 .map(|i| serde_json::json!({"page_number": i + 1}))
                                 .collect::<Vec<_>>();
@@ -60,11 +66,10 @@ async fn spawn_mock_surya(behaviour: MockBehaviour) -> (String, CancellationToke
                             }))
                             .into_response()
                         }
-                        MockBehaviour::InternalError(body) => (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            body.clone(),
-                        )
-                            .into_response(),
+                        MockBehaviour::InternalError(body) => {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, body.clone())
+                                .into_response()
+                        }
                     }
                 }
             }
@@ -95,20 +100,16 @@ async fn spawn_mock_surya(behaviour: MockBehaviour) -> (String, CancellationToke
 const ONE_BY_ONE_PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
     0x00, 0x00, 0x00, 0x0D, // IHDR length
-    b'I', b'H', b'D', b'R',
-    0x00, 0x00, 0x00, 0x01, // width = 1
+    b'I', b'H', b'D', b'R', 0x00, 0x00, 0x00, 0x01, // width = 1
     0x00, 0x00, 0x00, 0x01, // height = 1
     0x08, // bit depth
     0x06, // color type (RGBA)
-    0x00, 0x00, 0x00,
-    0x1F, 0x15, 0xC4, 0x89, // CRC
+    0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, // CRC
     0x00, 0x00, 0x00, 0x0A, // IDAT length
-    b'I', b'D', b'A', b'T',
-    0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x05, 0x00, 0x01,
-    0x0D, 0x0A, 0x2D, 0xB4, // CRC
+    b'I', b'D', b'A', b'T', 0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D,
+    0xB4, // CRC
     0x00, 0x00, 0x00, 0x00, // IEND length
-    b'I', b'E', b'N', b'D',
-    0xAE, 0x42, 0x60, 0x82, // CRC
+    b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82, // CRC
 ];
 
 #[tokio::test]

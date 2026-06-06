@@ -160,7 +160,10 @@ mod tests {
     }
 
     fn defs(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -182,12 +185,21 @@ mod tests {
         let TokenShape::Object(map) = &shape else {
             panic!("expected object, got {shape:?}");
         };
-        assert!(matches!(map["name"].shape, TokenShape::Scalar(ScalarTy::String)));
+        assert!(matches!(
+            map["name"].shape,
+            TokenShape::Scalar(ScalarTy::String)
+        ));
         let TokenShape::Object(addr) = &map["address"].shape else {
             panic!("expected nested object");
         };
-        assert!(matches!(addr["city"].shape, TokenShape::Scalar(ScalarTy::String)));
-        assert!(matches!(addr["zip"].shape, TokenShape::Scalar(ScalarTy::Number)));
+        assert!(matches!(
+            addr["city"].shape,
+            TokenShape::Scalar(ScalarTy::String)
+        ));
+        assert!(matches!(
+            addr["zip"].shape,
+            TokenShape::Scalar(ScalarTy::Number)
+        ));
     }
 
     #[test]
@@ -206,7 +218,10 @@ mod tests {
         let TokenShape::Object(map) = inner.as_ref() else {
             panic!("expected object element");
         };
-        assert!(matches!(map["id"].shape, TokenShape::Scalar(ScalarTy::Number)));
+        assert!(matches!(
+            map["id"].shape,
+            TokenShape::Scalar(ScalarTy::Number)
+        ));
     }
 
     #[test]
@@ -229,7 +244,10 @@ mod tests {
         let TokenShape::Object(home) = &map["home"].shape else {
             panic!("expected resolved $ref object, got {:?}", map["home"].shape);
         };
-        assert!(matches!(home["city"].shape, TokenShape::Scalar(ScalarTy::String)));
+        assert!(matches!(
+            home["city"].shape,
+            TokenShape::Scalar(ScalarTy::String)
+        ));
     }
 
     #[test]
@@ -241,7 +259,8 @@ mod tests {
 
     #[test]
     fn absent_ref_is_any() {
-        let shape = json_schema_to_token_shape(&json!({ "$ref": "#/definitions/Nope" }), &no_defs());
+        let shape =
+            json_schema_to_token_shape(&json!({ "$ref": "#/definitions/Nope" }), &no_defs());
         assert!(matches!(shape, TokenShape::Any));
     }
 

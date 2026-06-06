@@ -175,26 +175,26 @@
 				</CardContent>
 			</Card>
 
-			<!-- Projects (managed top-level, scoped to the active workspace) -->
-			<Card data-testid="projects-card">
+			<!-- Folders (managed top-level, scoped to the active workspace) -->
+			<Card data-testid="folders-card">
 				<CardHeader>
-					<CardTitle>Projects</CardTitle>
+					<CardTitle>Folders</CardTitle>
 					<CardDescription>
-						Group related templates. Each project gets its own per-webhook
-						OpenAPI bundle.
+						Organize templates into a hierarchy. Each folder gets its own
+						per-webhook OpenAPI bundle.
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<a
-						href="/projects"
+						href="/folders"
 						class="flex items-center gap-3 rounded-md border border-border bg-card/50 p-3 text-sm hover:bg-accent/50"
-						data-testid="link-projects"
+						data-testid="link-folders"
 					>
 						<FolderKanban class="size-5 text-muted-foreground" />
 						<div class="min-w-0 flex-1">
-							<div class="font-medium">Manage projects</div>
+							<div class="font-medium">Manage folders</div>
 							<div class="text-sm text-muted-foreground">
-								Create, attach templates, and view API contracts
+								Create, organize templates, and view API contracts
 							</div>
 						</div>
 						<ArrowRight class="size-4 text-muted-foreground" />

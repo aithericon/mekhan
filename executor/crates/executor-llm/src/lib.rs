@@ -6,12 +6,12 @@ pub mod execute_handler;
 pub mod hardware_probe;
 pub mod heartbeat;
 pub mod inference_handler;
-#[cfg(feature = "kreuzberg")]
-pub mod ocr_handler;
 /// Wire DTOs for the model load/unload command channel (P2). Gated behind the
 /// `vllm` feature (the model-pool node agent's payload contract).
 #[cfg(feature = "vllm")]
 pub mod model_command;
+#[cfg(feature = "kreuzberg")]
+pub mod ocr_handler;
 pub mod ollama_subprocess;
 pub mod pool_boot;
 pub mod pool_listener;

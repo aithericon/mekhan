@@ -1,0 +1,5573 @@
+{
+  "definitions": {
+    "Ctrl__consumer": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__producer": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__start": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Data__consumer": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "received": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "total_bytes": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__producer": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "sent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__start": {
+      "additionalProperties": true,
+      "properties": {
+        "_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    },
+    "EffectError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Error token produced by the engine when an effect handler fails.\n\nConstructed in `firing.rs` for every effect transition `_error` port. The `inputs` field contains the original port inputs (dynamic), enabling retry logic to re-queue the original job via `err.inputs.job`.",
+      "properties": {
+        "error": {
+          "description": "Error message from the handler.",
+          "type": "string"
+        },
+        "handler_id": {
+          "description": "Handler that failed (e.g., `\"executor_submit\"`).",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Original port inputs (dynamic — shape depends on the transition)."
+        },
+        "retryable": {
+          "description": "Whether the error is retryable.",
+          "type": "boolean"
+        },
+        "transition_id": {
+          "description": "Transition ID where the failure occurred.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "handler_id",
+        "inputs",
+        "retryable",
+        "transition_id"
+      ],
+      "title": "EffectError",
+      "type": "object"
+    },
+    "ExecutorCancelInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input to the `executor_cancel` effect handler.\n\nCancels a running execution identified by its execution ID.",
+      "properties": {
+        "execution_id": {
+          "description": "Execution ID to cancel (from `ExecutorSubmitted.execution_id`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "title": "ExecutorCancelInput",
+      "type": "object"
+    },
+    "ExecutorCancelled": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Output from the `executor_cancel` effect handler.",
+      "properties": {
+        "execution_id": {
+          "description": "Execution ID that was cancelled.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "title": "ExecutorCancelled",
+      "type": "object"
+    },
+    "ExecutorEventSignal": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Event signal delivered by the ExecutorWatcher for mid-execution events.\n\nCovers progress, artifact, metric, phase, output, and log events.",
+      "properties": {
+        "category": {
+          "description": "Event category (progress, artifact, metric, phase, output, log).",
+          "type": "string"
+        },
+        "detail": {
+          "description": "Event-specific detail payload."
+        },
+        "execution_id": {
+          "description": "Execution ID for correlation.",
+          "type": "string"
+        },
+        "sequence": {
+          "description": "Monotonic sequence number within this execution.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "source": {
+          "description": "Source identifier.",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "ISO 8601 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "detail",
+        "execution_id",
+        "sequence",
+        "source",
+        "timestamp"
+      ],
+      "title": "ExecutorEventSignal",
+      "type": "object"
+    },
+    "ExecutorStatusSignal": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Status signal delivered by the ExecutorWatcher.\n\nAll executor lifecycle statuses (accepted, running, completed, failed, timed_out, cancelled) share this envelope. The `detail` field carries status-specific data (e.g., outputs for completed, error info for failed).",
+      "properties": {
+        "detail": {
+          "description": "Status-specific detail payload."
+        },
+        "execution_id": {
+          "description": "Execution ID for correlation.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Source identifier (e.g., executor instance).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status name (accepted, running, completed, failed, timed_out, cancelled).",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "ISO 8601 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail",
+        "execution_id",
+        "source",
+        "status",
+        "timestamp"
+      ],
+      "title": "ExecutorStatusSignal",
+      "type": "object"
+    },
+    "ExecutorSubmitInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "ConfigRef": {
+          "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
+          "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
+            "storage_path": {
+              "description": "Storage key inside the global artifact bucket.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "storage_path"
+          ],
+          "type": "object"
+        },
+        "ExecutionSpec": {
+          "description": "Open-ended execution spec. The `backend` field selects which backend handles this job; `config` carries backend-specific parameters as opaque JSON.\n\nDomain-level declarations (inputs, outputs) live here because staging hooks need them regardless of backend.\n\n`config_ref` exists to keep large static configs (LLM schemas, prompts, catalogue projections) out of the per-job NATS token. When `config_ref` is set, `FetchConfigHook` downloads the blob at the named storage key and writes it into `config` before staging proceeds — the backends still read from `config` and don't know which path it took.",
+          "properties": {
+            "backend": {
+              "description": "Backend type identifier (e.g., \"process\", \"docker\").",
+              "type": "string"
+            },
+            "config": {
+              "default": {},
+              "description": "Backend-specific configuration (opaque to domain and worker layers). Each backend deserializes this into its own typed config.\n\nWhen `config_ref` is `Some`, this field is populated by `FetchConfigHook` at staging time from the referenced storage blob (overwriting whatever was on the wire — typically `null` / empty object). When `config_ref` is `None`, this field is taken as-is — the inline path used by tests and one-off programmatic jobs."
+            },
+            "config_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfigRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reference to a static config blob in object storage. Compiler-emitted jobs always set this; the inline `config` field is left empty and populated by `FetchConfigHook` before staging."
+            },
+            "inputs": {
+              "default": [],
+              "description": "Declared input files to stage before execution.",
+              "items": {
+                "$ref": "#/definitions/InputDeclaration"
+              },
+              "type": "array"
+            },
+            "outputs": {
+              "default": [],
+              "description": "Declared output files expected after execution.",
+              "items": {
+                "$ref": "#/definitions/OutputDeclaration"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "backend"
+          ],
+          "type": "object"
+        },
+        "InputDeclaration": {
+          "description": "Declaration of an input file to be staged before execution.",
+          "properties": {
+            "name": {
+              "description": "Name of this input (used as filename in inputs_dir).",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this input is required (default true).",
+              "type": "boolean"
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/InputSource"
+                }
+              ],
+              "description": "Where to get the input data."
+            }
+          },
+          "required": [
+            "name",
+            "source"
+          ],
+          "type": "object"
+        },
+        "InputSource": {
+          "description": "Source for an input file.",
+          "oneOf": [
+            {
+              "description": "Reference to a file in storage.\n\nWhen `storage` is `Some`, the file is downloaded from that specific backend. When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "storage": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/StorageConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
+                },
+                "type": {
+                  "enum": [
+                    "storage_path"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Inline JSON value (written as JSON file).",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "inline"
+                  ],
+                  "type": "string"
+                },
+                "value": true
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Raw text content (written verbatim, no JSON serialization).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "raw"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "URL to download from.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "url"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputDeclaration": {
+          "description": "Declaration of an expected output from an execution.",
+          "properties": {
+            "kind": {
+              "description": "Declared field kind (lowercase: \"text\", \"number\", \"bool\", \"json\", \"textarea\", \"select\", \"file\", \"signature\", \"timestamp\"). When the service-side compiler emits a typed output port, this carries the kind across the service/executor boundary so the runner can strict-validate the emitted value against the declaration. `None` means \"no kind validation\" (back-compat with pre-typed jobs + non-Python backends). Backend-side validation is opt-in via `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of this output.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path within outputs_dir. None means the value is set via IPC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this output is required (default true).",
+              "type": "boolean"
+            },
+            "upload_to": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OutputUploadConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "OutputUploadConfig": {
+          "description": "Configuration for uploading an output file to storage after execution.",
+          "properties": {
+            "destination_path": {
+              "description": "Destination path within the storage backend. When omitted, defaults to `artifacts/{execution_id}/outputs/{output_name}`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "storage": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageConfig"
+                }
+              ],
+              "description": "Storage backend configuration for the upload destination."
+            }
+          },
+          "required": [
+            "storage"
+          ],
+          "type": "object"
+        },
+        "RetryConfig": {
+          "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose errors return `is_temporary() == true` — non-transient failures (404, 403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without blowing past a Slurm sbatch's wall-clock budget.",
+          "properties": {
+            "max_attempts": {
+              "default": 3,
+              "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "max_delay_ms": {
+              "default": 10000,
+              "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "min_delay_ms": {
+              "default": 200,
+              "description": "Initial backoff delay in milliseconds. Default 200.",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "StorageBackend": {
+          "description": "Which storage backend to use.",
+          "oneOf": [
+            {
+              "description": "Local filesystem (default).",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Amazon S3 (or S3-compatible like MinIO).",
+              "enum": [
+                "s3"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Google Cloud Storage.",
+              "enum": [
+                "gcs"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Azure Blob Storage.",
+              "enum": [
+                "azblob"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "StorageConfig": {
+          "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the per-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text EXECUTOR_STORAGE_BACKEND=s3 EXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com EXECUTOR_STORAGE_BUCKET=my-bucket EXECUTOR_STORAGE_REGION=us-east-1 EXECUTOR_STORAGE_PREFIX=executor/ EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA... EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa... ```\n\n# executor.toml\n\n```toml [storage] backend = \"s3\" endpoint = \"https://minio.internal:9000\" bucket = \"artifacts\" region = \"us-east-1\" prefix = \"executor/\"\n\n[storage.credentials] access_key = \"minioadmin\" secret_key = \"minioadmin\" ```",
+          "properties": {
+            "backend": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageBackend"
+                }
+              ],
+              "description": "Which backend to use."
+            },
+            "bucket": {
+              "default": "",
+              "description": "Bucket or container name (ignored for local).",
+              "type": "string"
+            },
+            "credentials": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageCredentials"
+                }
+              ],
+              "default": {
+                "access_key": "",
+                "secret_key": ""
+              },
+              "description": "Credentials for the storage backend."
+            },
+            "endpoint": {
+              "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path.",
+              "type": "string"
+            },
+            "prefix": {
+              "default": "",
+              "description": "Path prefix within the bucket (e.g. \"executor/\").",
+              "type": "string"
+            },
+            "region": {
+              "default": null,
+              "description": "Region (optional, for S3/GCS).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resource_alias": {
+              "description": "Optional workspace resource binding (e.g. an `s3` resource). When set, the executor's file-ops backend overlays `endpoint`, `region`, `bucket`, and credentials from the resource envelope at run time — per-step inline values still win on a field-by-field basis. Empty or absent means \"use the inline fields directly\".",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/RetryConfig"
+                }
+              ],
+              "default": {
+                "max_attempts": 3,
+                "max_delay_ms": 10000,
+                "min_delay_ms": 200
+              },
+              "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's `RetryLayer`, so only errors with `is_temporary() == true` are retried."
+            }
+          },
+          "required": [
+            "backend",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        "StorageCredentials": {
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
+          "properties": {
+            "access_key": {
+              "default": "",
+              "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name).",
+              "type": "string"
+            },
+            "secret_key": {
+              "default": "",
+              "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Input to the `executor_submit` effect handler.\n\nSubmit an execution job with a typed [`ExecutionSpec`] describing the work to perform (backend type, config, inputs, outputs). Lifecycle fields (`run`, `retries`, `max_retries`) are passed through for retry tracking.",
+      "properties": {
+        "execution_id": {
+          "description": "Engine-stamped execution id flowed in from the scheduler net (where the same id was passed to the dispatcher, e.g. as `EXECUTOR_TARGET_EXEC_ID` for sbatch). The executor submit handler reuses this id as the NATS subject suffix so a one-shot consumer in the dispatched process exact-matches its own message.",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "Unique job identifier for correlation.",
+          "type": "string"
+        },
+        "max_retries": {
+          "description": "Maximum retries before dead-lettering.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retries": {
+          "description": "Number of retries so far.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "run": {
+          "description": "Execution attempt number (0-indexed, incremented on retry).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "spec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionSpec"
+            }
+          ],
+          "description": "Typed execution specification (backend, config, inputs, outputs)."
+        }
+      },
+      "required": [
+        "execution_id",
+        "job_id",
+        "max_retries",
+        "retries",
+        "run",
+        "spec"
+      ],
+      "title": "ExecutorSubmitInput",
+      "type": "object"
+    },
+    "ExecutorSubmitted": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "ConfigRef": {
+          "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
+          "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
+            "storage_path": {
+              "description": "Storage key inside the global artifact bucket.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "storage_path"
+          ],
+          "type": "object"
+        },
+        "ExecutionSpec": {
+          "description": "Open-ended execution spec. The `backend` field selects which backend handles this job; `config` carries backend-specific parameters as opaque JSON.\n\nDomain-level declarations (inputs, outputs) live here because staging hooks need them regardless of backend.\n\n`config_ref` exists to keep large static configs (LLM schemas, prompts, catalogue projections) out of the per-job NATS token. When `config_ref` is set, `FetchConfigHook` downloads the blob at the named storage key and writes it into `config` before staging proceeds — the backends still read from `config` and don't know which path it took.",
+          "properties": {
+            "backend": {
+              "description": "Backend type identifier (e.g., \"process\", \"docker\").",
+              "type": "string"
+            },
+            "config": {
+              "default": {},
+              "description": "Backend-specific configuration (opaque to domain and worker layers). Each backend deserializes this into its own typed config.\n\nWhen `config_ref` is `Some`, this field is populated by `FetchConfigHook` at staging time from the referenced storage blob (overwriting whatever was on the wire — typically `null` / empty object). When `config_ref` is `None`, this field is taken as-is — the inline path used by tests and one-off programmatic jobs."
+            },
+            "config_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfigRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reference to a static config blob in object storage. Compiler-emitted jobs always set this; the inline `config` field is left empty and populated by `FetchConfigHook` before staging."
+            },
+            "inputs": {
+              "default": [],
+              "description": "Declared input files to stage before execution.",
+              "items": {
+                "$ref": "#/definitions/InputDeclaration"
+              },
+              "type": "array"
+            },
+            "outputs": {
+              "default": [],
+              "description": "Declared output files expected after execution.",
+              "items": {
+                "$ref": "#/definitions/OutputDeclaration"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "backend"
+          ],
+          "type": "object"
+        },
+        "InputDeclaration": {
+          "description": "Declaration of an input file to be staged before execution.",
+          "properties": {
+            "name": {
+              "description": "Name of this input (used as filename in inputs_dir).",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this input is required (default true).",
+              "type": "boolean"
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/InputSource"
+                }
+              ],
+              "description": "Where to get the input data."
+            }
+          },
+          "required": [
+            "name",
+            "source"
+          ],
+          "type": "object"
+        },
+        "InputSource": {
+          "description": "Source for an input file.",
+          "oneOf": [
+            {
+              "description": "Reference to a file in storage.\n\nWhen `storage` is `Some`, the file is downloaded from that specific backend. When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "storage": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/StorageConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
+                },
+                "type": {
+                  "enum": [
+                    "storage_path"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Inline JSON value (written as JSON file).",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "inline"
+                  ],
+                  "type": "string"
+                },
+                "value": true
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Raw text content (written verbatim, no JSON serialization).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "raw"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "URL to download from.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "url"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputDeclaration": {
+          "description": "Declaration of an expected output from an execution.",
+          "properties": {
+            "kind": {
+              "description": "Declared field kind (lowercase: \"text\", \"number\", \"bool\", \"json\", \"textarea\", \"select\", \"file\", \"signature\", \"timestamp\"). When the service-side compiler emits a typed output port, this carries the kind across the service/executor boundary so the runner can strict-validate the emitted value against the declaration. `None` means \"no kind validation\" (back-compat with pre-typed jobs + non-Python backends). Backend-side validation is opt-in via `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of this output.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path within outputs_dir. None means the value is set via IPC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this output is required (default true).",
+              "type": "boolean"
+            },
+            "upload_to": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OutputUploadConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "OutputUploadConfig": {
+          "description": "Configuration for uploading an output file to storage after execution.",
+          "properties": {
+            "destination_path": {
+              "description": "Destination path within the storage backend. When omitted, defaults to `artifacts/{execution_id}/outputs/{output_name}`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "storage": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageConfig"
+                }
+              ],
+              "description": "Storage backend configuration for the upload destination."
+            }
+          },
+          "required": [
+            "storage"
+          ],
+          "type": "object"
+        },
+        "RetryConfig": {
+          "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose errors return `is_temporary() == true` — non-transient failures (404, 403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without blowing past a Slurm sbatch's wall-clock budget.",
+          "properties": {
+            "max_attempts": {
+              "default": 3,
+              "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "max_delay_ms": {
+              "default": 10000,
+              "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "min_delay_ms": {
+              "default": 200,
+              "description": "Initial backoff delay in milliseconds. Default 200.",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "StorageBackend": {
+          "description": "Which storage backend to use.",
+          "oneOf": [
+            {
+              "description": "Local filesystem (default).",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Amazon S3 (or S3-compatible like MinIO).",
+              "enum": [
+                "s3"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Google Cloud Storage.",
+              "enum": [
+                "gcs"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Azure Blob Storage.",
+              "enum": [
+                "azblob"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "StorageConfig": {
+          "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the per-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text EXECUTOR_STORAGE_BACKEND=s3 EXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com EXECUTOR_STORAGE_BUCKET=my-bucket EXECUTOR_STORAGE_REGION=us-east-1 EXECUTOR_STORAGE_PREFIX=executor/ EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA... EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa... ```\n\n# executor.toml\n\n```toml [storage] backend = \"s3\" endpoint = \"https://minio.internal:9000\" bucket = \"artifacts\" region = \"us-east-1\" prefix = \"executor/\"\n\n[storage.credentials] access_key = \"minioadmin\" secret_key = \"minioadmin\" ```",
+          "properties": {
+            "backend": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageBackend"
+                }
+              ],
+              "description": "Which backend to use."
+            },
+            "bucket": {
+              "default": "",
+              "description": "Bucket or container name (ignored for local).",
+              "type": "string"
+            },
+            "credentials": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageCredentials"
+                }
+              ],
+              "default": {
+                "access_key": "",
+                "secret_key": ""
+              },
+              "description": "Credentials for the storage backend."
+            },
+            "endpoint": {
+              "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path.",
+              "type": "string"
+            },
+            "prefix": {
+              "default": "",
+              "description": "Path prefix within the bucket (e.g. \"executor/\").",
+              "type": "string"
+            },
+            "region": {
+              "default": null,
+              "description": "Region (optional, for S3/GCS).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resource_alias": {
+              "description": "Optional workspace resource binding (e.g. an `s3` resource). When set, the executor's file-ops backend overlays `endpoint`, `region`, `bucket`, and credentials from the resource envelope at run time — per-step inline values still win on a field-by-field basis. Empty or absent means \"use the inline fields directly\".",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/RetryConfig"
+                }
+              ],
+              "default": {
+                "max_attempts": 3,
+                "max_delay_ms": 10000,
+                "min_delay_ms": 200
+              },
+              "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's `RetryLayer`, so only errors with `is_temporary() == true` are retried."
+            }
+          },
+          "required": [
+            "backend",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        "StorageCredentials": {
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
+          "properties": {
+            "access_key": {
+              "default": "",
+              "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name).",
+              "type": "string"
+            },
+            "secret_key": {
+              "default": "",
+              "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Output from the `executor_submit` effect handler.\n\nContains all input fields plus the engine-assigned `execution_id` for tracking the execution through its lifecycle (accepted → running → completed/failed/timed_out/cancelled).",
+      "properties": {
+        "execution_id": {
+          "description": "Engine-assigned execution identifier for lifecycle tracking.",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "Job identifier (echoed from input).",
+          "type": "string"
+        },
+        "max_retries": {
+          "description": "Max retries (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retries": {
+          "description": "Retries so far (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "run": {
+          "description": "Execution attempt (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "spec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionSpec"
+            }
+          ],
+          "description": "Execution spec (echoed from input, needed for retry resubmission)."
+        }
+      },
+      "required": [
+        "execution_id",
+        "job_id",
+        "max_retries",
+        "retries",
+        "run",
+        "spec"
+      ],
+      "title": "ExecutorSubmitted",
+      "type": "object"
+    }
+  },
+  "description": "",
+  "groups": [
+    {
+      "id": "group_1",
+      "name": "Producer (nats-latest)"
+    },
+    {
+      "id": "group_10",
+      "name": "Status Tracking",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "group_11",
+      "name": "Failure & Timeout",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "group_12",
+      "name": "Cancellation",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "group_13",
+      "name": "Events",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "group_14",
+      "name": "Effect Error Recovery",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "group_2",
+      "name": "Submission",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_3",
+      "name": "Status Tracking",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_4",
+      "name": "Failure & Timeout",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_5",
+      "name": "Cancellation",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_6",
+      "name": "Events",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_7",
+      "name": "Effect Error Recovery",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_8",
+      "name": "Consumer (unchanged stream())"
+    },
+    {
+      "id": "group_9",
+      "name": "Submission",
+      "parent_id": "group_8"
+    }
+  ],
+  "name": "43 · Lossy Frame Stream (transport dispatch proof)",
+  "places": [
+    {
+      "group_id": "group_10",
+      "id": "consumer/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_12",
+      "id": "consumer/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_12",
+      "id": "consumer/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_12",
+      "id": "consumer/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_11",
+      "id": "consumer/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_10",
+      "id": "consumer/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_9",
+      "id": "consumer/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_11",
+      "id": "consumer/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_ctrl",
+      "name": "Consumer (unchanged stream()) - Control Token",
+      "token_schema": "#/definitions/Ctrl__consumer",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_data",
+      "name": "Consumer (unchanged stream()) - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__consumer",
+      "type": "state"
+    },
+    {
+      "id": "p_consumer_output",
+      "name": "Consumer (unchanged stream()) - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_end_completed",
+      "name": "Done - Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "id": "p_end_result",
+      "name": "Done - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_producer_control_in",
+      "name": "Producer (nats-latest) - Control Emit Inbox",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_producer_ctrl",
+      "name": "Producer (nats-latest) - Control Token",
+      "token_schema": "#/definitions/Ctrl__producer",
+      "type": "state"
+    },
+    {
+      "id": "p_producer_data",
+      "name": "Producer (nats-latest) - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__producer",
+      "type": "state"
+    },
+    {
+      "id": "p_producer_frames",
+      "name": "Producer (nats-latest) - Data Channel 'frames'",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "id": "p_producer_frames_close",
+      "name": "Producer (nats-latest) - Data Channel 'frames' Close (producer status)",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_producer_output",
+      "name": "Producer (nats-latest) - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_data",
+      "name": "Start - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__start",
+      "type": "state"
+    },
+    {
+      "id": "p_start_main",
+      "name": "Start - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_named",
+      "name": "Start - Named",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_process",
+      "name": "Start - Process",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready",
+      "name": "Start",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready_out",
+      "name": "Start - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_3",
+      "id": "producer/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_5",
+      "id": "producer/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_5",
+      "id": "producer/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_5",
+      "id": "producer/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "producer/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_3",
+      "id": "producer/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_2",
+      "id": "producer/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "producer/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    }
+  ],
+  "requirements": [
+    {
+      "category": "catalogue",
+      "handler_ids": [
+        "catalogue_register"
+      ]
+    },
+    {
+      "category": "executor",
+      "handler_ids": [
+        "executor_cancel",
+        "executor_submit"
+      ]
+    },
+    {
+      "category": "human",
+      "handler_ids": [
+        "process_log_message",
+        "process_log_metric"
+      ]
+    },
+    {
+      "category": "orchestration",
+      "handler_ids": [
+        "process_complete",
+        "process_phase",
+        "process_progress",
+        "process_start"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "caused_signals": [
+        "consumer/sig_cancelled"
+      ],
+      "group_id": "group_12",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorCancelInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorCancelInput": {
+            "$ref": "#/definitions/ExecutorCancelInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/cancel_request",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_cancel",
+        "type": "effect"
+      },
+      "name": "Cancel Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/cancelling",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "consumer/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_14",
+      "guard": {
+        "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "consumer/dlq_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ dead: #{ job_id: err.inputs.job.job_id, run: err.inputs.job.run, reason: err.error, retries_exhausted: 0 } }",
+        "type": "rhai"
+      },
+      "name": "Dead Letter Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "consumer/exhausted_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Consumer (unchanged stream())' failed and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted (no handler — crash net)"
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_artifact",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "artifacts",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_artifact",
+          "port": "artifacts",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "catalogue_register",
+        "type": "effect"
+      },
+      "name": "Log Artifact",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "catalogued",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/artifact_log",
+          "port": "catalogued",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/log_failure",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/failure_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Message",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/message_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_metric",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "metric",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_metric",
+          "port": "metric",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_metric",
+        "type": "effect"
+      },
+      "name": "Log Metric",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/metric_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "evt",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_output",
+          "port": "evt",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ log: evt }",
+        "type": "rhai"
+      },
+      "name": "Log Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/output_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_phase",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "phase",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_phase",
+          "port": "phase",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_phase",
+        "type": "effect"
+      },
+      "name": "Log Phase",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/phase_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_13",
+      "id": "consumer/log_progress",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "progress",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/sig_progress",
+          "port": "progress",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_progress",
+        "type": "effect"
+      },
+      "name": "Log Progress",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "consumer/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "consumer/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "id": "consumer/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_producer_frames",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"consumer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Consumer: drain the `frames` data channel with the ORDINARY stream() API.\\n\\nThis code is identical to what it would be over JetStream — it never names a\\ntransport. The consumer's executor lifts `transport` from the producer's `open`\\ndescriptor and dispatches the matching (lossy core-NATS) subscribe adapter. That\\nindifference is the whole point: one consumer contract, any transport.\\n\\n`received` may be LESS than the producer's `sent` — lossy-latest drops anything\\npublished before this job subscribed. We assert only that the stream delivered\\n(received >= 1), which proves the dispatched adapter actually carried bytes.\\n\\\"\\\"\\\"\\n\\nimport aithericon\\n\\nreceived = 0\\ntotal_bytes = 0\\n\\nfor frame in aithericon.stream(\\\"frames\\\"):\\n    received += 1\\n    if isinstance(frame, (bytes, bytearray)):\\n        total_bytes += len(frame)\\n\\naithericon.set_output(\\\"received\\\", received)\\naithericon.set_output(\\\"total_bytes\\\", total_bytes)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"received\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"total_bytes\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/consumer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_8",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "consumer/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_14",
+      "guard": {
+        "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "consumer/retry_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "{\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    job.retries = retries + 1;\n                    #{ job: job }\n                }",
+        "type": "rhai"
+      },
+      "name": "Retry Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "consumer/sig_accepted",
+        "consumer/sig_running",
+        "consumer/sig_completed",
+        "consumer/sig_failed",
+        "consumer/sig_timed_out"
+      ],
+      "effect_config": {
+        "event_routes": {
+          "artifact": "consumer/sig_artifact",
+          "log": "consumer/sig_log",
+          "metric": "consumer/sig_metric",
+          "output": "consumer/sig_output",
+          "phase": "consumer/sig_phase",
+          "progress": "consumer/sig_progress"
+        },
+        "signal_routes": {
+          "accepted": "consumer/sig_accepted",
+          "cancelled": "consumer/sig_cancelled",
+          "completed": "consumer/sig_completed",
+          "failed": "consumer/sig_failed",
+          "running": "consumer/sig_running",
+          "timed_out": "consumer/sig_timed_out"
+        }
+      },
+      "group_id": "group_9",
+      "id": "consumer/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "consumer/sig_artifact",
+            "log": "consumer/sig_log",
+            "metric": "consumer/sig_metric",
+            "output": "consumer/sig_output",
+            "phase": "consumer/sig_phase",
+            "progress": "consumer/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "consumer/sig_accepted",
+            "cancelled": "consumer/sig_cancelled",
+            "completed": "consumer/sig_completed",
+            "failed": "consumer/sig_failed",
+            "running": "consumer/sig_running",
+            "timed_out": "consumer/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "consumer/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_10",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_accepted",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/submitted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_accepted",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Accepted",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/accepted",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_12",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_cancelled",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/cancelling",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_cancelled",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Cancelled",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/cancelled",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_11",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_11",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_failed_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_10",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_running",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_running",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Running",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/running",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_10",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_success",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_completed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __done = #{\n                    job_id: job.job_id,\n                    run: job.run,\n                    execution_id: job.execution_id,\n                    detail: sig.detail,\n                    source: if sig.source != () { sig.source } else { \"\" },\n                    status: sig.status\n                };\n                for __k in job.keys() { if __k.starts_with(\"_\") { __done[__k] = job[__k]; } }\n                #{ done: __done }",
+        "type": "rhai"
+      },
+      "name": "Execution Completed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_11",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_11",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "consumer/t_timeout_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "consumer/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "consumer/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "producer/sig_cancelled"
+      ],
+      "group_id": "group_5",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorCancelInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorCancelInput": {
+            "$ref": "#/definitions/ExecutorCancelInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/cancel_request",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_cancel",
+        "type": "effect"
+      },
+      "name": "Cancel Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/cancelling",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "producer/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_7",
+      "guard": {
+        "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "producer/dlq_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ dead: #{ job_id: err.inputs.job.job_id, run: err.inputs.job.run, reason: err.error, retries_exhausted: 0 } }",
+        "type": "rhai"
+      },
+      "name": "Dead Letter Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "producer/exhausted_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Producer (nats-latest)' failed and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted (no handler — crash net)"
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_artifact",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "artifacts",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_artifact",
+          "port": "artifacts",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "catalogue_register",
+        "type": "effect"
+      },
+      "name": "Log Artifact",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "catalogued",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/artifact_log",
+          "port": "catalogued",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/log_failure",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/failure_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Message",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/message_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_metric",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "metric",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_metric",
+          "port": "metric",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_metric",
+        "type": "effect"
+      },
+      "name": "Log Metric",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/metric_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "evt",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_output",
+          "port": "evt",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ log: evt }",
+        "type": "rhai"
+      },
+      "name": "Log Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/output_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_phase",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "phase",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_phase",
+          "port": "phase",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_phase",
+        "type": "effect"
+      },
+      "name": "Log Phase",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/phase_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "producer/log_progress",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "progress",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/sig_progress",
+          "port": "progress",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_progress",
+        "type": "effect"
+      },
+      "name": "Log Progress",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "producer/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "producer/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "producer/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Producer: pace small binary frames over a LOSSY-LATEST data channel.\\n\\nThe channel `frames` declares `transport: nats-latest` in the graph, so its\\nbytes ride plain core NATS (no JetStream, no replay, no back-pressure) instead of\\nthe durable default. Nothing here is transport-aware — this is the exact same\\n`open_output(...).write(...)` API every data demo uses. The transport choice\\nlives in the manifest the compiler baked; the SDK stamps it into the `open`\\ndescriptor; the executor dispatches the lossy publish adapter off it.\\n\\nBecause core NATS has no replay, a consumer only receives frames published AFTER\\nit subscribed. We emit `open` (on context entry), wait a brief lead-in so the\\ndownstream consumer can connect, THEN start writing — so most frames land while\\nthe consumer is listening. A slow consumer still legitimately misses some: that\\nis the lossy-latest contract.\\n\\\"\\\"\\\"\\n\\nimport time\\n\\nimport aithericon\\n\\nFRAMES = 20\\nLEAD_IN_S = 0.5  # after `open`, before the first write — lets the consumer connect\\nPACE_S = 0.15  # ~3 s of streaming, a wide window for the consumer to catch up\\nFRAME_BYTES = 256\\n\\nwith aithericon.open_output(\\\"frames\\\") as out:\\n    # `open` has fired; give the consumer time to receive it and subscribe.\\n    time.sleep(LEAD_IN_S)\\n    for i in range(FRAMES):\\n        # A distinct, fixed-size binary frame per write.\\n        out.write(bytes([i & 0xFF]) * FRAME_BYTES, content_type=\\\"application/octet-stream\\\")\\n        time.sleep(PACE_S)\\n\\naithericon.set_output(\\\"sent\\\", FRAMES)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"sent\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "Producer (nats-latest) - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "producer/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_7",
+      "guard": {
+        "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "producer/retry_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "{\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    job.retries = retries + 1;\n                    #{ job: job }\n                }",
+        "type": "rhai"
+      },
+      "name": "Retry Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "producer/sig_accepted",
+        "producer/sig_running",
+        "producer/sig_completed",
+        "producer/sig_failed",
+        "producer/sig_timed_out"
+      ],
+      "effect_config": {
+        "event_routes": {
+          "artifact": "producer/sig_artifact",
+          "control_emit": "p_producer_control_in",
+          "log": "producer/sig_log",
+          "metric": "producer/sig_metric",
+          "output": "producer/sig_output",
+          "phase": "producer/sig_phase",
+          "progress": "producer/sig_progress"
+        },
+        "signal_routes": {
+          "accepted": "producer/sig_accepted",
+          "cancelled": "producer/sig_cancelled",
+          "completed": "producer/sig_completed",
+          "failed": "producer/sig_failed",
+          "running": "producer/sig_running",
+          "timed_out": "producer/sig_timed_out"
+        }
+      },
+      "group_id": "group_2",
+      "id": "producer/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "producer/sig_artifact",
+            "control_emit": "p_producer_control_in",
+            "log": "producer/sig_log",
+            "metric": "producer/sig_metric",
+            "output": "producer/sig_output",
+            "phase": "producer/sig_phase",
+            "progress": "producer/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "producer/sig_accepted",
+            "cancelled": "producer/sig_cancelled",
+            "completed": "producer/sig_completed",
+            "failed": "producer/sig_failed",
+            "running": "producer/sig_running",
+            "timed_out": "producer/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "producer/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_accepted",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/submitted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_accepted",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Accepted",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/accepted",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_5",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_cancelled",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/cancelling",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_cancelled",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Cancelled",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/cancelled",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_failed_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_running",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_running",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Running",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/running",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_success",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_completed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __done = #{\n                    job_id: job.job_id,\n                    run: job.run,\n                    execution_id: job.execution_id,\n                    detail: sig.detail,\n                    source: if sig.source != () { sig.source } else { \"\" },\n                    status: sig.status\n                };\n                for __k in job.keys() { if __k.starts_with(\"_\") { __done[__k] = job[__k]; } }\n                #{ done: __done }",
+        "type": "rhai"
+      },
+      "name": "Execution Completed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "producer/t_timeout_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "producer/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "producer/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_consumer_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Consumer (unchanged stream())' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_consumer_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "consumer/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_consumer_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_consumer_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_consumer_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Consumer (unchanged stream()) - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__consumer"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__consumer"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_consumer_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_consumer_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_proc_complete",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_end_result",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_complete",
+        "type": "effect"
+      },
+      "name": "Done - Complete Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "completed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_completed",
+          "port": "completed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_result_shape",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_producer",
+          "schema_ref": "#/definitions/Data__producer"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_consumer",
+          "schema_ref": "#/definitions/Data__consumer"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_consumer_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_producer_data",
+          "port": "d_producer",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_consumer_data",
+          "port": "d_consumer",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __rv0 = (d_producer.detail.outputs.sent); let __rv1 = (d_consumer.detail.outputs.received); let __rv2 = (d_consumer.detail.outputs.total_bytes); let __rv = #{ \"sent\": __rv0, \"received\": __rv1, \"total_bytes\": __rv2 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "type": "rhai"
+      },
+      "name": "Done - Result",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "result",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_result",
+          "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "effect_config": {
+        "channel_close_routes": {
+          "frames": "p_producer_frames_close"
+        },
+        "channel_routes": {
+          "frames": "p_producer_frames"
+        }
+      },
+      "id": "t_producer_control_emit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "emit",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_producer_control_in",
+          "port": "emit",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "channel_close_routes": {
+            "frames": "p_producer_frames_close"
+          },
+          "channel_routes": {
+            "frames": "p_producer_frames"
+          }
+        },
+        "handler_id": "control_emit",
+        "type": "effect"
+      },
+      "name": "Producer (nats-latest) - Control Emit",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "p_producer_frames",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "p_producer_frames_close",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_producer_frames",
+          "port": "p_producer_frames",
+          "weight": 1
+        },
+        {
+          "place": "p_producer_frames_close",
+          "port": "p_producer_frames_close",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_producer_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Producer (nats-latest)' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Producer (nats-latest) - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_producer_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "producer/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Producer (nats-latest) - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_producer_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_producer_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_producer_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Producer (nats-latest) - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__producer"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__producer"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_producer_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_producer_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_park",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready_out",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; #{ data: d, main: d }",
+        "type": "rhai"
+      },
+      "name": "Start - Park Inputs (fork: park data, forward token)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_start_main",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_proc_name",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d._process_name = \"Lossy Frame Stream Demo\"; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Start - Derive Process Name",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_named",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "effect_config": {
+        "forward_ports": [
+          "main"
+        ],
+        "name": "Start",
+        "name_field": "_process_name"
+      },
+      "id": "t_start_proc_start",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "trigger",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_named",
+          "port": "trigger",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "forward_ports": [
+            "main"
+          ],
+          "name": "Start",
+          "name_field": "_process_name"
+        },
+        "handler_id": "process_start",
+        "type": "effect"
+      },
+      "name": "Start - Register Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "weight": 1
+        },
+        {
+          "place": "p_start_ready_out",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

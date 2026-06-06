@@ -43,6 +43,48 @@
 		timestamp: 'Time',
 		json: 'JSON'
 	};
+
+	// Streaming Channels (docs/25). Each declared channel becomes a handle on the
+	// node edge + an in-body badge. We split in/out so they stack down opposite
+	// edges (target=left, source=right) without colliding with the fixed
+	// `in`/`out`/`error` handles. The handle `id` MUST equal `channel.name` —
+	// that's the wiring contract edges resolve against.
+	type Channel = NonNullable<AutomatedStepNodeData['channels']>[number];
+	const channels = $derived<Channel[]>(data.channels ?? []);
+	const outChannels = $derived(channels.filter((c) => c.direction === 'out'));
+	const inChannels = $derived(channels.filter((c) => c.direction === 'in'));
+
+	// element.type → short label; binary carries the content_type (e.g. audio/wav).
+	function elementLabel(el: Channel['element']): string {
+		if (el.type === 'binary') return el.content_type || 'binary';
+		return el.type; // 'json' | 'any'
+	}
+
+	// Data plane rides amber, control plane rides purple (matches the legacy
+	// control-out purple `#a855f7`). Tooltip reads "direction · plane · element".
+	function channelStyle(plane: ChannelPlane): string {
+		return plane === 'data'
+			? 'background:#f59e0b;border-color:#b45309;'
+			: 'background:#a855f7;border-color:#7e22ce;';
+	}
+	function channelTitle(c: Channel): string {
+		return `${c.direction} · ${c.plane} · ${elementLabel(c.element)}`;
+	}
+	type ChannelPlane = Channel['plane'];
+
+	// Per-edge stacking: distribute N handles evenly down the side, starting
+	// below the fixed handle, so multiple channels never overlap. xyflow
+	// positions handles against the node bounding box, so `top` is a percentage
+	// of node height.
+	function handleTop(index: number, total: number): string {
+		// Spread within the lower band (60%..92%), clearing the fixed in/out
+		// handle which xyflow centers at ~50% — so the first channel doesn't
+		// overlap (and become hard to grab on) the primary port.
+		const top = 60;
+		const span = 32;
+		const step = total > 1 ? span / (total - 1) : 0;
+		return `${top + index * step}%`;
+	}
 </script>
 
 <Handle id="in" type="target" position={Position.Left} class={workflowNodeHandleClass('automated')} />
@@ -99,6 +141,30 @@
 				</ul>
 			</div>
 		{/if}
+		{#if channels.length > 0}
+			<div class="space-y-0.5 border-t border-border/40 pt-1.5" data-testid="automated-step-channels">
+				<span class="text-sm uppercase tracking-wider text-muted-foreground/70">Channels</span>
+				<ul class="flex flex-wrap gap-1">
+					{#each channels as channel (channel.name)}
+						<li
+							class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sm font-medium {channel.plane ===
+							'data'
+								? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+								: 'bg-purple-500/15 text-purple-600 dark:text-purple-400'}"
+							title={channelTitle(channel)}
+						>
+							<span
+								class="inline-block size-2 shrink-0 rounded-full"
+								style={channelStyle(channel.plane)}
+							></span>
+							<span class="text-muted-foreground/70">{channel.direction === 'out' ? '→' : '←'}</span>
+							<span class="truncate font-mono">{channel.name}</span>
+							<span class="text-muted-foreground/60">{elementLabel(channel.element)}</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	</div>
 {/snippet}
 <Handle
@@ -114,21 +180,33 @@
 	id="error"
 	type="source"
 	position={Position.Bottom}
+	class="!h-3 !w-3 !border-2"
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On error (retries exhausted)"
 />
-{#each data.channels ?? [] as channel (channel.name)}
-	<!-- Streaming Channel handle (docs/25): each control-output channel exposes
-	     a per-name port the job emits into at runtime (`emit`/`scatter`).
-	     Downstream edges wire to it by `sourceHandle == channel.name`. Stacked
-	     down the right edge, offset below the "out" handle. -->
-	{#if channel.direction === 'out' && channel.plane === 'control'}
-		<Handle
-			id={channel.name}
-			type="source"
-			position={Position.Right}
-			style="top:75%;background:#a855f7;border-color:#7e22ce;"
-			title="Channel out — {channel.name}"
-		/>
-	{/if}
+<!-- Streaming Channel handles (docs/25): every declared channel gets a per-name
+     port. OUT channels emit at runtime (`emit`/`scatter`) — source handles on
+     the right edge; downstream edges wire by `sourceHandle == channel.name`. IN
+     channels consume — target handles on the left; edges wire by
+     `targetHandle == channel.name`. Both stack down their edge below the fixed
+     `out`/`in` handle. Color encodes plane (purple=control, amber=data). -->
+{#each outChannels as channel, i (channel.name)}
+	<Handle
+		id={channel.name}
+		type="source"
+		position={Position.Right}
+		class="!h-3 !w-3 !border-2"
+		style="top:{handleTop(i, outChannels.length)};{channelStyle(channel.plane)}"
+		title={`Channel ${channel.name} — ${channelTitle(channel)}`}
+	/>
+{/each}
+{#each inChannels as channel, i (channel.name)}
+	<Handle
+		id={channel.name}
+		type="target"
+		position={Position.Left}
+		class="!h-3 !w-3 !border-2"
+		style="top:{handleTop(i, inChannels.length)};{channelStyle(channel.plane)}"
+		title={`Channel ${channel.name} — ${channelTitle(channel)}`}
+	/>
 {/each}

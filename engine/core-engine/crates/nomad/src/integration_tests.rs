@@ -245,7 +245,7 @@ async fn test_dispatch_includes_petri_meta() {
         "token_data fields should not appear in Meta"
     );
     assert!(
-        resp.get("Payload").map_or(true, |p| p.is_null()),
+        resp.get("Payload").is_none_or(|p| p.is_null()),
         "dispatched job should have no Payload (token_data flows via NATS, not Nomad dispatch)"
     );
 }

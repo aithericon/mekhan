@@ -25,13 +25,13 @@ use crate::models::template::PortField;
 // ── Scope (docs/20 §2) ────────────────────────────────────────────────────
 
 /// Polymorphic owner discriminator. A resource/asset/asset-type is owned by
-/// **exactly one** scope; visibility flows downward (template ⊃ project ⊃
+/// **exactly one** scope; visibility flows downward (template ⊃ folder ⊃
 /// workspace) with most-specific-wins. See [`crate::scope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeKind {
     Workspace,
-    Project,
+    Folder,
     Template,
 }
 
@@ -39,7 +39,7 @@ impl ScopeKind {
     pub fn as_db(&self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
-            Self::Project => "project",
+            Self::Folder => "folder",
             Self::Template => "template",
         }
     }
@@ -47,7 +47,7 @@ impl ScopeKind {
     pub fn from_db(s: &str) -> Option<Self> {
         match s {
             "workspace" => Some(Self::Workspace),
-            "project" => Some(Self::Project),
+            "folder" => Some(Self::Folder),
             "template" => Some(Self::Template),
             _ => None,
         }
@@ -328,6 +328,17 @@ pub struct ImportCsvParams {
 
 // ── Query params ───────────────────────────────────────────────────────────
 
+/// Query params for the asset/asset-type **create** endpoints. Lets callers
+/// specify the owner scope the same way the list endpoints do (`?scope=`),
+/// instead of (or in agreement with) the body's `scope_kind`/`scope_id`. When
+/// both are given they must agree; conflict → 400.
+#[derive(Debug, Default, Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct CreateScopeQuery {
+    /// Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.
+    /// Omitted → falls back to the body scope, then the caller's workspace.
+    pub scope: Option<String>,
+}
+
 /// Query params for `GET /api/v1/asset-types`.
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListAssetTypesQuery {
@@ -336,7 +347,7 @@ pub struct ListAssetTypesQuery {
     #[serde(default = "default_per_page")]
     pub per_page: i64,
     /// Scope context for downward-visibility resolution. `workspace` (the
-    /// caller's workspace) when omitted. Format: `workspace`, `project:<uuid>`,
+    /// caller's workspace) when omitted. Format: `workspace`, `folder:<uuid>`,
     /// or `template:<uuid>`.
     pub scope: Option<String>,
     /// Optional virtual-folder prefix filter on `display_path`.

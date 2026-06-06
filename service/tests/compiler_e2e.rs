@@ -856,7 +856,9 @@ fn plain_executor_is_byte_identical_regardless_of_manifest() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("capacity")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(
+                &known_with_prod_gpu("capacity"),
+            ),
             ..Default::default()
         },
     )
@@ -928,7 +930,9 @@ fn aliased_pool_bad_request_is_compile_error() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("capacity")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(
+                &known_with_prod_gpu("capacity"),
+            ),
             ..Default::default()
         },
     )
@@ -993,13 +997,12 @@ fn loop_without_lease_emits_no_lease_topology() {
     // topology. The fixture's lease field is ignored by serde (unknown field).
     let mut graph = graph;
     for node in &mut graph.nodes {
-        match &mut node.data {
-            mekhan_service::models::template::WorkflowNodeData::Decision { conditions, .. } => {
-                for c in conditions.iter_mut() {
-                    c.guard = "input.status == \"ok\"".to_string();
-                }
+        if let mekhan_service::models::template::WorkflowNodeData::Decision { conditions, .. } =
+            &mut node.data
+        {
+            for c in conditions.iter_mut() {
+                c.guard = "input.status == \"ok\"".to_string();
             }
-            _ => {}
         }
     }
     // No KnownResources needed — a plain loop resolves no datacenter.
@@ -1102,7 +1105,12 @@ fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
     let mut graph = load_graph("leased-loop-scheduled-body.json");
     for node in &mut graph.nodes {
         if node.id == "body" {
-            if let WorkflowNodeData::AutomatedStep { deployment_model: mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. }, .. } = &mut node.data {
+            if let WorkflowNodeData::AutomatedStep {
+                deployment_model:
+                    mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. },
+                ..
+            } = &mut node.data
+            {
                 *scheduler = Some("prod_dc".to_string());
             }
         }
@@ -1268,14 +1276,13 @@ fn lease_scope_aborts_when_acquire_fails() {
         .expect("a `_claim_abort` fail-fast transition must exist");
 
     // (b) It consumes a `_pending` place (the pre-acquire parking spot).
-    let consumes_pending = claim_abort["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| {
-            a["place"].as_str().map(|p| p.ends_with("_pending")).unwrap_or(false)
-                && a["read"] != serde_json::Value::Bool(true)
-        });
+    let consumes_pending = claim_abort["inputs"].as_array().unwrap().iter().any(|a| {
+        a["place"]
+            .as_str()
+            .map(|p| p.ends_with("_pending"))
+            .unwrap_or(false)
+            && a["read"] != serde_json::Value::Bool(true)
+    });
     assert!(
         consumes_pending,
         "claim_abort must CONSUME a `_pending` place: {:?}",
@@ -1283,17 +1290,13 @@ fn lease_scope_aborts_when_acquire_fails() {
     );
 
     // (c) It read-arcs (non-consuming) the parked lease-failure flag.
-    let reads_failed = claim_abort["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| {
-            a["place"]
-                .as_str()
-                .map(|p| p.ends_with("_lease_failed_parked"))
-                .unwrap_or(false)
-                && a["read"] == serde_json::Value::Bool(true)
-        });
+    let reads_failed = claim_abort["inputs"].as_array().unwrap().iter().any(|a| {
+        a["place"]
+            .as_str()
+            .map(|p| p.ends_with("_lease_failed_parked"))
+            .unwrap_or(false)
+            && a["read"] == serde_json::Value::Bool(true)
+    });
     assert!(
         reads_failed,
         "claim_abort must read-arc a `_lease_failed_parked` place: {:?}",
@@ -1303,7 +1306,12 @@ fn lease_scope_aborts_when_acquire_fails() {
     // (d) The lease-failed register transition now carries the `error`.
     let register = transitions(&air)
         .iter()
-        .find(|t| t["id"].as_str().unwrap().ends_with("_lease_failed_register"))
+        .find(|t| {
+            t["id"]
+                .as_str()
+                .unwrap()
+                .ends_with("_lease_failed_register")
+        })
         .expect("a `_lease_failed_register` transition must exist");
     let register_logic = register["logic"]["source"].as_str().unwrap();
     assert!(
@@ -1453,13 +1461,15 @@ fn loop_body_reading_start_field_via_parked_slug_compiles() {
         .expect("parked-borrow `start.job_name` in a loop body must compile");
     // And the read-arc into Start's parked place is actually synthesized.
     let reads_start = transitions(&air).iter().any(|t| {
-        t["id"].as_str().map(|s| s.starts_with("render")).unwrap_or(false)
+        t["id"]
+            .as_str()
+            .map(|s| s.starts_with("render"))
+            .unwrap_or(false)
             && t["inputs"]
                 .as_array()
                 .map(|ins| {
                     ins.iter().any(|a| {
-                        a["place"] == "p_start-1_data"
-                            && a["read"] == serde_json::Value::Bool(true)
+                        a["place"] == "p_start-1_data" && a["read"] == serde_json::Value::Bool(true)
                     })
                 })
                 .unwrap_or(false)
@@ -1512,7 +1522,9 @@ fn lease_scope_loop_counter_is_in_scope_at_end() {
         "",
         &files,
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_dc("datacenter")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(
+                &known_with_prod_dc("datacenter"),
+            ),
             ..Default::default()
         },
     )
@@ -1522,7 +1534,10 @@ fn lease_scope_loop_counter_is_in_scope_at_end() {
     // The End's result-mapping transition read-arcs the loop's parked counter
     // place — `lp.iteration` is borrow-reachable across the LeaseScope boundary.
     let end_reads_counter = transitions(&air).iter().any(|t| {
-        t["id"].as_str().map(|s| s.starts_with("t_end-1")).unwrap_or(false)
+        t["id"]
+            .as_str()
+            .map(|s| s.starts_with("t_end-1"))
+            .unwrap_or(false)
             && t["inputs"]
                 .as_array()
                 .map(|ins| {
@@ -1580,7 +1595,9 @@ fn compile_lease_scope_end_borrow(expr: &str) -> Result<Value, CompileError> {
         "",
         &files,
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_dc("datacenter")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(
+                &known_with_prod_dc("datacenter"),
+            ),
             ..Default::default()
         },
     )
@@ -1633,7 +1650,10 @@ fn lease_borrow_of_resolved_flavor_scheduler_field_compiles() {
 fn lease_borrow_of_wrong_flavor_scheduler_field_is_rejected() {
     let err = compile_lease_scope_end_borrow("ascope.lease.scheduler.eval_id").unwrap_err();
     let CompileError::LeaseFieldUnknown {
-        referenced, flavor, allowed, ..
+        referenced,
+        flavor,
+        allowed,
+        ..
     } = &err
     else {
         panic!("expected LeaseFieldUnknown for nomad-only field on a slurm scope, got {err:?}");

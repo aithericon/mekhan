@@ -212,10 +212,7 @@ async fn apply_air_re_apply_bumps_version_and_re_registers_trigger() {
             .fetch_one(&db)
             .await
             .unwrap();
-    assert!(
-        !v1_is_latest,
-        "v1 must be marked not-latest after re-apply"
-    );
+    assert!(!v1_is_latest, "v1 must be marked not-latest after re-apply");
 
     // GET /api/triggers — only one trg_bump exists (v2's), and its
     // target_node_id reflects the new air_target_place_id.
@@ -258,13 +255,12 @@ async fn apply_air_rejects_missing_air_target_place() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // No row was written.
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM workflow_templates WHERE name = $1",
-    )
-    .bind("preair-bad-target")
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM workflow_templates WHERE name = $1")
+            .bind("preair-bad-target")
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert_eq!(count, 0, "failed apply must not leave a partial row");
 }
 

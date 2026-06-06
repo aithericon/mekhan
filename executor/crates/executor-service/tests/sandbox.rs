@@ -233,8 +233,9 @@ impl SandboxTestEnv {
         //   - EXECUTOR_SUBJECT_PREFIX = `{prefix}` — so the executor's
         //     StatusReporter writes to `STATUS_{prefix}` / `{prefix}.executor.
         //     status.>`, exactly where this test's status consumer listens.
-        let nats_url =
-            aithericon_executor_test_harness::nats::shared_nats_url().await.to_string();
+        let nats_url = aithericon_executor_test_harness::nats::shared_nats_url()
+            .await
+            .to_string();
         let job_namespace = format!("{}_jobs", ctx.prefix);
         let subject_prefix = ctx.prefix.clone();
 
@@ -325,9 +326,9 @@ fn sandbox_image_available() -> bool {
 mod probes {
     use std::collections::HashMap;
 
-    use aithericon_executor_domain::{ExecutionJob, JobPriority};
     #[cfg(feature = "python")]
     use aithericon_executor_domain::OutputDeclaration;
+    use aithericon_executor_domain::{ExecutionJob, JobPriority};
     use aithericon_executor_process::ProcessConfig;
 
     fn bash_job(eid: &str, script: &str, timeout: Option<std::time::Duration>) -> ExecutionJob {
@@ -437,11 +438,7 @@ mod probes {
     /// (cancellation is the only exit). Spawns a grandchild `sleep` so the test
     /// can assert the whole PID-ns is torn down, not just nsjail.
     pub fn long_running_probe(eid: &str) -> ExecutionJob {
-        bash_job(
-            eid,
-            "sleep 600 & echo \"GRANDCHILD=$!\"; wait",
-            None,
-        )
+        bash_job(eid, "sleep 600 & echo \"GRANDCHILD=$!\"; wait", None)
     }
 
     /// Optional PID-cap probe: a bounded fork loop that must hit `pids_max`
@@ -1090,7 +1087,9 @@ async fn sandbox_startup_overhead_benchmark() {
         on_ms.len(),
         off_ms.len()
     );
-    eprintln!("[sandbox][bench] sandboxed    ms/job: mean={m_on:.1} median={med_on:.1} p90={p90_on:.1}");
+    eprintln!(
+        "[sandbox][bench] sandboxed    ms/job: mean={m_on:.1} median={med_on:.1} p90={p90_on:.1}"
+    );
     eprintln!("[sandbox][bench] unsandboxed  ms/job: mean={m_off:.1} median={med_off:.1} p90={p90_off:.1}");
     eprintln!(
         "[sandbox][bench] ⇒ nsjail per-job overhead ≈ mean {:.1} ms / median {:.1} ms",

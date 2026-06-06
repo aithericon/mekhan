@@ -269,15 +269,26 @@ impl VllmAdapter {
         Ok(body
             .data
             .into_iter()
-            .map(|row| match row.parent.or(row.root) {
-                Some(base) => LoadedModel::Lora {
-                    adapter_id: row.id,
-                    base,
-                },
-                None => LoadedModel::Base {
-                    model_id: row.id,
-                    max_num_seqs: None,
-                },
+            .map(|row| {
+                // vLLM marks a LoRA row with `parent` = the base it attaches to.
+                // A BASE row has `parent: null` but `root` pointing at ITSELF
+                // (vLLM ≥0.20 fills `root` = the model's own id). So a row is a
+                // LoRA only when it has a parent, or a `root` naming a DIFFERENT
+                // model — a self-referential `root` is the base, not an adapter.
+                let base = row
+                    .parent
+                    .clone()
+                    .or_else(|| row.root.clone().filter(|r| *r != row.id));
+                match base {
+                    Some(base) => LoadedModel::Lora {
+                        adapter_id: row.id,
+                        base,
+                    },
+                    None => LoadedModel::Base {
+                        model_id: row.id,
+                        max_num_seqs: None,
+                    },
+                }
             })
             .collect())
     }
@@ -410,6 +421,11 @@ mod tests {
                 "object": "list",
                 "data": [
                     { "id": "meta-llama/Llama-3-8B", "object": "model" },
+                    // A real vLLM ≥0.20 base row: parent null, root = ITSELF.
+                    // Must classify as Base, not a self-referential LoRA
+                    // (regression: live probe of `facebook/opt-125m` mislabeled
+                    // the base as a LoRA because `root` was non-null).
+                    { "id": "facebook/opt-125m", "object": "model", "parent": null, "root": "facebook/opt-125m" },
                     { "id": "adapter-a", "object": "model", "parent": "meta-llama/Llama-3-8B" },
                     { "id": "adapter-b", "object": "model", "root": "meta-llama/Llama-3-8B" }
                 ]
@@ -424,6 +440,10 @@ mod tests {
             vec![
                 LoadedModel::Base {
                     model_id: "meta-llama/Llama-3-8B".into(),
+                    max_num_seqs: None,
+                },
+                LoadedModel::Base {
+                    model_id: "facebook/opt-125m".into(),
                     max_num_seqs: None,
                 },
                 LoadedModel::Lora {

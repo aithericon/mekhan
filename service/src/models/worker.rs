@@ -315,8 +315,10 @@ mod tests {
         let runner = mint_token(crate::models::runner::RUNNER_TOKEN_PREFIX, id);
         assert!(parse_token(WORKER_TOKEN_PREFIX, &runner.full_token).is_none());
         let worker = mint_token(WORKER_TOKEN_PREFIX, id);
-        assert!(
-            parse_token(crate::models::runner::RUNNER_TOKEN_PREFIX, &worker.full_token).is_none()
-        );
+        assert!(parse_token(
+            crate::models::runner::RUNNER_TOKEN_PREFIX,
+            &worker.full_token
+        )
+        .is_none());
     }
 }

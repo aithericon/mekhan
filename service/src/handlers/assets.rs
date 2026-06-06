@@ -35,9 +35,9 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::asset::{
-    AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow,
-    AssetTypeSummary, AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest,
-    CreateAssetTypeRequest, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
+    AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
+    AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
+    CreateScopeQuery, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
     ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
 };
 use crate::models::error::{ApiError, ErrorResponse};
@@ -82,7 +82,7 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 
 /// Parse a `?scope=` query value into a concrete binding context for
 /// downward-visibility resolution. Accepts `workspace`, `workspace:<uuid>`,
-/// `project:<uuid>`, `template:<uuid>`. Bare `workspace` (or absent) resolves
+/// `folder:<uuid>`, `template:<uuid>`. Bare `workspace` (or absent) resolves
 /// to the caller's workspace.
 fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid), ApiError> {
     let Some(raw) = scope else {
@@ -94,7 +94,7 @@ fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid)
     }
     let (kind_str, id_str) = raw.split_once(':').ok_or_else(|| {
         ApiError::bad_request(format!(
-            "invalid scope '{raw}' — expected `workspace`, `project:<uuid>`, or `template:<uuid>`"
+            "invalid scope '{raw}' — expected `workspace`, `folder:<uuid>`, or `template:<uuid>`"
         ))
     })?;
     let kind = ScopeKind::from_db(kind_str)
@@ -129,6 +129,48 @@ fn create_scope(
     Ok((kind, id))
 }
 
+/// Resolve the owner scope for a CREATE request, accepting it from EITHER the
+/// request body (`scope_kind`/`scope_id`) OR the `?scope=` query param — the
+/// same grammar the list endpoints use. Previously only the body was honored,
+/// so an API caller who mirrored the list convention (`POST …?scope=folder:x`)
+/// silently created a workspace-scoped item. Now: if both are given they must
+/// agree (else 400); otherwise whichever is present wins, defaulting to the
+/// caller's workspace.
+fn resolve_create_scope(
+    user: &AuthUser,
+    query_scope: Option<&str>,
+    body_kind: Option<ScopeKind>,
+    body_id: Option<Uuid>,
+) -> Result<(ScopeKind, Uuid), ApiError> {
+    let body_set = body_kind.is_some() || body_id.is_some();
+    let query_set = query_scope.map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+    let body = if body_set {
+        Some(create_scope(user, body_kind, body_id)?)
+    } else {
+        None
+    };
+    let query = if query_set {
+        Some(parse_scope(user, query_scope)?)
+    } else {
+        None
+    };
+
+    match (body, query) {
+        (Some(b), Some(q)) if b != q => Err(ApiError::bad_request(format!(
+            "scope conflict: request body specifies {}:{} but ?scope= specifies \
+             {}:{} — provide only one, or make them agree",
+            b.0.as_db(),
+            b.1,
+            q.0.as_db(),
+            q.1
+        ))),
+        (Some(b), _) => Ok(b),
+        (None, Some(q)) => Ok(q),
+        (None, None) => Ok((ScopeKind::Workspace, caller_workspace(user))),
+    }
+}
+
 /// Map a [`scope::IncomparableClash`] to a 409 — the binding ref is ambiguous
 /// (two equally-specific scopes both define it, docs/20 §2).
 fn clash_to_api_error(c: scope::IncomparableClash) -> ApiError {
@@ -140,7 +182,9 @@ fn clash_to_api_error(c: scope::IncomparableClash) -> ApiError {
 /// Deserialize an `asset_types.fields_json` JSONB blob into `Vec<PortField>`.
 fn parse_fields(fields_json: &Value) -> Result<Vec<PortField>, ApiError> {
     serde_json::from_value::<Vec<PortField>>(fields_json.clone()).map_err(|e| {
-        ApiError::internal(format!("asset type schema is not a valid Vec<PortField>: {e}"))
+        ApiError::internal(format!(
+            "asset type schema is not a valid Vec<PortField>: {e}"
+        ))
     })
 }
 
@@ -255,8 +299,7 @@ fn check_additive_evolution(old: &[PortField], new: &[PortField]) -> Result<(), 
         }
     }
     // Newly-added fields must be optional.
-    let old_names: std::collections::HashSet<&str> =
-        old.iter().map(|f| f.name.as_str()).collect();
+    let old_names: std::collections::HashSet<&str> = old.iter().map(|f| f.name.as_str()).collect();
     for nf in new {
         if !old_names.contains(nf.name.as_str()) && nf.required {
             breaks.push(format!(
@@ -331,6 +374,7 @@ pub async fn list_asset_types(
 #[utoipa::path(
     post,
     path = "/api/v1/asset-types",
+    params(CreateScopeQuery),
     request_body = CreateAssetTypeRequest,
     responses(
         (status = 201, description = "Asset type created", body = AssetTypeDetail),
@@ -343,9 +387,11 @@ pub async fn list_asset_types(
 pub async fn create_asset_type(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetTypeRequest>,
 ) -> Result<(StatusCode, Json<AssetTypeDetail>), ApiError> {
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) =
+        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
     require_editor(&state, &user, scope_kind, scope_id).await?;
     let principal = user.subject_as_uuid();
     let detail = create_asset_type_internal(&state, &req, scope_kind, scope_id, principal).await?;
@@ -618,6 +664,7 @@ pub async fn list_assets(
 #[utoipa::path(
     post,
     path = "/api/v1/assets",
+    params(CreateScopeQuery),
     request_body = CreateAssetRequest,
     responses(
         (status = 201, description = "Asset created", body = AssetSummary),
@@ -631,9 +678,11 @@ pub async fn list_assets(
 pub async fn create_asset(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<AssetSummary>), ApiError> {
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) =
+        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
     require_editor(&state, &user, scope_kind, scope_id).await?;
     let principal = user.subject_as_uuid();
     let summary = create_asset_internal(&state, &req, scope_kind, scope_id, principal).await?;
@@ -1083,10 +1132,7 @@ pub async fn asset_usage(
                     m.iter().find_map(|(alias, pin)| {
                         let aid = pin.get("asset_id").and_then(Value::as_str)?;
                         (aid == target).then(|| {
-                            let v = pin
-                                .get("version")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(0) as i32;
+                            let v = pin.get("version").and_then(Value::as_i64).unwrap_or(0) as i32;
                             (alias.clone(), v)
                         })
                     })
@@ -1188,7 +1234,7 @@ fn row_scope(scope_kind: &str, scope_id: Uuid) -> Option<Scope> {
 fn folder_matches(display_path: Option<&str>, folder: Option<&str>) -> bool {
     match folder {
         None => true,
-        Some(prefix) if prefix.is_empty() => true,
+        Some("") => true,
         Some(prefix) => match display_path {
             None => false,
             Some(dp) => dp == prefix || dp.starts_with(&format!("{prefix}/")),
@@ -1276,8 +1322,8 @@ fn visible_pairs(visible: &VisibleScopes) -> (Vec<String>, Vec<Uuid>) {
         kinds.push(ScopeKind::Workspace.as_db().to_string());
         ids.push(ws);
     }
-    for p in &visible.projects {
-        kinds.push(ScopeKind::Project.as_db().to_string());
+    for p in &visible.folders {
+        kinds.push(ScopeKind::Folder.as_db().to_string());
         ids.push(*p);
     }
     if let Some(t) = visible.template {
@@ -1338,7 +1384,7 @@ async fn require_editor(
     scope_kind: ScopeKind,
     scope_id: Uuid,
 ) -> Result<(), ApiError> {
-    use crate::auth::membership::{map_to_api_error, require_role, Role, MembershipError};
+    use crate::auth::membership::{map_to_api_error, require_role, MembershipError, Role};
 
     // The workspace whose membership governs this write. For a workspace scope
     // it's the scope id itself; for project/template scopes we fall back to the
@@ -1453,11 +1499,7 @@ async fn write_records(
 /// cell per the field's [`crate::models::template::FieldKind`]. Header mode maps
 /// columns by name (unmapped columns ignored); headerless mode maps columns
 /// positionally to the type's field order.
-fn parse_csv(
-    bytes: &[u8],
-    fields: &[PortField],
-    has_header: bool,
-) -> Result<Vec<Value>, ApiError> {
+fn parse_csv(bytes: &[u8], fields: &[PortField], has_header: bool) -> Result<Vec<Value>, ApiError> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(has_header)
         .flexible(true)
@@ -1483,8 +1525,7 @@ fn parse_csv(
 
     let mut records: Vec<Value> = Vec::new();
     for (line, result) in reader.records().enumerate() {
-        let row = result
-            .map_err(|e| ApiError::bad_request(format!("bad csv row {line}: {e}")))?;
+        let row = result.map_err(|e| ApiError::bad_request(format!("bad csv row {line}: {e}")))?;
         let mut obj = serde_json::Map::new();
         for (i, cell) in row.iter().enumerate() {
             let Some(field) = column_fields.get(i).copied().flatten() else {
@@ -1518,8 +1559,9 @@ fn coerce_csv_cell(field: &PortField, cell: &str) -> Value {
             "false" | "0" | "no" | "n" => Value::Bool(false),
             _ => Value::String(cell.to_string()),
         },
-        FieldKind::Json => serde_json::from_str::<Value>(cell)
-            .unwrap_or_else(|_| Value::String(cell.to_string())),
+        FieldKind::Json => {
+            serde_json::from_str::<Value>(cell).unwrap_or_else(|_| Value::String(cell.to_string()))
+        }
         _ => Value::String(cell.to_string()),
     }
 }
@@ -1576,7 +1618,10 @@ mod tests {
     #[test]
     fn additive_add_optional_ok() {
         let old = vec![pf("a", FieldKind::Text, true)];
-        let new = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Number, false)];
+        let new = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Number, false),
+        ];
         assert!(check_additive_evolution(&old, &new).is_ok());
     }
 
@@ -1589,7 +1634,10 @@ mod tests {
 
     #[test]
     fn additive_remove_rejected() {
-        let old = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Text, false)];
+        let old = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Text, false),
+        ];
         let new = vec![pf("a", FieldKind::Text, true)];
         assert!(check_additive_evolution(&old, &new).is_err());
     }
@@ -1611,7 +1659,10 @@ mod tests {
     #[test]
     fn additive_new_required_field_rejected() {
         let old = vec![pf("a", FieldKind::Text, true)];
-        let new = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Text, true)];
+        let new = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Text, true),
+        ];
         assert!(check_additive_evolution(&old, &new).is_err());
     }
 
@@ -1648,5 +1699,75 @@ mod tests {
         assert!(!folder_matches(Some("scripts"), Some("materials")));
         assert!(!folder_matches(None, Some("materials")));
         assert!(folder_matches(None, None));
+    }
+
+    // ── resolve_create_scope: body / query reconciliation ────────────────────
+
+    fn test_user(ws: Uuid) -> AuthUser {
+        AuthUser {
+            subject: "dev".into(),
+            email: None,
+            display_name: None,
+            roles: vec![],
+            org_id: None,
+            workspace_id: Some(ws),
+        }
+    }
+
+    #[test]
+    fn create_scope_defaults_to_caller_workspace() {
+        let ws = Uuid::new_v4();
+        let u = test_user(ws);
+        assert_eq!(
+            resolve_create_scope(&u, None, None, None).unwrap(),
+            (ScopeKind::Workspace, ws)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_only() {
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        assert_eq!(
+            resolve_create_scope(&u, None, Some(ScopeKind::Folder), Some(folder)).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_query_only() {
+        // The previously-silent footgun: `?scope=folder:<id>` with no body
+        // scope now actually takes effect instead of defaulting to workspace.
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{folder}");
+        assert_eq!(
+            resolve_create_scope(&u, Some(&q), None, None).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_and_query_agree() {
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{folder}");
+        assert_eq!(
+            resolve_create_scope(&u, Some(&q), Some(ScopeKind::Folder), Some(folder)).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_and_query_conflict_is_400() {
+        let ws = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{}", Uuid::new_v4());
+        let err = resolve_create_scope(&u, Some(&q), Some(ScopeKind::Folder), Some(Uuid::new_v4()))
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 }

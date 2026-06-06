@@ -38,8 +38,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use aithericon_executor_llm::{
-    register_as_pool, spawn_pool_listener, OllamaSubprocess, OllamaSubprocessConfig, PoolBootConfig,
-    ToolResultsState,
+    register_as_pool, spawn_pool_listener, OllamaSubprocess, OllamaSubprocessConfig,
+    PoolBootConfig, ToolResultsState,
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;

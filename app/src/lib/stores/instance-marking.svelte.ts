@@ -317,3 +317,57 @@ export function leaseRuntimeFor(store: InstanceMarkingStore, nodeId: string): Le
 		schedulerDetail
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Streaming-channel lifecycle — per-channel best-effort live status (docs/25)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitize a channel name into the place-id segment the compiler emits.
+ * Mirrors `service/src/compiler/lower/channels.rs::sanitize` exactly: any char
+ * outside `[A-Za-z0-9_]` becomes `_`. Keep in lock-step with the compiler — the
+ * place id below (`p_{nodeId}_{seg}`) only resolves if the segment matches.
+ */
+export function sanitizeChannelSegment(name: string): string {
+	return name.replace(/[^A-Za-z0-9_]/g, '_');
+}
+
+/**
+ * Best-effort live lifecycle of one declared channel, read from the instance
+ * marking. Open/element tokens park at `p_{nodeId}_{seg}`; a DATA-plane
+ * channel's close token parks at a separate `p_{nodeId}_{seg}_close` sink
+ * (control channels have no `_close` place — their close rides the control
+ * seam, so `closed` stays false for them).
+ *
+ * CAVEAT: `projectMarking` reflects the CURRENT folded marking, not a running
+ * total — consumed element tokens disappear, so `elements` is "currently
+ * parked", not "total emitted", and a fully-drained channel reads 0 at
+ * terminal. This is a live overlay on top of the statically-declared channel
+ * list, not an authoritative counter.
+ */
+export interface ChannelRuntime {
+	/** Open/element tokens are (or were) present — the channel has activity. */
+	opened: boolean;
+	/** Element/open tokens currently parked at `p_{nodeId}_{seg}`. */
+	elements: number;
+	/** Close token seen at the data-plane `_close` sink. Always false for
+	 *  control channels (no `_close` place exists). */
+	closed: boolean;
+	/** Whether the instance net declares the channel's element place at all
+	 *  (false → no live lifecycle to show; render the channel statically). */
+	known: boolean;
+}
+
+export function channelRuntimeFor(
+	store: InstanceMarkingStore,
+	nodeId: string,
+	channelName: string
+): ChannelRuntime {
+	const seg = sanitizeChannelSegment(channelName);
+	const elementPlace = `p_${nodeId}_${seg}`;
+	const closePlace = `p_${nodeId}_${seg}_close`;
+	const known = store.hasPlace(elementPlace);
+	const elements = known ? store.count(elementPlace) : 0;
+	const closed = store.hasPlace(closePlace) && store.count(closePlace) > 0;
+	return { opened: elements > 0 || closed, elements, closed, known };
+}

@@ -17,6 +17,8 @@
 		else status = 'disconnected';
 	}
 
+	// One-time listener registration on the provider handed in at mount.
+	// svelte-ignore state_referenced_locally
 	provider.on('status', handleStatus);
 
 	onDestroy(() => {

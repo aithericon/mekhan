@@ -10,9 +10,7 @@ mod vault_store;
 
 pub use chain_store::ChainedSecretStore;
 #[cfg(feature = "vault")]
-pub use datastream_credential::{
-    unwrap_subject_grant, wrap_subject_grant, NATS_SUBJECT_GRANT_KEY,
-};
+pub use datastream_credential::{unwrap_subject_grant, wrap_subject_grant, NATS_SUBJECT_GRANT_KEY};
 pub use env_store::EnvVarSecretStore;
 pub use error::SecretError;
 pub use in_memory_store::InMemorySecretStore;

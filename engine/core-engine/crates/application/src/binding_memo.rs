@@ -370,7 +370,10 @@ mod tests {
         memo.mark_empty(TransitionId::named("t_join"));
         memo.mark_empty(TransitionId::named("t_other"));
 
-        memo.apply_events(Some(&net), [DomainEvent::NetInitialized { net: net.clone() }].iter());
+        memo.apply_events(
+            Some(&net),
+            [DomainEvent::NetInitialized { net: net.clone() }].iter(),
+        );
 
         assert!(!memo.is_known_empty(&TransitionId::named("t_join")));
         assert!(!memo.is_known_empty(&TransitionId::named("t_other")));

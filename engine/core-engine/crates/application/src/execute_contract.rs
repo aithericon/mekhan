@@ -104,7 +104,8 @@ mod tests {
         assert_eq!(req.config["system_prompt"], "You are a clinical assistant.");
         assert_eq!(req.input["prompt"], "Summarize the chart.");
 
-        let reserialized: Value = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        let reserialized: Value =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         let expected: Value = serde_json::from_str(REQUEST_SAMPLE).unwrap();
         assert_eq!(reserialized, expected);
     }
@@ -119,7 +120,10 @@ mod tests {
             input: serde_json::json!({}),
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(!json.contains("model"), "None model must not appear on the wire");
+        assert!(
+            !json.contains("model"),
+            "None model must not appear on the wire"
+        );
     }
 
     #[test]

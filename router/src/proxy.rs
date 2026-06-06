@@ -95,10 +95,13 @@ pub async fn chat_completions(
     {
         Ok(r) => r,
         Err(RouteError::NoReplica(model)) => {
+            // P4-L2 scale-FROM-zero signal: demand for a model with no live
+            // replica (e.g. a `scale_to_zero` policy that has scaled to 0).
+            ctx.metrics.inc_starved(&model);
             return error_json(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &format!("no live replica serves model `{model}`"),
-            )
+            );
         }
         Err(e @ RouteError::ResidencyUnsatisfiable { .. }) => {
             // Fail closed — never cross-zone, never external auto-offload.
@@ -111,6 +114,9 @@ pub async fn chat_completions(
         Some(p) => p,
         None => {
             Metrics::inc(&ctx.metrics.rejected_429_total);
+            // P4-L2 saturation-demand signal: live replicas exist but are all
+            // full — the model wants MORE capacity.
+            ctx.metrics.inc_starved(&peek.model);
             return too_many_requests(&peek.model);
         }
     };

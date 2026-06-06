@@ -35,8 +35,8 @@ use crate::models::job_template::{
     StageJobTemplateRequest, TemplateParameter, TemplateStaging, TemplateStagingRow,
     UpdateJobTemplateRequest,
 };
-use crate::petri::staging_net::trigger_staging;
 use crate::models::template::PaginatedResponse;
+use crate::petri::staging_net::trigger_staging;
 use crate::AppState;
 
 /// Identifier grammar shared with resource paths: a slug is referenced as an
@@ -514,11 +514,13 @@ pub async fn update_job_template(
             Some(created_by.as_str()),
         )
         .await?;
-        sqlx::query("UPDATE job_templates SET latest_version = $1, updated_at = NOW() WHERE id = $2")
-            .bind(latest_version)
-            .bind(row.id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE job_templates SET latest_version = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(latest_version)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
     }
 
     Ok(Json(JobTemplateSummary {
@@ -653,13 +655,15 @@ pub async fn stage_job_template(
         .cloned();
     let targets: Vec<Uuid> = match explicit {
         Some(ids) => ids,
-        None => sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM resources \
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM resources \
              WHERE workspace_id = $1 AND resource_type = 'datacenter' AND deleted_at IS NULL",
-        )
-        .bind(workspace_id)
-        .fetch_all(&state.db)
-        .await?,
+            )
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await?
+        }
     }
     .into_iter()
     .collect();

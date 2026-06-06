@@ -725,26 +725,6 @@ mod tests {
         }
     }
 
-    fn make_artifact_event_token() -> serde_json::Value {
-        serde_json::json!({
-            "execution_id": "exec-1",
-            "category": "artifact",
-            "detail": {
-                "event_type": "artifact_logged",
-                "artifact_id": "gp_model",
-                "name": "gp_model",
-                "category": "model",
-                "size_bytes": 400270,
-                "storage_path": "artifacts/gp_model.json",
-                "metadata": {
-                    "source_net": "bo-pipeline"
-                }
-            },
-            "sequence": 42,
-            "source": "exec-1"
-        })
-    }
-
     // -----------------------------------------------------------------------
     // CatalogueLookupHandler tests
     // -----------------------------------------------------------------------
@@ -1040,12 +1020,12 @@ mod tests {
         let output = handler.execute(input).await.unwrap();
         let result_token = output.tokens.get("unsubscribed").expect("output token");
 
-        assert_eq!(result_token["unsubscribed"].as_bool().unwrap(), true);
+        assert!(result_token["unsubscribed"].as_bool().unwrap());
         // Original fields preserved
         assert_eq!(result_token["subscription_id"].as_str().unwrap(), "sub-123",);
 
         // Effect result
-        assert_eq!(output.result["unsubscribed"].as_bool().unwrap(), true);
+        assert!(output.result["unsubscribed"].as_bool().unwrap());
         assert_eq!(
             output.result["subscription_id"].as_str().unwrap(),
             "sub-123",

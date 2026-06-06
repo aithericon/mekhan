@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod auth;
+pub mod autoscaler;
 pub mod backends;
 pub mod catalogue;
 pub mod causality;
@@ -228,6 +229,18 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::model_pool::transition_model
         ))
         .routes(routes!(handlers::model_pool::get_model))
+        // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
+        // manual scale. The autoscaler loop reconciles `model_replicas` rows;
+        // these surface them + the L1 manual desired override.
+        .routes(routes!(
+            handlers::model_replicas::list_model_replicas,
+            handlers::model_replicas::scale_model_replica
+        ))
+        .routes(routes!(handlers::model_replicas::get_model_replica))
+        // Model-pool P5 (docs/29 §7') — inference metering audit-ledger read.
+        .routes(routes!(
+            handlers::inference_metering::list_inference_requests
+        ))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -256,6 +269,11 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::instances::list_instance_children))
         .routes(routes!(handlers::instances::list_instance_allocations))
         .routes(routes!(handlers::instances::stream_instance))
+        // Executions — data-plane channel byte tap. Generic byte pipe over the
+        // executor's `EXECUTOR_DATASTREAM` JetStream stream
+        // (`executor.datastream.{execution_id}.{channel}`); ephemeral consumer,
+        // streams payload bytes chunk-by-chunk until the EOF envelope.
+        .routes(routes!(handlers::executions::tap_channel_data))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))
@@ -458,29 +476,30 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::add_member
         ))
         .routes(routes!(handlers::workspaces::remove_member))
-        // Projects (Phase A2) — M:N grouping of templates within a
-        // workspace. Not an ACL boundary.
-        .routes(routes!(handlers::projects::list_workspace_tags))
+        // Folders — single-parent hierarchical grouping of templates within
+        // a workspace (filesystem model). Not an ACL boundary.
+        .routes(routes!(handlers::folders::list_workspace_tags))
         .routes(routes!(
-            handlers::projects::list_projects,
-            handlers::projects::create_project
+            handlers::folders::list_folders,
+            handlers::folders::create_folder
         ))
         .routes(routes!(
-            handlers::projects::delete_project,
-            handlers::projects::update_project
+            handlers::folders::delete_folder,
+            handlers::folders::update_folder
         ))
-        .routes(routes!(handlers::projects::attach_template))
-        .routes(routes!(handlers::projects::detach_template))
-        // Template tags + visibility (Phase A2; GET added Phase B).
         .routes(routes!(
-            handlers::projects::get_template_tags,
-            handlers::projects::set_template_tags
+            handlers::folders::set_template_folder,
+            handlers::folders::get_template_folder
         ))
-        .routes(routes!(handlers::projects::set_template_visibility))
-        .routes(routes!(handlers::projects::list_template_projects))
-        // Per-project OpenAPI bundle (Phase B) — synthesized webhook spec
-        // for SDK generators + API doc viewers.
-        .routes(routes!(handlers::openapi_bundle::project_openapi_bundle))
+        // Template tags + visibility (tags are a separate cross-cutting system).
+        .routes(routes!(
+            handlers::folders::get_template_tags,
+            handlers::folders::set_template_tags
+        ))
+        .routes(routes!(handlers::folders::set_template_visibility))
+        // Per-folder OpenAPI bundle — synthesized trigger spec for SDK
+        // generators + API doc viewers, gathered across the folder subtree.
+        .routes(routes!(handlers::openapi_bundle::folder_openapi_bundle))
         // Active-workspace switcher (Phase B) — per-session override cookie.
         .routes(routes!(
             handlers::me::set_active_workspace,

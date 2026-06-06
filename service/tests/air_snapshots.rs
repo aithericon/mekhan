@@ -64,6 +64,41 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // Compiles offline (no Python run / model download needed at compile time);
     // RUNNING it is live-only (faster-whisper), documented in demo.json.
     "36-audio-transcribe",
+    // 42-live-audio-stream: Start File borrow → binary DATA channel produced but
+    // UNCONSUMED (no consumer edge) — the UI taps it live via ?follow=1. Pins
+    // that an unwired data OUT channel compiles; running it is live-only (paced).
+    "42-live-audio-stream",
+    // 43-lossy-frame-stream: producer → consumer over a `nats-latest` (lossy
+    // core-NATS) DATA channel — pins that the per-channel `transport` tag lowers
+    // into the manifest; running it (live-only) proves the executor dispatches
+    // the lossy adapter off the descriptor with zero SDK change.
+    "43-lossy-frame-stream",
+    // 44-durable-blob-stream: producer → consumer over an `s3` (durable
+    // object-store) DATA channel — a different transport SHAPE (key/value, not
+    // pub/sub). Pins that the `s3` transport tag lowers into the manifest;
+    // running it (live-only) proves the executor dispatches the object-store
+    // adapter off the descriptor, lossless + replayable, with zero SDK change.
+    "44-durable-blob-stream",
+    // 45-live-fmp4-stream: producer (PyAV-muxed fragmented MP4) → validator over
+    // a default-transport DATA channel whose element content_type is
+    // `audio/mp4;codecs="mp4a.40.2"`. Pins that an audio/mp4 element type lowers
+    // cleanly; the point is the PRESENTATION-side render-adapter dispatch (the UI
+    // routes this channel to the MSE player off the content_type), live-verified
+    // in the browser, not in the AIR snapshot.
+    "45-live-fmp4-stream",
+    // 46-live-video-stream: the VIDEO sibling of 45 — producer (PyAV/libx264
+    // H.264 fragmented MP4) → validator over a default-transport DATA channel
+    // whose element content_type is `video/mp4;codecs="avc1.42E01E"`. Same
+    // lowering as 45; the point is the PRESENTATION dispatch routing this to the
+    // `<video>` + MSE path, live-verified in the browser.
+    "46-live-video-stream",
+    // 47-stream-object-detection: the AI capstone — a real clip flows over a
+    // binary DATA channel (Start File borrow → stream step re-muxes to fragmented
+    // MP4), a detector step CONSUMES that data stream and EMITS a CONTROL stream
+    // of recognized objects on `detections`, and a `join: gather` edge folds them
+    // in `summary`. Pins that consume-data-channel + emit-control-channel + gather
+    // all lower together in one node graph; the YOLO inference itself is live-only.
+    "47-stream-object-detection",
 ];
 
 fn repo_root() -> PathBuf {
@@ -276,6 +311,36 @@ fn snapshot_18_stream_pipeline() {
 #[test]
 fn snapshot_36_audio_transcribe() {
     run("36-audio-transcribe");
+}
+
+#[test]
+fn snapshot_42_live_audio_stream() {
+    run("42-live-audio-stream");
+}
+
+#[test]
+fn snapshot_43_lossy_frame_stream() {
+    run("43-lossy-frame-stream");
+}
+
+#[test]
+fn snapshot_44_durable_blob_stream() {
+    run("44-durable-blob-stream");
+}
+
+#[test]
+fn snapshot_45_live_fmp4_stream() {
+    run("45-live-fmp4-stream");
+}
+
+#[test]
+fn snapshot_46_live_video_stream() {
+    run("46-live-video-stream");
+}
+
+#[test]
+fn snapshot_47_stream_object_detection() {
+    run("47-stream-object-detection");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

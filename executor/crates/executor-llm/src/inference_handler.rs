@@ -135,10 +135,16 @@ pub(crate) async fn run_completion(
     env: &HashMap<String, String>,
 ) -> Result<InferenceResponse, (StatusCode, String)> {
     if req.model.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "model must not be empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "model must not be empty".to_string(),
+        ));
     }
     if req.prompt.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "prompt must not be empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "prompt must not be empty".to_string(),
+        ));
     }
 
     let mut messages = Vec::new();
@@ -244,14 +250,12 @@ pub(crate) fn extract_bearer(headers: &HeaderMap) -> Result<String, (StatusCode,
             "Authorization header contains invalid characters".to_string(),
         )
     })?;
-    let token = raw
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                "Authorization header must use Bearer scheme".to_string(),
-            )
-        })?;
+    let token = raw.strip_prefix("Bearer ").ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "Authorization header must use Bearer scheme".to_string(),
+        )
+    })?;
     Ok(token.to_string())
 }
 
@@ -293,7 +297,10 @@ fn extract_fenced_block(text: &str) -> Option<String> {
     let after = match after.find('\n') {
         Some(nl)
             if !after[..nl].trim().is_empty()
-                && after[..nl].trim().chars().all(|c| c.is_ascii_alphanumeric()) =>
+                && after[..nl]
+                    .trim()
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric()) =>
         {
             &after[nl + 1..]
         }
@@ -343,11 +350,11 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::*;
-    use aithericon_executor_domain::{LlmStopReason, LlmUsage};
     use crate::port::{CompletionPort, CompletionRequest, CompletionResponse, LlmError};
+    use aithericon_executor_domain::{LlmStopReason, LlmUsage};
 
     // ---------------------------------------------------------------------------
     // Mock CompletionPort
@@ -478,7 +485,10 @@ mod tests {
         assert_eq!(v["usage"]["input_tokens"], 5);
         assert_eq!(v["usage"]["output_tokens"], 10);
         assert_eq!(v["usage"]["total_tokens"], 15);
-        assert!(v.get("structured_output").is_none(), "skip_serializing_if None");
+        assert!(
+            v.get("structured_output").is_none(),
+            "skip_serializing_if None"
+        );
     }
 
     #[test]

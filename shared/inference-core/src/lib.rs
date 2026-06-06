@@ -11,7 +11,41 @@
 //! re-export it later (doc 11 §7 lift) without the router depending on the
 //! executor workspace.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// The metering record / GDPR processing-record shape (doc 11 §5.7, doc 29 §7'
+/// P5 `inference_request_log`).
+///
+/// SINGLE SOURCE OF TRUTH for the record: the router stamps + publishes it on
+/// `inference.metering.{request_id}` (see `router/src/metering.rs`), and the
+/// mekhan projector (`service/src/projections/inference_metering.rs`)
+/// deserializes the SAME struct off that JetStream stream and folds it into the
+/// `inference_request_log` Postgres ledger. Keep the field set + serde shape
+/// here so the two halves cannot drift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceRequestLog {
+    pub request_id: String,
+    pub tenant: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
+    pub model: String,
+    pub replica_id: String,
+    pub replica_base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residency_zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slo_tier: Option<String>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    /// `completed` | `unmetered` | `cancelled` | `upstream_error`.
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+}
 
 /// The slim view of an OpenAI `/v1/chat/completions` request body the router
 /// needs to route. Every other field (`messages`, `temperature`, `tools`, …)

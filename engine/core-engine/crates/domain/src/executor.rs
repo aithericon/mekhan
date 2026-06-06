@@ -61,13 +61,13 @@ pub struct ExecutionSubmitRequest {
     /// Chunks are published to `executor.chunks.{execution_id}`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub feed_chunks: bool,
-    }
+}
 
-    fn is_false(b: &bool) -> bool {
+fn is_false(b: &bool) -> bool {
     !*b
-    }
+}
 
-    /// Result of a successful execution submission.
+/// Result of a successful execution submission.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionSubmitResult {
     /// Executor-assigned execution ID. Stored in the event log for replay

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { BaseEdge, EdgeToolbar, getBezierPath, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import { EDGE_LANE_WIDTH_PX } from '$lib/editor/edge-lane';
 
 	let {
 		id,
@@ -16,7 +17,9 @@
 		markerStart,
 		markerEnd,
 		deletable,
-		interactionWidth
+		interactionWidth,
+		data,
+		selected
 	}: EdgeProps = $props();
 
 	const { deleteElements } = useSvelteFlow();
@@ -25,14 +28,32 @@
 		getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition })
 	);
 
+	// Lane styling: draw the edge as wide as the port circle and tint it with a
+	// gradient running from the source port's color to the target port's color
+	// (both stashed on `data` by toFlowEdges) so it reads as a lane between the
+	// two sockets. The gradient axis is anchored to the edge's endpoints in flow
+	// space. Kept subtle (translucent) when idle, stronger when selected.
+	const lane = $derived(data as { laneFrom?: string; laneTo?: string } | undefined);
+	const laneFrom = $derived(lane?.laneFrom ?? 'var(--border)');
+	const laneTo = $derived(lane?.laneTo ?? laneFrom);
+	const stopOpacity = $derived(selected ? 0.85 : 0.4);
+	// SVG ids can't contain whitespace; edge ids are generated and shouldn't, but
+	// sanitize defensively so `url(#…)` always resolves.
+	const gradientId = $derived(`edge-lane-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+
 	// Phase 2 typed-ports: subscribe to the publish-error store and override
 	// the stroke when this edge's id is flagged. Read at render time — no top-
-	// level state mutation, so no feedback loop with xyflow's bind:edges.
+	// level state mutation, so no feedback loop with xyflow's bind:edges. The
+	// error state keeps the lane width but paints it solid destructive (no
+	// gradient) so failures stand out against the tinted lanes.
 	const compileError = $derived(compileErrors.byEdgeId.get(id));
+	const laneStyle = $derived(
+		`stroke-width: ${EDGE_LANE_WIDTH_PX}px; stroke-linecap: round;`
+	);
 	const effectiveStyle = $derived(
 		compileError
-			? `${style ?? ''}; stroke: hsl(var(--destructive)); stroke-width: 2.5;`
-			: style
+			? `${style ?? ''}; ${laneStyle} stroke: hsl(var(--destructive));`
+			: `${style ?? ''}; ${laneStyle} stroke: url(#${gradientId});`
 	);
 
 	function handleDelete(event: MouseEvent) {
@@ -41,6 +62,21 @@
 	}
 </script>
 
+{#if !compileError}
+	<defs>
+		<linearGradient
+			id={gradientId}
+			gradientUnits="userSpaceOnUse"
+			x1={sourceX}
+			y1={sourceY}
+			x2={targetX}
+			y2={targetY}
+		>
+			<stop offset="0%" stop-color={laneFrom} stop-opacity={stopOpacity} />
+			<stop offset="100%" stop-color={laneTo} stop-opacity={stopOpacity} />
+		</linearGradient>
+	</defs>
+{/if}
 <BaseEdge
 	path={pathResult[0]}
 	labelX={pathResult[1]}

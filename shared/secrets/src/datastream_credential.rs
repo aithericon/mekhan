@@ -119,13 +119,9 @@ mod tests {
         let wrapper = RecordingWrapper {
             last: std::sync::Mutex::new(None),
         };
-        let out = wrap_subject_grant(
-            Some(&wrapper),
-            "executor.datastream.exec-1.frames",
-            600,
-        )
-        .await
-        .unwrap();
+        let out = wrap_subject_grant(Some(&wrapper), "executor.datastream.exec-1.frames", 600)
+            .await
+            .unwrap();
         assert_eq!(out.as_deref(), Some("wrap-token-xyz"));
         let grant = wrapper.last.lock().unwrap().clone().unwrap();
         assert_eq!(

@@ -2525,6 +2525,7 @@ dependencies = [
 name = "inference-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]
@@ -2810,6 +2811,7 @@ dependencies = [
  "hcl-rs",
  "http-body-util",
  "indexmap",
+ "inference-core",
  "jsonschema",
  "jsonwebtoken",
  "nats-io-jwt",

@@ -446,7 +446,10 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
     let holds_lease = matches!(
         &node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { capacity: Some(_), .. },
+            deployment_model: DeploymentModel::Executor {
+                capacity: Some(_),
+                ..
+            },
             ..
         }
     );
@@ -471,11 +474,7 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
 /// as `input.<slug>.iteration` (or `<slug>.iteration` for the
 /// slug-borrow rewrite path).
 pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
-    let WorkflowNodeData::Loop {
-        accumulators,
-        ..
-    } = &node.data
-    else {
+    let WorkflowNodeData::Loop { accumulators, .. } = &node.data else {
         unreachable!("out_shape_loop on non-Loop variant");
     };
     let mut o = in_shape.clone();
@@ -528,7 +527,6 @@ pub(crate) fn out_shape_lease_scope(node: &WorkflowNode, in_shape: &TokenShape) 
     );
     o
 }
-
 
 pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Map { output, .. } = &node.data else {

@@ -118,7 +118,10 @@ mod tests {
             input: serde_json::json!({}),
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(!json.contains("model"), "None model must not appear on the wire");
+        assert!(
+            !json.contains("model"),
+            "None model must not appear on the wire"
+        );
     }
 
     #[test]

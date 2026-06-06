@@ -115,7 +115,12 @@ impl SacctEntry {
 
         // Positional accessor with empty-string default for the optional
         // accounting columns (back-compat with a 5-column sacct request).
-        let at = |i: usize| parts.get(i).map(|s| s.trim().to_string()).unwrap_or_default();
+        let at = |i: usize| {
+            parts
+                .get(i)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        };
 
         Some(Self {
             job_id: at(0),
@@ -228,7 +233,10 @@ pub fn parse_exit_code(field: &str) -> Option<i64> {
 /// an empty field or `INVALID`/`UNLIMITED` sentinels.
 pub fn parse_duration_ms(field: &str) -> Option<i64> {
     let field = field.trim();
-    if field.is_empty() || field.eq_ignore_ascii_case("INVALID") || field.eq_ignore_ascii_case("UNLIMITED") {
+    if field.is_empty()
+        || field.eq_ignore_ascii_case("INVALID")
+        || field.eq_ignore_ascii_case("UNLIMITED")
+    {
         return None;
     }
 
@@ -329,8 +337,7 @@ pub fn parse_tres(field: &str) -> ParsedTres {
         if key == "cpu" {
             out.cpu_count = value.parse::<i64>().ok();
         } else if key == "mem" {
-            out.memory_gb =
-                parse_mem_bytes(value).map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0));
+            out.memory_gb = parse_mem_bytes(value).map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0));
         } else if key == "gres/gpu" || key.starts_with("gres/gpu:") {
             out.gpu_count = value.parse::<i64>().ok();
             if let Some(typ) = key.strip_prefix("gres/gpu:") {
@@ -572,7 +579,10 @@ mod tests {
         assert_eq!(parse_mem_bytes("1024K"), Some(1024 * 1024));
         assert_eq!(parse_mem_bytes("1M"), Some(1024 * 1024));
         assert_eq!(parse_mem_bytes("2G"), Some(2 * 1024 * 1024 * 1024));
-        assert_eq!(parse_mem_bytes("2.5G"), Some((2.5 * 1024.0 * 1024.0 * 1024.0) as i64));
+        assert_eq!(
+            parse_mem_bytes("2.5G"),
+            Some((2.5 * 1024.0 * 1024.0 * 1024.0) as i64)
+        );
         assert_eq!(parse_mem_bytes("100"), Some(100));
         assert_eq!(parse_mem_bytes(""), None);
     }

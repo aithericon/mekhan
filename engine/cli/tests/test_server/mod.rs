@@ -21,7 +21,7 @@ use tokio::sync::{broadcast, Notify};
 
 use petri_api::dto::RunMode;
 use petri_api::net_registry::{NetRegistry, StoreFactory};
-use petri_api::router::{create_router, create_router_with_registry, AppState, SseSignal};
+use petri_api::router::{create_router, create_router_with_registry, AppState};
 use petri_application::{AdapterScheduler, PetriNetService};
 use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
 
@@ -102,6 +102,8 @@ impl TestServer {
     }
 
     /// Base URL for this test server.
+    // Shared test helper: used by some integration files, not all.
+    #[allow(dead_code)]
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -141,7 +143,8 @@ impl TestServer {
     /// applies to the net-scoped scenario-load endpoint.
     pub async fn deploy_net(&self, net_id: &str, scenario: &serde_json::Value) {
         let envelope = serde_json::json!({"scenario": scenario});
-        self.post(&format!("/api/nets/{net_id}/scenario"), &envelope).await;
+        self.post(&format!("/api/nets/{net_id}/scenario"), &envelope)
+            .await;
     }
 
     /// Evaluate a named net (multi-net mode).
@@ -154,6 +157,8 @@ impl TestServer {
     }
 
     /// Set run-mode for a named net (multi-net mode).
+    // Shared test helper: used by some integration files, not all.
+    #[allow(dead_code)]
     pub async fn set_run_mode(&self, net_id: &str, mode: &str) -> serde_json::Value {
         self.put(
             &format!("/api/nets/{net_id}/run-mode"),
@@ -207,6 +212,8 @@ impl TestServer {
     }
 
     /// PUT with JSON body.
+    // Shared test helper: used by some integration files, not all.
+    #[allow(dead_code)]
     pub async fn put(&self, path: &str, body: &serde_json::Value) -> serde_json::Value {
         let url = format!("{}{}", self.url, path);
         let body_str = body.to_string();

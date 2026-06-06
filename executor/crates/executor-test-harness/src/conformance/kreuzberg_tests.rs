@@ -153,14 +153,16 @@ pub async fn test_status_callback_fires<K: KreuzbergTestKit>(kit: &K) {
         .await
         .expect("execute ok");
 
-    let statuses = log.lock().unwrap();
-    assert!(
-        statuses
-            .iter()
-            .any(|s| matches!(s, ExecutionStatus::Running)),
-        "{}: expected at least one Running status callback, saw: {statuses:?}",
-        kit.backend_name()
-    );
+    {
+        let statuses = log.lock().unwrap();
+        assert!(
+            statuses
+                .iter()
+                .any(|s| matches!(s, ExecutionStatus::Running)),
+            "{}: expected at least one Running status callback, saw: {statuses:?}",
+            kit.backend_name()
+        );
+    }
 
     kit.cleanup_run_context(&ctx).await;
 }

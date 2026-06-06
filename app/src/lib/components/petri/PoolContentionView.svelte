@@ -56,6 +56,9 @@
 	let { netId = POOL_NET_ID, compact = false, waitingNodeIds = new Set<string>() }: Props =
 		$props();
 
+	// One pool store per mount, keyed on the initial netId (the view remounts
+	// when the target net changes), so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const store = createPoolLiveStore(netId);
 
 	// Percentage of pool currently in use (0–100), clamped for the progress bar.

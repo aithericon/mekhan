@@ -350,7 +350,7 @@ pub(crate) async fn assemble_cluster_summaries(
         .filter(|id| !covered.contains(*id))
         .cloned()
         .collect();
-    let names = resolve_names(&state, workspace_id, &orphan_ids).await;
+    let names = resolve_names(state, workspace_id, &orphan_ids).await;
     for id in orphan_ids {
         if let Some(c) = live.get(&id) {
             let resolved_name = names.get(&id);
@@ -482,8 +482,7 @@ pub async fn list_cluster_leases(
     .await
     .map_err(|e| ApiError::internal(format!("cluster leases lookup: {e}")))?;
 
-    let response: Vec<LeaseResponse> =
-        rows.into_iter().map(LeaseResponse::with_duration).collect();
+    let response: Vec<LeaseResponse> = rows.into_iter().map(LeaseResponse::with_duration).collect();
 
     Ok(Json(response))
 }
@@ -684,7 +683,12 @@ pub async fn fleet_metrics(
         .iter()
         .filter_map(|r| r.cluster_resource_id)
         .collect();
-    let names = resolve_names(&state, workspace_id, &ids.iter().map(Uuid::to_string).collect::<Vec<_>>()).await;
+    let names = resolve_names(
+        &state,
+        workspace_id,
+        &ids.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+    )
+    .await;
     let paths: HashMap<Uuid, String> = names
         .into_iter()
         .filter_map(|(id, (path, _))| Uuid::parse_str(&id).ok().map(|u| (u, path)))
@@ -696,12 +700,13 @@ pub async fn fleet_metrics(
         .collect();
 
     // Fleet rollup over the same windowed, workspace-scoped row set.
-    let fleet_total = aggregate_metrics(&state, workspace_id, window_start, window_end, None, false)
-        .await?
-        .into_iter()
-        .next()
-        .map(|r| metrics_from_row(r, window_start, window_end, &paths, true))
-        .unwrap_or_else(|| empty_metrics("fleet".into(), None, window_start, window_end));
+    let fleet_total =
+        aggregate_metrics(&state, workspace_id, window_start, window_end, None, false)
+            .await?
+            .into_iter()
+            .next()
+            .map(|r| metrics_from_row(r, window_start, window_end, &paths, true))
+            .unwrap_or_else(|| empty_metrics("fleet".into(), None, window_start, window_end));
 
     Ok(Json(FleetMetrics {
         clusters,

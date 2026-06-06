@@ -16,7 +16,11 @@ pub mod staging;
 
 pub use batch::BatchRunner;
 pub use cancel::{CancellationRegistry, NatsCancelListener};
-pub use chunks::{datastream_subject, JetStreamTransport, StreamTransport};
+#[cfg(feature = "opendal")]
+pub use chunks::S3Transport;
+pub use chunks::{
+    datastream_subject, JetStreamTransport, NatsLatestTransport, StreamTransport, TransportRegistry,
+};
 pub use completion::CompletionTracker;
 pub use config::{
     CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, ModelAgentSettings,

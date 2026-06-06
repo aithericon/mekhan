@@ -1,0 +1,12 @@
+{
+  "name": "Lossy frame stream: producer paces 20 frames over nats-latest, consumer drains via the unchanged stream() API and receives at least one",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.sent", "op": "eq", "value": 20 },
+    { "path": "result.value.received", "op": "gte", "value": 1 }
+  ]
+}

@@ -459,10 +459,12 @@ async fn reports_running_with_container_id() {
         .await
         .unwrap();
 
-    let entries = log.lock().unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].0, ExecutionStatus::Running);
-    assert!(entries[0].1.get("container_id").is_some());
+    {
+        let entries = log.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, ExecutionStatus::Running);
+        assert!(entries[0].1.get("container_id").is_some());
+    }
 
     let _ = tokio::fs::remove_dir_all(&ctx.run_dir.root).await;
 }

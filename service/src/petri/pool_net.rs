@@ -259,7 +259,10 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
 
             // Seed N clean capacity tokens.
             for i in 0..capacity {
-                ctx.seed_one(&pool, DynamicToken(json!({ "unit_id": format!("unit-{i}") })));
+                ctx.seed_one(
+                    &pool,
+                    DynamicToken(json!({ "unit_id": format!("unit-{i}") })),
+                );
             }
         }
 
@@ -1184,9 +1187,11 @@ mod tests {
     #[test]
     fn build_pool_net_branches_on_capacity_source() {
         // ---- Seeded ----
-        let seeded =
-            serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Seeded { capacity: 2 }))
-                .expect("seeded pool serializes");
+        let seeded = serde_json::to_value(build_pool_net(
+            Uuid::nil(),
+            CapacitySource::Seeded { capacity: 2 },
+        ))
+        .expect("seeded pool serializes");
 
         // Seeded-only transition; presence-only transitions absent.
         assert!(transition(&seeded, "t_reap").is_some(), "seeded has t_reap");
@@ -1211,8 +1216,7 @@ mod tests {
         // Unguarded grant (no guard key on t_grant).
         let seeded_grant = transition(&seeded, "t_grant").expect("seeded t_grant");
         assert!(
-            seeded_grant.get("guard").is_none()
-                || seeded_grant["guard"].is_null(),
+            seeded_grant.get("guard").is_none() || seeded_grant["guard"].is_null(),
             "seeded t_grant must be UNGUARDED: {seeded_grant}"
         );
 
@@ -1279,7 +1283,10 @@ mod tests {
         let presence = serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Presence))
             .expect("presence pool serializes");
 
-        for (t_id, held_or_unit) in [("t_reap_free", "unit.runner_id"), ("t_reap_held", "held.runner_id")] {
+        for (t_id, held_or_unit) in [
+            ("t_reap_free", "unit.runner_id"),
+            ("t_reap_held", "held.runner_id"),
+        ] {
             let t = transition(&presence, t_id).unwrap_or_else(|| panic!("{t_id}"));
             // Guard correlates the signal's runner_id against the slot's SHARED
             // runner_id.
@@ -1677,20 +1684,38 @@ mod tests {
     fn acquire_failure_routes_to_fail_channel_without_netfail() {
         let a = dc_air(Uuid::nil());
         let req = transition(&a, "t_request").expect("t_request");
-        let err_arc = req["outputs"].as_array().unwrap().iter()
+        let err_arc = req["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|o| o["port"] == "_error" && o["place"] == "request_error");
-        assert!(err_arc, "t_request must route _error to request_error: {req}");
+        assert!(
+            err_arc,
+            "t_request must route _error to request_error: {req}"
+        );
         let f = transition(&a, "t_request_failed").expect("t_request_failed");
         assert_eq!(f["logic"]["type"], "rhai");
-        let in_places: Vec<&str> = f["inputs"].as_array().unwrap().iter()
-            .map(|x| x["place"].as_str().unwrap()).collect();
-        assert!(in_places.contains(&"request_error"), "inputs: {in_places:?}");
-        let to_fail = f["outputs"].as_array().unwrap().iter()
+        let in_places: Vec<&str> = f["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["place"].as_str().unwrap())
+            .collect();
+        assert!(
+            in_places.contains(&"request_error"),
+            "inputs: {in_places:?}"
+        );
+        let to_fail = f["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|o| o["place"] == "fail_outbox");
         assert!(to_fail, "t_request_failed must route to fail_outbox: {f}");
         let src = f["logic"]["source"].as_str().unwrap();
-        assert!(src.contains("err.inputs.request.grant_id") && src.contains("err.error"),
-            "notify must carry grant_id + error: {src}");
+        assert!(
+            src.contains("err.inputs.request.grant_id") && src.contains("err.error"),
+            "notify must carry grant_id + error: {src}"
+        );
     }
 
     /// t_reap drops the expired hold without re-calling release (the allocator

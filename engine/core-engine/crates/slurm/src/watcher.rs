@@ -20,8 +20,9 @@ use tokio::sync::RwLock;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, AllocatedTres, AllocationMetrics,
-    CheckpointStore, RequestedTres, RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
+    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, AllocatedTres,
+    AllocationMetrics, CheckpointStore, RequestedTres, RoutingMeta, SignalPublisher,
+    DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
 use crate::config::SlurmConfig;
@@ -409,8 +410,14 @@ impl SlurmWatcher {
             // Build allocation accounting from the sacct row already fetched and
             // flatten it into the terminal signal payload (payload-only).
             let metrics = build_slurm_metrics(entry);
-            self.publish_signal(&routing, &entry.job_id, &job_status, &msg_id, Some(&metrics))
-                .await;
+            self.publish_signal(
+                &routing,
+                &entry.job_id,
+                &job_status,
+                &msg_id,
+                Some(&metrics),
+            )
+            .await;
 
             let terminal_at = terminal_at_for(&entry.state);
             self.tracked.write().await.insert(
@@ -756,10 +763,7 @@ mod tests {
         if active {
             return true;
         }
-        match terminal_at {
-            Some(at) if at < cutoff => false,
-            _ => true,
-        }
+        !matches!(terminal_at, Some(at) if at < cutoff)
     }
 
     #[test]

@@ -979,7 +979,7 @@ async fn backend_copy_with_gzip_compression() {
         result.outcome
     );
     assert_eq!(result.outputs["copied"], serde_json::json!(true));
-    assert!(result.outputs.get("bytes_transferred").is_some());
+    assert!(result.outputs.contains_key("bytes_transferred"));
 
     // Source still exists, destination is compressed
     assert!(env.operator.exists("data/people.csv").await.unwrap());

@@ -32,6 +32,12 @@ impl KreuzbergConformanceKit {
     }
 }
 
+impl Default for KreuzbergConformanceKit {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn temp_text_file(content: &str) -> tempfile::NamedTempFile {
     let f = tempfile::Builder::new()
         .suffix(".txt")

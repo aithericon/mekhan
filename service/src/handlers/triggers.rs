@@ -598,8 +598,7 @@ pub async fn set_trigger_enabled(
         )));
     }
 
-    let graph_json =
-        serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
+    let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let updated = sqlx::query_as::<_, WorkflowTemplate>(
         r#"

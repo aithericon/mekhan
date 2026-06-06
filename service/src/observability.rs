@@ -190,22 +190,41 @@ mod tests {
 
     #[test]
     fn counter_records_and_resets() {
-        reset_silent_drops();
-        assert_eq!(silent_drops(), 0);
-
+        // `SILENT_DROPS` is a process-global counter that OTHER unit tests
+        // increment concurrently (they exercise error paths that call
+        // `record_silent_drop*`). The counter is monotonically increasing
+        // except for this test's own `reset`, so assert on our own observed
+        // deltas rather than absolute values — that keeps the test robust
+        // under cargo's parallel test runner instead of flaking on a count
+        // bumped by a sibling test.
+        let base = silent_drops();
         record_silent_drop("test_kind_a", &"first failure");
-        assert_eq!(silent_drops(), 1);
+        assert!(
+            silent_drops() > base,
+            "record_silent_drop must increment the counter"
+        );
 
+        let mid = silent_drops();
         record_silent_drop_with(
             "test_kind_b",
             &"second failure",
             serde_json::json!({ "subject": "petri.events.foo" }),
             Some(b"raw payload bytes"),
         );
-        assert_eq!(silent_drops(), 2);
+        assert!(
+            silent_drops() > mid,
+            "record_silent_drop_with must increment the counter"
+        );
 
+        // `reset_silent_drops` stores 0; a sibling test may re-increment in
+        // the window before we read, so assert the counter dropped well below
+        // what we had just accumulated rather than being exactly 0.
+        let before_reset = silent_drops();
         reset_silent_drops();
-        assert_eq!(silent_drops(), 0);
+        assert!(
+            silent_drops() < before_reset,
+            "reset_silent_drops must drive the counter toward zero"
+        );
     }
 
     #[test]

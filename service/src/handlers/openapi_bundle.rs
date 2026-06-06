@@ -1,10 +1,9 @@
-//! Per-project OpenAPI bundle — `GET /api/v1/workspaces/{ws}/projects/{p}/openapi.json`.
+//! Per-folder OpenAPI bundle — `GET /api/v1/workspaces/{ws}/folders/{f}/openapi.json`.
 //!
 //! Assembles a synthetic OpenAPI 3.0.3 document covering every *callable*
-//! trigger advertised by the templates attached to the project. This is
-//! Phase B's flagship endpoint — it's *why* projects exist as a primitive.
+//! trigger advertised by the templates homed in the folder's subtree.
 //! Consumers (SDK generators, API doc viewers) can point at one URL per
-//! project and get an addressable, typed catalog of trigger entrypoints
+//! folder and get an addressable, typed catalog of trigger entrypoints
 //! without needing to crawl the full mekhan API.
 //!
 //! This module is a **pure consumer of the schema atom**: every requestBody /
@@ -21,6 +20,7 @@
 //!       - `POST /api/v1/triggers/{node_id}/fire`   (async, 202 `{instance_id}`)
 //!       - `POST /api/v1/triggers/{node_id}/invoke` (sync, 200 success envelope
 //!         `{ ok, value }`, or 202 `{instance_id}` on timeout)
+//!
 //!     The request body is the workflow's **declared input contract** — the
 //!     target `Start.initial` port reached by the trigger's outgoing edge —
 //!     yielding *precise* typed properties (that's the win over the old loose
@@ -59,60 +59,64 @@ use crate::models::template::{
 use crate::triggers::scope::{scope_json_schema, source_scope};
 use crate::AppState;
 
-/// GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json
+/// GET /api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json
 ///
 /// Returns a synthesized OpenAPI 3.0.3 document covering every callable
-/// trigger in the project's attached templates. The shape is suitable for
-/// feeding into `openapi-typescript`, `openapi-generator`, or any OAS3
-/// viewer.
+/// trigger in the templates homed anywhere in the folder's subtree. The shape
+/// is suitable for feeding into `openapi-typescript`, `openapi-generator`, or
+/// any OAS3 viewer.
 #[utoipa::path(
     get,
-    path = "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json",
+    path = "/api/v1/workspaces/{workspace_id}/folders/{folder_id}/openapi.json",
     params(
         ("workspace_id" = Uuid, Path, description = "Workspace id"),
-        ("project_id" = Uuid, Path, description = "Project id")
+        ("folder_id" = Uuid, Path, description = "Folder id")
     ),
     responses(
-        (status = 200, description = "Project OpenAPI bundle", body = serde_json::Value),
+        (status = 200, description = "Folder OpenAPI bundle", body = serde_json::Value),
         (status = 403, description = "Not a member", body = ErrorResponse),
-        (status = 404, description = "Project not found or not in workspace", body = ErrorResponse),
+        (status = 404, description = "Folder not found or not in workspace", body = ErrorResponse),
     ),
-    tag = "projects",
+    tag = "folders",
 )]
-pub async fn project_openapi_bundle(
+pub async fn folder_openapi_bundle(
     State(state): State<AppState>,
     user: AuthUser,
-    Path((workspace_id, project_id)): Path<(Uuid, Uuid)>,
+    Path((workspace_id, folder_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, ApiError> {
     require_member(&state.db, &user, workspace_id)
         .await
         .map_err(map_to_api_error)?;
 
-    // Confirm the project belongs to the gated workspace. Without this an
-    // editor in WS-A could read a project in WS-B by guessing its id.
-    let project: Option<(Uuid, String, String, String)> = sqlx::query_as(
-        "SELECT id, slug, display_name, description \
-           FROM projects WHERE id = $1 AND workspace_id = $2",
+    // Confirm the folder belongs to the gated workspace. Without this an
+    // editor in WS-A could read a folder in WS-B by guessing its id.
+    let folder: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT slug, display_name, description, path \
+           FROM folders WHERE id = $1 AND workspace_id = $2",
     )
-    .bind(project_id)
+    .bind(folder_id)
     .bind(workspace_id)
     .fetch_optional(&state.db)
     .await?;
-    let (_, project_slug, project_display, project_desc) =
-        project.ok_or_else(|| ApiError::not_found("project not found in this workspace"))?;
+    let (folder_slug, folder_display, folder_desc, folder_path) =
+        folder.ok_or_else(|| ApiError::not_found("folder not found in this workspace"))?;
 
-    // Live chain heads (`is_latest = true`) for every template attached to
-    // the project. We deliberately read the live row rather than whichever
-    // version was attached — projects follow the version chain.
+    // Live chain heads (`is_latest = true`) for every template homed in this
+    // folder OR any descendant (materialized-path prefix). We read the live row
+    // rather than whichever version was filed — folders follow the version
+    // chain via `base_template_id`.
+    let subtree_like = format!("{folder_path}/%");
     let template_rows: Vec<(Uuid, String, serde_json::Value, i32)> = sqlx::query_as(
         "SELECT t.id, t.name, t.graph, t.version \
-               FROM project_templates pt \
+               FROM template_folders tf \
+               JOIN folders f ON f.id = tf.folder_id \
                JOIN workflow_templates t \
-                 ON COALESCE(t.base_template_id, t.id) = pt.base_template_id \
-              WHERE pt.project_id = $1 AND t.is_latest = TRUE \
+                 ON COALESCE(t.base_template_id, t.id) = tf.base_template_id \
+              WHERE (f.path = $1 OR f.path LIKE $2) AND t.is_latest = TRUE \
               ORDER BY t.name",
     )
-    .bind(project_id)
+    .bind(&folder_path)
+    .bind(&subtree_like)
     .fetch_all(&state.db)
     .await?;
 
@@ -193,9 +197,7 @@ pub async fn project_openapi_bundle(
     // Session cookie + machine PAT (bearer) both authenticate the protected
     // `/fire` + `/invoke` routes (RFC 7662 introspection in
     // `require_auth_middleware`). Advertise both whenever a manual op exists.
-    let manual_present = paths
-        .keys()
-        .any(|p| p.starts_with("/api/v1/triggers/"));
+    let manual_present = paths.keys().any(|p| p.starts_with("/api/v1/triggers/"));
     if manual_present {
         security_schemes.insert(
             "sessionCookie".to_string(),
@@ -219,11 +221,11 @@ pub async fn project_openapi_bundle(
     let mut doc = json!({
         "openapi": "3.0.3",
         "info": {
-            "title": format!("Project: {project_display}"),
+            "title": format!("Folder: {folder_display}"),
             "version": "1.0.0",
             "description": format!(
-                "Callable trigger surface for project `{project_slug}`.{}",
-                if project_desc.is_empty() { String::new() } else { format!("\n\n{project_desc}") }
+                "Callable trigger surface for folder `{folder_slug}`.{}",
+                if folder_desc.is_empty() { String::new() } else { format!("\n\n{folder_desc}") }
             ),
         },
         "servers": [
@@ -267,7 +269,9 @@ fn resolve_trigger_input_port(graph: &WorkflowGraph, trigger_id: &str) -> Option
 /// Does this port declare at least one `File`-kind field? File fields earn a
 /// `multipart/form-data` content alternative on the requestBody.
 fn port_has_file(port: &Port) -> bool {
-    port.fields.iter().any(|f| matches!(f.kind, FieldKind::File))
+    port.fields
+        .iter()
+        .any(|f| matches!(f.kind, FieldKind::File))
 }
 
 /// Build the requestBody `content` map for a typed input `Port`.
@@ -421,7 +425,12 @@ fn emit_manual(
         },
     });
     x_ext(&mut fire);
-    insert_op(paths, &format!("/api/v1/triggers/{node_id}/fire"), "post", fire);
+    insert_op(
+        paths,
+        &format!("/api/v1/triggers/{node_id}/fire"),
+        "post",
+        fire,
+    );
 
     // --- /invoke (sync 200 envelope, 202 timeout) ---
     let mut invoke = json!({
@@ -565,7 +574,12 @@ fn emit_webhook(
         }
     }
 
-    insert_op(paths, &format!("/api/triggers/webhook/{}", hook.slug), &method, op);
+    insert_op(
+        paths,
+        &format!("/api/triggers/webhook/{}", hook.slug),
+        &method,
+        op,
+    );
 }
 
 /// Slot an operation into the `paths` map under the given path + lowercase
@@ -607,9 +621,7 @@ impl WebhookAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::template::{
-        ManualTrigger, Port, Position, WorkflowNode,
-    };
+    use crate::models::template::{ManualTrigger, Port, Position, WorkflowNode};
 
     fn trigger_node(id: &str, source: TriggerSource, enabled: bool) -> WorkflowNode {
         WorkflowNode {
@@ -632,7 +644,11 @@ mod tests {
         }
     }
 
-    fn port_field(name: &str, kind: FieldKind, required: bool) -> crate::models::template::PortField {
+    fn port_field(
+        name: &str,
+        kind: FieldKind,
+        required: bool,
+    ) -> crate::models::template::PortField {
         crate::models::template::PortField {
             name: name.into(),
             label: name.into(),
@@ -795,13 +811,11 @@ mod tests {
 
         let content = &paths["/api/v1/triggers/t_file/fire"]["post"]["requestBody"]["content"];
         // application/json — File is a storage-path string.
-        let json_props =
-            &content["application/json"]["schema"]["properties"];
+        let json_props = &content["application/json"]["schema"]["properties"];
         assert_eq!(json_props["attachment"]["type"], json!("string"));
         assert!(json_props["attachment"].get("format").is_none());
         // multipart/form-data — File becomes a binary upload, others mirror.
-        let mp_props =
-            &content["multipart/form-data"]["schema"]["properties"];
+        let mp_props = &content["multipart/form-data"]["schema"]["properties"];
         assert_eq!(mp_props["attachment"]["type"], json!("string"));
         assert_eq!(mp_props["attachment"]["format"], json!("binary"));
         assert_eq!(mp_props["note"]["type"], json!("string"));
@@ -857,7 +871,15 @@ mod tests {
         let mut schemas = BTreeMap::new();
         let mut sec = BTreeMap::new();
         emit_webhook(
-            "wh_2", "Secure", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut schemas,
+            "wh_2",
+            "Secure",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut schemas,
             &mut sec,
         );
         let op = &paths["/api/triggers/webhook/secure"]["post"];
@@ -877,7 +899,18 @@ mod tests {
         });
         let mut paths = BTreeMap::new();
         let (mut s, mut sec) = (BTreeMap::new(), BTreeMap::new());
-        emit_webhook("w", "A", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut s, &mut sec);
+        emit_webhook(
+            "w",
+            "A",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut s,
+            &mut sec,
+        );
         assert!(paths["/api/triggers/webhook/a"]["post"].is_object());
 
         // Explicit PUT.
@@ -888,7 +921,18 @@ mod tests {
         });
         let mut paths = BTreeMap::new();
         let (mut s, mut sec) = (BTreeMap::new(), BTreeMap::new());
-        emit_webhook("w", "B", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut s, &mut sec);
+        emit_webhook(
+            "w",
+            "B",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut s,
+            &mut sec,
+        );
         assert!(paths["/api/triggers/webhook/b"]["put"].is_object());
     }
 
@@ -928,12 +972,11 @@ mod tests {
             .nodes
             .iter()
             .filter(|n| match &n.data {
-                WorkflowNodeData::Trigger { source, enabled, .. } => {
+                WorkflowNodeData::Trigger {
+                    source, enabled, ..
+                } => {
                     *enabled
-                        && matches!(
-                            source,
-                            TriggerSource::Manual(_) | TriggerSource::Webhook(_)
-                        )
+                        && matches!(source, TriggerSource::Manual(_) | TriggerSource::Webhook(_))
                 }
                 _ => false,
             })
@@ -948,10 +991,7 @@ mod tests {
             TriggerSource::Manual(ManualTrigger { form: vec![] }),
             false,
         );
-        let enabled = matches!(
-            &node.data,
-            WorkflowNodeData::Trigger { enabled: true, .. }
-        );
+        let enabled = matches!(&node.data, WorkflowNodeData::Trigger { enabled: true, .. });
         assert!(!enabled);
     }
 

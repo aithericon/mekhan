@@ -302,9 +302,7 @@ impl NomadAllocatorClient {
                 }
             };
 
-            if let Ok(allocs) =
-                resp.json::<Vec<petri_nomad::models::Allocation>>().await
-            {
+            if let Ok(allocs) = resp.json::<Vec<petri_nomad::models::Allocation>>().await {
                 if let Some(node) = allocs
                     .iter()
                     .map(|a| a.node_name.trim())
@@ -372,7 +370,10 @@ impl NomadAllocatorClient {
     /// present, is set as the `docker` task driver image; otherwise `raw_exec`.
     ///
     /// Tolerates 200/201 (registered) and 409 (already registered) as success.
-    async fn stage_template(&self, args: &StageTemplateArgs) -> Result<StageOutcome, AllocatorError> {
+    async fn stage_template(
+        &self,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
         let job = self.render_parameterized_job(args);
         let url = self.url(&format!("job/{}", args.slug));
 
@@ -504,11 +505,6 @@ impl NomadAllocatorClient {
             "Name": args.slug,
             "Type": job_type,
             "Datacenters": datacenters,
-            "ParameterizedJob": {
-                "Payload": "optional",
-                "MetaRequired": [],
-                "MetaOptional": meta_optional,
-            },
             "TaskGroups": [{
                 "Name": "main",
                 "Count": count,
@@ -517,6 +513,20 @@ impl NomadAllocatorClient {
                 "Tasks": [task],
             }],
         });
+
+        // `ParameterizedJob` is a BATCH-only stanza — Nomad rejects it on a
+        // `service` job ("Parameterized job can only be used with batch or
+        // sysbatch scheduler"). The batch lease-executor path is dispatched
+        // per-run, so it keeps the stanza (and stays byte-identical to today).
+        // The service replica path (job_type=service) is NOT dispatched: it runs
+        // at a fixed Count, so it omits the stanza entirely.
+        if !is_service {
+            job["ParameterizedJob"] = json!({
+                "Payload": "optional",
+                "MetaRequired": [],
+                "MetaOptional": meta_optional,
+            });
+        }
 
         // Residency pin: a node Constraint on `${meta.compliance_zone}`, mirroring
         // the GPU-Device `if let Some(...).filter(non-empty)` idiom above. Inserted
@@ -610,11 +620,14 @@ pub async fn ensure_parameterized_jobs() {
         return;
     }
     let Some(addr) = std::env::var("NOMAD_ADDR").ok().filter(|s| !s.is_empty()) else {
-        tracing::warn!("NOMAD_AUTOPROVISION_JOBS=1 but NOMAD_ADDR unset — skipping Nomad job provisioning");
+        tracing::warn!(
+            "NOMAD_AUTOPROVISION_JOBS=1 but NOMAD_ADDR unset — skipping Nomad job provisioning"
+        );
         return;
     };
     let dir = std::env::var("NOMAD_JOB_TEMPLATE_DIR")
-        .ok().filter(|s| !s.is_empty())
+        .ok()
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "engine/infra/nomad".to_string());
     let token = std::env::var("NOMAD_TOKEN").ok().filter(|s| !s.is_empty());
     let entries = match std::fs::read_dir(&dir) {
@@ -627,24 +640,39 @@ pub async fn ensure_parameterized_jobs() {
     let http = reqwest::Client::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
         let body = match std::fs::read_to_string(&path) {
             Ok(b) => b,
-            Err(e) => { tracing::warn!(?path, %e, "could not read Nomad job file"); continue; }
+            Err(e) => {
+                tracing::warn!(?path, %e, "could not read Nomad job file");
+                continue;
+            }
         };
         let url = format!("{}/v1/jobs", addr.trim_end_matches('/'));
-        let mut req = http.post(&url).header("content-type", "application/json").body(body);
-        if let Some(ref t) = token { req = req.header("X-Nomad-Token", t); }
+        let mut req = http
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(body);
+        if let Some(ref t) = token {
+            req = req.header("X-Nomad-Token", t);
+        }
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
-                tracing::info!(?path, "registered Nomad parameterized job (dev autoprovision)");
+                tracing::info!(
+                    ?path,
+                    "registered Nomad parameterized job (dev autoprovision)"
+                );
             }
             Ok(resp) => {
                 let status = resp.status();
                 let txt = resp.text().await.unwrap_or_default();
                 tracing::warn!(?path, %status, body = %txt, "Nomad job register failed (dev autoprovision)");
             }
-            Err(e) => tracing::warn!(?path, %e, "Nomad job register request failed (dev autoprovision)"),
+            Err(e) => {
+                tracing::warn!(?path, %e, "Nomad job register request failed (dev autoprovision)")
+            }
         }
     }
 }
@@ -746,7 +774,10 @@ mod tests {
             lease.get("executor_namespace").unwrap(),
             "lease-inst-1-loop-node"
         );
-        assert!(lease.get("node").is_none(), "node omitted until placed: {lease}");
+        assert!(
+            lease.get("node").is_none(),
+            "node omitted until placed: {lease}"
+        );
         assert!(lease.get("expiry").is_none(), "expiry omitted: {lease}");
         assert!(lease.get("gpu_uuid").is_none(), "gpu_uuid retired: {lease}");
         assert_eq!(lease["scheduler"]["flavor"], "nomad");
@@ -1035,6 +1066,15 @@ mod tests {
         let r = client.render_parameterized_job(&svc);
         assert_eq!(r["Job"]["Type"], "service");
         assert_eq!(r["Job"]["TaskGroups"][0]["Count"], 3);
+        // A `service` job MUST NOT carry the `ParameterizedJob` stanza — Nomad
+        // rejects the register with 500 "Parameterized job can only be used with
+        // batch or sysbatch scheduler". (Regression guard: a live Nomad register
+        // of a residency-pinned model replica caught this; the shape-only checks
+        // above did not.)
+        assert!(
+            r["Job"].get("ParameterizedJob").is_none(),
+            "service job must omit ParameterizedJob (Nomad rejects it on non-batch): {r:#}"
+        );
 
         // service + replicas None ⇒ Count 1.
         let svc_default = StageTemplateArgs {
@@ -1066,6 +1106,12 @@ mod tests {
         let bw = client.render_parameterized_job(&batch_with_replicas);
         assert_eq!(bw["Job"]["Type"], "batch");
         assert_eq!(bw["Job"]["TaskGroups"][0]["Count"], 1);
+        // The batch (dispatched lease-executor) path KEEPS the parameterized
+        // stanza — it is dispatched per-run.
+        assert!(
+            bw["Job"]["ParameterizedJob"].is_object(),
+            "batch job must keep ParameterizedJob: {bw:#}"
+        );
     }
 
     #[tokio::test]

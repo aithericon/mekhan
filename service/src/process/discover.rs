@@ -515,7 +515,7 @@ async fn discover_asset_globals(
     use crate::compiler::token_shape::references_head_token;
     use crate::models::asset::{Cardinality, ScopeKind};
     use crate::models::template::AssetBinding;
-    use crate::scope::{resolve_one, visible_scopes_for, Scope, ScopedItem};
+    use crate::scope::{resolve_one_visible, visible_scopes_for, Scope, ScopedItem};
 
     // Pass 1a: node-data binding ref-keys, indexed `ref_key -> alias` so the
     // registry keys by the alias the node code reads (`<alias>.json`). `declared`
@@ -566,8 +566,8 @@ async fn discover_asset_globals(
         scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
         scope_ids.push(ws);
     }
-    for p in &visible.projects {
-        scope_kinds.push(ScopeKind::Project.as_db().to_string());
+    for p in &visible.folders {
+        scope_kinds.push(ScopeKind::Folder.as_db().to_string());
         scope_ids.push(*p);
     }
     if let Some(t) = visible.template {
@@ -632,16 +632,27 @@ async fn discover_asset_globals(
     }
 
     let ref_key_vec: Vec<String> = ref_keys.iter().cloned().collect();
-    let rows: Vec<(Uuid, i32, String, Uuid, String, Uuid, serde_json::Value, String)> =
-        sqlx::query_as(
-            "SELECT a.id, a.version, a.ref_key, a.scope_id, a.scope_kind, \
+    // Raw row shape returned by the asset global lookup query below:
+    // (id, version, ref_key, scope_id, scope_kind, type_id, fields_json, cardinality).
+    type AssetRow = (
+        Uuid,
+        i32,
+        String,
+        Uuid,
+        String,
+        Uuid,
+        serde_json::Value,
+        String,
+    );
+    let rows: Vec<AssetRow> = sqlx::query_as(
+        "SELECT a.id, a.version, a.ref_key, a.scope_id, a.scope_kind, \
                 t.id, t.fields_json, t.cardinality \
          FROM assets a \
          JOIN asset_types t ON t.id = a.type_id \
          JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
            ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
          WHERE a.ref_key = ANY($3) AND a.deleted_at IS NULL",
-        )
+    )
     .bind(&scope_kinds)
     .bind(&scope_ids)
     .bind(&ref_key_vec)
@@ -668,7 +679,7 @@ async fn discover_asset_globals(
         .collect();
 
     for ref_key in &ref_keys {
-        let resolved = resolve_one(ref_key, candidates.clone()).map_err(|clash| {
+        let resolved = resolve_one_visible(&visible, ref_key, candidates.clone()).map_err(|clash| {
             let view = crate::compiler::CompileError::AssetBindingAmbiguous {
                 node_id: String::new(),
                 ref_key: ref_key.clone(),
@@ -684,9 +695,7 @@ async fn discover_asset_globals(
             // with the resource path); a control-flow-only head falls through to
             // the guard resolver's `UnresolvedGuardPath`.
             if strict {
-                if let Some((node_id, _)) =
-                    declared.iter().find(|(_, b)| &b.ref_key == ref_key)
-                {
+                if let Some((node_id, _)) = declared.iter().find(|(_, b)| &b.ref_key == ref_key) {
                     let view = crate::compiler::CompileError::AssetBindingUnknown {
                         node_id: node_id.clone(),
                         ref_key: ref_key.clone(),
@@ -719,9 +728,7 @@ async fn discover_asset_globals(
         // Registry key: the binding alias when bound (so `__assets["<alias>"]`
         // stays correct), else the bare ref-key (control-flow-only reference).
         let bound_alias = binding_aliases.get(ref_key).cloned();
-        let key = bound_alias
-            .clone()
-            .unwrap_or_else(|| ref_key.clone());
+        let key = bound_alias.clone().unwrap_or_else(|| ref_key.clone());
 
         let mut global = NamedGlobal::from_asset(
             ref_key.clone(),
@@ -809,6 +816,9 @@ mod tests {
     fn no_control_flow_no_heads() {
         let graph = guard_graph("input.status == \"ok\"");
         let heads = collect_control_flow_heads(&graph).expect("scan");
-        assert!(heads.is_empty(), "only control leaves → no global heads; got {heads:?}");
+        assert!(
+            heads.is_empty(),
+            "only control leaves → no global heads; got {heads:?}"
+        );
     }
 }

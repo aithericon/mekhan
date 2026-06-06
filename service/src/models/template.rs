@@ -371,7 +371,11 @@ pub enum WorkflowNodeData {
         /// node code reads. `#[serde(default)]` ⇒ existing templates (field
         /// absent → empty) round-trip unchanged (same precedent as
         /// `deployment_model`/`channels`).
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     #[serde(rename = "decision")]
@@ -533,7 +537,11 @@ pub enum WorkflowNodeData {
         /// instead of from an upstream producer read-arc. `#[serde(default)]` ⇒
         /// existing templates (field absent → empty) round-trip unchanged (same
         /// precedent as AutomatedStep's `asset_bindings`).
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
@@ -772,7 +780,11 @@ pub enum WorkflowNodeData {
         /// Node-level asset bindings (docs/20 §5) — same field, defaults and
         /// semantics as `AutomatedStep::asset_bindings`. The agent's inference
         /// turns read the staged asset(s) as ordinary inputs.
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     /// Calls another published template as a child net and returns its
@@ -1368,7 +1380,11 @@ pub enum DeploymentModel {
         /// slug into `job_template`. `None` ⇒ the bare `job_template` string is
         /// used verbatim (legacy/manual path). The actual staging mechanism is
         /// Phase 4 — this field only drives resolve+validate at publish.
-        #[serde(rename = "jobTemplateRef", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "jobTemplateRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         job_template_ref: Option<TemplateRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
@@ -1573,18 +1589,54 @@ pub enum ElementType {
 /// `join` decides the fold). `Each` fires downstream once per `item`
 /// (the old `signal` behaviour, generalised); `Gather` is the counted
 /// barrier (the old `scatter` path) that collects all items, sorts by
-/// `__map_idx`, and projects a single array — requiring the producer
-/// channel to carry a positive `max_fanout` (the barrier cap).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// `__map_idx`, and projects a single array — sized by the episode's own
+/// `close.count`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelJoin {
+    #[default]
     Each,
     Gather,
 }
 
-impl Default for ChannelJoin {
-    fn default() -> Self {
-        ChannelJoin::Each
+/// Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This
+/// is the single source of truth the producer SDK stamps into the `open`
+/// descriptor and both executors dispatch on: the producer's executor picks the
+/// publish adapter, the consumer's executor picks the subscribe adapter off the
+/// descriptor it lifted. Ignored for `Control` channels (their payloads ride the
+/// net, not a transport).
+///
+/// * `Jetstream` — the v1 default: reliable, ordered, replayable JetStream
+///   stream with per-element ack backpressure. The tappable durable log.
+/// * `NatsLatest` — lossy-latest core NATS: no ordering, no ack, no replay; a
+///   late/slow consumer misses early elements (live frames / drop-stale). The
+///   semantic opposite of JetStream — what proves the dispatch seam is real.
+/// * `S3` — durable object store (S3 / GCS / Azure / local-fs via OpenDAL): each
+///   element is one object, the consumer polls keys in order. Lossless, ordered,
+///   and fully **replayable** from element zero long after the producer finished
+///   — the right transport for large/durable blobs (checkpoints, datasets,
+///   archived media). A different transport SHAPE (key/value, not pub/sub),
+///   proving the dispatch port is genuinely store-agnostic. Requires the worker
+///   to have a `[storage]` backend configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChannelTransport {
+    #[default]
+    Jetstream,
+    NatsLatest,
+    S3,
+}
+
+impl ChannelTransport {
+    /// The wire tag baked into the manifest + descriptor (the dispatch key both
+    /// executors and the SDK switch on). Stable across the model→manifest→SDK
+    /// boundary — do not derive from the serde rename alone.
+    pub fn wire_tag(self) -> &'static str {
+        match self {
+            ChannelTransport::Jetstream => "jetstream",
+            ChannelTransport::NatsLatest => "nats-latest",
+            ChannelTransport::S3 => "s3",
+        }
     }
 }
 
@@ -1592,9 +1644,7 @@ impl Default for ChannelJoin {
 /// (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
 /// place at runtime; the net wires edges to it by `name`. A control OUT
 /// channel lowers uniformly to one accumulating place; the fold discipline
-/// lives on the CONSUMER edge's [`ChannelJoin`], NOT here. `max_fanout` is a
-/// uniform safety cap (positive if present); a `gather` consumer REQUIRES the
-/// producer channel to set it (the barrier cap).
+/// lives on the CONSUMER edge's [`ChannelJoin`], NOT here.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Channel {
@@ -1602,8 +1652,12 @@ pub struct Channel {
     pub direction: ChannelDirection,
     pub plane: ChannelPlane,
     pub element: ElementType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_fanout: Option<u32>,
+    /// Out-of-band transport for a `Data` channel's bytes (default
+    /// `Jetstream`). Ignored for `Control` channels. Baked into the manifest so
+    /// the producer SDK stamps it into the `open` descriptor and both executors
+    /// dispatch the right [`StreamTransport`] adapter off it.
+    #[serde(default)]
+    pub transport: ChannelTransport,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
@@ -1853,7 +1907,9 @@ impl FieldKind {
     pub fn base_schema(&self) -> serde_json::Value {
         use serde_json::json;
         match self {
-            Self::Text | Self::Textarea | Self::Select | Self::Signature => json!({"type": "string"}),
+            Self::Text | Self::Textarea | Self::Select | Self::Signature => {
+                json!({"type": "string"})
+            }
             Self::Number => json!({"type": "number"}),
             Self::Bool => json!({"type": "boolean"}),
             Self::Timestamp => json!({"type": "string", "format": "date-time"}),
@@ -2661,18 +2717,24 @@ pub struct UpdateTemplateRequest {
 /// Template-specific list parameters layered on top of the generic
 /// `crate::query::QueryParams` extractor (which owns `page`/`page_size`/`sort`/
 /// `search`/`filter[field][op]`). These are the relational & security filters
-/// that don't reduce to a plain column predicate: `project_id`/`tag` are M:N
-/// joins, `base_template_id` switches the listing into version-chain mode, and
-/// `owner_template_id` toggles private sub-workflow visibility.
+/// that don't reduce to a plain column predicate: `folder_id`/`tag` are
+/// relational joins, `base_template_id` switches the listing into version-chain
+/// mode, and `owner_template_id` toggles private sub-workflow visibility.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct TemplateListExtras {
     /// Version-chain mode: list every version of this base family (ignoring
     /// `is_latest`) instead of the default latest-only catalogue listing.
     pub base_template_id: Option<Uuid>,
-    /// Restrict to templates attached to a project (M:N via
-    /// `project_templates.base_template_id`). The join is non-restrictive
-    /// w.r.t. version chain — the live `is_latest` row wins.
-    pub project_id: Option<Uuid>,
+    /// Restrict to templates homed in this folder (via
+    /// `template_folders.base_template_id`). With `recursive=true` the filter
+    /// covers the whole subtree rooted at the folder; otherwise only direct
+    /// members. The live `is_latest` row wins.
+    pub folder_id: Option<Uuid>,
+    /// When a `folder_id` is supplied, include templates homed anywhere in the
+    /// folder's subtree (matched by materialized-path prefix) rather than only
+    /// its direct members.
+    #[serde(default)]
+    pub recursive: bool,
     /// Restrict to templates carrying this tag in the user's workspace.
     pub tag: Option<String>,
     /// Enumerate the private sub-workflow children owned by this parent
@@ -2755,9 +2817,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef,
-        Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
-        WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
+        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 

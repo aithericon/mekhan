@@ -105,7 +105,7 @@ fn make_initial_ctx(spec: &ExecutionSpec, tmp: &std::path::Path, eid: &str) -> R
     RunContext {
         execution_id: eid.to_string(),
         spec: spec.clone(),
-        run_dir: RunDirectory::new(&tmp.to_path_buf(), eid),
+        run_dir: RunDirectory::new(tmp, eid),
         timeout: Duration::from_secs(30),
         env: HashMap::new(),
         resolved_env: HashMap::new(),

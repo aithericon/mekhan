@@ -25,10 +25,10 @@
 //!     token (guarded `item.kind == "item"`) projects to a result; the shared
 //!     `gather::emit_gather_barrier` collects exactly `count` items correlated on
 //!     `__map_id`, sorts by `__map_idx`, and reduces to one `#{ output: [..] }`
-//!     collection token on `p_{id}_{name}_gathered`. A `gather` consumer REQUIRES
-//!     the producer channel to carry a positive `max_fanout` (the barrier cap),
-//!     enforced loudly per-item and at close-count. `count == 0` (an empty
-//!     episode: `open` then `close(0)`) fires the barrier once with `[]`.
+//!     collection token on `p_{id}_{name}_gathered`. The barrier sizes itself on
+//!     the episode's own `close.count` — there is no producer-side fan-out cap.
+//!     `count == 0` (an empty episode: `open` then `close(0)`) fires the barrier
+//!     once with `[]`.
 //!
 //!   - **Data** (docs/25 §2-4) — the OPEN control token (`kind: open`), carrying
 //!     the out-of-band transport DESCRIPTOR, lands verbatim on `p_{id}_{name}`
@@ -48,9 +48,7 @@
 //!     emit's `channel` field and deposits the token onto the resolved place.
 
 use super::*;
-use crate::models::template::{
-    Channel, ChannelDirection, ChannelJoin, ChannelPlane, WorkflowEdge,
-};
+use crate::models::template::{Channel, ChannelDirection, ChannelJoin, ChannelPlane, WorkflowEdge};
 use std::collections::HashMap;
 
 /// One synthesized channel place, ready to fold into the node's `NodePorts`.
@@ -80,7 +78,13 @@ pub(crate) struct LoweredChannels {
 /// with `_` so a stray name can never break the synthesized place id.
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -112,6 +116,7 @@ pub(crate) fn channel_manifest_rhai(channels: &[Channel]) -> String {
                 "name": c.name,
                 "plane": plane,
                 "element_kind": element_kind,
+                "transport": c.transport.wire_tag(),
             })
         })
         .collect();
@@ -152,7 +157,9 @@ fn resolve_channel_joins(
 /// deposits its `open`/`close` bracket tokens — all via `control_emit`. Mirrors
 /// the `out_channels` filter in [`lower_channels`] so the two never drift.
 pub(crate) fn has_out_channel(channels: &[Channel]) -> bool {
-    channels.iter().any(|c| matches!(c.direction, ChannelDirection::Out))
+    channels
+        .iter()
+        .any(|c| matches!(c.direction, ChannelDirection::Out))
 }
 
 /// Pre-create the `control_emit` inbox place when the node has ≥1 OUT channel
@@ -181,7 +188,7 @@ pub(crate) fn control_inbox(
 /// Builds the per-channel raw places, the `control_emit` ingestion seam (inbox +
 /// effect transition with `channel_routes`), and — per CONSUMER-edge
 /// [`ChannelJoin`] — either an each-projection transition (`Each`) or the counted
-/// gather barrier + `max_fanout` guard (`Gather`). Returns the wiring ports the
+/// gather barrier (`Gather`). Returns the wiring ports the
 /// caller folds into the node's `NodePorts`.
 ///
 /// PRODUCER LOWERING IS UNIFORM: every control OUT channel deposits its uniform
@@ -231,8 +238,10 @@ pub(crate) fn lower_channels(
     // `open` descriptor token rides the SAME seam — so it joins `out_channels`
     // and gets a deposit place / output arc just like a control channel. Build
     // the seam only if any OUT channel exists.
-    let out_channels: Vec<&Channel> =
-        channels.iter().filter(|c| matches!(c.direction, ChannelDirection::Out)).collect();
+    let out_channels: Vec<&Channel> = channels
+        .iter()
+        .filter(|c| matches!(c.direction, ChannelDirection::Out))
+        .collect();
 
     // `channel_routes`: channel name → synthesized RAW DEPOSIT place id. The
     // producer always deposits its `open | item* | close` episode here; the
@@ -270,8 +279,10 @@ pub(crate) fn lower_channels(
                 format!("p_{id}_{seg}"),
                 format!("{label} - Data Channel '{}'", ch.name),
             );
-            channel_routes
-                .insert(ch.name.clone(), serde_json::Value::String(p_chan.id().to_string()));
+            channel_routes.insert(
+                ch.name.clone(),
+                serde_json::Value::String(p_chan.id().to_string()),
+            );
             deposit_places.push(p_chan.clone());
 
             // CLOSE sink: a producer-status place the `close` bracket lands on,
@@ -281,10 +292,15 @@ pub(crate) fn lower_channels(
             // keeps the consumer firing EXACTLY once, on `open`.
             let p_close: PlaceHandle<DynamicToken> = ctx.state(
                 format!("p_{id}_{seg}_close"),
-                format!("{label} - Data Channel '{}' Close (producer status)", ch.name),
+                format!(
+                    "{label} - Data Channel '{}' Close (producer status)",
+                    ch.name
+                ),
             );
-            channel_close_routes
-                .insert(ch.name.clone(), serde_json::Value::String(p_close.id().to_string()));
+            channel_close_routes.insert(
+                ch.name.clone(),
+                serde_json::Value::String(p_close.id().to_string()),
+            );
             deposit_places.push(p_close.clone());
 
             ports.push(ChannelPort {
@@ -302,8 +318,10 @@ pub(crate) fn lower_channels(
             format!("p_{id}_{seg}"),
             format!("{label} - Channel '{}' (raw)", ch.name),
         );
-        channel_routes
-            .insert(ch.name.clone(), serde_json::Value::String(p_raw.id().to_string()));
+        channel_routes.insert(
+            ch.name.clone(),
+            serde_json::Value::String(p_raw.id().to_string()),
+        );
         deposit_places.push(p_raw.clone());
 
         let join = joins.get(&ch.name).copied().unwrap_or_default();
@@ -356,23 +374,12 @@ pub(crate) fn lower_channels(
                     format!("{label} - Channel '{}' Gathered", ch.name),
                 );
 
-                // `max_fanout` guard. A `gather` consumer REQUIRES the producer
-                // channel to carry a positive `max_fanout` (enforced by
-                // `validate_channels`); a `close` whose `count` exceeds it throws
-                // → NetFailed (the instance fails loudly, never silent-dropping
-                // items). The cap also bounds the worst-case fan-out the barrier
-                // waits on.
-                let max_fanout = ch.max_fanout.unwrap_or(0);
-
-                // t_{id}_{seg}_close — consume the `close` token, enforce the cap,
-                // emit the gather coordinator `#{ count: <n>, __map_id }`. The
-                // correlate id is the emit's `__map_id`. `count == 0` (empty
-                // episode) yields `count: 0` and the barrier fires once with `[]`
-                // (the engine's count-gated gather fires when `len >= 0`).
-                let fanout_msg = format!(
-                    "gather channel '{}' on step '{label}' exceeded max_fanout ({max_fanout})",
-                    ch.name
-                );
+                // t_{id}_{seg}_close — consume the `close` token, emit the gather
+                // coordinator `#{ count: <n>, __map_id }`. The correlate id is the
+                // emit's `__map_id`. `count == 0` (empty episode) yields `count: 0`
+                // and the barrier fires once with `[]` (the engine's count-gated
+                // gather fires when `len >= 0`). The barrier sizes itself entirely
+                // on `close.count` — there is no producer-side fan-out cap.
                 ctx.transition(
                     format!("t_{id}_{seg}_close"),
                     format!("{label} - Channel '{}' Close", ch.name),
@@ -380,26 +387,14 @@ pub(crate) fn lower_channels(
                 .auto_input("close", &p_raw)
                 .auto_output("count", &p_count)
                 .guard_rhai(r#"close.kind == "close""#)
-                .logic_rhai(format!(
-                    "if close.count > {max_fanout} {{ throw \"{}\"; }} \
-                     #{{ count: #{{ count: close.count, \"__map_id\": close.__map_id }} }}",
-                    rhai_str_escape(&fanout_msg)
-                ))
+                .logic_rhai(
+                    r#"#{ count: #{ count: close.count, "__map_id": close.__map_id } }"#
+                        .to_string(),
+                )
                 .done();
 
                 // t_{id}_{seg}_item — consume each `item` token, project it to the
                 // gather's `#{ value, __map_idx, __map_id }` shape.
-                //
-                // Per-ITEM `max_fanout` guard: the close-count cap can be desynced
-                // from the actual emit count. A 0-based `__map_idx` reaching the
-                // cap means the item count has exceeded it, so throw at the first
-                // offending item — the instance fails loudly (NetFailed via
-                // ScriptError), never a silent over-fanout orphan. This is the
-                // per-item sibling of the close-count cap on `t_{id}_{seg}_close`.
-                let item_fanout_msg = format!(
-                    "gather channel '{}' on step '{label}' exceeded max_fanout ({max_fanout}) — item index out of bounds",
-                    ch.name
-                );
                 ctx.transition(
                     format!("t_{id}_{seg}_item"),
                     format!("{label} - Channel '{}' Item", ch.name),
@@ -407,10 +402,10 @@ pub(crate) fn lower_channels(
                 .auto_input("item", &p_raw)
                 .auto_output("result", &p_results)
                 .guard_rhai(r#"item.kind == "item""#)
-                .logic_rhai(format!(
-                    r#"if item.__map_idx >= {max_fanout} {{ throw "{}"; }} #{{ result: #{{ value: item.payload, "__map_idx": item.__map_idx, "__map_id": item.__map_id }} }}"#,
-                    rhai_str_escape(&item_fanout_msg)
-                ))
+                .logic_rhai(
+                    r#"#{ result: #{ value: item.payload, "__map_idx": item.__map_idx, "__map_id": item.__map_id } }"#
+                        .to_string(),
+                )
                 .done();
 
                 // Shared counted barrier: read the coordinator for `count` +
@@ -443,7 +438,10 @@ pub(crate) fn lower_channels(
     // consumer's `stream(name)` reads it as the consumer job's input (then
     // connects to the descriptor's out-of-band transport). Register an inbound
     // place edges target by `targetHandle == name`.
-    for ch in channels.iter().filter(|c| matches!(c.direction, ChannelDirection::In)) {
+    for ch in channels
+        .iter()
+        .filter(|c| matches!(c.direction, ChannelDirection::In))
+    {
         // An IN channel aliases the node's MAIN input place: the upstream's OPEN
         // descriptor token (data) — or a future inbound control token — must both
         // TRIGGER the node's job (the submit transition consumes `input_place`)
@@ -545,10 +543,7 @@ mod tests {
     /// channel of the same name) wires off `step`'s source handle carrying the
     /// given `join` (`"each"`/`"gather"`/absent). This is the path the producer
     /// lowering reads to pick the fold discipline.
-    fn graph_with_consumer_join(
-        chan: serde_json::Value,
-        join: Option<&str>,
-    ) -> WorkflowGraph {
+    fn graph_with_consumer_join(chan: serde_json::Value, join: Option<&str>) -> WorkflowGraph {
         let name = chan["name"].as_str().unwrap().to_string();
         // Consumer IN channel mirrors the producer's plane so the only thing
         // under test is the `join` (a cross-plane edge would error first).
@@ -601,7 +596,7 @@ mod tests {
 
     fn gather_channel() -> serde_json::Value {
         json!({ "name": "items", "direction": "out", "plane": "control",
-                "element": { "type": "any" }, "max_fanout": 16 })
+                "element": { "type": "any" } })
     }
 
     fn data_channel() -> serde_json::Value {
@@ -658,10 +653,16 @@ mod tests {
             .or_else(|| t["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("each transition rhai source");
-        assert!(src.contains("item.payload"), "each must project item.payload; got {src}");
+        assert!(
+            src.contains("item.payload"),
+            "each must project item.payload; got {src}"
+        );
         let guard = t["guard"].as_str().or_else(|| t["guard"]["expr"].as_str());
         if let Some(g) = guard {
-            assert!(g.contains(r#"item.kind == "item""#), "each guard wrong: {g}");
+            assert!(
+                g.contains(r#"item.kind == "item""#),
+                "each guard wrong: {g}"
+            );
         }
 
         // The control_emit transition carries the channel_routes effect_config.
@@ -732,11 +733,18 @@ mod tests {
     #[test]
     fn explicit_each_join_lowers_to_each() {
         let graph = graph_with_consumer_join(each_channel(), Some("each"));
-        let air =
-            compile_to_air(&graph, "ch-each-explicit", "d", &std::collections::HashMap::new())
-                .unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-each-explicit",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let places = place_ids(&air);
-        assert!(places.iter().any(|p| p == "p_step_events_each"), "each place missing: {places:?}");
+        assert!(
+            places.iter().any(|p| p == "p_step_events_each"),
+            "each place missing: {places:?}"
+        );
         for absent in ["p_step_events_count", "p_step_events_gathered"] {
             assert!(
                 !places.iter().any(|p| p == absent),
@@ -751,19 +759,33 @@ mod tests {
     #[test]
     fn gather_split_uses_collapsed_kind_strings() {
         let graph = graph_with_consumer_join(gather_channel(), Some("gather"));
-        let air =
-            compile_to_air(&graph, "ch-gather-kinds", "d", &std::collections::HashMap::new())
-                .unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-gather-kinds",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let close = transition(&air, "t_step_items_close");
-        let guard = close["guard"].as_str().or_else(|| close["guard"]["expr"].as_str());
+        let guard = close["guard"]
+            .as_str()
+            .or_else(|| close["guard"]["expr"].as_str());
         if let Some(g) = guard {
-            assert!(g.contains(r#"close.kind == "close""#), "close guard wrong: {g}");
+            assert!(
+                g.contains(r#"close.kind == "close""#),
+                "close guard wrong: {g}"
+            );
             assert!(!g.contains("scatter_close"), "retired kind leaked: {g}");
         }
         let item = transition(&air, "t_step_items_item");
-        let iguard = item["guard"].as_str().or_else(|| item["guard"]["expr"].as_str());
+        let iguard = item["guard"]
+            .as_str()
+            .or_else(|| item["guard"]["expr"].as_str());
         if let Some(g) = iguard {
-            assert!(g.contains(r#"item.kind == "item""#), "item guard wrong: {g}");
+            assert!(
+                g.contains(r#"item.kind == "item""#),
+                "item guard wrong: {g}"
+            );
             assert!(!g.contains("scatter_item"), "retired kind leaked: {g}");
         }
     }
@@ -780,7 +802,11 @@ mod tests {
         // be a control_emit output arc, for BOTH join disciplines. Each: default
         // join (no consumer edge); Gather: a gather consumer edge.
         for (label, graph, deposit) in [
-            ("each", graph_with_channels(json!([each_channel()])), "p_step_events"),
+            (
+                "each",
+                graph_with_channels(json!([each_channel()])),
+                "p_step_events",
+            ),
             (
                 "gather",
                 graph_with_consumer_join(gather_channel(), Some("gather")),
@@ -790,9 +816,9 @@ mod tests {
             let air = compile_to_air(&graph, "ch-arc", "d", &std::collections::HashMap::new())
                 .unwrap_or_else(|e| panic!("{label} compile failed: {e:?}"));
             let t = transition(&air, "t_step_control_emit");
-            let outs = t["outputs"].as_array().unwrap_or_else(|| {
-                panic!("{label}: t_step_control_emit has no output arcs: {t}")
-            });
+            let outs = t["outputs"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{label}: t_step_control_emit has no output arcs: {t}"));
             assert!(
                 outs.iter().any(|a| a["place"] == deposit),
                 "{label}: control_emit must declare an output arc to deposit place '{deposit}'; got {outs:?}"
@@ -844,12 +870,11 @@ mod tests {
         }
     }
 
-    /// The gather ITEM transition carries a per-item `max_fanout` guard
-    /// (`item.__map_idx >= {max_fanout}` → throw), the per-item sibling of the
-    /// close-count cap, so an over-fanout fails the instance loudly at the first
-    /// offending item rather than silently orphaning it.
+    /// The gather ITEM transition projects each item to the gather's
+    /// `#{ value, __map_idx, __map_id }` shape with NO producer-side cap — the
+    /// barrier sizes itself on `close.count`, so there is no over-fanout throw.
     #[test]
-    fn gather_item_has_per_item_max_fanout_guard() {
+    fn gather_item_projects_without_fanout_cap() {
         let graph = graph_with_consumer_join(gather_channel(), Some("gather"));
         let air =
             compile_to_air(&graph, "ch-guard", "d", &std::collections::HashMap::new()).unwrap();
@@ -861,14 +886,13 @@ mod tests {
             .or_else(|| item["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("item transition rhai source");
-        // gather_channel() declares max_fanout: 16.
         assert!(
-            src.contains("item.__map_idx >= 16"),
-            "item transition must guard against over-fanout; got {src}"
+            src.contains("__map_idx") && src.contains("__map_id"),
+            "item transition must project the gather shape; got {src}"
         );
         assert!(
-            src.contains("throw"),
-            "over-fanout must throw (NetFailed), not silently drop; got {src}"
+            !src.contains("throw"),
+            "item transition must NOT carry a fan-out cap (no throw); got {src}"
         );
     }
 
@@ -916,8 +940,13 @@ mod tests {
     #[test]
     fn data_channel_open_place_is_control_emit_output_arc() {
         let graph = graph_with_channels(json!([data_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-data-arc", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-data-arc",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let t = transition(&air, "t_step_control_emit");
         let outs = t["outputs"]
             .as_array()
@@ -938,8 +967,13 @@ mod tests {
     #[test]
     fn data_channel_close_routes_to_separate_sink() {
         let graph = graph_with_channels(json!([data_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-data-close", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-data-close",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
 
         let places = place_ids(&air);
         assert!(
@@ -1011,8 +1045,13 @@ mod tests {
         // registered as the producer's `output_place`: an unregistered handle
         // would have failed `find_output_place` ("no output place for
         // source_handle 'frames'") instead of compiling.
-        let air = compile_to_air(&graph, "ch-data-wire", "d", &std::collections::HashMap::new())
-            .expect("data channel must be edge-wireable off its source handle");
+        let air = compile_to_air(
+            &graph,
+            "ch-data-wire",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .expect("data channel must be edge-wireable off its source handle");
         let places = place_ids(&air);
         assert!(
             places.iter().any(|p| p == "p_step_frames"),
@@ -1023,8 +1062,13 @@ mod tests {
     #[test]
     fn manifest_is_baked_into_job_spec() {
         let graph = graph_with_channels(json!([each_channel(), gather_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-manifest", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-manifest",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let prepare = transition(&air, "step/prepare");
         let src = prepare["logic"]
             .get("Rhai")
@@ -1032,7 +1076,10 @@ mod tests {
             .or_else(|| prepare["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("prepare rhai source");
-        assert!(src.contains(r#""channels":"#), "manifest key missing: {src}");
+        assert!(
+            src.contains(r#""channels":"#),
+            "manifest key missing: {src}"
+        );
         assert!(src.contains(r#""name": "events""#), "events entry missing");
         assert!(src.contains(r#""name": "items""#), "items entry missing");
         // The manifest carries NO fold contract — the fold lives on the consumer
@@ -1061,26 +1108,22 @@ mod tests {
         assert_eq!(err.kind(), "channel_invalid");
     }
 
-    /// A `gather` consumer edge on a producer channel WITHOUT a positive
-    /// `max_fanout` is rejected (the barrier has no cap). The cap is no longer
-    /// tied to a producer contract — it's a consumer-join requirement.
+    /// A `gather` consumer edge is VALID with no producer-side cap — the counted
+    /// barrier sizes itself on the episode's own `close.count`.
     #[test]
-    fn validate_rejects_gather_without_producer_max_fanout() {
-        // gather consumer edge, but the producer channel declares no max_fanout.
+    fn validate_accepts_gather_without_producer_cap() {
         let graph = graph_with_consumer_join(
             json!({ "name": "items", "direction": "out", "plane": "control",
                     "element": { "type": "any" } }),
             Some("gather"),
         );
-        let err = validate_channels(&graph).unwrap_err();
-        assert_eq!(err.kind(), "channel_invalid");
+        assert!(validate_channels(&graph).is_ok());
     }
 
-    /// A bare control channel with no max_fanout and no consumer is now VALID —
-    /// it defaults to the `Each` join (the old "must declare a contract" rule is
-    /// gone; the producer is uniform).
+    /// A bare control channel with no consumer is VALID — it defaults to the
+    /// `Each` join (the producer is uniform; there are no producer-side knobs).
     #[test]
-    fn validate_accepts_control_channel_without_max_fanout() {
+    fn validate_accepts_bare_control_channel() {
         let graph = graph_with_channels(json!([
             { "name": "events", "direction": "out", "plane": "control",
               "element": { "type": "any" } }
@@ -1119,16 +1162,6 @@ mod tests {
     fn validate_accepts_well_formed_data_channel() {
         let graph = graph_with_channels(json!([data_channel()]));
         assert!(validate_channels(&graph).is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_data_channel_with_max_fanout() {
-        let graph = graph_with_channels(json!([
-            { "name": "frames", "direction": "out", "plane": "data",
-              "element": { "type": "any" }, "max_fanout": 4 }
-        ]));
-        let err = validate_channels(&graph).unwrap_err();
-        assert_eq!(err.kind(), "channel_invalid");
     }
 
     #[test]

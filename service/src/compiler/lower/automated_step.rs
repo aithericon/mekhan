@@ -42,14 +42,17 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     {
         if enclosing_leased_scope_slug(cx.node, cx.graph).is_none() {
             // Standalone Scheduled step: perform single-node lease lifecycle.
-            let alias = scheduler.as_deref().filter(|a| !a.is_empty()).ok_or_else(|| {
-                // Every Scheduled step REQUIRES a concrete cluster — the selection
-                // pass (scheduler_select.rs) enforces this, so absence here is a
-                // hard unresolved error.
-                CompileError::SchedulerUnresolved {
-                    node_id: cx.node.id.clone(),
-                }
-            })?;
+            let alias = scheduler
+                .as_deref()
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| {
+                    // Every Scheduled step REQUIRES a concrete cluster — the selection
+                    // pass (scheduler_select.rs) enforces this, so absence here is a
+                    // hard unresolved error.
+                    CompileError::SchedulerUnresolved {
+                        node_id: cx.node.id.clone(),
+                    }
+                })?;
 
             // Resolve the datacenter binding and delegate to the pooled body wrapping.
             // A per-node container spec (if any) is merged into the lease claim
@@ -88,7 +91,10 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { capacity: Some(_), .. },
+            deployment_model: DeploymentModel::Executor {
+                capacity: Some(_),
+                ..
+            },
             ..
         }
     ) {
@@ -568,7 +574,6 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     Ok(())
 }
 
-
 /// Everything the pooled lowering needs once `Inline.capacity.alias` has been
 /// resolved to a net-backed `capacity` (or `datacenter`) resource and its
 /// dispatch backend.
@@ -697,8 +702,8 @@ pub(super) fn resolve_binding(
         .as_object()
         .cloned()
         .unwrap_or_default();
-    let capacity_backend = crate::models::capacity::axes_for_resource(&kind, &public_map)
-        .map(|axes| axes.backend());
+    let capacity_backend =
+        crate::models::capacity::axes_for_resource(&kind, &public_map).map(|axes| axes.backend());
 
     // Map the resolved CapacityBackend to a net-backed PoolBackend the role
     // accepts. Queue / Deferred / None have no admission net, so they are a
@@ -710,7 +715,9 @@ pub(super) fn resolve_binding(
         Some(crate::models::capacity::CapacityBackend::Scheduler) => PoolBackend::Scheduler,
         // A worker queue / deferred-quota / non-pool resource has no admission
         // net for either role.
-        Some(crate::models::capacity::CapacityBackend::Queue) => return Err(wrong_backend("queue")),
+        Some(crate::models::capacity::CapacityBackend::Queue) => {
+            return Err(wrong_backend("queue"))
+        }
         Some(crate::models::capacity::CapacityBackend::Deferred) => {
             return Err(wrong_backend("deferred"))
         }
@@ -978,10 +985,11 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
 /// pool, so capacity tokens stay clean and the pool does not wedge.
 fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::AutomatedStep {
-        deployment_model: DeploymentModel::Executor {
-            capacity: Some(binding),
-            ..
-        },
+        deployment_model:
+            DeploymentModel::Executor {
+                capacity: Some(binding),
+                ..
+            },
         ..
     } = &cx.node.data
     else {
@@ -1227,7 +1235,10 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             well_known::POOL_CLAIM_INBOX,
             &[
                 ("grant", grant_inbox_place.as_str()),
-                (well_known::POOL_FAIL_CHANNEL, lease_failed_inbox_place.as_str()),
+                (
+                    well_known::POOL_FAIL_CHANNEL,
+                    lease_failed_inbox_place.as_str(),
+                ),
             ],
         )
     } else {
@@ -1252,7 +1263,10 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             format!("{label} - Register Hold"),
             pool_net_id,
             well_known::POOL_REGISTER_INBOX,
-            &[(well_known::POOL_FAIL_CHANNEL, lease_failed_inbox_place.as_str())],
+            &[(
+                well_known::POOL_FAIL_CHANNEL,
+                lease_failed_inbox_place.as_str(),
+            )],
         )
     } else {
         ctx.bridge_out(
@@ -1954,9 +1968,7 @@ mod slug_forwarding_tests {
 #[cfg(test)]
 mod container_injection_tests {
     use crate::compiler::resource_refs::{KnownResource, KnownResources};
-    use crate::compiler::{
-        compile_to_air_with_options, CompileOptions, CompilerContainerSpec,
-    };
+    use crate::compiler::{compile_to_air_with_options, CompileOptions, CompilerContainerSpec};
     use crate::models::template::WorkflowGraph;
     use serde_json::json;
     use std::collections::HashMap;

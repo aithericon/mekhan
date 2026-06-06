@@ -300,8 +300,9 @@ mod tests {
     fn port_vs_constant_skipped() {
         assert!(extract_join_constraints("a.status == \"done\"").is_empty());
         assert!(extract_join_constraints("a.count == 3").is_empty());
-        assert!(extract_join_constraints("a.x == 3 && a.y == b.y")
-            == vec![c("a", &["y"], "b", &["y"])]);
+        assert!(
+            extract_join_constraints("a.x == 3 && a.y == b.y") == vec![c("a", &["y"], "b", &["y"])]
+        );
     }
 
     #[test]

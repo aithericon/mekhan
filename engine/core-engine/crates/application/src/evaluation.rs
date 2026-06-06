@@ -271,7 +271,8 @@ pub(crate) fn select_next_transition(
         let input_arcs = net.input_arcs(&transition.id);
 
         // Find a valid binding for this transition
-        let binding = find_valid_binding(executor, transition, &input_arcs, marking, schema_registry);
+        let binding =
+            find_valid_binding(executor, transition, &input_arcs, marking, schema_registry);
         if binding.is_none() && memo.is_some() {
             newly_empty.push(transition.id.clone());
         }
@@ -386,7 +387,11 @@ pub(crate) fn reconcile_binding_memo<T: TopologyRepository>(
                 || events
                     .iter()
                     .any(|pe| matches!(pe.event, petri_domain::DomainEvent::NetInitialized { .. }));
-            let net = if needs_net { topology.get_topology() } else { None };
+            let net = if needs_net {
+                topology.get_topology()
+            } else {
+                None
+            };
             m.apply_events(net.as_ref(), events.iter().map(|pe| &pe.event));
         }
     }
@@ -771,9 +776,11 @@ pub fn check_terminal_state(
             // key. Fall back to the whole token data so those nets surface a
             // result rather than completing with empty outputs.
             let exit_code = match &token.color {
-                TokenColor::Data(data) => {
-                    Some(data.get("exit_code").cloned().unwrap_or_else(|| data.clone()))
-                }
+                TokenColor::Data(data) => Some(
+                    data.get("exit_code")
+                        .cloned()
+                        .unwrap_or_else(|| data.clone()),
+                ),
                 _ => None,
             };
             return Some(TerminalReachedInfo {
@@ -783,6 +790,97 @@ pub fn check_terminal_state(
         }
     }
     None
+}
+
+/// Thin wrapper that discards the cache-advance delta. Test-only; production
+/// callers use [`advance_marking`] directly so they can reconcile the binding
+/// memo from the delta.
+#[cfg(test)]
+pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
+    events: &E,
+    projection: &S,
+    cached_state: &RwLock<Option<(u64, Marking)>>,
+) -> Marking {
+    advance_marking(events, projection, cached_state).await.0
+}
+
+/// How the marking cache advanced on a call to [`advance_marking`]. The eval
+/// loop feeds this to the [`BindingMemo`](crate::binding_memo::BindingMemo) so
+/// the negative-binding memo is invalidated from the **same** event delta that
+/// moved the marking — never from a second, independently-timed read of the
+/// log (which could disagree if an external append landed in between).
+pub(crate) enum MarkingDelta {
+    /// Cache hit — the marking is unchanged since the previous call.
+    Unchanged,
+    /// Incremental — exactly these events were applied to advance the marking.
+    Applied(Vec<PersistedEvent>),
+    /// Full reprojection — the cache was empty (first call, or after a reset /
+    /// topology load). Treat as a wholesale change.
+    Rebuilt,
+}
+
+/// Get the current marking *and* report how the cache advanced. The single
+/// source of truth for the marking-cache cursor logic.
+///
+/// The cache cursor is the **storage-order count** of the event log
+/// (`events.len()`), and incremental updates use positional slicing
+/// (`events.events_from(idx)`). Filtering by the `.sequence` field is unsafe
+/// here: a cache hydrated from a multi-session NATS stream may hold events
+/// whose `.sequence` numbering restarts at 0 each session, so a sequence-field
+/// filter silently drops live appends whose `.sequence` happens to fall below
+/// the cursor — the cached marking then drifts away from `f(events)` and the
+/// eval loop re-fires the same transition on a stale binding (the executor-net
+/// infinite-fire bug, see [[engine-loop-dup-seq]]).
+pub(crate) async fn advance_marking<E: EventRepository, S: StateProjection>(
+    events: &E,
+    projection: &S,
+    cached_state: &RwLock<Option<(u64, Marking)>>,
+) -> (Marking, MarkingDelta) {
+    let current_idx = events.len().await as u64;
+
+    enum CacheState {
+        Hit(Marking),
+        Stale {
+            cached_idx: u64,
+            cached_marking: Marking,
+        },
+        Miss,
+    }
+
+    let state = {
+        let cache = cached_state.read().unwrap();
+        match &*cache {
+            Some((cached_idx, cached_marking)) if *cached_idx == current_idx => {
+                CacheState::Hit(cached_marking.clone())
+            }
+            Some((cached_idx, cached_marking)) => CacheState::Stale {
+                cached_idx: *cached_idx,
+                cached_marking: cached_marking.clone(),
+            },
+            None => CacheState::Miss,
+        }
+    };
+
+    match state {
+        CacheState::Hit(marking) => (marking, MarkingDelta::Unchanged),
+        CacheState::Stale {
+            cached_idx,
+            mut cached_marking,
+        } => {
+            let new_events = events.events_from(cached_idx as usize).await;
+            for persisted in &new_events {
+                crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
+            }
+            *cached_state.write().unwrap() = Some((current_idx, cached_marking.clone()));
+            (cached_marking, MarkingDelta::Applied(new_events))
+        }
+        CacheState::Miss => {
+            let all = events.all_events().await;
+            let marking = projection.project(&all);
+            *cached_state.write().unwrap() = Some((current_idx, marking.clone()));
+            (marking, MarkingDelta::Rebuilt)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1373,96 +1471,5 @@ mod tests {
             "expected ScriptError, got {err:?}"
         );
         assert!(err.is_permanent(), "dead-end error must be permanent");
-    }
-}
-
-/// Thin wrapper that discards the cache-advance delta. Test-only; production
-/// callers use [`advance_marking`] directly so they can reconcile the binding
-/// memo from the delta.
-#[cfg(test)]
-pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
-    events: &E,
-    projection: &S,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
-) -> Marking {
-    advance_marking(events, projection, cached_state).await.0
-}
-
-/// How the marking cache advanced on a call to [`advance_marking`]. The eval
-/// loop feeds this to the [`BindingMemo`](crate::binding_memo::BindingMemo) so
-/// the negative-binding memo is invalidated from the **same** event delta that
-/// moved the marking — never from a second, independently-timed read of the
-/// log (which could disagree if an external append landed in between).
-pub(crate) enum MarkingDelta {
-    /// Cache hit — the marking is unchanged since the previous call.
-    Unchanged,
-    /// Incremental — exactly these events were applied to advance the marking.
-    Applied(Vec<PersistedEvent>),
-    /// Full reprojection — the cache was empty (first call, or after a reset /
-    /// topology load). Treat as a wholesale change.
-    Rebuilt,
-}
-
-/// Get the current marking *and* report how the cache advanced. The single
-/// source of truth for the marking-cache cursor logic.
-///
-/// The cache cursor is the **storage-order count** of the event log
-/// (`events.len()`), and incremental updates use positional slicing
-/// (`events.events_from(idx)`). Filtering by the `.sequence` field is unsafe
-/// here: a cache hydrated from a multi-session NATS stream may hold events
-/// whose `.sequence` numbering restarts at 0 each session, so a sequence-field
-/// filter silently drops live appends whose `.sequence` happens to fall below
-/// the cursor — the cached marking then drifts away from `f(events)` and the
-/// eval loop re-fires the same transition on a stale binding (the executor-net
-/// infinite-fire bug, see [[engine-loop-dup-seq]]).
-pub(crate) async fn advance_marking<E: EventRepository, S: StateProjection>(
-    events: &E,
-    projection: &S,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
-) -> (Marking, MarkingDelta) {
-    let current_idx = events.len().await as u64;
-
-    enum CacheState {
-        Hit(Marking),
-        Stale {
-            cached_idx: u64,
-            cached_marking: Marking,
-        },
-        Miss,
-    }
-
-    let state = {
-        let cache = cached_state.read().unwrap();
-        match &*cache {
-            Some((cached_idx, cached_marking)) if *cached_idx == current_idx => {
-                CacheState::Hit(cached_marking.clone())
-            }
-            Some((cached_idx, cached_marking)) => CacheState::Stale {
-                cached_idx: *cached_idx,
-                cached_marking: cached_marking.clone(),
-            },
-            None => CacheState::Miss,
-        }
-    };
-
-    match state {
-        CacheState::Hit(marking) => (marking, MarkingDelta::Unchanged),
-        CacheState::Stale {
-            cached_idx,
-            mut cached_marking,
-        } => {
-            let new_events = events.events_from(cached_idx as usize).await;
-            for persisted in &new_events {
-                crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
-            }
-            *cached_state.write().unwrap() = Some((current_idx, cached_marking.clone()));
-            (cached_marking, MarkingDelta::Applied(new_events))
-        }
-        CacheState::Miss => {
-            let all = events.all_events().await;
-            let marking = projection.project(&all);
-            *cached_state.write().unwrap() = Some((current_idx, marking.clone()));
-            (marking, MarkingDelta::Rebuilt)
-        }
     }
 }

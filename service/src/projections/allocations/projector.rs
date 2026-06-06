@@ -252,10 +252,9 @@ impl State {
         let Some(grant_id) = lease.get("grant_id").and_then(|v| v.as_str()) else {
             return;
         };
-        let row = self
-            .rows
-            .entry(grant_id.to_string())
-            .or_insert_with(|| AllocationRow::new(AllocationKind::DatacenterLease, net_id, grant_id));
+        let row = self.rows.entry(grant_id.to_string()).or_insert_with(|| {
+            AllocationRow::new(AllocationKind::DatacenterLease, net_id, grant_id)
+        });
 
         if let Some(alloc_id) = lease
             .get("alloc_id")
@@ -313,12 +312,16 @@ impl State {
         let Some(grant_id) = grant_id else {
             return;
         };
-        let row = self.rows.entry(grant_id.clone()).or_insert_with(|| {
-            AllocationRow::new(AllocationKind::DatacenterLease, "", &grant_id)
-        });
+        let row = self
+            .rows
+            .entry(grant_id.clone())
+            .or_insert_with(|| AllocationRow::new(AllocationKind::DatacenterLease, "", &grant_id));
         row.released_at = Some(ts);
         // A clean release supersedes held; do not clobber a terminal failure.
-        if matches!(row.status, AllocationStatus::Pending | AllocationStatus::Held) {
+        if matches!(
+            row.status,
+            AllocationStatus::Pending | AllocationStatus::Held
+        ) {
             row.status = AllocationStatus::Released;
         }
         row.last_sequence = sequence;
@@ -444,10 +447,9 @@ impl State {
                 return;
             }
         }
-        let row = self
-            .rows
-            .entry(grant_id.clone())
-            .or_insert_with(|| AllocationRow::new(AllocationKind::ConcurrencyLimitGrant, net_id, &grant_id));
+        let row = self.rows.entry(grant_id.clone()).or_insert_with(|| {
+            AllocationRow::new(AllocationKind::ConcurrencyLimitGrant, net_id, &grant_id)
+        });
         if is_grant {
             if row.acquired_at.is_none() {
                 row.acquired_at = Some(ts);
@@ -457,7 +459,10 @@ impl State {
             }
         } else {
             row.released_at = Some(ts);
-            if matches!(row.status, AllocationStatus::Pending | AllocationStatus::Held) {
+            if matches!(
+                row.status,
+                AllocationStatus::Pending | AllocationStatus::Held
+            ) {
                 row.status = AllocationStatus::Released;
             }
         }
@@ -592,7 +597,13 @@ mod tests {
             "scheduler": { "slurm": { "partition": "gpu" } },
         });
         let result = serde_json::json!({ "alloc_id": "job-42", "lease": lease });
-        let events = vec![effect_completed(1, 100, "resource_lease_acquire", result, vec![])];
+        let events = vec![effect_completed(
+            1,
+            100,
+            "resource_lease_acquire",
+            result,
+            vec![],
+        )];
 
         let rows = project_allocations(&events, NET);
         assert_eq!(rows.len(), 1);
@@ -789,7 +800,8 @@ mod tests {
             hash: String::new(),
             previous_hash: None,
         };
-        let rows = project_allocations(&[fired(1, 100, "t_grant"), fired(2, 200, "t_release")], net);
+        let rows =
+            project_allocations(&[fired(1, 100, "t_grant"), fired(2, 200, "t_release")], net);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, AllocationKind::ConcurrencyLimitGrant);
         assert_eq!(rows[0].status, AllocationStatus::Released);

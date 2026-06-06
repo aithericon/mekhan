@@ -197,7 +197,7 @@ pub async fn create_template(
 }
 
 /// Append the shared FROM-tail for the latest-version template listing:
-/// optional project/tag JOINs, the mandatory workspace+visibility gate, the
+/// optional folder/tag JOINs, the mandatory workspace+visibility gate, the
 /// private-children rule, the generic typed filters, and free-text search.
 /// Used identically by the COUNT and the SELECT query so the two can't drift.
 fn append_template_where(
@@ -206,9 +206,23 @@ fn append_template_where(
     extras: &TemplateListExtras,
     params: &QueryParams,
 ) -> Result<(), QueryError> {
-    if let Some(project_id) = extras.project_id {
-        qb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
-        qb.push_bind(project_id);
+    if let Some(folder_id) = extras.folder_id {
+        // Direct membership: the template's home folder is exactly the selected
+        // folder. Recursive: the home folder is the selected folder OR any
+        // descendant, resolved by materialized-path prefix via a self-join on
+        // `folders` (so the caller need not pre-resolve the path).
+        qb.push(
+            " JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id)",
+        );
+        if extras.recursive {
+            qb.push(" JOIN folders f ON f.id = tf.folder_id");
+            qb.push(" JOIN folders sel ON sel.id = ");
+            qb.push_bind(folder_id);
+            qb.push(" AND (f.path = sel.path OR f.path LIKE sel.path || '/%')");
+        } else {
+            qb.push(" AND tf.folder_id = ");
+            qb.push_bind(folder_id);
+        }
     }
     if let Some(ref tag) = extras.tag {
         qb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
@@ -271,8 +285,8 @@ fn append_template_where(
 ///     (published, version, visibility, created_at, …)
 ///
 /// plus the template-specific relational/security params in
-/// [`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,
-/// `owner_template_id`).
+/// [`TemplateListExtras`] (`folder_id` + `recursive`, `tag`,
+/// `base_template_id`, `owner_template_id`).
 #[utoipa::path(
     get,
     path = "/api/v1/templates",

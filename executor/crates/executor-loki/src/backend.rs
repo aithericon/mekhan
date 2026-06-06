@@ -227,8 +227,8 @@ impl ExecutionBackend for LokiBackend {
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let start = Instant::now();
-        let resolved: ResolvedLokiConfig = serde_json::from_value(run_context.backend_state.clone())
-            .map_err(|e| {
+        let resolved: ResolvedLokiConfig =
+            serde_json::from_value(run_context.backend_state.clone()).map_err(|e| {
                 ExecutorError::Config(format!("failed to deserialize resolved loki config: {e}"))
             })?;
 
@@ -362,11 +362,7 @@ fn build_logql_context(
 /// dedicated `tera::Tera` so the escape fn is scoped to this backend; the
 /// template extension (`.logql`) is registered for autoescape so interpolated
 /// `{{ … }}` values flow through [`escape_logql`].
-fn render_logql(
-    source: &str,
-    ctx: &tera::Context,
-    label: &str,
-) -> Result<String, ExecutorError> {
+fn render_logql(source: &str, ctx: &tera::Context, label: &str) -> Result<String, ExecutorError> {
     let mut tera = tera::Tera::default();
     tera.autoescape_on(vec![".logql"]);
     tera.set_escape_fn(escape_logql);
@@ -513,7 +509,10 @@ fn flatten_streams(result: &Value) -> Vec<Value> {
         return entries;
     };
     for stream in streams {
-        let labels = stream.get("stream").cloned().unwrap_or(Value::Object(Map::new()));
+        let labels = stream
+            .get("stream")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
         let Some(values) = stream.get("values").and_then(Value::as_array) else {
             continue;
         };
@@ -521,8 +520,16 @@ fn flatten_streams(result: &Value) -> Vec<Value> {
             let Some(pair) = pair.as_array() else {
                 continue;
             };
-            let ts = pair.first().and_then(Value::as_str).unwrap_or("").to_string();
-            let line = pair.get(1).and_then(Value::as_str).unwrap_or("").to_string();
+            let ts = pair
+                .first()
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let line = pair
+                .get(1)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             entries.push(json!({
                 "ts": ts,
                 "line": line,
@@ -718,8 +725,7 @@ mod tests {
         let mut c = ctx(&td);
         stage_envelope(&mut c, "start", serde_json::json!({ "path": r"C:\logs" }));
         let context = build_logql_context(&c, "logs").unwrap();
-        let rendered =
-            render_logql(r#"{path="{{ start.path }}"}"#, &context, "query").unwrap();
+        let rendered = render_logql(r#"{path="{{ start.path }}"}"#, &context, "query").unwrap();
         assert_eq!(rendered, r#"{path="C:\\logs"}"#);
     }
 

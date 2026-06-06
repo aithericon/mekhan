@@ -37,7 +37,7 @@
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
-	import AssignToProjectDialog from '$lib/components/templates/AssignToProjectDialog.svelte';
+	import MoveToFolderDialog from '$lib/components/templates/MoveToFolderDialog.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 
 	let templates = $state<TemplateSummary[]>([]);
@@ -48,7 +48,8 @@
 	let dialogTemplateId = $state<string | null>(null);
 	let runCounts = $state<Record<string, { running: number; completed: number }>>({});
 	let searchQuery = $state('');
-	let projectFilter = $state<string | null>(null);
+	let folderFilter = $state<string | null>(null);
+	let recursiveFilter = $state(false);
 	let tagFilter = $state<string | null>(null);
 
 	// Server-driven pagination (0-based) + sort. Search/sort/filter all run on
@@ -67,14 +68,14 @@
 		{ value: '-version', label: 'Version' }
 	];
 	const sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === sort)?.label ?? 'Sort');
-	const hasQuery = $derived(!!searchQuery.trim() || !!projectFilter || !!tagFilter);
+	const hasQuery = $derived(!!searchQuery.trim() || !!folderFilter || !!tagFilter);
 
-	// Per-card Settings sheet + Assign-to-project dialog. Each holds the
+	// Per-card Settings sheet + Move-to-folder dialog. Each holds the
 	// target template so a single instance serves every card.
 	let settingsOpen = $state(false);
 	let settingsTemplate = $state<TemplateSummary | null>(null);
-	let assignOpen = $state(false);
-	let assignTemplate = $state<TemplateSummary | null>(null);
+	let moveOpen = $state(false);
+	let moveTemplate = $state<TemplateSummary | null>(null);
 
 	// Opening a bits-ui overlay from inside a closing dropdown races the
 	// dropdown's focus-return; defer to the next tick so the sheet/dialog
@@ -83,14 +84,15 @@
 		settingsTemplate = t;
 		setTimeout(() => (settingsOpen = true), 0);
 	}
-	function openAssign(t: TemplateSummary) {
-		assignTemplate = t;
-		setTimeout(() => (assignOpen = true), 0);
+	function openMove(t: TemplateSummary) {
+		moveTemplate = t;
+		setTimeout(() => (moveOpen = true), 0);
 	}
 
-	// Sidebar project/tag selection reloads from page 0.
-	function applyFilters(next: { projectId: string | null; tag: string | null }) {
-		projectFilter = next.projectId;
+	// Sidebar folder/tag selection reloads from page 0.
+	function applyFilters(next: { folderId: string | null; recursive: boolean; tag: string | null }) {
+		folderFilter = next.folderId;
+		recursiveFilter = next.recursive;
 		tagFilter = next.tag;
 		loadFirst();
 	}
@@ -134,7 +136,8 @@
 			pageSize: PAGE_SIZE,
 			search: searchQuery.trim() || undefined,
 			sort,
-			projectId: projectFilter ?? undefined,
+			folderId: folderFilter ?? undefined,
+			recursive: folderFilter ? recursiveFilter : undefined,
 			tag: tagFilter ?? undefined
 		});
 	}
@@ -318,7 +321,8 @@
 
 <div class="flex h-full" data-testid="templates-page">
 	<TemplatesFiltersSidebar
-		projectId={projectFilter}
+		folderId={folderFilter}
+		recursive={recursiveFilter}
 		tag={tagFilter}
 		onChange={applyFilters}
 	/>
@@ -483,11 +487,11 @@
 											Settings
 										</DropdownMenuItem>
 										<DropdownMenuItem
-											data-testid="btn-assign-project-template-{template.id}"
-											onSelect={() => openAssign(template)}
+											data-testid="btn-move-folder-template-{template.id}"
+											onSelect={() => openMove(template)}
 										>
 											<FolderInput class="size-4" />
-											Assign to project
+											Move to folder
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
 										<DropdownMenuItem
@@ -605,9 +609,9 @@
 	</SheetContent>
 </Sheet.Root>
 
-<AssignToProjectDialog
-	bind:open={assignOpen}
-	templateId={assignTemplate?.id ?? null}
-	baseTemplateId={assignTemplate ? (assignTemplate.base_template_id ?? assignTemplate.id) : null}
-	templateName={assignTemplate?.name}
+<MoveToFolderDialog
+	bind:open={moveOpen}
+	templateId={moveTemplate?.id ?? null}
+	templateName={moveTemplate?.name}
+	onMoved={loadFirst}
 />

@@ -115,11 +115,7 @@ fn leaf_schema(kind: FieldKind) -> Value {
 /// bare scalar schema; nested messages get a recursively-resolved object schema
 /// (cycle-guarded via `in_flight`); `builtin_interfaces/*` and unknown `/`
 /// types collapse to a permissive `{}`.
-fn type_schema(
-    rosapi_type: &str,
-    typedefs: &[TypeDef],
-    in_flight: &mut Vec<String>,
-) -> Value {
+fn type_schema(rosapi_type: &str, typedefs: &[TypeDef], in_flight: &mut Vec<String>) -> Value {
     if let Some(kind) = primitive_kind(rosapi_type) {
         return leaf_schema(kind);
     }
@@ -270,7 +266,10 @@ mod tests {
 
         let linear = port.fields.iter().find(|f| f.name == "linear").unwrap();
         assert_eq!(linear.kind, FieldKind::Json, "nested message → Json");
-        let schema = linear.schema.as_ref().expect("nested message carries schema");
+        let schema = linear
+            .schema
+            .as_ref()
+            .expect("nested message carries schema");
         assert_eq!(schema["type"], "object");
         // Vector3's three double fields resolve to nullable-Number schemas
         // (rosbridge renders NaN/±Inf as JSON null — see `leaf_schema`).
@@ -286,7 +285,9 @@ mod tests {
 
     #[test]
     fn teleport_response_is_empty_ack() {
-        let td = parse(include_str!("bundled/turtlesim__TeleportAbsolute_Response.json"));
+        let td = parse(include_str!(
+            "bundled/turtlesim__TeleportAbsolute_Response.json"
+        ));
         let port = typedefs_to_port(&td, "turtlesim/TeleportAbsolute_Response", "out", "Output");
         assert!(port.fields.is_empty(), "empty ack response → empty port");
     }
@@ -344,7 +345,10 @@ mod tests {
 
     #[test]
     fn normalize_strips_msg_srv_action_infixes() {
-        assert_eq!(normalize_type_name("geometry_msgs/msg/Twist"), "geometry_msgs/Twist");
+        assert_eq!(
+            normalize_type_name("geometry_msgs/msg/Twist"),
+            "geometry_msgs/Twist"
+        );
         assert_eq!(
             normalize_type_name("turtlesim/srv/TeleportAbsolute"),
             "turtlesim/TeleportAbsolute"
@@ -354,7 +358,10 @@ mod tests {
             "turtlesim/RotateAbsolute"
         );
         // Already-normalized stays put.
-        assert_eq!(normalize_type_name("geometry_msgs/Twist"), "geometry_msgs/Twist");
+        assert_eq!(
+            normalize_type_name("geometry_msgs/Twist"),
+            "geometry_msgs/Twist"
+        );
     }
 
     #[test]
@@ -374,7 +381,9 @@ mod tests {
 
     #[test]
     fn rotate_absolute_result_single_number() {
-        let td = parse(include_str!("bundled/turtlesim__RotateAbsolute_Result.json"));
+        let td = parse(include_str!(
+            "bundled/turtlesim__RotateAbsolute_Result.json"
+        ));
         let port = typedefs_to_port(&td, "turtlesim/RotateAbsolute_Result", "out", "Output");
         assert_eq!(port.fields.len(), 1);
         assert_eq!(port.fields[0].name, "delta");
@@ -403,7 +412,10 @@ mod tests {
         let target = &port.fields[0];
         assert_eq!(target.name, "target");
         assert_eq!(target.kind, FieldKind::Json, "array field → Json");
-        let schema = target.schema.as_ref().expect("array field carries a schema");
+        let schema = target
+            .schema
+            .as_ref()
+            .expect("array field carries a schema");
         assert_eq!(schema["type"], "array");
         assert_eq!(
             schema["items"],
@@ -459,7 +471,10 @@ mod tests {
         // and an opaque builtin_interfaces/Time stamp ({}).
         let header = by("header").schema.clone().unwrap();
         assert_eq!(header["type"], "object");
-        assert_eq!(header["properties"]["frame_id"], json!({ "type": "string" }));
+        assert_eq!(
+            header["properties"]["frame_id"],
+            json!({ "type": "string" })
+        );
         assert_eq!(header["properties"]["stamp"], json!({}));
     }
 }

@@ -114,8 +114,8 @@ impl ExecutionBackend for SuryaBackend {
         _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
-        let resolved: ResolvedSuryaConfig = serde_json::from_value(run_context.backend_state.clone())
-            .map_err(|e| {
+        let resolved: ResolvedSuryaConfig =
+            serde_json::from_value(run_context.backend_state.clone()).map_err(|e| {
                 ExecutorError::Config(format!("failed to deserialize resolved surya config: {e}"))
             })?;
 
@@ -281,7 +281,10 @@ fn success_result_single(
             "surya/page_count".into(),
         ],
         latest_values: HashMap::from([
-            ("surya/extraction_time_ms".into(), duration.as_millis() as f64),
+            (
+                "surya/extraction_time_ms".into(),
+                duration.as_millis() as f64,
+            ),
             ("surya/content_length".into(), chars),
             ("surya/page_count".into(), response.page_count as f64),
         ]),
@@ -350,7 +353,12 @@ async fn execute_batch(
 
     for (idx, (name, path)) in targets.iter().enumerate() {
         if cancel.is_cancelled() {
-            return Ok(cancelled_result_batch(run_context, start.elapsed(), idx, total));
+            return Ok(cancelled_result_batch(
+                run_context,
+                start.elapsed(),
+                idx,
+                total,
+            ));
         }
         if start.elapsed() >= run_context.timeout {
             return Ok(timed_out_result_batch(
@@ -472,11 +480,17 @@ async fn execute_batch(
             "surya/total_content_length".into(),
         ],
         latest_values: HashMap::from([
-            ("surya/total_extraction_time_ms".into(), duration.as_millis() as f64),
+            (
+                "surya/total_extraction_time_ms".into(),
+                duration.as_millis() as f64,
+            ),
             ("surya/total_files".into(), total as f64),
             ("surya/successful_files".into(), successful as f64),
             ("surya/failed_files".into(), failed as f64),
-            ("surya/total_content_length".into(), total_content_length as f64),
+            (
+                "surya/total_content_length".into(),
+                total_content_length as f64,
+            ),
         ]),
     };
 
@@ -639,7 +653,9 @@ fn backend_error_result(
         repeat_count: 1,
     };
     ExecutionResult {
-        outcome: ExecutionOutcome::BackendError { message: message.clone() },
+        outcome: ExecutionOutcome::BackendError {
+            message: message.clone(),
+        },
         duration,
         stdout_tail: None,
         stderr_tail: Some(message),

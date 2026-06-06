@@ -249,7 +249,10 @@ mod tests {
     fn build_assets_decl_drops_null_record_fields() {
         let env = json!({ "mats": [ { "name": "x", "note": null } ] });
         let decl = build_assets_decl(&env, &["mats"]);
-        assert!(!decl.contains("null"), "no `null` literal may escape: {decl}");
+        assert!(
+            !decl.contains("null"),
+            "no `null` literal may escape: {decl}"
+        );
         assert!(decl.contains("\"name\": \"x\""));
         assert!(!decl.contains("\"note\""));
     }

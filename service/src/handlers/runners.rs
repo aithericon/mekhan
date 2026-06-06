@@ -31,9 +31,9 @@ use crate::models::capability::{load_known_capabilities, validate_caps_against_t
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
     mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
-    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerInterfaceCatalog, RunnerInterfaces,
-    RunnerNatsCreds, RunnerPresenceSnapshot, RunnerRegistrationTokenRow, RunnerRow, RunnerSummary,
-    UpsertRunnerInterfacesRequest, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
+    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerInterfaceCatalog,
+    RunnerInterfaces, RunnerNatsCreds, RunnerPresenceSnapshot, RunnerRegistrationTokenRow,
+    RunnerRow, RunnerSummary, UpsertRunnerInterfacesRequest, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
 };
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
@@ -218,7 +218,9 @@ pub async fn enroll_runner(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| {
-        ApiError::forbidden("registration token is no longer usable (revoked, expired, or exhausted)")
+        ApiError::forbidden(
+            "registration token is no longer usable (revoked, expired, or exhausted)",
+        )
     })?;
 
     // 4b. Phase 4 — type the advertised capabilities against the workspace's
@@ -437,12 +439,11 @@ pub async fn upsert_runner_interfaces(
     // Resolve the runner's workspace from the live row (revoked rows → 404).
     // This both validates the runner exists and stamps the workspace_id without
     // trusting anything client-supplied.
-    let workspace_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT workspace_id FROM runners WHERE id = $1 AND revoked_at IS NULL",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let workspace_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM runners WHERE id = $1 AND revoked_at IS NULL")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
     let workspace_id = workspace_id.ok_or_else(|| ApiError::not_found("runner not found"))?;
 
     let catalog = serde_json::to_value(&req.catalog)
@@ -491,16 +492,15 @@ pub async fn get_runner_interfaces(
 
     // Join through the workspace so a foreign-workspace runner's catalog is never
     // leaked; absence of either the runner-scope match or the catalog row → 404.
-    let row: Option<(serde_json::Value, Option<String>, chrono::DateTime<Utc>)> =
-        sqlx::query_as(
-            "SELECT ri.catalog, ri.catalog_version, ri.discovered_at \
+    let row: Option<(serde_json::Value, Option<String>, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT ri.catalog, ri.catalog_version, ri.discovered_at \
              FROM runner_interfaces ri \
              WHERE ri.runner_id = $1 AND ri.workspace_id = $2",
-        )
-        .bind(id)
-        .bind(workspace_id)
-        .fetch_optional(&state.db)
-        .await?;
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await?;
 
     let (catalog_value, catalog_version, discovered_at) =
         row.ok_or_else(|| ApiError::not_found("no interface catalog reported for this runner"))?;

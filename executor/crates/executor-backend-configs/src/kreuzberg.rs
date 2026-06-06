@@ -137,11 +137,11 @@ impl KreuzbergConfig {
                     });
                 return Ok((name, p));
             }
-            return Err(ExecutorError::Config(format!(
+            Err(ExecutorError::Config(format!(
                 "kreuzberg: input '{}' not found in staged inputs (available: {:?})",
                 spec,
                 staged_inputs.keys().collect::<Vec<_>>()
-            )));
+            )))
         } else if staged_inputs.len() == 1 {
             let (name, path) = staged_inputs.iter().next().unwrap();
             Ok((name.clone(), path.clone()))

@@ -402,7 +402,9 @@ where
         net_parameters,
     } = envelope;
 
-    if let Err((status, message)) = validate_dispatch_options(&scenario, &skip_mask, &stage_overrides) {
+    if let Err((status, message)) =
+        validate_dispatch_options(&scenario, &skip_mask, &stage_overrides)
+    {
         tracing::error!(reason = %message, "Dispatch options validation failed");
         return Err(status);
     }
@@ -551,11 +553,8 @@ fn validate_dispatch_options(
     if skip_mask.is_empty() && stage_overrides.is_empty() {
         return Ok(());
     }
-    let declared: std::collections::HashSet<&str> = scenario
-        .transitions
-        .iter()
-        .map(|t| t.id.as_str())
-        .collect();
+    let declared: std::collections::HashSet<&str> =
+        scenario.transitions.iter().map(|t| t.id.as_str()).collect();
 
     for skip_id in skip_mask {
         if !declared.contains(skip_id.as_str()) {
@@ -1595,9 +1594,7 @@ mod tests {
             run_mode: Arc::new(RwLock::new(RunMode::default())),
             eval_notify: Arc::new(Notify::new()),
             event_tx: Arc::new(event_tx),
-            dispatch_options: Arc::new(RwLock::new(
-                petri_domain::DispatchOptions::default(),
-            )),
+            dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         }
     }
 

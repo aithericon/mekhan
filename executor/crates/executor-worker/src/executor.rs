@@ -15,7 +15,7 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::cancel::CancellationRegistry;
-use crate::chunks::StreamTransport;
+use crate::chunks::TransportRegistry;
 use crate::completion::CompletionTracker;
 use crate::config::CleanupPolicy;
 use crate::event_emitter::StreamContext;
@@ -44,12 +44,13 @@ pub struct JobExecutor {
     pub log_config: SidecarLogConfig,
     /// Completion tracker for drain-mode shutdown. `None` in daemon/manifest modes.
     pub completion_tracker: Option<Arc<CompletionTracker>>,
-    /// Data-plane byte transport (docs/25 §6), handed to each job's IPC sidecar
-    /// so a producer's `PublishChunk` publishes binary envelopes onto its
-    /// channel's datastream subject AND a consumer's `StreamChunks` subscribes to
-    /// the producer's subject and relays its envelopes back. `None` when NATS is
-    /// not wired (some test harnesses), in which case both validate + no-op.
-    pub transport: Option<Arc<dyn StreamTransport>>,
+    /// Data-plane byte transport REGISTRY (docs/25 §6), handed to each job's IPC
+    /// sidecar. A producer's `PublishChunk` selects its adapter off the channel's
+    /// declared transport and publishes binary envelopes onto its subject; a
+    /// consumer's `StreamChunks` selects the adapter off the producer's `open`
+    /// descriptor and relays its envelopes back. `None` when NATS is not wired
+    /// (some test harnesses), in which case both validate + no-op.
+    pub transports: Option<TransportRegistry>,
 }
 
 impl JobExecutor {
@@ -225,7 +226,7 @@ impl JobExecutor {
             stream_ctx,
             job.channels.clone(),
             Some(self.reporter.event_emitter()),
-            self.transport.clone(),
+            self.transports.clone(),
         )
         .await
         {
@@ -449,7 +450,7 @@ impl JobExecutor {
                             };
                             match promote_file_output_to_store(
                                 store.as_ref(),
-                                &execution_id,
+                                execution_id,
                                 &decl.name,
                                 value,
                                 &run_context.run_dir.outputs_dir,
@@ -927,10 +928,7 @@ async fn promote_file_output_to_store(
     // Rewrite the value's key to the shared object key.
     let promoted = match value {
         serde_json::Value::Object(mut map) => {
-            map.insert(
-                "key".to_string(),
-                serde_json::Value::String(shared_key),
-            );
+            map.insert("key".to_string(), serde_json::Value::String(shared_key));
             serde_json::Value::Object(map)
         }
         // A bare string value becomes the shared key directly.
@@ -968,16 +966,11 @@ mod tests {
             "media_type": "image/png",
         });
 
-        let promoted = promote_file_output_to_store(
-            &store,
-            "exec-abc",
-            "page_1",
-            value,
-            run_dir.path(),
-        )
-        .await
-        .unwrap()
-        .expect("a local file is promotable");
+        let promoted =
+            promote_file_output_to_store(&store, "exec-abc", "page_1", value, run_dir.path())
+                .await
+                .unwrap()
+                .expect("a local file is promotable");
 
         // The rewritten key is the deterministic shared key.
         let shared_key = promoted
@@ -1023,7 +1016,10 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        assert_eq!(promoted, serde_json::json!("artifacts/e1/outputs/img/doc.png"));
+        assert_eq!(
+            promoted,
+            serde_json::json!("artifacts/e1/outputs/img/doc.png")
+        );
     }
 
     /// A value whose `key` is NOT an existing local file (e.g. already a shared
@@ -1062,7 +1058,9 @@ mod tests {
         let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
 
         let rel = "page_0002.png";
-        tokio::fs::write(run_dir.path().join(rel), b"p2").await.unwrap();
+        tokio::fs::write(run_dir.path().join(rel), b"p2")
+            .await
+            .unwrap();
 
         let value = serde_json::json!({ "key": rel, "page": 2 });
         let promoted = promote_file_output_to_store(&store, "e3", "page_1", value, run_dir.path())

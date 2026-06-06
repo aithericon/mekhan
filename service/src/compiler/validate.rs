@@ -364,9 +364,10 @@ fn lease_field_model() -> LeaseFieldModel {
     let mut core = BTreeSet::new();
     let mut per_flavor: HashMap<String, BTreeSet<String>> = HashMap::new();
 
-    let schema =
-        aithericon_resources::pool::schemas_for_backend(aithericon_resources::pool::PoolBackend::Scheduler)
-            .lease;
+    let schema = aithericon_resources::pool::schemas_for_backend(
+        aithericon_resources::pool::PoolBackend::Scheduler,
+    )
+    .lease;
     let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
         return LeaseFieldModel { core, per_flavor };
     };
@@ -492,7 +493,7 @@ fn lease_field_violation(model: &LeaseFieldModel, flavor: &str, segs: &[String])
     };
     if field == "scheduler" {
         let sub = match segs.get(2) {
-            None => return None,          // whole `scheduler` object.
+            None => return None, // whole `scheduler` object.
             Some(s) => s.as_str(),
         };
         if sub == "flavor" {
@@ -584,7 +585,6 @@ pub(crate) fn validate_timeout(
     }
     Ok(())
 }
-
 
 pub(crate) fn validate_map(
     node: &WorkflowNode,
@@ -824,20 +824,15 @@ pub(crate) fn warn_unmerged_fan_in(
 ///
 /// - **No duplicate names** on one node (the synthesized place id
 ///   `p_{id}_{name}` and the `channel_routes` map key must be unique).
-/// - **`max_fanout` is positive if present** — a uniform safety cap. There is
-///   no producer-side contract any more; the fold discipline lives on the
-///   consumer edge's [`ChannelJoin`].
-/// - **Data channels carry no control knobs** — a `Data`-plane channel must not
-///   set `max_fanout`, and no edge into/out of it may set a `join`.
 /// - **`Json` element schemas resolve + compile** against the workflow-level
 ///   `definitions` (same `$ref` resolution the executor `SchemaRegistry` uses).
 /// - **Plane/wiring coherence** — a `Data`-plane channel has no Phase-1a
 ///   lowering, so an edge wiring one (`sourceHandle == name`) is rejected loudly
 ///   rather than silently dropping the byte stream.
 /// - **Consumer-join coherence** — for each CONTROL out-channel, all consumer
-///   edges must agree on `join` (v1 = one discipline per channel); a `gather`
-///   consumer requires the producer channel to carry a positive `max_fanout`
-///   (the barrier cap). Data edges must not set `join`.
+///   edges must agree on `join` (v1 = one discipline per channel). The `gather`
+///   barrier is sized by the episode's own `close.count`, so no producer-side
+///   cap is needed. Data edges must not set `join`.
 pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
     use crate::models::template::{ChannelJoin, ChannelPlane, ElementType};
 
@@ -864,31 +859,25 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             if !seen.insert(ch.name.as_str()) {
                 return Err(invalid("duplicate channel name on this node".to_string()));
             }
+            // The channel handle `id` IS `ch.name` (the wiring contract). An
+            // AutomatedStep node also exposes fixed `in`/`out`/`error` handles;
+            // a channel sharing one of those names would collide on the same
+            // node, silently cross-wiring the fixed port's edges (the editor
+            // resolves edges purely by handle id). Reserve them.
+            if matches!(ch.name.as_str(), "in" | "out" | "error") {
+                return Err(invalid(
+                    "channel name is reserved (collides with the fixed in/out/error handle); rename it"
+                        .to_string(),
+                ));
+            }
 
             match ch.plane {
                 ChannelPlane::Control => {
-                    // No producer-side contract. `max_fanout` is a uniform
-                    // safety cap: positive if present. Whether a positive cap
-                    // is REQUIRED is decided by the consumer edge's join
-                    // (gather needs one) in the edge pass below.
-                    if let Some(n) = ch.max_fanout {
-                        if n == 0 {
-                            return Err(invalid(
-                                "max_fanout must be positive when present".to_string(),
-                            ));
-                        }
-                    }
+                    // No producer-side knobs: the fold discipline lives on the
+                    // consumer edge's join, and the gather barrier sizes itself
+                    // on the episode's own close.count.
                 }
                 ChannelPlane::Data => {
-                    // Data channels carry out-of-band bytes; the net sees only
-                    // the open/close bracket, never per-element tokens — so the
-                    // control-only firing knobs are nonsensical and rejected.
-                    if ch.max_fanout.is_some() {
-                        return Err(invalid(
-                            "data channels must not declare max_fanout (control-plane only)"
-                                .to_string(),
-                        ));
-                    }
                     // A `Binary` element must carry a non-empty content_type so
                     // the transport/consumer can route the blob (the MIME hint
                     // the binary envelope stamps, docs/25 §6).
@@ -914,7 +903,6 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
                 }
             }
         }
-
     }
 
     // Cross-plane wiring coherence: a channel edge must not splice a data-plane
@@ -954,7 +942,9 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
-        let Some(src_ch) = node_channels.get(edge.source.as_str()).and_then(|m| m.get(src_h))
+        let Some(src_ch) = node_channels
+            .get(edge.source.as_str())
+            .and_then(|m| m.get(src_h))
         else {
             if edge.join.is_some() {
                 return Err(CompileError::ChannelInvalid {
@@ -965,7 +955,9 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
-        let Some(tgt_ch) = node_channels.get(edge.target.as_str()).and_then(|m| m.get(tgt_h))
+        let Some(tgt_ch) = node_channels
+            .get(edge.target.as_str())
+            .and_then(|m| m.get(tgt_h))
         else {
             continue;
         };
@@ -1021,20 +1013,8 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
                         control_joins.insert(key, join);
                     }
                 }
-                // A `gather` consumer needs the producer channel to size the
-                // counted barrier via a positive max_fanout.
-                if join == ChannelJoin::Gather
-                    && !matches!(src_ch.max_fanout, Some(n) if n > 0)
-                {
-                    return Err(CompileError::ChannelInvalid {
-                        node_id: edge.source.clone(),
-                        channel: src_h.to_string(),
-                        message: format!(
-                            "control channel '{src_h}' has a gather consumer but no positive \
-                             max_fanout (the gather barrier cap)"
-                        ),
-                    });
-                }
+                // A `gather` consumer's counted barrier is sized by the
+                // episode's own `close.count` — no producer-side cap needed.
             }
         }
     }
@@ -1278,10 +1258,7 @@ pub fn node_output_fields(
                 }
                 out.insert(node.id.clone(), fields);
             }
-            WorkflowNodeData::Loop {
-                accumulators,
-                ..
-            } => {
+            WorkflowNodeData::Loop { accumulators, .. } => {
                 let mut fields = std::collections::BTreeMap::new();
                 fields.insert("iteration".to_string(), FieldKind::Number);
                 // Accumulators are opaque-Rhai parked fields: `Json` escape

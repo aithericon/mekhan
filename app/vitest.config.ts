@@ -11,7 +11,15 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			$lib: new URL('./src/lib', import.meta.url).pathname
+			$lib: new URL('./src/lib', import.meta.url).pathname,
+			// SvelteKit's `$app/environment` is a virtual module the unit lane
+			// (plain vitest, no SvelteKit plugin) can't resolve. Components
+			// reachable from tests (e.g. output-renderers/index → JsonBlock →
+			// CodeEditor) import `browser` from it, so point it at a stub.
+			'$app/environment': new URL(
+				'./src/lib/testing/app-environment-stub.ts',
+				import.meta.url
+			).pathname
 		}
 	}
 });

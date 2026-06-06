@@ -584,17 +584,19 @@ fn project_for_slug(slug: Option<&str>) -> &'static SeedProject {
         .unwrap_or(&SEED_PROJECTS[0])
 }
 
-/// Upsert a seeded project in the default workspace and return its id. Keyed
-/// on `(workspace_id, slug)`; `ON CONFLICT DO UPDATE` keeps the display name /
-/// description fresh and guarantees a `RETURNING id` even on the conflict path.
+/// Upsert a seeded root folder in the default workspace and return its id.
+/// Keyed on the root-slug partial unique index (`folders_root_slug_uniq`);
+/// `ON CONFLICT DO UPDATE` keeps the display name / description fresh and
+/// guarantees a `RETURNING id` even on the conflict path.
 async fn ensure_project(
     state: &crate::AppState,
     project: &SeedProject,
 ) -> Result<uuid::Uuid, DemoSeedError> {
+    let path = format!("/{}", project.slug);
     let (id,): (uuid::Uuid,) = sqlx::query_as(
-        "INSERT INTO projects (workspace_id, slug, display_name, description, created_by) \
-              VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (workspace_id, slug) \
+        "INSERT INTO folders (workspace_id, parent_id, slug, display_name, description, path, created_by) \
+              VALUES ($1, NULL, $2, $3, $4, $5, $6) \
+         ON CONFLICT (workspace_id, slug) WHERE parent_id IS NULL \
               DO UPDATE SET display_name = EXCLUDED.display_name, \
                             description = EXCLUDED.description \
          RETURNING id",
@@ -603,6 +605,7 @@ async fn ensure_project(
     .bind(project.slug)
     .bind(project.display_name)
     .bind(project.description)
+    .bind(&path)
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .fetch_one(&state.db)
     .await?;
@@ -956,10 +959,10 @@ fn guess_content_type(filename: &str) -> &'static str {
 
 /// One asset fixture: a self-contained asset-type schema + the asset (ref-key)
 /// + its records. The type is created (or reused if a same-named type already
-/// exists in the demo workspace) before the asset, so several fixtures can
-/// share a type without ordering ceremony. A record's `File`-field value may be
-/// `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
-/// bundled file and substitutes the resulting storage path.
+///   exists in the demo workspace) before the asset, so several fixtures can
+///   share a type without ordering ceremony. A record's `File`-field value may be
+///   `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
+///   bundled file and substitutes the resulting storage path.
 #[derive(serde::Deserialize)]
 struct AssetFixture {
     asset_type: crate::models::asset::CreateAssetTypeRequest,
@@ -1359,35 +1362,39 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .fetch_one(&state.db)
     .await?;
 
-    // Group the demo under its declared project (default "Demos"). Keyed on
-    // `base_template_id` (= `template_id` here, since this is v1), so the
-    // attachment follows the live `is_latest` version automatically.
-    // Best-effort: a grouping failure must not fail the seed.
+    // File the demo into its declared folder (default "Demos"). Keyed on
+    // `base_template_id` (= `template_id` here, since this is v1), so the home
+    // follows the live `is_latest` version automatically. Best-effort: a
+    // filing failure must not fail the seed.
     //
-    // Private children are skipped: they're hidden from the catalogue (and
-    // the project listing already filters `visibility <> 'private'`), so a
-    // `project_templates` row for them would be dead weight, not a demo a
-    // user can open from the project view.
+    // Private children are skipped: they're hidden from the catalogue, so a
+    // `template_folders` row for them would be dead weight, not a demo a user
+    // can open from the folder view.
     if visibility != "private" {
         let project = project_for_slug(demo.metadata.project.as_deref());
         match ensure_project(state, project).await {
-            Ok(project_id) => {
+            Ok(folder_id) => {
                 if let Err(e) = sqlx::query(
-                    "INSERT INTO project_templates (project_id, base_template_id, added_by) \
-                          VALUES ($1, $2, $3) \
-                     ON CONFLICT (project_id, base_template_id) DO NOTHING",
+                    "INSERT INTO template_folders (base_template_id, folder_id, workspace_id, moved_by) \
+                          VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (base_template_id) \
+                          DO UPDATE SET folder_id = EXCLUDED.folder_id, \
+                                        workspace_id = EXCLUDED.workspace_id, \
+                                        moved_by = EXCLUDED.moved_by, \
+                                        moved_at = NOW()",
                 )
-                .bind(project_id)
                 .bind(template_id)
+                .bind(folder_id)
+                .bind(DEMO_WORKSPACE_ID)
                 .bind(DEMO_SEEDER_AUTHOR_ID)
                 .execute(&state.db)
                 .await
                 {
-                    tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+                    tracing::warn!(template_id = %template_id, error = %e, "file demo into folder failed (skipped)");
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+                tracing::warn!(error = %e, "ensure demo folder failed — demo seeded without folder grouping");
             }
         }
     }
@@ -1532,10 +1539,10 @@ pub async fn purge_seeded(state: &crate::AppState) -> Result<DemoResetReport, De
             .await?;
         report.tests_removed += del_tests.rows_affected() as usize;
 
-        // Project grouping keys on base_template_id with no FK to templates,
-        // so detach explicitly (leaves the now-empty project heading in place
-        // for the next reseed to reuse, whichever project it was attached to).
-        sqlx::query("DELETE FROM project_templates WHERE base_template_id = $1")
+        // Folder filing keys on base_template_id with no FK to templates, so
+        // unfile explicitly (leaves the now-empty folder in place for the next
+        // reseed to reuse, whichever folder it was filed under).
+        sqlx::query("DELETE FROM template_folders WHERE base_template_id = $1")
             .bind(base)
             .execute(&state.db)
             .await?;
@@ -1875,7 +1882,11 @@ mod tests {
             .expect("merge-extraction node must exist");
         match &merge.data {
             WorkflowNodeData::Join { mode, output, .. } => {
-                assert_eq!(*mode, JoinMode::Any, "branching demo uses XOR-join (mode=any)");
+                assert_eq!(
+                    *mode,
+                    JoinMode::Any,
+                    "branching demo uses XOR-join (mode=any)"
+                );
                 assert!(
                     output.fields.iter().any(|f| f.name == "fields"),
                     "merge-extraction.output must declare a `fields` field"
@@ -1960,11 +1971,11 @@ mod tests {
     /// AIR is fully self-contained — no S3 dependency.
     #[test]
     fn dump_document_pipeline_branching_v1_air() {
+        use crate::compiler::rhai_gen::json_to_rhai_literal;
         use crate::compiler::{
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
             ConfigStorage,
         };
-        use crate::compiler::rhai_gen::json_to_rhai_literal;
 
         let Some(out_path) = std::env::var_os("DUMP_BRANCHING_AIR") else {
             return;
@@ -2005,14 +2016,12 @@ mod tests {
             .expect("AIR must carry a transitions array");
         let mut inlined = 0usize;
         for (node_id, config) in &node_configs {
-            let storage_key =
-                ConfigStorage::ephemeral().key(node_id);
+            let storage_key = ConfigStorage::ephemeral().key(node_id);
             let needle = format!(
                 "\"config_ref\": #{{ \"storage_path\": \"{}\" }}",
                 storage_key.replace('\\', "\\\\").replace('"', "\\\"")
             );
-            let replacement =
-                format!("\"config\": {}", json_to_rhai_literal(config));
+            let replacement = format!("\"config\": {}", json_to_rhai_literal(config));
 
             let prepare_id = format!("{node_id}/prepare");
             let t = transitions
@@ -2029,8 +2038,7 @@ mod tests {
                  looked for: {needle}"
             );
             let rewritten = src.replace(&needle, &replacement);
-            *t.pointer_mut("/logic/source").unwrap() =
-                serde_json::Value::String(rewritten);
+            *t.pointer_mut("/logic/source").unwrap() = serde_json::Value::String(rewritten);
             inlined += 1;
         }
         assert_eq!(

@@ -11,6 +11,9 @@
 
 	let remoteUsers = $state<UserPresence[]>([]);
 
+	// One-time subscription to the awareness instance handed in at mount; the
+	// prop is stable for the component's life, so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const unsubscribe = onRemoteChange(awareness, (users) => {
 		remoteUsers = users;
 	});

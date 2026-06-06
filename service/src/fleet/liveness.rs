@@ -183,9 +183,7 @@ impl FleetLiveness {
     /// are kept fresh by the runner controller's own present/expire edges.
     pub async fn covered_backends(&self) -> HashSet<String> {
         let map = self.0.lock().await;
-        map.values()
-            .flat_map(|e| e.caps.iter().cloned())
-            .collect()
+        map.values().flat_map(|e| e.caps.iter().cloned()).collect()
     }
 
     /// The single `satisfies`-shaped eligibility query (docs/23 §4): whether ANY
@@ -359,7 +357,9 @@ mod tests {
         // retaining only fresh entries (the sweep body, worker-only).
         {
             let mut map = liveness.map().lock().await;
-            let e = map.get_mut(&(CapacityKind::Worker, "w1".to_string())).unwrap();
+            let e = map
+                .get_mut(&(CapacityKind::Worker, "w1".to_string()))
+                .unwrap();
             e.last_seen = Instant::now() - Duration::from_secs(3600);
         }
         {
@@ -384,7 +384,11 @@ mod tests {
     #[tokio::test]
     async fn latest_presence_replaces_advertised_backends() {
         let liveness = FleetLiveness::new();
-        handle_presence(liveness.map(), br#"{"worker_id":"w1","backends":["python"]}"#).await;
+        handle_presence(
+            liveness.map(),
+            br#"{"worker_id":"w1","backends":["python"]}"#,
+        )
+        .await;
         handle_presence(liveness.map(), br#"{"worker_id":"w1","backends":["loki"]}"#).await;
         assert!(!liveness.serves_backend("python").await);
         assert!(liveness.serves_backend("loki").await);
@@ -395,7 +399,11 @@ mod tests {
         // The unified query: a backend served by EITHER kind counts as covered,
         // and the worker-only sweep never touches a runner mirror.
         let liveness = FleetLiveness::new();
-        handle_presence(liveness.map(), br#"{"worker_id":"w1","backends":["python"]}"#).await;
+        handle_presence(
+            liveness.map(),
+            br#"{"worker_id":"w1","backends":["python"]}"#,
+        )
+        .await;
         liveness
             .upsert_runner("r1".to_string(), vec!["xrd".to_string()], 3)
             .await;
@@ -435,7 +443,10 @@ mod tests {
             });
         }
         assert!(!liveness.serves_backend("python").await, "worker swept");
-        assert!(liveness.serves_backend("xrd").await, "runner mirror survives sweep");
+        assert!(
+            liveness.serves_backend("xrd").await,
+            "runner mirror survives sweep"
+        );
 
         // The runner leaves only via drop_runner (controller-owned lifecycle).
         liveness.drop_runner("r1").await;

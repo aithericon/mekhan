@@ -272,7 +272,10 @@ fn build_container_body(
 /// Resource ceilings (tightened to the stricter of job-vs-sandbox):
 /// - `memory` = min(job, sandbox); `pids_limit` + `cpu_period`/`cpu_quota`
 ///   from the sandbox when set.
-fn apply_sandbox_to_host_config(host_config: &mut HostConfig, sb: &SandboxConfig) -> Option<String> {
+fn apply_sandbox_to_host_config(
+    host_config: &mut HostConfig,
+    sb: &SandboxConfig,
+) -> Option<String> {
     // Network: deny by default (override any job network_mode); the workload
     // keeps egress only when the operator opted in via allow_network.
     if !sb.allow_network {

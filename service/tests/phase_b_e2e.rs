@@ -112,13 +112,13 @@ async fn seed_template_with_webhook(
     id
 }
 
-async fn create_project(app: &axum::Router, subject: &str, workspace_id: Uuid, slug: &str) -> Uuid {
+async fn create_folder(app: &axum::Router, subject: &str, workspace_id: Uuid, slug: &str) -> Uuid {
     let resp = app
         .clone()
         .oneshot(
             req_as(subject, Some(workspace_id))
                 .method("POST")
-                .uri(format!("/api/v1/workspaces/{workspace_id}/projects"))
+                .uri(format!("/api/v1/workspaces/{workspace_id}/folders"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "slug": slug, "display_name": slug, "description": "test" })
@@ -128,33 +128,32 @@ async fn create_project(app: &axum::Router, subject: &str, workspace_id: Uuid, s
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "create_project");
+    assert_eq!(resp.status(), StatusCode::CREATED, "create_folder");
     let body = body_json(resp.into_body()).await;
     Uuid::parse_str(body["id"].as_str().unwrap()).unwrap()
 }
 
-async fn attach_template(
+/// File a template into a folder (its single home) via `PUT /templates/{id}/folder`.
+async fn set_template_folder(
     app: &axum::Router,
     subject: &str,
     workspace_id: Uuid,
-    project_id: Uuid,
+    folder_id: Uuid,
     template_id: Uuid,
 ) {
     let resp = app
         .clone()
         .oneshot(
             req_as(subject, Some(workspace_id))
-                .method("POST")
-                .uri(format!("/api/v1/projects/{project_id}/templates"))
+                .method("PUT")
+                .uri(format!("/api/v1/templates/{template_id}/folder"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "template_id": template_id }).to_string(),
-                ))
+                .body(Body::from(json!({ "folder_id": folder_id }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "attach_template");
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "set_template_folder");
 }
 
 // -- B1: per-project OpenAPI bundle ------------------------------------------
@@ -174,8 +173,8 @@ async fn openapi_bundle_lists_attached_webhooks() {
         &["invoice_id", "amount"],
     )
     .await;
-    let proj = create_project(&app, "alice", ws, "billing").await;
-    attach_template(&app, "alice", ws, proj, tpl).await;
+    let folder = create_folder(&app, "alice", ws, "billing").await;
+    set_template_folder(&app, "alice", ws, folder, tpl).await;
 
     let resp = app
         .clone()
@@ -183,7 +182,7 @@ async fn openapi_bundle_lists_attached_webhooks() {
             req_as("alice", Some(ws))
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/workspaces/{ws}/projects/{proj}/openapi.json"
+                    "/api/v1/workspaces/{ws}/folders/{folder}/openapi.json"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -194,7 +193,7 @@ async fn openapi_bundle_lists_attached_webhooks() {
     let doc = body_json(resp.into_body()).await;
 
     assert_eq!(doc["openapi"], "3.0.3");
-    assert_eq!(doc["info"]["title"], "Project: billing");
+    assert_eq!(doc["info"]["title"], "Folder: billing");
     let path = &doc["paths"]["/api/triggers/webhook/invoice-received"];
     assert!(path["post"].is_object(), "POST operation must exist");
     let op = &path["post"];
@@ -222,7 +221,7 @@ async fn openapi_bundle_rejects_non_member() {
     seed_member(&db, ws_a, "alice", "owner").await;
     seed_member(&db, ws_b, "bob", "owner").await;
 
-    let proj = create_project(&app, "alice", ws_a, "billing").await;
+    let folder = create_folder(&app, "alice", ws_a, "billing").await;
 
     let resp = app
         .clone()
@@ -230,7 +229,7 @@ async fn openapi_bundle_rejects_non_member() {
             req_as("bob", Some(ws_b))
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/workspaces/{ws_a}/projects/{proj}/openapi.json"
+                    "/api/v1/workspaces/{ws_a}/folders/{folder}/openapi.json"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -248,9 +247,9 @@ async fn openapi_bundle_404_on_project_in_wrong_workspace() {
     seed_member(&db, ws_a, "alice", "owner").await;
     seed_member(&db, ws_b, "alice", "owner").await;
 
-    let proj_in_a = create_project(&app, "alice", ws_a, "billing").await;
+    let folder_in_a = create_folder(&app, "alice", ws_a, "billing").await;
 
-    // Alice is a member of ws_b, so the gate passes; the project belongs
+    // Alice is a member of ws_b, so the gate passes; the folder belongs
     // to ws_a, so the in-workspace check should 404.
     let resp = app
         .clone()
@@ -258,7 +257,7 @@ async fn openapi_bundle_404_on_project_in_wrong_workspace() {
             req_as("alice", Some(ws_b))
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/workspaces/{ws_b}/projects/{proj_in_a}/openapi.json"
+                    "/api/v1/workspaces/{ws_b}/folders/{folder_in_a}/openapi.json"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -273,7 +272,7 @@ async fn openapi_bundle_empty_project_yields_empty_paths() {
     let (app, db) = header_driven_app().await;
     let ws = seed_workspace(&db, &format!("ws-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws, "alice", "owner").await;
-    let proj = create_project(&app, "alice", ws, "empty").await;
+    let folder = create_folder(&app, "alice", ws, "empty").await;
 
     let resp = app
         .clone()
@@ -281,7 +280,7 @@ async fn openapi_bundle_empty_project_yields_empty_paths() {
             req_as("alice", Some(ws))
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/workspaces/{ws}/projects/{proj}/openapi.json"
+                    "/api/v1/workspaces/{ws}/folders/{folder}/openapi.json"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -325,8 +324,8 @@ async fn openapi_bundle_method_defaults_to_post_when_unset() {
     .await
     .unwrap();
 
-    let proj = create_project(&app, "alice", ws, "ping").await;
-    attach_template(&app, "alice", ws, proj, id).await;
+    let folder = create_folder(&app, "alice", ws, "ping").await;
+    set_template_folder(&app, "alice", ws, folder, id).await;
 
     let resp = app
         .clone()
@@ -334,7 +333,7 @@ async fn openapi_bundle_method_defaults_to_post_when_unset() {
             req_as("alice", Some(ws))
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/workspaces/{ws}/projects/{proj}/openapi.json"
+                    "/api/v1/workspaces/{ws}/folders/{folder}/openapi.json"
                 ))
                 .body(Body::empty())
                 .unwrap(),

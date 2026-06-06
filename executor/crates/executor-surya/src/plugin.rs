@@ -145,10 +145,8 @@ impl OcrBackend for SuryaOcrPlugin {
         let mime_type = sniff_image_mime(image_bytes);
         // base64-encode for the wire envelope per the legacy ocr/
         // sidecar contract; matches SuryaAdapter::ocr's expected input.
-        let input_b64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            image_bytes,
-        );
+        let input_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, image_bytes);
 
         // OcrConfig carries language + other hints (PSM mode, etc.).
         // The bundled Surya wrapper does its own language auto-detection
@@ -162,12 +160,14 @@ impl OcrBackend for SuryaOcrPlugin {
             mime_type: mime_type.to_string(),
             filename: None,
         };
-        let response = self.adapter.ocr(&request).await.map_err(|e| {
-            KreuzbergError::Ocr {
+        let response = self
+            .adapter
+            .ocr(&request)
+            .await
+            .map_err(|e| KreuzbergError::Ocr {
                 message: format!("Surya OCR failed: {e}"),
                 source: Some(Box::new(e)),
-            }
-        })?;
+            })?;
 
         Ok(ExtractionResult {
             content: response.ocr_text,
@@ -186,7 +186,7 @@ impl OcrBackend for SuryaOcrPlugin {
         // upstream Surya handles unknown codes by attempting recognition
         // with its default language model, so claiming true here
         // mirrors upstream behaviour.
-        supported_languages_list().iter().any(|l| *l == lang)
+        supported_languages_list().contains(&lang)
     }
 
     fn backend_type(&self) -> OcrBackendType {
@@ -252,15 +252,12 @@ pub fn unregister() -> KreuzResult<()> {
 fn supported_languages_list() -> &'static [&'static str] {
     &[
         // European
-        "eng", "deu", "fra", "spa", "ita", "por", "nld", "swe", "nor", "dan", "fin", "pol",
-        "ces", "slk", "hun", "ron", "bul", "hrv", "srp", "ukr", "rus", "ell", "lat",
+        "eng", "deu", "fra", "spa", "ita", "por", "nld", "swe", "nor", "dan", "fin", "pol", "ces",
+        "slk", "hun", "ron", "bul", "hrv", "srp", "ukr", "rus", "ell", "lat",
         // Middle Eastern + Indic
-        "ara", "heb", "fas", "urd", "hin", "ben",
-        // East Asian
-        "jpn", "kor", "zho",
-        // Southeast Asian
-        "vie", "tha",
-        // Other
+        "ara", "heb", "fas", "urd", "hin", "ben", // East Asian
+        "jpn", "kor", "zho", // Southeast Asian
+        "vie", "tha", // Other
         "tur",
     ]
 }
@@ -281,8 +278,7 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
         return "image/jpeg";
     }
     // TIFF little-endian: 49 49 2A 00; big-endian: 4D 4D 00 2A
-    if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00])
-        || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
     {
         return "image/tiff";
     }
@@ -392,9 +388,15 @@ mod tests {
             "image/jpeg"
         );
         // TIFF little-endian
-        assert_eq!(sniff_image_mime(&[0x49, 0x49, 0x2A, 0x00, 0x00]), "image/tiff");
+        assert_eq!(
+            sniff_image_mime(&[0x49, 0x49, 0x2A, 0x00, 0x00]),
+            "image/tiff"
+        );
         // TIFF big-endian
-        assert_eq!(sniff_image_mime(&[0x4D, 0x4D, 0x00, 0x2A, 0x00]), "image/tiff");
+        assert_eq!(
+            sniff_image_mime(&[0x4D, 0x4D, 0x00, 0x2A, 0x00]),
+            "image/tiff"
+        );
         // WebP (RIFF + 4 byte size + WEBP)
         let mut webp = Vec::new();
         webp.extend_from_slice(b"RIFF");

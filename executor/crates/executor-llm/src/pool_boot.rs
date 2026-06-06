@@ -236,7 +236,9 @@ mod tests {
     fn from_env_short_circuits_when_disabled() {
         // Poison-safe: if another env-mutating test panicked while
         // holding the lock, recover the inner () and continue.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let prior = std::env::var("AITHERICON_EXECUTOR_REGISTER_AS_POOL").ok();
         std::env::set_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL", "false");
@@ -259,7 +261,9 @@ mod tests {
     /// `ENV_LOCK` window contiguous.
     #[test]
     fn from_env_round_trips_kreuzberg_enabled_flag() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Capture + restore the full env touched by this test so it stays
         // hermetic against the rest of the suite.

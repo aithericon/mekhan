@@ -240,11 +240,18 @@ use utoipa::OpenApi;
             crate::models::model_pool::TransitionRequest,
             crate::models::runner::ModelEntry,
             crate::models::runner::ModelInterfaceKind,
+            // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
+            // manual scale DTOs.
+            crate::models::model_replicas::ModelReplicaRow,
+            crate::models::model_replicas::ModelReplicaScaleRequest,
+            // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
+            crate::models::inference_metering::InferenceRequestLogRow,
         ),
     ),
     tags(
         (name = "templates", description = "Workflow template CRUD, versioning, publish, compile-to-AIR."),
         (name = "instances", description = "Running workflow instances deployed to the petri-lab engine."),
+        (name = "executions", description = "AutomatedStep execution introspection — data-plane channel byte taps (out-of-band streaming channel payloads over JetStream)."),
         (name = "processes", description = "HPI process inspection — metrics, logs, tasks, artifacts."),
         (name = "processes-live", description = "SSE backfill + live streams for process metrics, logs, and artifacts."),
         (name = "tasks", description = "Human task lifecycle — list, complete, cancel."),
@@ -261,7 +268,7 @@ use utoipa::OpenApi;
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),
         (name = "workspaces", description = "Tenant boundaries — membership + member admin (Phase A2)."),
-        (name = "projects", description = "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."),
+        (name = "folders", description = "Workspace-scoped hierarchical template grouping (single-parent tree) + tag/visibility surface + per-folder OpenAPI bundle."),
         (name = "me", description = "Per-session preferences — active workspace switcher."),
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),

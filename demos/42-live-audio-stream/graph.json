@@ -1,0 +1,84 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Live Audio Stream",
+        "initial": {
+          "id": "in",
+          "label": "Audio Input",
+          "fields": [
+            {
+              "name": "audio",
+              "label": "Audio (16 kHz mono WAV)",
+              "kind": "file",
+              "required": true,
+              "accept": "audio/wav,audio/x-wav,audio/wave"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "streamer",
+      "type": "automated_step",
+      "slug": "streamer",
+      "position": { "x": 360, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Pace audio over a data channel",
+        "description": "Retrieves the uploaded WAV and re-emits its raw 16-bit PCM over the Data/Out channel `speech` IN ~REAL TIME — one ~200 ms write, then sleep ~200 ms — so the stream takes about as long as the audio itself. Nothing consumes the channel in the net; the point is the out-of-band JetStream datastream, which the UI taps live (`GET .../channels/speech/data?follow=1`) and plays through Web Audio WHILE this step is still producing. The net only ever sees the channel's open + close (2 firings); the bytes never enter the marking.",
+        "channels": [
+          {
+            "name": "speech",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "audio/L16" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Stream stats",
+          "fields": [
+            { "name": "bytes_streamed", "label": "Bytes streamed", "kind": "number" },
+            { "name": "sample_rate", "label": "Sample rate", "kind": "number" },
+            { "name": "seconds", "label": "Audio seconds", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 680, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "seconds", "expression": "streamer.seconds" },
+          { "targetField": "bytes_streamed", "expression": "streamer.bytes_streamed" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_streamer", "source": "start", "target": "streamer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_streamer_end", "source": "streamer", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

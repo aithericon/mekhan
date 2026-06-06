@@ -56,8 +56,8 @@
 //! env-on means the pool advertises Ocr but `/v1/ocr/extract` 404s. See
 //! the Cargo.toml comment for the full deployment matrix.
 
-use axum::{Json, http::StatusCode};
-use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use axum::{http::StatusCode, Json};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::{Deserialize, Serialize};
 
 /// Request body for `POST /v1/ocr/extract`.

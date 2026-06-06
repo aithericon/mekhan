@@ -206,7 +206,7 @@ fn nix_spec_from_requirements(requirements: &[String], config: &serde_json::Valu
         .and_then(|v| v.as_str())
         .map(|p| {
             // "python3.11" → "python311", "python3" → "python3"
-            p.replace('.', "").replace("python3", "python3")
+            p.replace('.', "")
         })
         .unwrap_or_else(|| "python311".into());
 

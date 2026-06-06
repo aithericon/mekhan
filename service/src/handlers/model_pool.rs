@@ -43,11 +43,18 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 /// the presence snapshot currently considers PRESENT. Fail-soft: a DB error on
 /// the catalog scan yields an empty map (no model is "served"), an unparseable
 /// catalog row is skipped.
-async fn serving_runner_counts(state: &AppState, workspace_id: Uuid) -> HashMap<String, u32> {
+///
+/// Free function over `(db, runner_presence)` so the model-pool AUTOSCALER
+/// (`crate::autoscaler`) reads the SAME observed-replica count this picker uses —
+/// the loaded-set live half and the autoscaler's `observed_count` cannot drift.
+pub(crate) async fn serving_runner_counts(
+    db: &sqlx::PgPool,
+    runner_presence: &crate::runners_presence::RunnerPresence,
+    workspace_id: Uuid,
+) -> HashMap<String, u32> {
     // Live runners: the in-memory presence snapshot (the actual pool-capacity
     // signal). Restrict the catalog join to those that are present.
-    let present: HashSet<Uuid> = state
-        .runner_presence
+    let present: HashSet<Uuid> = runner_presence
         .snapshot()
         .await
         .into_iter()
@@ -58,7 +65,7 @@ async fn serving_runner_counts(state: &AppState, workspace_id: Uuid) -> HashMap<
     let catalogs: Vec<(Uuid, serde_json::Value)> =
         sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
             .bind(workspace_id)
-            .fetch_all(&state.db)
+            .fetch_all(db)
             .await
             .unwrap_or_default();
 
@@ -105,7 +112,7 @@ pub async fn list_loaded_models(
     .await
     .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
-    let counts = serving_runner_counts(&state, workspace_id).await;
+    let counts = serving_runner_counts(&state.db, &state.runner_presence, workspace_id).await;
 
     let out = rows
         .into_iter()
@@ -150,7 +157,7 @@ pub async fn get_model(
     let row = row.ok_or_else(|| ApiError::not_found("no such model in this workspace"))?;
 
     // Fail-soft live half (same contract as the list).
-    let serving = serving_runner_counts(&state, workspace_id)
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
         .await
         .get(&row.model_id)
         .copied()
@@ -222,7 +229,7 @@ pub async fn transition_model(
     .await
     .map_err(|e| ApiError::internal(format!("model_states transition write: {e}")))?;
 
-    let serving = serving_runner_counts(&state, workspace_id)
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
         .await
         .get(&updated.model_id)
         .copied()

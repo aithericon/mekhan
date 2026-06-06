@@ -1,0 +1,14 @@
+{
+  "name": "Durable blob stream: producer writes 8 × 8 KiB blocks over the s3 object-store transport; consumer drains via the unchanged stream() API and — because S3 is durable + ordered + replayable — receives ALL of them losslessly",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.sent", "op": "eq", "value": 8 },
+    { "path": "result.value.bytes_sent", "op": "eq", "value": 65536 },
+    { "path": "result.value.received", "op": "eq", "value": 8 },
+    { "path": "result.value.total_bytes", "op": "eq", "value": 65536 }
+  ]
+}

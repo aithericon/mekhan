@@ -95,9 +95,8 @@ impl EffectHandler for StageTemplateHandler {
 
         // Parse the typed request token. Missing required fields (staging_id,
         // slug) are a FATAL author/compiler error — there is nothing to record.
-        let req: StageRequestToken = serde_json::from_value(token.clone()).map_err(|e| {
-            EffectError::Fatal(format!("stage_template request is not valid: {e}"))
-        })?;
+        let req: StageRequestToken = serde_json::from_value(token.clone())
+            .map_err(|e| EffectError::Fatal(format!("stage_template request is not valid: {e}")))?;
 
         if req.staging_id.is_empty() {
             return Err(EffectError::Fatal(
@@ -417,7 +416,11 @@ mod tests {
         let handler = StageTemplateHandler::new(stager.clone(), "request", "staged");
 
         let mut input = stage_input();
-        if let Some(obj) = input.inputs.get_mut("request").and_then(|v| v.as_object_mut()) {
+        if let Some(obj) = input
+            .inputs
+            .get_mut("request")
+            .and_then(|v| v.as_object_mut())
+        {
             obj.insert(
                 "package_ref".to_string(),
                 serde_json::json!({ "catalogue_entry_id": "cat-7" }),

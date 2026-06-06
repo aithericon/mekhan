@@ -440,9 +440,7 @@ impl MekhanNats {
     /// Durable consumer for the `image_materializations` projection (docs/22).
     /// Same `petri.events.>` firehose as staging; pre-filters to `materialize-*`
     /// nets in-process.
-    pub async fn image_materializations_consumer(
-        &self,
-    ) -> Result<PullConsumer, async_nats::Error> {
+    pub async fn image_materializations_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
         let durable = self.durable_name("mekhan-image-materializations");
         let consumer = stream
@@ -451,6 +449,66 @@ impl MekhanNats {
                 jetstream::consumer::pull::Config {
                     durable_name: Some(durable.clone()),
                     filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
+    /// Durable consumer for the `model_replicas` projection (model-pool P4,
+    /// docs/29 §6'). Same `petri.events.>` firehose as staging; pre-filters to
+    /// `model-replica-*` nets in-process (see
+    /// `service/src/projections/model_replicas/`).
+    pub async fn model_replicas_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-model-replicas");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
+    /// Create or get the durable consumer for the inference-metering audit
+    /// ledger (model-pool P5, docs/29 §7'). The router publishes one complete
+    /// `inference_core::InferenceRequestLog` per request on
+    /// `inference.metering.{request_id}` with a plain `client.publish` — this
+    /// `get_or_create_stream`'d `INFERENCE_METERING` JetStream stream captures
+    /// those subjects, so the projector
+    /// (`service/src/projections/inference_metering.rs`) can fold each record
+    /// into the durable `inference_request_log` Postgres table.
+    ///
+    /// `Limits` retention with a 30-day `max_age` — the durable record lives in
+    /// Postgres; the stream is the buffered transport + replay-on-restart.
+    pub async fn inference_metering_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self
+            .jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "INFERENCE_METERING".into(),
+                subjects: vec!["inference.metering.>".into()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: Duration::from_secs(30 * 24 * 60 * 60), // 30 days
+                ..Default::default()
+            })
+            .await?;
+        let durable = self.durable_name("mekhan-inference-metering");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "inference.metering.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
                     ..Default::default()

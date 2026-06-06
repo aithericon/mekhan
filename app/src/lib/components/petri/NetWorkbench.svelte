@@ -50,6 +50,8 @@
 	const petriStore = $derived(createPetriStore(netId));
 
 	// ── Layout state ────────────────────────────────────────────────────
+	// Seed the open/closed default from the prop, then own it locally.
+	// svelte-ignore state_referenced_locally
 	let netTreeOpen = $state(showNetTree);
 	let rightTab = $state<'inspector' | 'services' | 'analysis'>('inspector');
 	let showScenarioEditor = $state(false);

@@ -308,8 +308,8 @@ pub enum CompileError {
     /// A streaming [`Channel`](crate::models::template::Channel) declaration on
     /// an AutomatedStep is invalid (docs/25). Covers: a duplicate channel name
     /// on one node; a `Json` element schema that doesn't resolve / compile; a
-    /// `Scatter` control channel missing a positive `max_fanout`; or a
-    /// plane/wiring mismatch the edge typing can't express.
+    /// plane/wiring mismatch the edge typing can't express; or consumer edges
+    /// that disagree on a control channel's `join`.
     #[error("node '{node_id}': channel '{channel}' is invalid — {message}")]
     ChannelInvalid {
         node_id: String,
@@ -497,9 +497,7 @@ pub enum CompileError {
     /// (e.g. two sibling projects containing this template) both define it, so
     /// picking one would be a silent guess (docs/20 §2). Same posture as
     /// `SlugConflict` — ambiguity is an error, not a guess.
-    #[error(
-        "node '{node_id}': asset binding '{ref_key}' is ambiguous — {detail}"
-    )]
+    #[error("node '{node_id}': asset binding '{ref_key}' is ambiguous — {detail}")]
     AssetBindingAmbiguous {
         node_id: String,
         ref_key: String,

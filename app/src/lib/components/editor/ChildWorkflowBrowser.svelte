@@ -2,19 +2,20 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
-	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
+	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import Lock from '@lucide/svelte/icons/lock';
 	import Tag from '@lucide/svelte/icons/tag';
 	import Search from '@lucide/svelte/icons/search';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import {
 		listTemplates,
-		listProjects,
+		listFolders,
 		listWorkspaceTags,
 		type Template,
-		type Project
+		type Folder
 	} from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
+	import FolderTree from '$lib/components/FolderTree.svelte';
 	import { familyId } from '$lib/editor/template-utils';
 
 	interface Props {
@@ -27,7 +28,7 @@
 
 	let { open = $bindable(), currentTemplateId, onselect }: Props = $props();
 
-	let projects = $state<Project[]>([]);
+	let folders = $state<Folder[]>([]);
 	let tags = $state<string[]>([]);
 	let templates = $state<Template[]>([]);
 	let loading = $state(false);
@@ -36,19 +37,19 @@
 	// `catalogue` = the workspace's public/shared templates (private hidden);
 	// `private` = this workflow's own private children (drafts included).
 	let mode = $state<'catalogue' | 'private'>('catalogue');
-	let projectId = $state<string | null>(null);
+	let folderId = $state<string | null>(null);
 	let tag = $state<string | null>(null);
 	let search = $state('');
 	let publishedOnly = $state(false);
 
-	// Projects + tags load once per open.
+	// Folders + tags load once per open.
 	$effect(() => {
 		if (!open) return;
 		const ws = workspaces.active?.id;
 		if (!ws) return;
-		listProjects(ws)
-			.then((p) => (projects = p))
-			.catch(() => (projects = []));
+		listFolders(ws)
+			.then((f) => (folders = f))
+			.catch(() => (folders = []));
 		listWorkspaceTags(ws)
 			.then((t) => (tags = t))
 			.catch(() => (tags = []));
@@ -59,7 +60,7 @@
 	$effect(() => {
 		if (!open) return;
 		const m = mode;
-		const pid = projectId;
+		const fid = folderId;
 		const tg = tag;
 		const pub = publishedOnly;
 		const cur = currentTemplateId;
@@ -72,7 +73,7 @@
 				: listTemplates({
 						pageSize: 100,
 						published: pub || undefined,
-						projectId: pid || undefined,
+						folderId: fid || undefined,
 						tag: tg || undefined
 					});
 		req
@@ -114,14 +115,14 @@
 		window.open(`/templates/${t.id}`, '_blank');
 	}
 
-	function selectProject(id: string | null) {
+	function selectFolder(id: string | null) {
 		mode = 'catalogue';
-		projectId = id;
+		folderId = id;
 		tag = null;
 	}
 	function selectPrivate() {
 		mode = 'private';
-		projectId = null;
+		folderId = null;
 		tag = null;
 	}
 	function toggleTag(t: string) {
@@ -140,37 +141,17 @@
 		</Dialog.Header>
 
 		<div class="flex min-h-0 flex-1">
-			<!-- Project / scope sidebar -->
+			<!-- Folder / scope sidebar -->
 			<aside class="w-56 shrink-0 overflow-y-auto border-r border-border bg-card/30 p-3">
 				<div class="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-					<FolderKanban class="size-4 text-muted-foreground" />
-					Projects
+					<FolderTreeIcon class="size-4 text-muted-foreground" />
+					Folders
 				</div>
-				<ul class="space-y-0.5">
-					<li>
-						<button
-							type="button"
-							class="w-full rounded px-2 py-1 text-left text-sm hover:bg-accent {mode === 'catalogue' && projectId === null && tag === null ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground'}"
-							onclick={() => selectProject(null)}
-							data-testid="browser-project-all"
-						>
-							All templates
-						</button>
-					</li>
-					{#each projects as p (p.id)}
-						<li>
-							<button
-								type="button"
-								class="w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent {mode === 'catalogue' && projectId === p.id ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground'}"
-								onclick={() => selectProject(p.id)}
-								title={p.description || p.display_name}
-								data-testid={`browser-project-${p.slug}`}
-							>
-								{p.display_name}
-							</button>
-						</li>
-					{/each}
-				</ul>
+				<FolderTree
+					{folders}
+					selectedId={mode === 'catalogue' ? folderId : '__none__'}
+					onSelect={selectFolder}
+				/>
 
 				{#if currentTemplateId}
 					<div class="mt-4 mb-2 flex items-center gap-2 text-sm font-medium text-foreground">

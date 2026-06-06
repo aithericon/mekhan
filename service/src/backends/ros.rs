@@ -432,7 +432,11 @@ mod tests {
         assert_eq!(port.fields.len(), 2);
         let delta = port.fields.iter().find(|f| f.name == "delta").unwrap();
         assert_eq!(delta.kind, FieldKind::Number);
-        let fc = port.fields.iter().find(|f| f.name == "feedback_count").unwrap();
+        let fc = port
+            .fields
+            .iter()
+            .find(|f| f.name == "feedback_count")
+            .unwrap();
         assert_eq!(fc.kind, FieldKind::Number);
     }
 
@@ -480,9 +484,17 @@ mod tests {
         assert_eq!(port.fields.len(), 3);
         let ec = port.fields.iter().find(|f| f.name == "error_code").unwrap();
         assert_eq!(ec.kind, FieldKind::Number);
-        let es = port.fields.iter().find(|f| f.name == "error_string").unwrap();
+        let es = port
+            .fields
+            .iter()
+            .find(|f| f.name == "error_string")
+            .unwrap();
         assert_eq!(es.kind, FieldKind::Text);
-        let fc = port.fields.iter().find(|f| f.name == "feedback_count").unwrap();
+        let fc = port
+            .fields
+            .iter()
+            .find(|f| f.name == "feedback_count")
+            .unwrap();
         assert_eq!(fc.kind, FieldKind::Number);
     }
 

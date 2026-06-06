@@ -44,6 +44,7 @@
 	// authoritative document has synced. Binding to a not-yet-synced shared
 	// text makes y-codemirror mirror the local initial content back into the
 	// doc, concatenating duplicate copies into the persisted file.
+	// svelte-ignore state_referenced_locally
 	let synced = $state(provider ? provider.isSynced : true);
 	const handleSync = (s: boolean) => {
 		synced = s;

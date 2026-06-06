@@ -8088,7 +8088,7 @@
         }
       ],
       "logic": {
-        "source": "let __src = d_propose.detail.outputs.candidates; let __arr = if type_of(__src) == \"array\" { __src } else { [] }; let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ \"cand\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"mp\" }); __i += 1; } #{ count: #{ expected: __arr.len(), \"__map_id\": \"mp\" }, items: __items }",
+        "source": "let __src = d_propose.detail.outputs.candidates; let __arr = if type_of(__src) == \"array\" { __src } else { [] }; let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ \"cand\": __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"mp\" }); __i += 1; } #{ count: #{ expected: __arr.len(), \"__map_id\": \"mp\" }, items: __items }",
         "type": "rhai"
       },
       "name": "Evaluate K candidates - Scatter",

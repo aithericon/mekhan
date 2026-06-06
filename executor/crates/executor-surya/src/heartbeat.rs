@@ -207,9 +207,15 @@ mod tests {
         let config = fixture_config();
         let payload = build_payload_from_parts(&config, true);
         let services = &payload["services"];
-        assert!(services.get("ollama").is_none(), "MUST NOT advertise ollama");
+        assert!(
+            services.get("ollama").is_none(),
+            "MUST NOT advertise ollama"
+        );
         assert!(services.get("vllm").is_none(), "MUST NOT advertise vllm");
-        assert!(services.get("kreuzberg").is_none(), "MUST NOT advertise kreuzberg");
+        assert!(
+            services.get("kreuzberg").is_none(),
+            "MUST NOT advertise kreuzberg"
+        );
         assert!(
             services.get("ocr_sidecar").is_none(),
             "MUST NOT advertise legacy ocr_sidecar"

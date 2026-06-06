@@ -303,6 +303,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Token-in-place predicate used by the scheduler-adapter test fixtures.
+    type CheckTokenInPlace = Arc<dyn Fn(&PlaceId, &TokenId) -> bool + Send + Sync>;
+
     #[test]
     fn test_scheduler_creation() {
         let scheduler = AdapterScheduler::new();
@@ -501,7 +504,7 @@ mod tests {
             });
 
         // Dummy check function (always returns true)
-        let check_fn: Arc<dyn Fn(&PlaceId, &TokenId) -> bool + Send + Sync> = Arc::new(|_, _| true);
+        let check_fn: CheckTokenInPlace = Arc::new(|_, _| true);
 
         // Process a token creation event
         let token_data = json!({ "value": 42 });
@@ -552,7 +555,7 @@ mod tests {
         });
 
         // Dummy check function
-        let check_fn: Arc<dyn Fn(&PlaceId, &TokenId) -> bool + Send + Sync> = Arc::new(|_, _| true);
+        let check_fn: CheckTokenInPlace = Arc::new(|_, _| true);
 
         // Process a token creation event for a place with no adapters
         let token_id = TokenId::new();
@@ -609,7 +612,7 @@ mod tests {
         });
 
         // Dummy check function
-        let check_fn: Arc<dyn Fn(&PlaceId, &TokenId) -> bool + Send + Sync> = Arc::new(|_, _| true);
+        let check_fn: CheckTokenInPlace = Arc::new(|_, _| true);
 
         let start = Instant::now();
         let token_id = TokenId::new();
@@ -678,7 +681,7 @@ mod tests {
             });
 
         // Dummy check function
-        let check_fn: Arc<dyn Fn(&PlaceId, &TokenId) -> bool + Send + Sync> = Arc::new(|_, _| true);
+        let check_fn: CheckTokenInPlace = Arc::new(|_, _| true);
 
         // Process with specific token data
         let token_data = json!({ "value": 21 });

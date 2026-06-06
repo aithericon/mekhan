@@ -196,10 +196,7 @@ pub async fn register() -> Result<(), BoxErr> {
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "enroll rejected by {enroll_url}: HTTP {status}\n{text}"
-        )
-        .into());
+        return Err(format!("enroll rejected by {enroll_url}: HTTP {status}\n{text}").into());
     }
 
     let enrolled: EnrolledRunner = resp
@@ -264,9 +261,7 @@ pub async fn register() -> Result<(), BoxErr> {
     }
     println!();
     if !creds_written {
-        println!(
-            "No NATS creds were issued at enroll time. Fetch them later with:"
-        );
+        println!("No NATS creds were issued at enroll time. Fetch them later with:");
         println!("  aithericon-executor refresh-creds --url {}", args.url);
         println!();
     }
@@ -302,8 +297,7 @@ struct RefreshCredsArgs {
 /// Phase-1-enrolled runner (no JWT yet) or a rotating runner obtains fresh creds.
 pub async fn refresh_creds() -> Result<(), BoxErr> {
     let flags = std::env::args().skip(2);
-    let synthetic =
-        std::iter::once("aithericon-executor refresh-creds".to_string()).chain(flags);
+    let synthetic = std::iter::once("aithericon-executor refresh-creds".to_string()).chain(flags);
     let args = RefreshCredsArgs::parse_from(synthetic);
 
     // Resolve the runner directory: explicit --base-dir wins, else config.
@@ -495,10 +489,7 @@ pub async fn enroll_worker(
         .map_err(|e| format!("failed to extract nkey seed: {e}"))?;
 
     let worker_dir = PathBuf::from(base_dir).join("worker");
-    let enroll_url = format!(
-        "{}/api/v1/workers/enroll",
-        mekhan_url.trim_end_matches('/')
-    );
+    let enroll_url = format!("{}/api/v1/workers/enroll", mekhan_url.trim_end_matches('/'));
     let body = EnrollWorkerRequest {
         registration_token: registration_token.to_string(),
         name: name.to_string(),
@@ -519,7 +510,9 @@ pub async fn enroll_worker(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("worker enroll rejected by {enroll_url}: HTTP {status}\n{text}").into());
+        return Err(
+            format!("worker enroll rejected by {enroll_url}: HTTP {status}\n{text}").into(),
+        );
     }
 
     let enrolled: EnrolledWorker = resp

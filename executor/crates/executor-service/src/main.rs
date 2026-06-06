@@ -13,43 +13,42 @@ use aithericon_executor_domain::ExecutionJob;
 use aithericon_executor_http::HttpBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
-#[cfg(feature = "surya")]
-use aithericon_executor_surya::SuryaBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
 use aithericon_executor_logs::{
     CompositeLogSink, FileLogSink, LevelFilterSink, LogSink, LogSinkConfig, NatsLogSink,
 };
+#[cfg(feature = "loki")]
+use aithericon_executor_loki::LokiBackend;
 use aithericon_executor_metrics::{
     CompositeMetricSink, InMemoryMetricSink, LokiMetricSink, MetricSink, MetricSinkConfig,
     NatsMetricSink,
 };
+#[cfg(feature = "postgres")]
+use aithericon_executor_postgres::PostgresBackend;
 use aithericon_executor_process::ProcessBackend;
+#[cfg(feature = "prometheus")]
+use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "python")]
 use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 #[cfg(feature = "python")]
 use aithericon_executor_python::PythonBackend;
-#[cfg(feature = "smtp")]
-use aithericon_executor_smtp::SmtpBackend;
-#[cfg(feature = "postgres")]
-use aithericon_executor_postgres::PostgresBackend;
-#[cfg(feature = "loki")]
-use aithericon_executor_loki::LokiBackend;
-#[cfg(feature = "prometheus")]
-use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "ros")]
 use aithericon_executor_ros::RosBackend;
+#[cfg(feature = "smtp")]
+use aithericon_executor_smtp::SmtpBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
+#[cfg(feature = "surya")]
+use aithericon_executor_surya::SuryaBackend;
 use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
-    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker,
-    DrainConfig, ExecutorConfig, JetStreamTransport, JobExecutor, JobSource, Lifetime,
-    LiveModelState, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
-    StreamTransport,
+    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker, DrainConfig,
+    ExecutorConfig, JobExecutor, JobSource, Lifetime, LiveModelState, NatsCancelListener,
+    NixEnvironmentHook, SidecarLogConfig, StatusReporter, TransportRegistry,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -184,7 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return Err(e.into());
         }
         info!(
-            allow_network = config.sandbox.as_ref().map(|s| s.allow_network).unwrap_or(false),
+            allow_network = config
+                .sandbox
+                .as_ref()
+                .map(|s| s.allow_network)
+                .unwrap_or(false),
             "sandbox enabled — process/python jobs run under nsjail"
         );
     }
@@ -336,14 +339,15 @@ async fn run_nats_daemon(
         );
     }
 
-    // Data-plane byte transport (docs/25 §6). Ensure the `EXECUTOR_DATASTREAM`
-    // stream exists once, then hand each job's IPC sidecar the transport so a
-    // producer's `PublishChunk` publishes binary envelopes onto its channel's
-    // datastream subject AND a consumer's `StreamChunks` subscribes to the
-    // producer's subject and relays its envelopes back.
-    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
-    let transport: Option<Arc<dyn StreamTransport>> =
-        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
+    // Data-plane byte transport REGISTRY (docs/25 §6). Ensure the durable
+    // `EXECUTOR_DATASTREAM` stream exists once, then hand each job's IPC sidecar
+    // the registry so producer-write/consumer-read dispatch the adapter off the
+    // channel's declared transport (`jetstream` durable | `nats-latest` lossy).
+    TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+        &config,
+    ));
 
     // Build the JobExecutor. `registered_wires` is the set of backend
     // wire-names that actually registered (feature-gated arms may skip) —
@@ -353,7 +357,7 @@ async fn run_nats_daemon(
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
-        transport,
+        transports,
     )?;
     let executor = Arc::new(executor);
 
@@ -485,11 +489,9 @@ async fn run_nats_daemon(
                 ..Default::default()
             };
 
-            let storage = NatsStorage::<ExecutionJob>::new_with_config(
-                nats_client.clone(),
-                nats_config,
-            )
-            .await?;
+            let storage =
+                NatsStorage::<ExecutionJob>::new_with_config(nats_client.clone(), nats_config)
+                    .await?;
 
             // Worker name must stay unique across the served backends; include
             // the routing partition so logs disambiguate co-located groups, but
@@ -517,7 +519,10 @@ async fn run_nats_daemon(
         // carried so the fleet view can render which group each worker competes
         // in (the actual queue partition is the group's UUID, bound above).
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
-        let presence_id = config.worker_id.clone().unwrap_or_else(|| config.name.clone());
+        let presence_id = config
+            .worker_id
+            .clone()
+            .unwrap_or_else(|| config.name.clone());
         spawn_worker_presence_task(
             nats_client_for_cancel.clone(),
             presence_id.clone(),
@@ -619,10 +624,12 @@ async fn run_nats_drain(
         info!("NATS cancel listener started");
     }
 
-    // Data-plane byte transport (see `run_nats_daemon` for the rationale).
-    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
-    let transport: Option<Arc<dyn StreamTransport>> =
-        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
+    // Data-plane byte transport REGISTRY (see `run_nats_daemon` for the rationale).
+    TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+        &config,
+    ));
 
     // Build the executor with a completion tracker
     let tracker = Arc::new(CompletionTracker::new());
@@ -637,7 +644,7 @@ async fn run_nats_drain(
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
-        transport,
+        transports,
     )?;
     executor.completion_tracker = Some(tracker);
     let executor = Arc::new(executor);
@@ -753,11 +760,13 @@ async fn run_manifest(
 
     // Build executor — same pipeline as daemon mode.
     let cancel_registry = CancellationRegistry::new();
-    // Data-plane transport: a manifest job MAY be a producer (`open_output`) or a
-    // consumer (`stream`), so wire the transport here too.
-    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
-    let transport: Option<Arc<dyn StreamTransport>> =
-        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
+    // Data-plane transport REGISTRY: a manifest job MAY be a producer
+    // (`open_output`) or a consumer (`stream`), so wire it here too.
+    TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
+    let transports: Option<TransportRegistry> = Some(attach_object_store(
+        TransportRegistry::new(jetstream.clone(), nats_client.clone()),
+        &config,
+    ));
     // Manifest mode is its own single-namespace dispatcher — no per-backend
     // fan-out, so the registered wire set is unused here.
     let (executor, _registered_wires) = build_executor(
@@ -765,7 +774,7 @@ async fn run_manifest(
         reporter.clone(),
         &nats_client,
         cancel_registry,
-        transport,
+        transports,
     )?;
     let executor = Arc::new(executor);
 
@@ -846,8 +855,7 @@ fn register_executor_backend(
     match meta.wire_name {
         "process" => {
             info!("process backend registered");
-            let mut process =
-                ProcessBackend::new().with_max_output_bytes(config.max_output_bytes);
+            let mut process = ProcessBackend::new().with_max_output_bytes(config.max_output_bytes);
             if let Some(cfg) = &sandbox_cfg {
                 process = process.with_sandbox(cfg.clone());
             }
@@ -969,7 +977,7 @@ fn build_executor(
     reporter: StatusReporter,
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
-    transport: Option<Arc<dyn StreamTransport>>,
+    transports: Option<TransportRegistry>,
 ) -> Result<(JobExecutor, Vec<&'static str>), Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
@@ -1059,7 +1067,7 @@ fn build_executor(
             cancel_registry,
             log_config,
             completion_tracker: None,
-            transport,
+            transports,
         },
         registered_wires,
     ))
@@ -1165,6 +1173,39 @@ async fn maybe_enroll_worker(
     );
 
     Ok(())
+}
+
+/// Attach the durable object-store data-plane transport (`transport: "s3"`) to a
+/// freshly-built [`TransportRegistry`], when the `opendal` feature is on and a
+/// `[storage]` section is configured. Reuses the SAME `StorageConfig` that backs
+/// the artifact store, so the datastream objects land in the configured bucket
+/// (under the store prefix). A worker with no `[storage]` simply has no `"s3"`
+/// transport — a `transport: "s3"` channel then fails loudly at dispatch.
+#[cfg(feature = "opendal")]
+fn attach_object_store(registry: TransportRegistry, config: &ExecutorConfig) -> TransportRegistry {
+    let Some(storage) = &config.storage else {
+        return registry;
+    };
+    match aithericon_executor_storage::build_operator(storage) {
+        Ok(operator) => {
+            info!(
+                backend = ?storage.backend,
+                "data-plane object-store transport enabled (transport=s3)"
+            );
+            registry.with_object_store(operator, storage.prefix.clone())
+        }
+        Err(e) => {
+            warn!(error = %e, "object-store data-plane transport unavailable — build_operator failed");
+            registry
+        }
+    }
+}
+
+/// No-op without the `opendal` feature — the `"s3"` transport is then simply
+/// absent from the registry (and the `get("s3")` match arm compiles to `None`).
+#[cfg(not(feature = "opendal"))]
+fn attach_object_store(registry: TransportRegistry, _config: &ExecutorConfig) -> TransportRegistry {
+    registry
 }
 
 /// Build the artifact store based on config.

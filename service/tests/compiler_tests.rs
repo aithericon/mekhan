@@ -2,8 +2,8 @@
 //!
 //! These test the compiler as a pure function -- no database or network needed.
 
-use mekhan_service::compiler::{compile_to_air, compile_to_air_with_options, CompileOptions};
 use mekhan_service::compiler::resource_refs::{KnownResource, KnownResources};
+use mekhan_service::compiler::{compile_to_air, compile_to_air_with_options, CompileOptions};
 use mekhan_service::models::template::{
     default_join_output_port, BranchCondition, ContextStrategy, DeploymentModel,
     ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef,
@@ -6378,7 +6378,7 @@ fn automated_step_success_preserves_control_metadata_leaves() {
 ///   byte-identical.
 #[test]
 fn deployment_model_surface_round_trips() {
-    use mekhan_service::models::template::{DeploymentModel, CapacityBinding};
+    use mekhan_service::models::template::{CapacityBinding, DeploymentModel};
 
     // Default = plain executor dispatch, no pool. Serializes to a bare
     // `{"mode":"executor"}`.
@@ -6498,7 +6498,13 @@ fn pool_resource_kinds_and_pool_registry() {
     // secret fields — CRUD's split_config puts everything in public_config.
     let cap = lookup("capacity").expect("capacity kind registered");
     assert!(cap.secret_fields.is_empty());
-    for f in ["liveness", "dispatch", "exclusivity", "capacity_kind", "eligibility"] {
+    for f in [
+        "liveness",
+        "dispatch",
+        "exclusivity",
+        "capacity_kind",
+        "eligibility",
+    ] {
         assert!(
             cap.public_fields.contains(&f),
             "capacity.public_fields missing `{f}`; got {:?}",
@@ -6544,8 +6550,8 @@ fn pool_resource_kinds_and_pool_registry() {
         "capacity_amount": 4,
         "eligibility": "partition",
     });
-    let seeded_axes = axes_for_resource("capacity", seeded.as_object().unwrap())
-        .expect("seeded capacity parses");
+    let seeded_axes =
+        axes_for_resource("capacity", seeded.as_object().unwrap()).expect("seeded capacity parses");
     assert_eq!(seeded_axes.backend(), CapacityBackend::Tokens);
     assert_eq!(
         seeded_axes.backend().pool_backend(),

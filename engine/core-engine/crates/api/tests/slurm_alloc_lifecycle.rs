@@ -75,7 +75,10 @@ async fn slurm_allocator_acquire_release_lifecycle() {
 
     // Typed per-flavor scheduler detail; gpu_uuid is gone.
     assert_eq!(
-        lease.get("scheduler").and_then(|s| s.get("flavor")).and_then(|v| v.as_str()),
+        lease
+            .get("scheduler")
+            .and_then(|s| s.get("flavor"))
+            .and_then(|v| v.as_str()),
         Some("slurm"),
         "lease must carry the slurm scheduler flavor: {lease}"
     );

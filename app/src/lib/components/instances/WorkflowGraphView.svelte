@@ -20,6 +20,8 @@
 		createInstanceMarkingStore,
 		isAwaitingResource,
 		leaseRuntimeFor,
+		channelRuntimeFor,
+		type ChannelRuntime,
 		type LeaseRuntime
 	} from '$lib/stores/instance-marking.svelte';
 	import { PoolContentionView } from '$lib/components/petri';
@@ -76,6 +78,9 @@
 	// timer — its `refresh()` is folded into the existing 2 s poll below, so
 	// the instance view keeps a single poll. Only created once the instance
 	// actually has a deployed net (net_id present, not `created`).
+	// Created once from the instance's net at mount (the view remounts per
+	// instance id), so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const marking = createInstanceMarkingStore(instance.net_id ?? '');
 
 	// Bump on every marking refresh so the derived predicate / waiting-set
@@ -273,6 +278,21 @@
 		return leaseRuntimeFor(marking, drawerNode.id);
 	});
 
+	// Per-channel live lifecycle for the node the drawer currently shows, keyed
+	// by channel name. Re-derives each poll tick so the Channels section's
+	// "opened · N elements · closed" status stays live. Null when the node has
+	// no declared channels (the Channels section then degrades to static).
+	const drawerChannelRuntime = $derived.by<Record<string, ChannelRuntime> | null>(() => {
+		void markingTick;
+		// `channels` lives only on the `automated_step` arm of WorkflowNodeData.
+		const decl =
+			drawerNode?.data?.type === 'automated_step' ? (drawerNode.data.channels ?? []) : [];
+		if (decl.length === 0) return null;
+		const out: Record<string, ChannelRuntime> = {};
+		for (const ch of decl) out[ch.name] = channelRuntimeFor(marking, drawerNode!.id, ch.name);
+		return out;
+	});
+
 	function openDrawerFor(nodeId: string) {
 		const list = executionsByNode.get(nodeId) ?? [];
 		const node = nodesById.get(nodeId) ?? null;
@@ -346,6 +366,7 @@
 	childInstances={drawerChildren}
 	leaseRuntime={drawerLease}
 	allocationRows={drawerAllocations}
+	channelRuntime={drawerChannelRuntime}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}

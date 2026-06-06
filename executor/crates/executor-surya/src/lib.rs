@@ -71,12 +71,16 @@ pub use backend::{SuryaBackend, SURYA_BASE_URL_ENV};
 pub use config::{ExtractionMode, ResolvedSuryaConfig, SuryaConfig};
 pub use hardware_probe::{probe_hardware, HardwareAdvertisement};
 pub use heartbeat::{heartbeat_loop, HeartbeatConfig};
-pub use plugin::{register as register_kreuzberg_plugin, unregister as unregister_kreuzberg_plugin,
-                 SuryaOcrPlugin, BACKEND_NAME as KREUZBERG_BACKEND_NAME};
+pub use plugin::{
+    register as register_kreuzberg_plugin, unregister as unregister_kreuzberg_plugin,
+    SuryaOcrPlugin, BACKEND_NAME as KREUZBERG_BACKEND_NAME,
+};
 pub use pool_boot::{register_as_pool, PoolBootConfig, PoolBootHandle};
 pub use pool_listener::spawn_pool_listener;
 pub use port::{OcrError, OcrRequest, OcrResponse};
-pub use register::{build_register_request, default_pool_name, default_pool_tenant_id,
-                   default_requester_role, engine_caps_for_hardware, mint_register_jwt,
-                   register_on_boot, RegisterRequest, RegisterResponse};
+pub use register::{
+    build_register_request, default_pool_name, default_pool_tenant_id, default_requester_role,
+    engine_caps_for_hardware, mint_register_jwt, register_on_boot, RegisterRequest,
+    RegisterResponse,
+};
 pub use surya_subprocess::{SuryaSubprocess, SuryaSubprocessConfig};

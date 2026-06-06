@@ -641,7 +641,7 @@ async fn cli_activate_returns_422_on_bridge_error() {
     let report: serde_json::Value =
         serde_json::from_str(&body).expect("422 body should be valid JSON");
     assert_eq!(report["is_valid"], false);
-    assert!(report["issues"].as_array().unwrap().len() > 0);
+    assert!(!report["issues"].as_array().unwrap().is_empty());
     assert!(report["summary"]["error_count"].as_u64().unwrap() > 0);
 }
 

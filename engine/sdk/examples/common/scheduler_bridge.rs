@@ -27,6 +27,8 @@
 use aithericon_sdk::prelude::*;
 
 /// Result relayed back from the scheduler relay net (success path).
+// Shared example API: used by some example targets (e.g. job_net), dead in others.
+#[allow(dead_code)]
 #[token]
 pub struct SchedulerJobResult {
     pub job_id: String,
@@ -35,6 +37,8 @@ pub struct SchedulerJobResult {
 }
 
 /// Failure relayed back from the scheduler relay net (failure path).
+// Shared example API: used by some example targets (e.g. job_net), dead in others.
+#[allow(dead_code)]
 #[token]
 pub struct SchedulerJobFailure {
     pub job_id: String,
@@ -50,6 +54,8 @@ pub struct SchedulerJobFailure {
 ///
 /// The scheduler relay net's `result_outbox` uses channel "result" and `failure_outbox`
 /// uses channel "failure". This struct enforces that callers provide both.
+// Shared example API: used by some example targets (e.g. job_net), dead in others.
+#[allow(dead_code)]
 pub struct SchedulerReply<'a> {
     /// Place where successful job results should land.
     pub result: &'a PlaceHandle<SchedulerJobResult>,
@@ -60,6 +66,8 @@ pub struct SchedulerReply<'a> {
 /// Wire up a bridge_out to the scheduler relay net with typed reply channels.
 ///
 /// Returns a `PlaceHandle<SchedulerSubmitInput>` — the dispatch outbox.
+// Shared example API: used by some example targets (e.g. job_net), dead in others.
+#[allow(dead_code)]
 pub fn connect_to_scheduler(
     ctx: &mut Context,
     reply: SchedulerReply<'_>,

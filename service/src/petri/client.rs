@@ -56,12 +56,11 @@ impl PetriClient {
         // `parameterize_*` step produces opaque JSON. Convert here so the
         // envelope's request body is one strongly-typed shape, not two
         // half-serialized halves.
-        let scenario: ScenarioDefinition = serde_json::from_value(air_json.clone()).map_err(
-            |e| PetriError::Response {
+        let scenario: ScenarioDefinition =
+            serde_json::from_value(air_json.clone()).map_err(|e| PetriError::Response {
                 status: 0,
                 body: format!("parameterized AIR is not a valid ScenarioDefinition: {e}"),
-            },
-        )?;
+            })?;
         // Tenant propagation D1-A: `net_parameters` rides the same envelope and
         // is stored on the engine's net service via `set_net_parameters`, where
         // the firing path reads `net_parameters.tenant_id` into the pre-dispatch

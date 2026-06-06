@@ -72,15 +72,11 @@ impl PoolBootConfig {
         let capability_routing_url = std::env::var("CLOUD_LAYER_CAPABILITY_ROUTING_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:3101".to_string());
         let jwt_secret = std::env::var("CLOUD_LAYER_JWT_SECRET").map_err(|_| {
-            anyhow::anyhow!(
-                "CLOUD_LAYER_JWT_SECRET not set — required to mint platform_admin JWT"
-            )
+            anyhow::anyhow!("CLOUD_LAYER_JWT_SECRET not set — required to mint platform_admin JWT")
         })?;
         let tenant_id_str = default_pool_tenant_id();
         let tenant_id = Uuid::parse_str(&tenant_id_str).map_err(|e| {
-            anyhow::anyhow!(
-                "AITHERICON_EXECUTOR_SURYA_POOL_TENANT_ID is not a valid UUID: {e}"
-            )
+            anyhow::anyhow!("AITHERICON_EXECUTOR_SURYA_POOL_TENANT_ID is not a valid UUID: {e}")
         })?;
         let requester_role = default_requester_role();
         let pool_name = default_pool_name();
@@ -158,9 +154,8 @@ pub async fn register_as_pool(
     //    document-extraction path so kreuzberg::extract_file calls with
     //    `OcrConfig::backend = "surya"` route through this pool's Surya
     //    subprocess.
-    crate::plugin::register(Arc::clone(&adapter)).map_err(|e| {
-        anyhow::anyhow!("kreuzberg plugin registration failed (fail-closed): {e}")
-    })?;
+    crate::plugin::register(Arc::clone(&adapter))
+        .map_err(|e| anyhow::anyhow!("kreuzberg plugin registration failed (fail-closed): {e}"))?;
     tracing::info!("kreuzberg OcrBackend plugin 'surya' registered");
 
     // 5. Mint JWT + POST /v1/pools/register. Fail-closed on any error.

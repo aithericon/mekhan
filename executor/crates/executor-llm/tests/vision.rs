@@ -143,7 +143,7 @@ fn create_test_image(dir: &std::path::Path) -> PathBuf {
 fn create_minimal_bmp() -> Vec<u8> {
     let width: u32 = 8;
     let height: u32 = 8;
-    let row_size = ((width * 3 + 3) / 4) * 4; // rows padded to 4 bytes
+    let row_size = (width * 3).div_ceil(4) * 4; // rows padded to 4 bytes
     let pixel_data_size = row_size * height;
     let file_size = 54 + pixel_data_size;
 
@@ -175,9 +175,7 @@ fn create_minimal_bmp() -> Vec<u8> {
         }
         // Padding to 4-byte boundary
         let padding = row_size as usize - (width as usize * 3);
-        for _ in 0..padding {
-            bmp.push(0);
-        }
+        bmp.extend(std::iter::repeat_n(0, padding));
     }
 
     bmp

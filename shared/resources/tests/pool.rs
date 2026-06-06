@@ -79,7 +79,11 @@ fn legacy_pool_kinds_are_gone() {
 /// each dispatch backend, keyed by `PoolBackend` (not by kind name).
 #[test]
 fn schemas_for_each_backend_are_object_schemas() {
-    for backend in [PoolBackend::Tokens, PoolBackend::Presence, PoolBackend::Scheduler] {
+    for backend in [
+        PoolBackend::Tokens,
+        PoolBackend::Presence,
+        PoolBackend::Scheduler,
+    ] {
         let s = schemas_for_backend(backend);
         assert_eq!(
             s.claim.get("type").and_then(|v| v.as_str()),
@@ -129,7 +133,13 @@ fn lease_schemas_declare_expected_fields() {
     // Typed core: alloc_id is the only required field; node/expiry/
     // executor_namespace are optional; scheduler is the required per-flavor
     // tagged union. `gpu_uuid` is GONE (no allocator reports it).
-    for f in ["alloc_id", "node", "expiry", "executor_namespace", "scheduler"] {
+    for f in [
+        "alloc_id",
+        "node",
+        "expiry",
+        "executor_namespace",
+        "scheduler",
+    ] {
         assert!(
             dc_props.contains_key(f),
             "datacenter lease missing `{f}`; got {:?}",
@@ -145,7 +155,10 @@ fn lease_schemas_declare_expected_fields() {
     // `definitions`/`$defs` block the engine's SchemaRegistry can't resolve.
     for k in ["definitions", "$defs"] {
         assert!(
-            dc_lease.get(k).and_then(|v| v.as_object()).is_none_or(|o| o.is_empty()),
+            dc_lease
+                .get(k)
+                .and_then(|v| v.as_object())
+                .is_none_or(|o| o.is_empty()),
             "lease schema must inline subschemas; found non-empty `{k}`"
         );
     }
@@ -154,7 +167,10 @@ fn lease_schemas_declare_expected_fields() {
     // discriminator per variant.
     let scheduler = &dc_props["scheduler"];
     assert!(
-        scheduler.get("oneOf").and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty()),
+        scheduler
+            .get("oneOf")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty()),
         "scheduler must inline a non-empty oneOf; got {scheduler:?}"
     );
 }

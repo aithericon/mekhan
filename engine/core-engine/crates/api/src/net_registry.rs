@@ -26,11 +26,12 @@ use petri_application::pre_dispatch::{
 use petri_application::resource_lease_handlers::AllocatorClient;
 use petri_application::{
     subworkflow_handlers::SubWorkflowCancelHandler, AdapterScheduler, EventRepository,
-    HttpAllocatorClient, MockSchedulerClient, PetriNetService, ProcessCompleteHandler,
-    ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
-    ProcessStatusDetailHandler, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
-    MaterializeImageHandler, SchedulerCancelHandler, SchedulerSubmitHandler, StageTemplateHandler,
-    StateProjection, TimerCancelHandler, TimerScheduleHandler, TopologyRepository,
+    HttpAllocatorClient, MaterializeImageHandler, MockSchedulerClient, PetriNetService,
+    ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
+    ProcessStartHandler, ProcessStatusDetailHandler, ResourceLeaseAcquireHandler,
+    ResourceLeaseReleaseHandler, SchedulerCancelHandler, SchedulerSubmitHandler,
+    StageTemplateHandler, StateProjection, TimerCancelHandler, TimerScheduleHandler,
+    TopologyRepository,
 };
 #[cfg(feature = "catalogue")]
 use petri_application::{

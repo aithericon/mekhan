@@ -148,9 +148,12 @@ test.describe('SubWorkflow derived ports', () => {
 		const panel = page.getByTestId('node-property-panel');
 		await expect(panel).toBeVisible();
 
-		// Pick the child template — this triggers the io-contract fetch.
-		await panel.getByTestId('select-subworkflow-template').click();
-		await page.getByRole('option', { name: 'Child Workflow' }).click();
+		// Pick the child template via the browser dialog — this triggers the
+		// io-contract fetch. The template picker is now a button that opens a
+		// ChildWorkflowBrowser modal; each result is a `browser-pick-<familyId>`
+		// button. A v1 row (base_template_id: null) has familyId === its own id.
+		await panel.getByTestId('btn-open-subworkflow-browser').click();
+		await page.getByTestId(`browser-pick-${CHILD_ID}`).click();
 
 		// (1) Input rows are FIXED to the child's Start field(s).
 		const inputField = panel.getByTestId('subworkflow-input-field');
@@ -160,9 +163,10 @@ test.describe('SubWorkflow derived ports', () => {
 		await expect(panel.getByTestId('input-subworkflow-map-expr')).toBeVisible();
 		await expect(panel.getByTestId('input-subworkflow-map-field')).toHaveCount(0);
 
-		// (2) Output is read-only derived: the DerivedPortsSection "CHILD END"
-		// badge and the derived field names are shown, with NO add-field button.
-		await expect(panel.getByText('CHILD END')).toBeVisible();
+		// (2) Output is read-only derived: the DerivedPortsSection "Child End"
+		// badge (CSS-uppercased to "CHILD END" visually; DOM text is "Child End")
+		// and the derived field names are shown, with NO add-field button.
+		await expect(panel.getByText('Child End')).toBeVisible();
 		await expect(panel.getByText('invoice_amount')).toBeVisible();
 		await expect(panel.getByText('status')).toBeVisible();
 		await expect(panel.getByRole('button', { name: /add field/i })).toHaveCount(0);

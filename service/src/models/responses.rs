@@ -84,6 +84,11 @@ pub struct StepExecutionResponse {
     /// The envelope deposited at the node's `data_port` (parking nodes) or
     /// `workflow_terminals[*]` (End nodes).
     pub outputs: Option<serde_json::Value>,
+    /// Executor `execution_id` (`mekhan-{net}-{uuid}`) for AutomatedStep/Agent
+    /// steps — the key the datastream tap scopes a channel's bytes by
+    /// (`GET /api/v1/executions/{execution_id}/channels/{c}/data`). `None` for
+    /// non-executor nodes (Start/End/Decision/...).
+    pub execution_id: Option<String>,
     /// Decision branch identifier: `"edge:<edge_id>"` for the output that
     /// received the token. `None` for non-branching nodes.
     pub branch_taken: Option<String>,

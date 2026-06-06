@@ -399,7 +399,10 @@ mod tests {
         assert_ne!(c.port, 5050, "must not collide with legacy ocr/ sidecar");
         assert_ne!(c.port, 7100, "must not collide with compute-agent control");
         assert_ne!(c.port, 11436, "must not collide with executor-llm Ollama");
-        assert_ne!(c.port, 3301, "must not collide with executor-llm pool_listener");
+        assert_ne!(
+            c.port, 3301,
+            "must not collide with executor-llm pool_listener"
+        );
         assert_ne!(c.port, 3030, "must not collide with mekhan engine");
         assert!(c.venv_path.is_none());
         assert!(c.python_binary.is_none());
@@ -441,9 +444,9 @@ mod tests {
                     "Err message must name the recipe operator should run; got: {msg}"
                 );
             }
-            Err(other) => panic!(
-                "resolve_python with default-venv-missing must Err::Config, got {other:?}"
-            ),
+            Err(other) => {
+                panic!("resolve_python with default-venv-missing must Err::Config, got {other:?}")
+            }
         }
     }
 
@@ -481,9 +484,7 @@ mod tests {
         // must return Err (from resolve_python) — NEVER a success with a
         // stale handle. Host-independent (no Surya install required).
         let cfg = SuryaSubprocessConfig {
-            python_binary: Some(PathBuf::from(
-                "/nonexistent/path/to/python-binary-xyz",
-            )),
+            python_binary: Some(PathBuf::from("/nonexistent/path/to/python-binary-xyz")),
             readiness_timeout_secs: 1,
             ..SuryaSubprocessConfig::default()
         };

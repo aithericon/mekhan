@@ -326,9 +326,8 @@ impl<'a> PublishService<'a> {
                     ApiError::bad_request(format!("asset resolution failed at publish: {e}"))
                 })?;
             let aliases: Vec<&str> = asset_manifest.keys().map(String::as_str).collect();
-            air_json = crate::petri::asset_resolver::splice_assets_into_air(
-                air_json, &envelope, &aliases,
-            );
+            air_json =
+                crate::petri::asset_resolver::splice_assets_into_air(air_json, &envelope, &aliases);
         }
 
         // Stash the `{key -> {asset_id, version}}` pin map as a sidecar key on
@@ -550,9 +549,10 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
         // work queue; `Scheduled` (cluster lease) does not.
         let pool_alias = match deployment_model {
             DeploymentModel::Executor { capacity: None, .. } => None,
-            DeploymentModel::Executor { capacity: Some(binding), .. } => {
-                Some(binding.alias.as_str())
-            }
+            DeploymentModel::Executor {
+                capacity: Some(binding),
+                ..
+            } => Some(binding.alias.as_str()),
             _ => continue,
         };
 
@@ -976,7 +976,11 @@ async fn resolve_container_specs(
         let WorkflowNodeData::AutomatedStep {
             deployment_model:
                 DeploymentModel::Scheduled {
-                    job_template_ref: Some(TemplateRef { template_id, version }),
+                    job_template_ref:
+                        Some(TemplateRef {
+                            template_id,
+                            version,
+                        }),
                     ..
                 },
             ..
@@ -999,12 +1003,13 @@ async fn resolve_container_specs(
         };
 
         // (b) Resolve the bound image's (version, image_ref).
-        let resolved =
-            crate::petri::staging_net::resolve_container_image(&state.db, workspace_id, container_resource_id)
-                .await
-                .map_err(|e| {
-                    ApiError::internal(format!("container spec: resolve container_image: {e}"))
-                })?;
+        let resolved = crate::petri::staging_net::resolve_container_image(
+            &state.db,
+            workspace_id,
+            container_resource_id,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("container spec: resolve container_image: {e}")))?;
         let Some((_image_version, image_ref)) = resolved else {
             tracing::warn!(
                 node = %node.id, %container_resource_id,
@@ -1542,10 +1547,18 @@ mod container_spec_tests {
     fn standalone_steps_key_under_their_own_id() {
         // Two unleased steps → distinct keys (each its own node id), both kept.
         let mut specs = HashMap::new();
-        insert_container_spec(&mut specs, "step_a".into(), build_container_spec("img-a", false))
-            .unwrap();
-        insert_container_spec(&mut specs, "step_b".into(), build_container_spec("img-b", false))
-            .unwrap();
+        insert_container_spec(
+            &mut specs,
+            "step_a".into(),
+            build_container_spec("img-a", false),
+        )
+        .unwrap();
+        insert_container_spec(
+            &mut specs,
+            "step_b".into(),
+            build_container_spec("img-b", false),
+        )
+        .unwrap();
         assert_eq!(specs.len(), 2);
     }
 
@@ -1566,8 +1579,12 @@ mod container_spec_tests {
         // → hard error (v1 runs one image per held allocation).
         let mut specs = HashMap::new();
         let key = "lease_holder".to_string();
-        insert_container_spec(&mut specs, key.clone(), build_container_spec("img-a", false))
-            .unwrap();
+        insert_container_spec(
+            &mut specs,
+            key.clone(),
+            build_container_spec("img-a", false),
+        )
+        .unwrap();
         let err = insert_container_spec(&mut specs, key, build_container_spec("img-b", false));
         assert!(err.is_err());
     }

@@ -1,4 +1,4 @@
-//! Wire DTOs for the workspaces, projects, tags, and visibility surface.
+//! Wire DTOs for the workspaces, folders, tags, and visibility surface.
 //!
 //! Workspaces are tenant boundaries created out-of-band (seeded `default`,
 //! Zitadel-auto-provisioned, or future admin-spawned). The endpoints here
@@ -42,42 +42,59 @@ pub struct AddMemberRequest {
     pub role: String,
 }
 
+/// A folder node in a workspace's single-parent template tree (filesystem
+/// model). `path` is the materialized path ('/a/b/c'); the frontend builds the
+/// tree from `parent_id`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
-pub struct Project {
+pub struct Folder {
     pub id: Uuid,
     pub workspace_id: Uuid,
+    /// Parent folder, or `None` for a root-level folder.
+    pub parent_id: Option<Uuid>,
     pub slug: String,
     pub display_name: String,
     pub description: String,
+    /// Materialized path, e.g. `/research/q3`. Unique within a workspace.
+    pub path: String,
     pub created_at: DateTime<Utc>,
     pub created_by: Uuid,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct CreateProjectRequest {
+pub struct CreateFolderRequest {
+    /// Parent folder; `None` creates a root-level folder.
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
     pub slug: String,
     pub display_name: String,
     #[serde(default)]
     pub description: String,
 }
 
-/// Partial update for a project. Both fields optional — omitted fields are
-/// left untouched (COALESCE). `slug` is immutable (stable filter key).
+/// Partial update for a folder. All fields optional. Supplying `slug` and/or
+/// `parent_id` performs a MOVE (subtree paths are rewritten); `display_name` /
+/// `description` are COALESCE renames.
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct UpdateProjectRequest {
+pub struct UpdateFolderRequest {
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// New parent folder (move). Present-and-`null` is ambiguous with absent in
+    /// flat JSON, so a move-to-root is expressed via `slug` change or by the
+    /// caller setting a different parent; `Some(id)` reparents under `id`.
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
+/// Set (or clear) the home folder of a template. `None` moves the template to
+/// the workspace root (deletes its `template_folders` row).
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct AttachTemplateRequest {
-    /// The *base* template id (the first version's id, which the
-    /// `is_latest`-chained version graph hangs off of). Project membership
-    /// follows the live version chain so attaching once survives version
-    /// bumps.
-    pub template_id: Uuid,
+pub struct SetFolderRequest {
+    #[serde(default)]
+    pub folder_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

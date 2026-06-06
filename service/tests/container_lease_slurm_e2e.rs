@@ -52,9 +52,9 @@
 //! Rosetta/qemu emulation; `apptainer pull` + `.sif` conversion work, and the
 //! `apptainer exec` wrap launches, but exec of the container's amd64 process
 //! fails with `exec … failed: invalid argument` — apptainer's fresh mount/user
-//! namespace doesn't inherit the emulation's binfmt interpreter. The materialize
-//! + lease-acquire + apptainer-wrap path is fully exercised up to that exec; the
-//! in-container execution itself only runs on a real x86_64 host.
+//! namespace doesn't inherit the emulation's binfmt interpreter. The
+//! materialize + lease-acquire + apptainer-wrap path is fully exercised up to
+//! that exec; the in-container execution itself only runs on a real x86_64 host.
 
 mod common;
 
@@ -329,7 +329,11 @@ async fn net_running(net_id: &str) -> bool {
             resp.json::<Value>()
                 .await
                 .ok()
-                .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
                 .as_deref()
                 == Some("running")
         }
@@ -344,7 +348,11 @@ fn slurm_ssh(remote_cmd: &str) -> String {
     // dir (service/), so a repo-relative path misses. Mirror the PEM read's
     // CARGO_MANIFEST_DIR anchor.
     let key = std::env::var("TEST_SLURM_SSH_KEY").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/infra/slurm/ssh/slurm_test").to_string()
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../engine/infra/slurm/ssh/slurm_test"
+        )
+        .to_string()
     });
     let out = Command::new("ssh")
         .args([
@@ -458,13 +466,20 @@ async fn create_container_image(app: &axum::Router) -> Uuid {
         .unwrap();
     let status = resp.status();
     let body = body_json(resp.into_body()).await;
-    assert_eq!(status, StatusCode::CREATED, "create container_image: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create container_image: {body}"
+    );
     body["id"].as_str().unwrap().parse().unwrap()
 }
 
 /// Create a `slurm` job-template entity bound to the container image. Returns
 /// `(template_id, version)` for the body node's `job_template_ref`.
-async fn create_job_template(app: &axum::Router, container_resource_id: Uuid) -> (Uuid, i32, String) {
+async fn create_job_template(
+    app: &axum::Router,
+    container_resource_id: Uuid,
+) -> (Uuid, i32, String) {
     let slug = "container_drain";
     let resp = app
         .clone()
@@ -677,7 +692,11 @@ async fn leased_loop_runs_executor_inside_container() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
@@ -713,7 +732,9 @@ async fn leased_loop_runs_executor_inside_container() {
         // In-container witness: the drain executor's srun command is wrapped as
         // `apptainer exec … <sif> /bin/bash …`. Probe the cluster process table.
         if !saw_apptainer {
-            let procs = slurm_ssh("ps -eo args 2>/dev/null | grep -F 'apptainer exec' | grep -v grep || true");
+            let procs = slurm_ssh(
+                "ps -eo args 2>/dev/null | grep -F 'apptainer exec' | grep -v grep || true",
+            );
             if procs.contains("apptainer exec") && procs.contains(BY_REF_SIF) {
                 saw_apptainer = true;
             }
@@ -776,7 +797,9 @@ async fn leased_loop_runs_executor_inside_container() {
             }
         }
         if Instant::now() > out_deadline {
-            panic!("the drain executor did not drain {MAX_ITERATIONS} jobs within 120s of completion");
+            panic!(
+                "the drain executor did not drain {MAX_ITERATIONS} jobs within 120s of completion"
+            );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
@@ -784,7 +807,12 @@ async fn leased_loop_runs_executor_inside_container() {
     assert!(
         drain_log.contains("Starting lease drain executor"),
         "drain-executor log at {drain_out} missing startup banner. tail:\n{}",
-        drain_log.lines().rev().take(20).collect::<Vec<_>>().join("\n")
+        drain_log
+            .lines()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert!(
         handled >= MAX_ITERATIONS as usize,
@@ -796,10 +824,17 @@ async fn leased_loop_runs_executor_inside_container() {
     // which is only possible if the executor ran in-container.
     if !saw_apptainer {
         assert!(
-            drain_log.contains("py=3.12") || drain_log.contains("\"py\": \"3.12") || drain_log.contains("3.12"),
+            drain_log.contains("py=3.12")
+                || drain_log.contains("\"py\": \"3.12")
+                || drain_log.contains("3.12"),
             "could not witness apptainer wrap via ps AND the drain log shows no python 3.12 \
              marker — cannot confirm in-container execution. tail:\n{}",
-            drain_log.lines().rev().take(30).collect::<Vec<_>>().join("\n")
+            drain_log
+                .lines()
+                .rev()
+                .take(30)
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 
@@ -824,7 +859,9 @@ async fn leased_loop_runs_executor_inside_container() {
             break;
         }
         if Instant::now() > release_deadline {
-            panic!("lease alloc still live 60s after completion — terminal exit did not release it");
+            panic!(
+                "lease alloc still live 60s after completion — terminal exit did not release it"
+            );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

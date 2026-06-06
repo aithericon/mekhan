@@ -13,7 +13,7 @@
 //! follow-on slice.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -162,8 +162,11 @@ impl SuryaConfig {
 /// backend when `config.mime_type` is unset. Mirrors the legacy
 /// `online-clinic/ocr/src/main.py::_file_to_images` accepted-MIMEs set —
 /// the bundled wrapper rejects everything else with a 422.
-pub fn guess_mime_from_path(path: &PathBuf) -> Option<&'static str> {
-    let ext = path.extension().and_then(|s| s.to_str())?.to_ascii_lowercase();
+pub fn guess_mime_from_path(path: &Path) -> Option<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())?
+        .to_ascii_lowercase();
     Some(match ext.as_str() {
         "pdf" => "application/pdf",
         "png" => "image/png",

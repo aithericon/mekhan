@@ -39,7 +39,7 @@ pub async fn run(
     let latest = crate::http::resolve_latest(&server_url, &chain_id).await?;
     let template_id = latest.id;
 
-    let start_tokens: Value = match start_tokens_file {
+    let mut start_tokens: Value = match start_tokens_file {
         Some(path) => {
             let raw = std::fs::read_to_string(path)
                 .with_context(|| format!("could not read --start-tokens file '{path}'"))?;
@@ -48,6 +48,20 @@ pub async fn run(
         }
         None => Value::Array(build_start_tokens_from_inputs(inputs)?),
     };
+
+    // Resolve `{"__file": "<relative-path>"}` directives in the start tokens:
+    // upload the bundled file (relative to the start-tokens file's directory) and
+    // substitute the platform `FileRef` shape a `file`-kind Start field expects.
+    // This is the same convenience the demo asset seeder offers (`seed_demo_assets`)
+    // — so "stage a file in a demo" is `{"__file": "assets/sample.wav"}`, not a
+    // hand-rolled base64 blob in a token.
+    if let Some(path) = start_tokens_file {
+        let base_dir = Path::new(path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| Path::new(".").to_path_buf());
+        resolve_file_directives(&server_url, &template_id, &base_dir, &mut start_tokens).await?;
+    }
 
     println!("Creating instance from template {}...", template_id);
 
@@ -111,4 +125,159 @@ fn build_start_tokens_from_inputs(inputs: &[String]) -> Result<Vec<Value>> {
         .into_iter()
         .map(|(block, token)| json!({ "start_block_id": block, "token": Value::Object(token) }))
         .collect())
+}
+
+/// Walk the start-token array and replace every `{"__file": "<rel>"}` directive
+/// with an uploaded-file `FileRef`. The upload is scoped to the Start block the
+/// directive sits under (`/api/v1/files/upload/{template}/{block}`), mirroring
+/// what the editor's file-upload field does at instance-create time.
+async fn resolve_file_directives(
+    server_url: &str,
+    template_id: &str,
+    base_dir: &Path,
+    start_tokens: &mut Value,
+) -> Result<()> {
+    let Some(tokens) = start_tokens.as_array_mut() else {
+        return Ok(());
+    };
+    for entry in tokens.iter_mut() {
+        let block = entry
+            .get("start_block_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("start")
+            .to_string();
+        if let Some(token) = entry.get_mut("token") {
+            resolve_in_value(server_url, template_id, &block, base_dir, token).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Recursively rewrite `{"__file": "<rel>"}` objects in place. Any other object
+/// is descended into; arrays are walked element-wise.
+fn resolve_in_value<'a>(
+    server_url: &'a str,
+    template_id: &'a str,
+    block: &'a str,
+    base_dir: &'a Path,
+    value: &'a mut Value,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + 'a>> {
+    Box::pin(async move {
+        match value {
+            Value::Object(map) => {
+                if let Some(rel) = map.get("__file").and_then(|v| v.as_str()) {
+                    if map.len() != 1 {
+                        anyhow::bail!(
+                            "a {{\"__file\": …}} directive must be the only key in its object"
+                        );
+                    }
+                    let rel = rel.to_string();
+                    let file_ref =
+                        upload_directive_file(server_url, template_id, block, base_dir, &rel)
+                            .await?;
+                    *value = file_ref;
+                } else {
+                    for v in map.values_mut() {
+                        resolve_in_value(server_url, template_id, block, base_dir, v).await?;
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for v in items.iter_mut() {
+                    resolve_in_value(server_url, template_id, block, base_dir, v).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })
+}
+
+/// Upload one bundled file and return the `FileRef` map a `file`-kind Start
+/// field carries: `{key, url, filename, content_type, size}` (the same shape
+/// `/api/v1/files/upload` returns plus the platform-facing `url`).
+async fn upload_directive_file(
+    server_url: &str,
+    template_id: &str,
+    block: &str,
+    base_dir: &Path,
+    rel: &str,
+) -> Result<Value> {
+    let abs = base_dir.join(rel);
+    let bytes = std::fs::read(&abs)
+        .with_context(|| format!("could not read __file '{}'", abs.display()))?;
+    let filename = abs
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload.bin")
+        .to_string();
+    let content_type = guess_content_type(&filename);
+
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.clone())
+        .mime_str(&content_type)
+        .with_context(|| format!("invalid content type '{content_type}'"))?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let url = format!(
+        "{}/api/v1/files/upload/{}/{}",
+        server_url.trim_end_matches('/'),
+        template_id,
+        block,
+    );
+    println!("Staging file {rel} → {url}");
+    let client = reqwest::Client::new();
+    let resp = crate::http::auth(client.post(&url).multipart(form))
+        .send()
+        .await
+        .with_context(|| format!("failed to upload __file '{rel}'"))?;
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or_default();
+    if status.as_u16() != 201 {
+        let msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("upload failed");
+        anyhow::bail!("file upload for '{rel}' failed ({status}): {msg}");
+    }
+    let key = body
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("upload response missing 'key'"))?;
+    Ok(json!({
+        "key": key,
+        "url": format!("/api/v1/files/{key}"),
+        "filename": body.get("filename").cloned().unwrap_or(Value::String(filename)),
+        "content_type": body.get("content_type").cloned().unwrap_or(Value::String(content_type)),
+        "size": body.get("size").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Minimal extension → MIME map for the file-staging path. Falls back to
+/// `application/octet-stream` (which the upload allowlist accepts).
+fn guess_content_type(filename: &str) -> String {
+    let ext = filename
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "txt" => "text/plain",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }

@@ -23,8 +23,6 @@
 //! absence assertion lives in `core-engine/crates/nats/tests/` and is
 //! outside this crate's owned-files scope; surfaced in the B1 report.
 
-#![cfg(test)]
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};

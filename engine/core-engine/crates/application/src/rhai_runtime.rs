@@ -1005,7 +1005,10 @@ mod tests {
         // A constraint that is not a map at all.
         let runtime = RhaiRuntime::new();
         let mut req = Map::new();
-        req.insert("constraints".into(), Dynamic::from(vec![Dynamic::from(42_i64)]));
+        req.insert(
+            "constraints".into(),
+            Dynamic::from(vec![Dynamic::from(42_i64)]),
+        );
         let caps: Map = runtime.json_to_dynamic(&xrd_caps()).cast();
         assert!(!satisfies_impl(&req, &caps));
 
@@ -1014,7 +1017,10 @@ mod tests {
         bad.insert("capability".into(), Dynamic::from("xrd"));
         bad.insert("field".into(), Dynamic::from("source"));
         let mut req2 = Map::new();
-        req2.insert("constraints".into(), Dynamic::from(vec![Dynamic::from(bad)]));
+        req2.insert(
+            "constraints".into(),
+            Dynamic::from(vec![Dynamic::from(bad)]),
+        );
         assert!(!satisfies_impl(&req2, &caps));
 
         // A `constraints` value that is not even an array => treated as no
