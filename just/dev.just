@@ -35,7 +35,7 @@ nomad_jobs_dir := ".dev/nomad-jobs"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,postgres,loki,prometheus,ros,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,vllm,kreuzberg,smtp,postgres,loki,prometheus,ros,vault"
 
 # Local infra + daemon endpoints. These read the per-worktree env exported by
 # just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical
@@ -50,6 +50,10 @@ vault_addr   := env_var_or_default("MEKHAN_VAULT_ADDR", "http://localhost:18200"
 vault_token  := "root"
 service_url  := env_var_or_default("MEKHAN_SERVICE_URL", "http://localhost:13100")
 engine_url   := env_var_or_default("MEKHAN_ENGINE_URL", "http://localhost:13030")
+router_url   := env_var_or_default("MEKHAN_ROUTER_URL", "http://localhost:13200")
+router_port  := env_var_or_default("MEKHAN_ROUTER_PORT", "13200")
+ollama_port  := env_var_or_default("OLLAMA_PORT", "11434")
+ollama_model := env_var_or_default("OLLAMA_MODEL", "qwen3.5:9b")
 service_port := env_var_or_default("MEKHAN_SERVICE_PORT", "13100")
 engine_port  := env_var_or_default("MEKHAN_ENGINE_PORT", "13030")
 cancel_port  := env_var_or_default("MEKHAN_CANCEL_PORT", "13105")
@@ -80,9 +84,11 @@ up:
     @just dev::_wait-engine-stream
     @just dev::up-mekhan
     @just dev::pg-demo-seed
+    @just dev::up-router || true
     @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
+    @just dev::up-model-runner || true
     @just dev::_summary
 
 # Same as `up` but with auth ENABLED: mekhan-service runs in BFF mode (real
@@ -97,14 +103,18 @@ up-auth:
     @just dev::_wait-engine-stream
     @just dev::up-mekhan bff
     @just dev::pg-demo-seed
+    @just dev::up-router || true
     @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
+    @just dev::up-model-runner || true
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
 
 # Stop everything: native daemons first, then infra
 down:
     @just dev::down-app      || true
+    @just dev::_kill model-runner || true
+    @just dev::_kill router  || true
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
@@ -138,7 +148,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in ollama executor runner engine nomad mekhan app; do
+    for name in ollama executor runner model-runner engine nomad router mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -847,6 +857,157 @@ up-runner:
 
 down-runner:
     @just dev::_kill runner
+
+# ── Inference router (model-pool DATA plane, docs 11/29) ──────────────────────
+#
+# The OpenAI-compatible router that fronts the self-hosted model pool. Inference
+# goes STRAIGHT here — never through the engine net or the presence net. The
+# router admits per-engine `C`, meters each request to NATS (the inference-audit
+# ledger the /models Router tab reads), and exposes the in-flight `/metrics`
+# gauge mekhan scrapes for engine headroom (`AUTOSCALER_DEMAND_URL`, wired in
+# up-mekhan → headroom-only; no model_policy is seeded, so the placement loop
+# stays idle). Dev wires ONE upstream replica: the shared Ollama serving the
+# default model over its OpenAI-compat surface. Re-runnable; skips if already up.
+up-router:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    if [ -s "{{pid_dir}}/router.pid" ] && kill -0 "$(cat {{pid_dir}}/router.pid)" 2>/dev/null; then
+      echo "  inference-router already running (pid $(cat {{pid_dir}}/router.pid))"
+      exit 0
+    fi
+    echo "▶ building inference-router…"
+    # Umbrella workspace member → output lands in ./target/, like mekhan-service.
+    cargo build -p inference-router
+    # One static upstream: the shared Ollama (OpenAI-compat) serving the default
+    # model. `inventory.rs`'s live mekhan poll is a deferred upgrade; the static
+    # ROUTER_REPLICAS table is the MVP source of truth.
+    replicas='[{"base_url":"http://localhost:{{ollama_port}}","model_ids":["{{ollama_model}}"],"concurrency_c":4}]'
+    echo "▶ starting inference-router on :{{router_port}} (upstream: ollama {{ollama_model}})…"
+    pid=$(just/scripts/spawn-daemon.sh router "{{pid_dir}}/router.pid" "{{log_dir}}/router.log" \
+      -- env \
+        RUST_LOG="info,inference_router=debug" \
+        ROUTER_BIND_ADDR="0.0.0.0:{{router_port}}" \
+        ROUTER_NATS_URL="{{nats_url}}" \
+        ROUTER_MEKHAN_URL="{{service_url}}" \
+        ROUTER_REPLICAS="$replicas" \
+        "${CARGO_TARGET_DIR:-$PWD/target}/debug/inference-router")
+    echo "  ✓ inference-router (pid $pid)  {{router_url}}  log: {{log_dir}}/router.log"
+
+down-router:
+    @just dev::_kill router
+
+# ── Model-pool node (the self-hosted LLM pool, docs 28-31) ────────────────────
+#
+# Enrolls + starts ONE dev model-server runner so the pool works OUT OF THE BOX:
+# it appears on the /models Engines tab, and the shared Ollama's default model
+# shows under "ready to load" (provisioned-to-disk, one click to make resident).
+# A dedicated daemon — the faithful dev shape of a model-server NODE, kept
+# distinct from the generic `executor` worker and the `lab_fleet` presence
+# `runner`. Enrolls UNGROUPED (no seeded-group dependency; the model inventory
+# join is group-agnostic) and runs the `[model_agent]` against the shared Ollama
+# (backend=ollama; the dev executor binary now carries the `vllm` feature that
+# gates the agent). Re-runnable with a STABLE identity (same reuse logic as
+# up-runner). Soft-skips if mekhan never comes up.
+up-model-runner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    echo "▶ waiting for mekhan…"
+    ready=""
+    for _ in $(seq 1 60); do
+      if curl -fsS "{{service_url}}/healthz" >/dev/null 2>&1; then ready=1; break; fi
+      sleep 1
+    done
+    if [ -z "$ready" ]; then
+      echo "  ⚠ mekhan not ready after 60s — skipping model-pool runner" >&2
+      echo "    (the /models pool stays empty until 'just dev up-model-runner')" >&2
+      exit 0
+    fi
+    # Reuse the executor binary (same {{executor_features}} — includes `vllm`,
+    # which gates the model agent). Build if absent.
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    if [ ! -x "$bin" ]; then
+      echo "▶ building executor (features: {{executor_features}})…"
+      (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
+    fi
+    if [ -s "{{pid_dir}}/model-runner.pid" ] && kill -0 "$(cat {{pid_dir}}/model-runner.pid)" 2>/dev/null; then
+      echo "  stopping previous model runner (pid $(cat {{pid_dir}}/model-runner.pid))"
+      just dev::_kill model-runner || true
+    fi
+
+    runner_base="$PWD/{{work_dir}}/model-runner"
+    mkdir -p "$runner_base"
+    # Model-server runner config. UNGROUPED (no [pool]); [model_agent] drives the
+    # shared Ollama's admin surface (probe /api/ps + /api/tags, load/unload/pull).
+    # `vllm_url` is the endpoint for whichever backend — here the shared Ollama.
+    cat > "$runner_base/executor.toml" <<EOF
+    name        = "dev-model-server"
+    nats_url    = "{{nats_url}}"
+    base_dir    = "$runner_base"
+    concurrency = 2
+    # The model agent + presence catalog publish need mekhan's URL to POST the
+    # interface catalog (the live half of the /models Engines join).
+    mekhan_url  = "{{service_url}}"
+
+    [model_agent]
+    backend           = "ollama"
+    vllm_url          = "http://localhost:{{ollama_port}}"
+    served_base_model = "{{ollama_model}}"
+    max_num_seqs      = 4
+
+    [storage]
+    backend  = "s3"
+    endpoint = "{{s3_endpoint}}"
+    bucket   = "mekhan-artifacts"
+    region   = "us-east-1"
+
+    [storage.credentials]
+    access_key = "rustfsadmin"
+    secret_key = "rustfsadmin"
+
+    [logs]
+    enabled = true
+    sinks   = [{ type = "file" }, { type = "nats", min_level = "info" }]
+    EOF
+
+    # Stable identity across restarts (same reasoning as up-runner): reuse the
+    # enrolled id when its row is still live; only re-enroll after a reset wipes it.
+    identity="$runner_base/runner/identity.json"
+    reuse=""
+    if [ -f "$identity" ]; then
+      rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+        echo "▶ reusing enrolled model runner $rid (row still live)"
+        reuse=1
+      fi
+    fi
+
+    if [ -z "$reuse" ]; then
+      rm -rf "$runner_base/runner"
+      echo "▶ minting registration token (ungrouped)…"
+      rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
+          -H 'content-type: application/json' -d '{}' | jq -r '.token')
+      if [ -z "$rt" ] || [ "$rt" = "null" ]; then
+        echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
+        exit 1
+      fi
+      name="dev-model-$(date +%s)"
+      echo "▶ enrolling model runner '$name' (ungrouped, backend=ollama)…"
+      ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
+          --token "$rt" --name "$name" )
+    fi
+
+    echo "▶ starting model-pool runner daemon…"
+    pid=$(just/scripts/spawn-daemon.sh model-runner "{{pid_dir}}/model-runner.pid" "{{log_dir}}/model-runner.log" \
+      -- env RUST_LOG="info,aithericon_executor=debug" \
+        VAULT_ADDR="{{vault_addr}}" \
+        bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
+    echo "  ✓ model-pool runner (pid $pid)  log: {{log_dir}}/model-runner.log"
+    echo "  /models Engines now shows this node; '{{ollama_model}}' is ready to load."
+
+down-model-runner:
+    @just dev::_kill model-runner
 
 # ── ROS turtle fleet (turtlesim + rosbridge container + ros runner) ──────────
 #
@@ -1837,6 +1998,7 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__S3__SECRET_KEY="rustfsadmin" \
         MEKHAN__DEMOS__SEED="true" \
         MEKHAN__DEMOS__DIR="$PWD/demos" \
+        AUTOSCALER_DEMAND_URL="{{router_url}}" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
         ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
