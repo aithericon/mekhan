@@ -99,7 +99,15 @@ services:
           tcp_port: ${MEKHAN_LIVEKIT_RTC_TCP_PORT:-7881}
           udp_port: ${MEKHAN_LIVEKIT_RTC_UDP_PORT:-7882}
           use_external_ip: false
-          node_ip: 127.0.0.1
+          # node_ip is the address the server advertises as its ICE candidate.
+          # 127.0.0.1 works for native clients (executor publisher) and Chromium,
+          # but Firefox refuses to send ICE checks to a loopback REMOTE candidate
+          # — so the SFU never learns the browser's NAT-reflexive address and the
+          # subscriber connection never establishes (black video). Advertising the
+          # host's LAN IP instead makes Firefox probe it; the packet still hits the
+          # 0.0.0.0-published UDP port and the prflx return path forms exactly as it
+          # does for Chromium. dev-ports.sh computes the LAN IP into this var.
+          node_ip: ${MEKHAN_LIVEKIT_NODE_IP:-127.0.0.1}
         keys:
           devkey: secret
     ports:

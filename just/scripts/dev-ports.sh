@@ -108,6 +108,26 @@ MEKHAN_S3_ENDPOINT="http://localhost:${MEKHAN_S3_PORT}"
 MEKHAN_VAULT_ADDR="http://localhost:${MEKHAN_VAULT_PORT}"
 MEKHAN_LIVEKIT_URL="ws://localhost:${MEKHAN_LIVEKIT_PORT}"
 
+# LiveKit advertises MEKHAN_LIVEKIT_NODE_IP as its single ICE candidate. It MUST
+# be a non-loopback address the viewer's browser will actually probe: Firefox
+# silently drops a loopback (127.0.0.1) REMOTE candidate, so with node_ip set to
+# 127.0.0.1 the SFU never learns the browser's NAT-reflexive address, the
+# subscriber PeerConnection never establishes, and the live video stays black
+# (Chromium and the native executor publisher tolerate loopback, which is why
+# they worked). Advertising the host's LAN IP makes every browser probe it; the
+# packet still lands on the 0.0.0.0-published UDP port and the prflx return path
+# forms identically. Honour a caller-supplied override; else autodetect the
+# primary LAN IP (macOS `ipconfig`, Linux `ip route`), falling back to loopback.
+if [[ -z "${MEKHAN_LIVEKIT_NODE_IP:-}" ]]; then
+    if command -v ipconfig >/dev/null 2>&1; then
+        MEKHAN_LIVEKIT_NODE_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
+    fi
+    if [[ -z "${MEKHAN_LIVEKIT_NODE_IP:-}" ]] && command -v ip >/dev/null 2>&1; then
+        MEKHAN_LIVEKIT_NODE_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    fi
+    MEKHAN_LIVEKIT_NODE_IP=${MEKHAN_LIVEKIT_NODE_IP:-127.0.0.1}
+fi
+
 export \
     WORKTREE_SLOT \
     MEKHAN_SERVICE_PORT MEKHAN_ENGINE_PORT MEKHAN_CANCEL_PORT MEKHAN_APP_PORT \
@@ -116,6 +136,7 @@ export \
     MEKHAN_ZITADEL_DB_PORT MEKHAN_ZITADEL_PORT \
     MEKHAN_MAILPIT_SMTP_PORT MEKHAN_MAILPIT_UI_PORT MEKHAN_HTTPBIN_PORT \
     MEKHAN_LIVEKIT_PORT MEKHAN_LIVEKIT_RTC_TCP_PORT MEKHAN_LIVEKIT_RTC_UDP_PORT \
+    MEKHAN_LIVEKIT_NODE_IP \
     MEKHAN_SERVICE_URL MEKHAN_ENGINE_URL MEKHAN_NATS_URL MEKHAN_NATS_MON_URL \
     MEKHAN_DATABASE_URL MEKHAN_S3_ENDPOINT MEKHAN_VAULT_ADDR MEKHAN_LIVEKIT_URL
 
@@ -144,5 +165,6 @@ MEKHAN_HTTPBIN_PORT=${MEKHAN_HTTPBIN_PORT}
 MEKHAN_LIVEKIT_PORT=${MEKHAN_LIVEKIT_PORT}    (${MEKHAN_LIVEKIT_URL})
 MEKHAN_LIVEKIT_RTC_TCP_PORT=${MEKHAN_LIVEKIT_RTC_TCP_PORT}
 MEKHAN_LIVEKIT_RTC_UDP_PORT=${MEKHAN_LIVEKIT_RTC_UDP_PORT}
+MEKHAN_LIVEKIT_NODE_IP=${MEKHAN_LIVEKIT_NODE_IP}    (ICE candidate the browser probes)
 EOF
 fi
