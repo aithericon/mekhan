@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000231",
+  "folder": "assets",
   "name": "23 · Resource Reference",
   "description": "A Decision routes on `demo_pg.port` — a PUBLIC (non-secret) field of the workspace `postgres` resource `demo_pg`. The reference is a compile-time constant (docs/20 §5.1 + the named-global unification): publish inlines the resource's public-config value into the guard (`15439 == 15439`), so a resource's public field drives control flow with no staging, no read-arc, and no `{{secret:…}}` envelope. The secret `password` is never inlinable. Requires the auto-seeded `postgres` resource `demo_pg` (demos/resources/demo_pg.json)."
 }

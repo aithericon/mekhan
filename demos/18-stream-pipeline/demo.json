@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f18",
+  "folder": "streaming",
   "name": "18 · Stream Pipeline",
   "description": "Three-stage data-plane streaming pipeline, all Python: producer → transform → reducer (docs/25). The producer opens a Data/Out channel 'lower' and writes 4 lowercase word elements (the/quick/brown/fox). The transform is BOTH a stream reader AND writer: it declares a Data/In channel 'lower' (drained via stream('lower')) and a Data/Out channel 'upper' (written via open_output('upper')) — mapping each element (uppercase) straight through. The reducer declares a Data/In channel 'upper', drains it via stream('upper'), and concatenates the elements into 'THE QUICK BROWN FOX'. All bulk bytes flow out-of-band over the transport; the net sees only each stage's open + close (no per-element token spam).",
   "visibility": "public"

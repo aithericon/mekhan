@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000013",
+  "folder": "basics",
   "name": "03 · Decision Routing",
   "description": "Step 3 of the learning path. Branches on a numeric score: an AutomatedStep doubles the input, a Decision routes high vs low to separate End nodes. Showcases Decision guards over <slug>.<field> producer borrows."
 }

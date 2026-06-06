@@ -83,11 +83,31 @@ A seeded demo whose templateId already exists on the server is left
 alone — users can hand-edit through the web editor without the seeder
 clobbering their changes.
 
+## Folders
+
+Every demo is filed into a category folder under the `/demos` root in
+the default workspace. The category is declared in `demo.json`:
+
+```json
+{ "templateId": "…", "folder": "streaming", "name": "…", … }
+```
+
+`folder` is a path **relative to `/demos`**: a bare slug nests one level
+(`"streaming"` → `/demos/streaming`); slashes nest deeper
+(`"robotics/xarm"` → `/demos/robotics/xarm`). Absent ⇒ filed directly in
+`/demos`. The curated categories (display name + blurb) live in
+`DEMO_CATEGORIES` in `service/src/demos.rs`; an unknown slug still gets a
+folder with a title-cased name. `private` demos are never filed (they're
+hidden from the catalogue), so they omit `folder`. The unit test
+`service::demos::tests::every_seeded_public_demo_declares_a_known_folder`
+enforces that every public demo names a known category.
+
 ## Adding a demo
 
 1. Drop a new directory under `demos/`.
 2. Mint a stable templateId (UUID) — bake it into `demo.json` so
-   re-seeding is idempotent and tests can refer to it.
+   re-seeding is idempotent and tests can refer to it. Set `folder` to
+   the category it belongs in (see [Folders](#folders)).
 3. Author `graph.json` either by hand or by exporting from a published
    template: `mekhan pull <template-id> demos/<new-name>/ --format json`.
 4. Drop per-node sources into `nodes/<id>/`.

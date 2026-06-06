@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000030",
+  "folder": "examples",
   "name": "Email Welcome",
   "description": "Tiny demo of the SMTP executor backend. A HumanTask collects {name, email}; an AutomatedStep with backendType=smtp renders Tera templates against the intake form data and sends a welcome email. Pair with `just dev mailhog-up` to capture the message at http://localhost:8025 without a real SMTP server. Requires an SMTP resource named `mail` (host: localhost, port: 1025, blank username/password — matches mailhog defaults) in the workspace at /resources."
 }

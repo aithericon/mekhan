@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000008e0",
+  "folder": "control-flow",
   "name": "08e · Parent w/ crashing child (unwired)",
   "description": "Live e2e for subworkflow-failure-propagation. Calls 08c-unwired-failure (a child that always crashes => child NetFailed) via a SubWorkflow node whose error handle is UNWIRED. The child crash must propagate to this parent and, because the parent's SubWorkflow error is unwired, crash the PARENT too (instance 'failed') — instead of hanging at 'running'. Requires 08c to seed first (alphabetical)."
 }

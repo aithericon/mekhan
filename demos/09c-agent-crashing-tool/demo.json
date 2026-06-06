@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000009c0",
+  "folder": "control-flow",
   "name": "09c · Agent w/ crashing tool (feedback)",
   "description": "Live e2e for subworkflow-failure-propagation, agent path. An Agent whose only tool is 08c-unwired-failure (a sub-workflow that always crashes). onToolError=feedback. When the tool crashes, the child NetFailed must propagate to the agent and come back as a TOOL-ERROR fed into the loop (the LLM sees 'tool failed: ...') so the agent can retry/adapt — the agent net must KEEP RUNNING and complete, NOT crash. Requires 08c to seed first (alphabetical). Uses Ollama qwen3.5:9b."
 }

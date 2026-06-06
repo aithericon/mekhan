@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000260",
+  "folder": "pools",
   "name": "26 · Runner Pool (lab fleet)",
   "description": "The smallest lab-runner-fleet demo (docs/21). The single 'Measure' step is deployed to the `lab_fleet` PRESENCE pool — a capacity-LESS resource whose capacity is one unit per live, enrolled runner that heartbeats `runner.{id}.presence`. With NO placement Requirements, any present runner can be granted the step; the compiler wraps the body behind a claim/grant/release against the pool's backing net and the granted unit's `executor_namespace` (`runner.{id}`) routes the job to that exact runner. Run `just dev runner-up` to enroll + start a dev runner, then `mekhan test` this template: with no runner present the instance parks at the claim; once a runner is present it is granted, runs, and completes. Pair with demo 27 for typed-capability Requirements matching."
 }

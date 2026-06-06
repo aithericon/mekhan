@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f16",
+  "folder": "pools",
   "name": "16 · Leased GPU (Nomad)",
   "description": "Hold ONE cluster allocation and run a warm, multi-shot GPU workload on it — the lease counterpart to demo 13's contention story. A `LeaseScope` bound to the `nomad_dc` datacenter acquires a single Nomad allocation on enter and releases it on exit; the `Loop` inside renders N shots, and the `Scheduled` Python body runs on the held node BY CONTAINMENT (no per-step scheduler — it inherits the scope's datacenter). One persistent drain executor pulls every iteration's job warm (venv/model/GPU stay hot), instead of paying a fresh queue + cold-start per shot. The held alloc is released exactly once at the loop's terminal exit; if it dies mid-batch, fail-fast routes the failure to the caller. Requires `just dev scheduler-up` (Nomad agent + the registered petri-lease-executor job); the `nomad_dc` datacenter resource is seeded automatically from demos/resources/nomad_dc.json. See docs/17-lease-scope.md and demo 13 for the contended-pool alternative."
 }

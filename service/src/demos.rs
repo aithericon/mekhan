@@ -81,14 +81,15 @@ pub struct DemoMetadata {
     /// `templateId` — paste it here verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_template_id: Option<String>,
-    /// Slug of the project this demo is grouped under in the catalogue.
-    /// Absent ⇒ the shared [`DEMO_PROJECT_SLUG`] ("demos") project — the
-    /// historical default. Set to a known slug (see [`project_for_slug`]) to
-    /// split a family of demos into its own heading, e.g. the online-clinic
-    /// port set under `"online-clinic"`. Ignored for `private` demos (they're
-    /// hidden from the catalogue and never attached to a project).
+    /// Category folder this demo is filed under, **relative to the `/demos`
+    /// root**. A bare slug (`"streaming"`) nests one level (`/demos/streaming`);
+    /// slashes nest deeper (`"robotics/xarm"` → `/demos/robotics/xarm`). Absent
+    /// ⇒ filed directly in the `/demos` root. Known slugs (see
+    /// [`DEMO_CATEGORIES`]) get a curated display name + blurb; unknown
+    /// segments fall back to a title-cased slug. Ignored for `private` demos
+    /// (they're hidden from the catalogue and never filed into a folder).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
+    pub folder: Option<String>,
 }
 
 /// One parsed demo directory.
@@ -539,60 +540,122 @@ const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-0
 /// cross-workspace public-read branch in `list_templates`.
 const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
 
-/// Slug + display name of the project that groups every seeded demo. Projects
-/// are a non-ACL grouping inside a workspace (see migration 20240125), so this
-/// is purely organizational: it keeps the built-in demos collected under one
-/// heading in the default workspace instead of scattered among user templates.
-/// `UNIQUE (workspace_id, slug)` makes the slug the idempotency key.
-const DEMO_PROJECT_SLUG: &str = "demos";
+/// Slug of the root folder every seeded demo lives under. Folders are a
+/// non-ACL grouping inside a workspace (see migration 20240149), so this is
+/// purely organizational: it keeps the built-in demos collected under one
+/// `/demos` tree in the default workspace instead of scattered among user
+/// templates. The root-slug partial unique index makes the slug the
+/// idempotency key.
+const DEMO_ROOT_SLUG: &str = "demos";
 
-/// One seeded project heading: its stable slug, display name, and blurb.
-/// `slug` is the `(workspace_id, slug)` idempotency key; the rest is purely
-/// cosmetic catalogue copy.
-struct SeedProject {
+/// One curated demo category folder: its path-segment `slug` (the
+/// `(workspace_id, parent_id, slug)` idempotency key), display name, and blurb.
+/// Everything but `slug` is cosmetic catalogue copy.
+struct DemoCategory {
     slug: &'static str,
     display_name: &'static str,
     description: &'static str,
 }
 
-/// The catalogue's built-in project headings. A demo names one by slug via
-/// `demo.json::project`; an absent / unknown slug falls back to [`DEMO_PROJECT_SLUG`].
-/// Projects are a non-ACL grouping inside a workspace (see migration 20240125),
-/// so this is purely organizational — it keeps related demos collected under
-/// one heading instead of scattered among user templates.
-const SEED_PROJECTS: &[SeedProject] = &[
-    SeedProject {
-        slug: DEMO_PROJECT_SLUG,
-        display_name: "Demos",
-        description: "Built-in example workflows seeded by mekhan-service.",
+/// The built-in demo category folders, each a child of the `/demos` root. A
+/// demo names one by slug via `demo.json::folder`; an absent slug files the
+/// demo directly in the root, and an unknown slug still gets a folder (with a
+/// title-cased display name). Purely organizational — it groups related demos
+/// under one heading instead of one flat `/demos` list.
+const DEMO_CATEGORIES: &[DemoCategory] = &[
+    DemoCategory {
+        slug: "basics",
+        display_name: "Basics",
+        description: "The core primitives, in learning-path order: Start/Automated/End, \
+                      human tasks, decisions, loops, parallel fan-out, sub-workflows, forms.",
     },
-    SeedProject {
+    DemoCategory {
+        slug: "control-flow",
+        display_name: "Control Flow",
+        description: "Failure handling (the error port, retries, wired vs. unwired \
+                      failures) and timing (delay / timeout).",
+    },
+    DemoCategory {
+        slug: "agents-llm",
+        display_name: "Agents & LLM",
+        description: "LLM-driven steps: OCR→classify→extract, multi-turn agents with \
+                      sub-workflow tools, and self-hosted model-pool inference.",
+    },
+    DemoCategory {
+        slug: "integrations",
+        display_name: "Integrations",
+        description: "Executor backends that talk to external systems: HTTP, Postgres, \
+                      Loki/LogQL, Prometheus/PromQL.",
+    },
+    DemoCategory {
+        slug: "optimization",
+        display_name: "Optimization",
+        description: "Bayesian-optimization loops: catalog triggers, observation \
+                      producers, and the optimize/observe cycle.",
+    },
+    DemoCategory {
+        slug: "pools",
+        display_name: "Pools & Leasing",
+        description: "Capacity primitives: resource pools, leased GPUs, runner pools, \
+                      and runner cross-resource declarations.",
+    },
+    DemoCategory {
+        slug: "streaming",
+        display_name: "Streaming",
+        description: "Channel streaming end to end: control/data planes, stream map / \
+                      pipeline, audio transcription, and live audio/video media streams.",
+    },
+    DemoCategory {
+        slug: "assets",
+        display_name: "Assets & Resources",
+        description: "Typed assets and workspace resources: consuming, referencing, \
+                      and reading them from Python.",
+    },
+    DemoCategory {
+        slug: "robotics",
+        display_name: "Robotics",
+        description: "ROS-driven fleets through the platform: turtlesim, the xArm 6 \
+                      (joint / trajectory / scene / grasp), and sample-handling cells.",
+    },
+    DemoCategory {
         slug: "online-clinic",
         display_name: "Online Clinic",
         description: "Online-clinic document-intake workflows (OCR → classify → \
                       extract → safety gate) ported onto mekhan primitives.",
     },
+    DemoCategory {
+        slug: "examples",
+        display_name: "Examples",
+        description: "End-to-end example workflows that tie the primitives together.",
+    },
 ];
 
-/// Resolve a demo's declared `project` slug to a seeded project, falling back
-/// to the shared "Demos" heading when the slug is absent or unrecognized.
-fn project_for_slug(slug: Option<&str>) -> &'static SeedProject {
-    let want = slug.unwrap_or(DEMO_PROJECT_SLUG);
-    SEED_PROJECTS
-        .iter()
-        .find(|p| p.slug == want)
-        .unwrap_or(&SEED_PROJECTS[0])
+/// Curated metadata for a category path segment, if it is a known slug.
+fn category_meta(slug: &str) -> Option<&'static DemoCategory> {
+    DEMO_CATEGORIES.iter().find(|c| c.slug == slug)
 }
 
-/// Upsert a seeded root folder in the default workspace and return its id.
+/// Title-case a kebab slug for the display name of an unknown category segment
+/// (`"my-folder"` → `"My Folder"`).
+fn title_from_slug(slug: &str) -> String {
+    slug.split('-')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Upsert the `/demos` root folder in the default workspace and return its id.
 /// Keyed on the root-slug partial unique index (`folders_root_slug_uniq`);
-/// `ON CONFLICT DO UPDATE` keeps the display name / description fresh and
-/// guarantees a `RETURNING id` even on the conflict path.
-async fn ensure_project(
-    state: &crate::AppState,
-    project: &SeedProject,
-) -> Result<uuid::Uuid, DemoSeedError> {
-    let path = format!("/{}", project.slug);
+/// `ON CONFLICT DO UPDATE` keeps the copy fresh and guarantees a `RETURNING id`
+/// even on the conflict path.
+async fn ensure_demo_root(state: &crate::AppState) -> Result<uuid::Uuid, DemoSeedError> {
     let (id,): (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO folders (workspace_id, parent_id, slug, display_name, description, path, created_by) \
               VALUES ($1, NULL, $2, $3, $4, $5, $6) \
@@ -602,14 +665,62 @@ async fn ensure_project(
          RETURNING id",
     )
     .bind(DEMO_WORKSPACE_ID)
-    .bind(project.slug)
-    .bind(project.display_name)
-    .bind(project.description)
-    .bind(&path)
+    .bind(DEMO_ROOT_SLUG)
+    .bind("Demos")
+    .bind("Built-in example workflows seeded by mekhan-service.")
+    .bind(format!("/{DEMO_ROOT_SLUG}"))
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .fetch_one(&state.db)
     .await?;
     Ok(id)
+}
+
+/// Ensure the category folder chain for a demo exists under `/demos` and return
+/// the **leaf** folder id the demo should be filed into. `folder` is the
+/// `demo.json::folder` path relative to the root (`"streaming"`,
+/// `"robotics/xarm"`); `None`/empty files the demo directly in the root.
+///
+/// Each path segment is upserted as a child of the previous one, keyed on
+/// `(workspace_id, parent_id, slug)` so reseeding is idempotent. Known segments
+/// (see [`DEMO_CATEGORIES`]) carry curated copy; unknown ones get a title-cased
+/// display name and an empty blurb.
+async fn ensure_demo_folder(
+    state: &crate::AppState,
+    folder: Option<&str>,
+) -> Result<uuid::Uuid, DemoSeedError> {
+    let mut parent = ensure_demo_root(state).await?;
+    let Some(path) = folder else {
+        return Ok(parent);
+    };
+    let mut acc = format!("/{DEMO_ROOT_SLUG}");
+    for seg in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+        acc.push('/');
+        acc.push_str(seg);
+        let (display_name, description) = match category_meta(seg) {
+            Some(c) => (c.display_name.to_string(), c.description.to_string()),
+            None => (title_from_slug(seg), String::new()),
+        };
+        let (id,): (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO folders (workspace_id, parent_id, slug, display_name, description, path, created_by) \
+                  VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (workspace_id, parent_id, slug) \
+                  DO UPDATE SET display_name = EXCLUDED.display_name, \
+                                description = EXCLUDED.description, \
+                                path = EXCLUDED.path \
+             RETURNING id",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(parent)
+        .bind(seg)
+        .bind(&display_name)
+        .bind(&description)
+        .bind(&acc)
+        .bind(DEMO_SEEDER_AUTHOR_ID)
+        .fetch_one(&state.db)
+        .await?;
+        parent = id;
+    }
+    Ok(parent)
 }
 
 /// Seed every demo under `root` into the running service. Idempotent:
@@ -1371,8 +1482,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     // `template_folders` row for them would be dead weight, not a demo a user
     // can open from the folder view.
     if visibility != "private" {
-        let project = project_for_slug(demo.metadata.project.as_deref());
-        match ensure_project(state, project).await {
+        match ensure_demo_folder(state, demo.metadata.folder.as_deref()).await {
             Ok(folder_id) => {
                 if let Err(e) = sqlx::query(
                     "INSERT INTO template_folders (base_template_id, folder_id, workspace_id, moved_by) \
@@ -3592,5 +3702,54 @@ mod tests {
         let demo = load_demo(&repo_root().join("demos/07-ocr-classify-extract"))
             .expect("07-ocr-classify-extract must load");
         assert!(demo.tests.is_empty());
+    }
+
+    #[test]
+    fn title_from_slug_titlecases_kebab() {
+        assert_eq!(title_from_slug("online-clinic"), "Online Clinic");
+        assert_eq!(title_from_slug("basics"), "Basics");
+        assert_eq!(title_from_slug("control-flow"), "Control Flow");
+        // empty / dangling separators don't produce blank words
+        assert_eq!(title_from_slug("a--b-"), "A B");
+        assert_eq!(title_from_slug(""), "");
+    }
+
+    #[test]
+    fn known_demo_categories_resolve_to_curated_copy() {
+        let c = category_meta("streaming").expect("streaming is a known category");
+        assert_eq!(c.display_name, "Streaming");
+        assert!(!c.description.is_empty());
+        // an unknown segment has no curated entry (caller falls back to a
+        // title-cased slug) — proves the fallback path is reachable.
+        assert!(category_meta("not-a-real-category").is_none());
+    }
+
+    #[test]
+    fn every_seeded_public_demo_declares_a_known_folder() {
+        // Guards the demo.json ↔ DEMO_CATEGORIES contract: every public demo
+        // must name a curated category (so the seeded tree stays tidy), and
+        // private children must NOT (they're never filed). Catches a typo in a
+        // new demo's `folder` slug at test time, not at seed time.
+        let root = repo_root().join("demos");
+        for entry in std::fs::read_dir(&root).expect("demos dir") {
+            let dir = entry.expect("dir entry").path();
+            if !dir.join("demo.json").exists() {
+                continue; // assets/, resources/, … support dirs
+            }
+            let demo = load_demo(&dir).expect("demo must load");
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let is_private = demo.metadata.visibility.as_deref() == Some("private");
+            match (&demo.metadata.folder, is_private) {
+                (Some(folder), false) => {
+                    let leaf = folder.rsplit('/').next().unwrap();
+                    assert!(
+                        category_meta(leaf).is_some(),
+                        "demo {name}: folder `{folder}` leaf `{leaf}` is not a known DEMO_CATEGORIES slug"
+                    );
+                }
+                (None, false) => panic!("public demo {name} declares no `folder`"),
+                (_, true) => { /* private children are never filed; folder optional */ }
+            }
+        }
     }
 }

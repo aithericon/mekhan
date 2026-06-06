@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000015",
+  "folder": "basics",
   "name": "05 · Parallel Fanout",
   "description": "Step 5 of the learning path. ParallelSplit fans the control token into two AutomatedStep branches; Join (`mode: all`) merges them back. Both branches run concurrently on the executor."
 }
