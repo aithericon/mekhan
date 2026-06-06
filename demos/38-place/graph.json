@@ -141,14 +141,137 @@
       }
     },
     {
-      "id": "release",
+      "id": "descend_plan",
       "type": "automated_step",
-      "slug": "release",
+      "slug": "descend_plan",
       "position": { "x": 1160, "y": 120 },
       "data": {
         "type": "automated_step",
+        "label": "Plan Cartesian Descent to Insert Pose",
+        "description": "ROS `call_service` to `/plan_cartesian` (`aithericon_motion_bridge/srv/PlanCartesian`) — a straight-line Cartesian descent from the current (approach) pose down into the caller's `insert_pose` at the instrument port. `waypoints` is a single-element array whose lone entry is the BARE whole-object placeholder `{{ start.insert_pose }}` (the array literal is rendered element-wise; a pure placeholder resolving to an object is adopted verbatim as the typed `geometry_msgs/Pose`). The port is clear of collision objects, so the descent solves fully (`fraction ≈ 1.0`) and the carried sample is lowered into the port before release. The bridge time-parameterizes the geometric path before returning so Path B can execute it.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/plan_cartesian",
+            "interface_type": "aithericon_motion_bridge/srv/PlanCartesian",
+            "fields": {
+              "waypoints": ["{{ start.insert_pose }}"],
+              "group": "xarm6",
+              "frame_id": "link_base",
+              "eef_step": 0.01,
+              "jump_threshold": 0.0,
+              "allowed_planning_time": 5.0
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/PlanCartesian_Request",
+                "fieldnames": ["waypoints", "group", "frame_id", "eef_step", "jump_threshold", "allowed_planning_time"],
+                "fieldtypes": ["geometry_msgs/Pose", "string", "string", "double", "double", "double"],
+                "fieldarraylen": [0, -1, -1, -1, -1, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/PlanCartesian_Response",
+                "fieldnames": ["success", "trajectory", "planning_time", "point_count", "total_duration", "fraction", "error_code", "error_message"],
+                "fieldtypes": ["boolean", "string", "double", "int32", "double", "double", "int32", "string"],
+                "fieldarraylen": [-1, -1, -1, -1, -1, -1, -1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "trajectory", "label": "Trajectory (opaque JSON-encoded JointTrajectory)", "kind": "text" },
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "planning_time", "label": "Planning time (s)", "kind": "number" },
+            { "name": "point_count", "label": "Point count", "kind": "number" },
+            { "name": "total_duration", "label": "Total duration (s)", "kind": "number" },
+            { "name": "fraction", "label": "Fraction solved", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "descend_gate",
+      "type": "decision",
+      "slug": "descend_gate",
+      "position": { "x": 1440, "y": 120 },
+      "data": {
+        "type": "decision",
+        "label": "Descent plan acceptable?",
+        "description": "Gate on the Cartesian descent into the port. Accept any successful solve with at least one trajectory point; a hard planning failure or empty path routes to `end-rejected` (release never fires, the object stays attached). `total_duration` is bounded at 30s as a runaway guard.",
+        "conditions": [
+          {
+            "edgeId": "branch-accept",
+            "label": "Accept",
+            "guard": "descend_plan.success == true && descend_plan.point_count > 0 && descend_plan.total_duration <= 30.0"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "descend_exec",
+      "type": "automated_step",
+      "slug": "descend_exec",
+      "position": { "x": 1720, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Execute Descent Trajectory (Path B)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` — execute the time-parameterized Cartesian descent from `descend_plan`, spliced verbatim as `{{ descend_plan.trajectory }}`. Lowers the carried sample from the approach pose down into the instrument port before the atomic release fires. Same `xarm_fleet` runner.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": "{{ descend_plan.trajectory }}"
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": ["error_code", "error_string"],
+                "fieldtypes": ["int32", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "release",
+      "type": "automated_step",
+      "slug": "release",
+      "position": { "x": 2000, "y": 120 },
+      "data": {
+        "type": "automated_step",
         "label": "Release (atomic open + detach)",
-        "description": "ROS `call_service` to `/release` (`aithericon_motion_bridge/srv/Release`) — the atomic inverse of grasp: actuate the `xarm_gripper` group open THEN `AttachedCollisionObject` REMOVE (detach) of the carried object on `/apply_planning_scene`, both in one service call. The `object_id` is spliced from the child input as the BARE placeholder `{{ start.object_id }}`. Response `{success, attached, error_message}`; `attached==false` after release is the proof the object is no longer part of the robot's collision body. Runs on the same `xarm_fleet` runner.",
+        "description": "ROS `call_service` to `/release` (`aithericon_motion_bridge/srv/Release`) — the atomic inverse of grasp: actuate the `xarm_gripper` group open THEN `AttachedCollisionObject` REMOVE (detach) of the carried object on `/apply_planning_scene`, both in one service call. The `object_id` is spliced from the child input as the BARE placeholder `{{ start.object_id }}`. Fires AFTER the Cartesian descent (`descend_exec`) has lowered the sample into the port, so the release happens with the gripper seated at the insert pose rather than 14 cm up. Response `{success, attached, error_message}`; `attached==false` after release is the proof the object is no longer part of the robot's collision body. Runs on the same `xarm_fleet` runner.",
         "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
         "requirements": {
           "constraints": [
@@ -192,9 +315,130 @@
       }
     },
     {
+      "id": "retract_plan",
+      "type": "automated_step",
+      "slug": "retract_plan",
+      "position": { "x": 2280, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Plan Retract to Approach (MoveIt)",
+        "description": "ROS `call_service` to `/plan_to_pose` (`aithericon_motion_bridge/srv/PlanToPose`) — a JOINT-SPACE plan that lifts the (now empty) gripper out of the port back up to the approach pose. A joint-space plan is used rather than a straight-line cartesian one because the cartesian solver stalls (fraction 0) stepping out of the deep insert config, whereas `/plan_kinematic_path` reliably finds a path to the approach pose (which was just planned TO at the start of the subworkflow, so it is known reachable). Returns the arm to a high neutral configuration so the next job's /compute_ik seeds from a sane pose.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/plan_to_pose",
+            "interface_type": "aithericon_motion_bridge/srv/PlanToPose",
+            "fields": {
+              "target": "{{ start.approach_pose }}",
+              "group": "xarm6",
+              "frame_id": "link_base",
+              "allowed_planning_time": 5.0,
+              "num_planning_attempts": 10
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/PlanToPose_Request",
+                "fieldnames": ["target", "group", "frame_id", "allowed_planning_time", "num_planning_attempts"],
+                "fieldtypes": ["geometry_msgs/Pose", "string", "string", "double", "int32"],
+                "fieldarraylen": [-1, -1, -1, -1, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/PlanToPose_Response",
+                "fieldnames": ["success", "trajectory", "planning_time", "point_count", "total_duration", "error_code", "error_message"],
+                "fieldtypes": ["boolean", "string", "double", "int32", "double", "int32", "string"],
+                "fieldarraylen": [-1, -1, -1, -1, -1, -1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "trajectory", "label": "Trajectory (opaque JSON-encoded JointTrajectory)", "kind": "text" },
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "planning_time", "label": "Planning time (s)", "kind": "number" },
+            { "name": "point_count", "label": "Point count", "kind": "number" },
+            { "name": "total_duration", "label": "Total duration (s)", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "retract_gate",
+      "type": "decision",
+      "slug": "retract_gate",
+      "position": { "x": 2560, "y": 120 },
+      "data": {
+        "type": "decision",
+        "label": "Retract plan acceptable?",
+        "description": "Best-effort gate on the lift-out. Accept a successful solve with at least one point → execute the retract. A failed/empty solve falls through to `end-done` ANYWAY (default branch): the release already succeeded, so placed stays true — the lift is polish, not a correctness gate. `total_duration` bounded at 30s.",
+        "conditions": [
+          {
+            "edgeId": "branch-accept",
+            "label": "Accept",
+            "guard": "retract_plan.success == true && retract_plan.point_count > 0 && retract_plan.total_duration <= 30.0"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "retract_exec",
+      "type": "automated_step",
+      "slug": "retract_exec",
+      "position": { "x": 2840, "y": 40 },
+      "data": {
+        "type": "automated_step",
+        "label": "Execute Retract Trajectory (Path B)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` — execute the time-parameterized retract from `retract_plan`, spliced verbatim as `{{ retract_plan.trajectory }}`. Lifts the (now empty) gripper out of the port back to the approach pose. Same `xarm_fleet` runner.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": "{{ retract_plan.trajectory }}"
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": ["error_code", "error_string"],
+                "fieldtypes": ["int32", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
       "id": "end-done",
       "type": "end",
-      "position": { "x": 1440, "y": 120 },
+      "position": { "x": 3120, "y": 120 },
       "data": {
         "type": "end",
         "label": "Placed",
@@ -223,7 +467,15 @@
     { "id": "e_plan_gate", "source": "plan_pose", "target": "gate", "targetHandle": "in", "type": "sequence" },
     { "id": "e_gate_execute", "source": "gate", "target": "execute", "targetHandle": "in", "sourceHandle": "branch-accept", "label": "Accept", "type": "conditional" },
     { "id": "e_gate_rejected", "source": "gate", "target": "end-rejected", "targetHandle": "in", "sourceHandle": "default", "label": "Reject", "type": "conditional" },
-    { "id": "e_execute_release", "source": "execute", "target": "release", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_release_done", "source": "release", "target": "end-done", "targetHandle": "in", "type": "sequence" }
+    { "id": "e_execute_descplan", "source": "execute", "target": "descend_plan", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_descplan_descgate", "source": "descend_plan", "target": "descend_gate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_descgate_descexec", "source": "descend_gate", "target": "descend_exec", "targetHandle": "in", "sourceHandle": "branch-accept", "label": "Accept", "type": "conditional" },
+    { "id": "e_descgate_rejected", "source": "descend_gate", "target": "end-rejected", "targetHandle": "in", "sourceHandle": "default", "label": "Reject", "type": "conditional" },
+    { "id": "e_descexec_release", "source": "descend_exec", "target": "release", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_release_retractplan", "source": "release", "target": "retract_plan", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_retractplan_retractgate", "source": "retract_plan", "target": "retract_gate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_retractgate_retractexec", "source": "retract_gate", "target": "retract_exec", "targetHandle": "in", "sourceHandle": "branch-accept", "label": "Accept", "type": "conditional" },
+    { "id": "e_retractgate_done", "source": "retract_gate", "target": "end-done", "targetHandle": "in", "sourceHandle": "default", "label": "Skip", "type": "conditional" },
+    { "id": "e_retractexec_done", "source": "retract_exec", "target": "end-done", "targetHandle": "in", "type": "sequence" }
   ]
 }
