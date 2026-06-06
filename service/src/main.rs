@@ -255,7 +255,9 @@ async fn main() -> anyhow::Result<()> {
     mekhan_service::autoscaler::spawn_autoscaler(
         db.clone(),
         petri.clone(),
+        mekhan_nats.clone(),
         runner_presence.clone(),
+        fleet.clone(),
         demand,
     );
 
@@ -264,6 +266,17 @@ async fn main() -> anyhow::Result<()> {
     // status/replica_slug/last_error (observed_count stays roster-driven).
     tokio::spawn(
         mekhan_service::projections::model_replicas::start_model_replicas_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
+    // Node-replicas projection (PETRI_GLOBAL → node_replicas). Folds each
+    // `node-pool-<row>-<gen>` net's terminal `stage_template` effect into its row's
+    // status/node_slug/last_error (observed_nodes/observed_slots stay
+    // FleetLiveness-driven, docs/31 Loop 1).
+    tokio::spawn(
+        mekhan_service::projections::node_replicas::start_node_replicas_ingest(
             mekhan_nats.clone(),
             db.clone(),
         ),

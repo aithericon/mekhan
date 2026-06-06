@@ -67,6 +67,27 @@ pub fn model_replica_net_id(replica_id: uuid::Uuid, generation: i64) -> String {
     format!("model-replica-{replica_id}-{generation}")
 }
 
+/// Net id for a one-shot **node-pool actuation** run (model-pool docs/31 Phase 2,
+/// Loop 1). The node-fleet scaler reconciles one `node_replicas` row per
+/// `node_pool` capacity resource; on every provision / scale / teardown it deploys
+/// a short-lived net (`build_node_pool_net`) that fires the engine's
+/// `stage_template` effect once — registering / scaling / stopping a long-running
+/// generic vLLM-engine `service` job (a node FLEET, NO `model_id`) on the target
+/// datacenter at the desired node Count.
+///
+/// Sibling to [`model_replica_net_id`] and keyed identically: `(pool_id,
+/// generation)`, where `generation` is the actuation's monotonic stamp (the loop
+/// passes `last_actuated_at.timestamp_millis()`). Each provision / scale / teardown
+/// gets a FRESH net id so the engine re-seeds + re-fires `t_stage` — the
+/// `e16db353` generation-keyed pattern, lifted verbatim. The Nomad job slug
+/// (`node_pool_slug`) stays stable across generations, so each fresh net
+/// re-registers the SAME service job in place at the new Count; the loop reaps the
+/// prior generation's net. Pure function of `(pool id, generation)` ⇒ replay-safe
+/// + unique per actuation.
+pub fn node_pool_net_id(pool_id: uuid::Uuid, generation: i64) -> String {
+    format!("node-pool-{pool_id}-{generation}")
+}
+
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
 /// A `ClaimRequest { grant_id }` deposited here is matched against a free
 /// capacity token by `t_grant`, which replies a `Grant { grant_id, gpu_id }`

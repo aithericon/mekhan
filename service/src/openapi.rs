@@ -240,10 +240,27 @@ use utoipa::OpenApi;
             crate::models::model_pool::TransitionRequest,
             crate::models::runner::ModelEntry,
             crate::models::runner::ModelInterfaceKind,
+            // Model-pool reconciliation (docs/31 Phase 0) — per-node engine
+            // inventory read. The nested per-node / per-engine / per-adapter
+            // shapes are reached only through `Vec<_>` in the
+            // `GET /api/v1/fleet/engines` response, so register them explicitly
+            // for frontend codegen.
+            crate::handlers::fleet_engines::FleetEnginesResponse,
+            crate::handlers::fleet_engines::NodeInventory,
+            crate::handlers::fleet_engines::NodeEngine,
+            crate::handlers::fleet_engines::LoadedAdapter,
             // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
             // manual scale DTOs.
             crate::models::model_replicas::ModelReplicaRow,
             crate::models::model_replicas::ModelReplicaScaleRequest,
+            // docs/31 Loop 1 — node-pool replica reconciliation row (read-only).
+            crate::models::node_replicas::NodeReplicaRow,
+            // Operator load/unload action — the model-command wire envelope.
+            crate::runner_commands::ModelCommand,
+            crate::runner_commands::LoadTarget,
+            // Official model-catalog browse (operator model browser).
+            crate::handlers::model_catalog::CatalogModel,
+            crate::handlers::model_catalog::ModelCatalogResponse,
             // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
             crate::models::inference_metering::InferenceRequestLogRow,
         ),

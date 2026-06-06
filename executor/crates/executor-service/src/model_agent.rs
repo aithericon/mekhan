@@ -40,7 +40,9 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use aithericon_executor_llm::{LoadTarget, LoadedModel, ModelCommand, VllmAdapter};
+use aithericon_executor_llm::{
+    LoadTarget, LoadedModel, ModelBackend, ModelCommand, OllamaControlAdapter, VllmAdapter,
+};
 use aithericon_executor_worker::{ExecutorConfig, LiveModelState, ModelAgentSettings};
 
 /// Spawn the model-pool node agent as fire-and-forget background work.
@@ -77,7 +79,20 @@ pub fn spawn_model_agent(
     };
 
     tokio::spawn(async move {
-        let adapter = VllmAdapter::new(ma.vllm_url.clone());
+        // Select the control backend: vLLM admin surface (default) or the
+        // Metal-native Ollama runtime. `vllm_url` is the endpoint for whichever.
+        let adapter = match ma.backend.as_deref().unwrap_or("vllm") {
+            "ollama" => {
+                info!(%runner_id, endpoint = %ma.vllm_url, "model agent backend: ollama (Metal runtime)");
+                ModelBackend::Ollama(OllamaControlAdapter::new(ma.vllm_url.clone()))
+            }
+            other => {
+                if other != "vllm" {
+                    warn!(%runner_id, backend = %other, "unknown model_agent backend; defaulting to vllm");
+                }
+                ModelBackend::Vllm(VllmAdapter::new(ma.vllm_url.clone()))
+            }
+        };
 
         // Read the rnr_ token once (mirrors ros_catalog's read-from-path).
         let token = match read_runner_token(&token_path) {
@@ -140,7 +155,7 @@ fn read_runner_token(token_path: &std::path::Path) -> Result<String, String> {
 
 /// Probe vLLM, build the catalog, publish it, and refresh the live state.
 async fn probe_and_publish(
-    adapter: &VllmAdapter,
+    adapter: &ModelBackend,
     ma: &ModelAgentSettings,
     runner_id: &str,
     mekhan_url: &str,
@@ -152,7 +167,24 @@ async fn probe_and_publish(
         .await
         .map_err(|e| format!("vllm probe: {e}"))?;
 
-    let catalog = build_catalog(&loaded, ma.max_num_seqs);
+    // Also probe the models provisioned to disk (Ollama `/api/tags`; vLLM's
+    // served set). Fail-soft: a probe error degrades `pulled` to empty rather
+    // than failing the whole publish — the resident set is the load-bearing half.
+    let pulled = match adapter.probe_pulled_models().await {
+        Ok(ms) => ms
+            .iter()
+            .map(|m| match m {
+                LoadedModel::Base { model_id, .. } => model_id.clone(),
+                LoadedModel::Lora { adapter_id, .. } => adapter_id.clone(),
+            })
+            .collect(),
+        Err(e) => {
+            warn!(%runner_id, error = %e, "model agent: pulled-set probe failed; reporting empty");
+            Vec::new()
+        }
+    };
+
+    let catalog = build_catalog(&loaded, ma.max_num_seqs, &pulled);
     let concurrency = concurrency_of(&catalog);
     let model_ids = model_ids_of(&catalog);
     models.set(concurrency, model_ids);
@@ -169,7 +201,7 @@ async fn probe_and_publish(
 #[allow(clippy::too_many_arguments)]
 async fn run_command_listener(
     client: async_nats::Client,
-    adapter: VllmAdapter,
+    adapter: ModelBackend,
     ma: ModelAgentSettings,
     runner_id: String,
     mekhan_url: String,
@@ -203,7 +235,7 @@ async fn run_command_listener(
                 // shared `runner.{id}.>` filter also catches `presence` (which
                 // this daemon PUBLISHES) — ignore anything that isn't a command.
                 let verb = msg.subject.as_str().split('.').next_back().unwrap_or("");
-                if verb != "load" && verb != "unload" {
+                if verb != "load" && verb != "unload" && verb != "pull" {
                     continue;
                 }
                 match serde_json::from_slice::<ModelCommand>(&msg.payload) {
@@ -232,7 +264,7 @@ async fn run_command_listener(
 /// `load_lora_adapter`/`unload_lora_adapter`; Base load/unload → `wake_up`/
 /// `sleep` (base swap). All calls are 404-tolerant in the adapter; a real error
 /// is logged here (best-effort — never crashes the listener).
-async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
+async fn apply_command(adapter: &ModelBackend, cmd: &ModelCommand) {
     let result = match cmd {
         ModelCommand::Load {
             target:
@@ -242,7 +274,7 @@ async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
                     ..
                 },
         } => {
-            // A load with no source is a no-op we surface, not a vLLM call.
+            // A load with no source is a no-op we surface, not a backend call.
             match source_uri {
                 Some(src) => adapter.load_lora(adapter_id, src).await,
                 None => {
@@ -254,13 +286,25 @@ async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
         ModelCommand::Unload {
             target: LoadTarget::Lora { adapter_id, .. },
         } => adapter.unload_lora(adapter_id).await,
-        // Base swap: load wakes the resident engine, unload sleeps it.
+        // Base placement: load makes the base resident (vLLM wake / Ollama warm
+        // `model_id` into VRAM), unload evicts it (vLLM sleep / Ollama keep_alive 0).
         ModelCommand::Load {
-            target: LoadTarget::Base { .. },
-        } => adapter.wake_up().await,
+            target: LoadTarget::Base { model_id },
+        } => adapter.load_base(model_id).await,
         ModelCommand::Unload {
-            target: LoadTarget::Base { .. },
-        } => adapter.sleep().await,
+            target: LoadTarget::Base { model_id },
+        } => adapter.unload_base(model_id).await,
+        // Provision to disk without making resident (Ollama `/api/pull`; vLLM
+        // no-op). A bare-LoRA pull has no host engine to attach to → skip.
+        ModelCommand::Pull {
+            target: LoadTarget::Base { model_id },
+        } => adapter.pull_base(model_id).await,
+        ModelCommand::Pull {
+            target: LoadTarget::Lora { adapter_id, .. },
+        } => {
+            warn!(%adapter_id, "model agent: Pull of a bare LoRA is unsupported; skipping");
+            Ok(())
+        }
     };
     if let Err(e) = result {
         warn!(error = %e, "model agent: vLLM admin call failed (best-effort)");
@@ -275,7 +319,12 @@ async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
 /// Entry shape (matches mekhan's `ModelEntry`):
 ///   Base: `{ "model_id", "kind": "base", "max_num_seqs": C? }`
 ///   Lora: `{ "model_id": adapter_id, "kind": "lora", "base", "source_uri"? }`
-fn build_catalog(loaded: &[LoadedModel], c: Option<u32>) -> Value {
+///
+/// `pulled` is the additive `RunnerInterfaceCatalog.pulled` field — model ids
+/// provisioned to disk (loadable without a re-download). It is the SUPERSET that
+/// includes the resident `models`; mekhan's read excludes already-resident bases
+/// so the operator sees "ready to load" distinctly from "serving".
+fn build_catalog(loaded: &[LoadedModel], c: Option<u32>, pulled: &[String]) -> Value {
     let models: Vec<Value> = loaded
         .iter()
         .map(|m| match m {
@@ -291,7 +340,7 @@ fn build_catalog(loaded: &[LoadedModel], c: Option<u32>) -> Value {
             }),
         })
         .collect();
-    json!({ "models": models })
+    json!({ "models": models, "pulled": pulled })
 }
 
 /// C reported on presence = the first base entry's `max_num_seqs`. There is one
@@ -337,9 +386,12 @@ mod tests {
                 base: "meta-llama/Llama-3-8B".into(),
             },
         ];
-        let catalog = build_catalog(&loaded, Some(256));
+        let catalog = build_catalog(&loaded, Some(256), &["meta-llama/Llama-3-8B".into()]);
         let models = catalog["models"].as_array().unwrap();
         assert_eq!(models.len(), 3);
+
+        // `pulled` carries the on-disk superset verbatim.
+        assert_eq!(catalog["pulled"], json!(["meta-llama/Llama-3-8B"]));
 
         // Base: kind=base, C present, no base back-pointer.
         assert_eq!(models[0]["model_id"], "meta-llama/Llama-3-8B");
@@ -363,7 +415,7 @@ mod tests {
             model_id: "b".into(),
             max_num_seqs: None,
         }];
-        let catalog = build_catalog(&loaded, None);
+        let catalog = build_catalog(&loaded, None, &[]);
         assert!(catalog["models"][0]["max_num_seqs"].is_null());
     }
 
@@ -379,14 +431,14 @@ mod tests {
                 base: "base".into(),
             },
         ];
-        let catalog = build_catalog(&loaded, Some(128));
+        let catalog = build_catalog(&loaded, Some(128), &[]);
         assert_eq!(concurrency_of(&catalog), Some(128));
         assert_eq!(model_ids_of(&catalog), vec!["base", "lora"]);
     }
 
     #[test]
     fn empty_probe_yields_empty_catalog() {
-        let catalog = build_catalog(&[], Some(64));
+        let catalog = build_catalog(&[], Some(64), &[]);
         assert_eq!(catalog["models"].as_array().unwrap().len(), 0);
         assert_eq!(concurrency_of(&catalog), None);
         assert!(model_ids_of(&catalog).is_empty());

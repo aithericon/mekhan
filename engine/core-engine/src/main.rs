@@ -515,7 +515,6 @@ async fn main() {
             registry: registry.clone(),
             metadata_kv: kv,
             activity_tracker: activity_tracker.clone(),
-            jetstream: jetstream.clone(),
         };
         let delete_route = axum::Router::new()
             .route(
@@ -1183,15 +1182,45 @@ struct NetDeletionState {
         Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     metadata_kv: async_nats::jetstream::kv::Store,
     activity_tracker: Option<Arc<ActivityTracker>>,
-    jetstream: async_nats::jetstream::Context,
 }
 
 /// DELETE /api/nets/{net_id} — properly terminate and clean up a net.
 ///
 /// Handles three cases:
 /// 1. Hot net (in registry): terminate with lifecycle event + cancel tasks.
-/// 2. Hibernated net (in KV but not registry): publish NetCancelled directly to NATS.
-/// 3. Not found: return 404.
+/// 2. Hibernated-but-active net (in KV with status Running/Created, but evicted
+///    from the registry): REHYDRATE it into a hot net, then terminate through the
+///    exact same path as Case 1.
+/// 3. Already terminal (completed/cancelled) or genuinely unknown: no-op cleanup
+///    or 404.
+///
+/// ## Why a hibernated active net MUST be rehydrated before cancel
+///
+/// `NetRegistry::terminate` runs `service.drain_finalizers()` BEFORE emitting
+/// `NetCancelled`, firing any `t_<id>_finally` finalizer to release a held lease.
+/// A leased net's success-path release (`t_<id>_exit`) is gated on the body
+/// completing, so a mid-run cancel never releases — the single held token sits in
+/// the pool net's `in_use` place forever (event-sourced → survives restart →
+/// permanently strands the runner/allocation). That is the strand bug fixed for
+/// HOT nets in 922dd9b4.
+///
+/// The drain can only release what it can SEE: it scans the in-memory marking for
+/// the parked held token. A hibernated net has been evicted from the registry, so
+/// its marking is not in memory. The previous Case 2 published `NetCancelled`
+/// straight to NATS WITHOUT rehydrating and WITHOUT draining — so a hibernated
+/// leased net skipped the finalizer entirely and re-stranded its lease.
+///
+/// The fix: call `get_or_create(&net_id)` to rehydrate. The store factory BLOCKS
+/// on hydration (`ready_rx.await`) before returning the stores, replaying the
+/// net's full NATS event log into the in-memory cache — so the reconstructed
+/// marking (including the parked held-lease token) is present. A woken net
+/// resumes in `RunMode::Running`, exactly as `GlobalSignalListener` wakes it.
+/// Once hot, the Case-1 block (which re-checks `get(&net_id).is_some()`) handles
+/// it uniformly: the datacenter pre-terminate hook + `terminate` → the finalizer
+/// drain sees the held token and journals the release ahead of `NetCancelled`.
+///
+/// Only Running/Created nets are rehydrated — never completed/cancelled/tombstoned
+/// nets, which have no held token to release and must not be resurrected.
 async fn delete_net_handler(
     axum::extract::State(state): axum::extract::State<NetDeletionState>,
     axum::extract::Path(net_id): axum::extract::Path<String>,
@@ -1199,7 +1228,40 @@ async fn delete_net_handler(
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    // Case 1: Hot net — terminate properly (emits NetCancelled, cancels tasks)
+    // Read the metadata KV ONCE up front. We need it both to decide whether a
+    // cold net is still active (→ rehydrate) and to drive the terminal/404 arms.
+    let meta = match state.metadata_kv.get(&net_id).await {
+        Ok(Some(entry)) => serde_json::from_slice::<NetMetadata>(&entry).ok(),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(net_id = %net_id, error = %e, "Failed to read metadata KV");
+            None
+        }
+    };
+
+    // Rehydrate a hibernated-but-active net so the finalizer drain below can find
+    // the parked held-lease token (see the doc comment above). After this, the
+    // Case-1 block handles it uniformly. We only rehydrate active nets, and only
+    // when they are not already hot, so this is a no-op for hot/terminal nets.
+    if state.registry.get(&net_id).is_none()
+        && matches!(
+            meta.as_ref().map(|m| &m.status),
+            Some(NetStatus::Running) | Some(NetStatus::Created)
+        )
+    {
+        tracing::info!(
+            net_id = %net_id,
+            "Rehydrating hibernated active net before cancel (so finalizer drain can \
+             release any held lease)"
+        );
+        // `get_or_create` is a sync fn; it internally uses `block_in_place` for
+        // the hydration wait — calling it from this async handler is fine (it is
+        // how the NATS signal listeners wake hibernated nets).
+        let _ = state.registry.get_or_create(&net_id);
+    }
+
+    // Case 1: Hot net (now includes a just-rehydrated hibernated active net) —
+    // terminate properly (drains finalizers, emits NetCancelled, cancels tasks).
     if state.registry.get(&net_id).is_some() {
         // docs/16 §8 — pre-terminate hook: release any cluster lease HELD on
         // behalf of this instance BEFORE we tear down the eval loop. `terminate`
@@ -1226,11 +1288,22 @@ async fn delete_net_handler(
                 if let Some(ref activity) = state.activity_tracker {
                     let _ = activity.remove(&net_id).await;
                 }
-                tracing::info!(net_id = %net_id, "Net deleted (was hot)");
+                tracing::info!(net_id = %net_id, "Net deleted (was hot or rehydrated)");
+                return StatusCode::NO_CONTENT.into_response();
+            }
+            // The net vanished between rehydrate/hot-check and terminate (a race
+            // with a natural completion or a concurrent cancel). `terminate`
+            // returns `Err("Net '<id>' not found")` in that case — treat it as
+            // idempotent success, matching the rest of this handler's philosophy.
+            Err(e) if e.contains("not found") => {
+                if let Some(ref activity) = state.activity_tracker {
+                    let _ = activity.remove(&net_id).await;
+                }
+                tracing::info!(net_id = %net_id, "Net already gone at terminate (idempotent)");
                 return StatusCode::NO_CONTENT.into_response();
             }
             Err(e) => {
-                tracing::error!(net_id = %net_id, error = %e, "Failed to terminate hot net");
+                tracing::error!(net_id = %net_id, error = %e, "Failed to terminate net");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     axum::Json(serde_json::json!({"error": format!("Failed to terminate: {}", e)})),
@@ -1240,65 +1313,15 @@ async fn delete_net_handler(
         }
     }
 
-    // Case 2 & 3: Check metadata KV for hibernated or completed nets
-    let meta = match state.metadata_kv.get(&net_id).await {
-        Ok(Some(entry)) => serde_json::from_slice::<NetMetadata>(&entry).ok(),
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!(net_id = %net_id, error = %e, "Failed to read metadata KV");
-            None
-        }
-    };
-
+    // Not hot (and not an active net we could rehydrate). Resolve via the
+    // metadata KV read at the top of the handler.
     match meta {
-        Some(meta) if meta.status == NetStatus::Running || meta.status == NetStatus::Created => {
-            // Case 2: Hibernated net — publish NetCancelled directly to NATS
-            let event = petri_domain::DomainEvent::NetCancelled {
-                net_id: net_id.clone(),
-                reason: Some("Deleted by user".to_string()),
-                cancelled_by: Some("engine-api".to_string()),
-            };
-            let persisted = petri_domain::PersistedEvent::new(0, event, None);
-            let subject = Subjects::for_event(&persisted.event, Some(&net_id));
-            let payload = match serde_json::to_vec(&persisted) {
-                Ok(p) => p,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        axum::Json(
-                            serde_json::json!({"error": format!("Serialization failed: {}", e)}),
-                        ),
-                    )
-                        .into_response();
-                }
-            };
-
-            match state.jetstream.publish(subject, payload.into()).await {
-                Ok(ack_future) => {
-                    if let Err(e) = ack_future.await {
-                        tracing::warn!(net_id = %net_id, error = %e, "NATS ACK failed for NetCancelled");
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(net_id = %net_id, error = %e, "Failed to publish NetCancelled");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        axum::Json(
-                            serde_json::json!({"error": format!("NATS publish failed: {}", e)}),
-                        ),
-                    )
-                        .into_response();
-                }
-            }
-
-            if let Some(ref activity) = state.activity_tracker {
-                let _ = activity.remove(&net_id).await;
-            }
-            tracing::info!(net_id = %net_id, "Net deleted (was hibernated)");
-            StatusCode::NO_CONTENT.into_response()
-        }
+        // An active net that we failed to make hot above would have been caught
+        // by the Case-1 block; reaching here with an active status means the net
+        // could not be rehydrated (vanished) — idempotent no-op cleanup.
         Some(_) => {
-            // Already completed/cancelled — clean up any leftover activity entry
+            // Already completed/cancelled (or raced away) — clean up any leftover
+            // activity entry.
             if let Some(ref activity) = state.activity_tracker {
                 let _ = activity.remove(&net_id).await;
             }

@@ -68,6 +68,7 @@
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<NavMenu label="Library" items={libraryItems} testid="nav-library" />
 			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
+			<Button variant="ghost" size="sm" href="/models" data-testid="nav-models">Models</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
 			<NavMenu label="Internals" items={internalItems} testid="nav-internals" muted />
 			<div class="ml-auto flex items-center gap-1">

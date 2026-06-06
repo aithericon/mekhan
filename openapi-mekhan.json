@@ -2436,6 +2436,28 @@
         }
       }
     },
+    "/api/v1/fleet/engines": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/fleet/engines` — per-node Base/adapter inventory + per-engine\n`max_num_seqs` + headroom.",
+        "description": "Reads [`serving_runner_inventory`] (the `presence ∩ catalog` join, retaining\nthe runner→entries mapping), groups each node's entries by base, reads the\n`max_num_seqs` off Base entries, attaches LoRAs via the `base` back-pointer,\nand layers headroom from the router in-flight gauge (fail-soft to full\nbudget). Workspace-scoped, session/human authed.",
+        "operationId": "list_fleet_engines",
+        "responses": {
+          "200": {
+            "description": "Per-node engine inventory: base engines, per-engine C, loaded LoRA adapters, headroom",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetEnginesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/folders/{id}": {
       "delete": {
         "tags": [
@@ -3703,6 +3725,53 @@
         }
       }
     },
+    "/api/v1/model-catalog/{source}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/model-catalog/{source}` — browse an upstream OFFICIAL catalog\n(`ollama` scrape | `huggingface` JSON API). Session/human authed; metadata\nonly (no inference, no workspace data). Cached ~10 min; fail-soft to empty.",
+        "operationId": "browse_model_catalog",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "Catalog source: `ollama` or `huggingface`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free-text search; empty / absent ⇒ the upstream's popular/trending list.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upstream model browse results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown catalog source"
+          }
+        }
+      }
+    },
     "/api/v1/models": {
       "get": {
         "tags": [
@@ -3944,6 +4013,30 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/node-replicas": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/node-replicas` — list every node-pool replica row in the workspace.",
+        "operationId": "list_node_replicas",
+        "responses": {
+          "200": {
+            "description": "Per-pool node-replica reconciliation rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeReplicaRow"
+                  }
                 }
               }
             }
@@ -6124,6 +6217,52 @@
           },
           "404": {
             "description": "Runner not found or no stored nats_public_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runners/{runner_id}/model-commands": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/runners/{runner_id}/model-commands` — publish a load/unload\ncommand to a runner's model agent. Body is the wire [`ModelCommand`]\n(`{kind, target:{Base|Lora}}`). `202`: accepted (fire-and-forget,\ndesired-state — the agent applies it and re-publishes its catalog).",
+        "operationId": "publish_runner_model_command",
+        "parameters": [
+          {
+            "name": "runner_id",
+            "in": "path",
+            "description": "target runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Command published to the runner's model agent"
+          },
+          "500": {
+            "description": "NATS publish failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -10909,6 +11048,64 @@
           "collection"
         ]
       },
+      "CatalogModel": {
+        "type": "object",
+        "description": "One model in an upstream catalog browse result.",
+        "required": [
+          "id",
+          "name",
+          "source"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capability tags (Ollama `tools`/`vision`/…; HF pipeline/library tags)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A one-line blurb when the upstream provides one."
+          },
+          "id": {
+            "type": "string",
+            "description": "The provision id — the exact string a `Pull`/`Load` command takes. Ollama\nlibrary slug (`llama3.2`) or HF repo id (`meta-llama/Llama-3.2-1B`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human display name (== `id` for HF; the title for Ollama)."
+          },
+          "pulls": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Popularity hint — Ollama's \"5M\" pull count, or HF's download integer as a\nstring. Display-only."
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Parameter-size tags the upstream advertises (Ollama `1b`/`3b`/…); empty for\nHF (which exposes no clean size facet here)."
+          },
+          "source": {
+            "type": "string",
+            "description": "Which catalog this came from (`ollama` | `huggingface`)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Link to the model's upstream page."
+          }
+        }
+      },
       "CatalogTrigger": {
         "type": "object",
         "properties": {
@@ -13641,6 +13838,27 @@
           }
         }
       },
+      "FleetEnginesResponse": {
+        "type": "object",
+        "description": "`GET /api/v1/fleet/engines` response — the per-node engine inventory.",
+        "required": [
+          "headroom_from_router",
+          "nodes"
+        ],
+        "properties": {
+          "headroom_from_router": {
+            "type": "boolean",
+            "description": "Whether per-engine headroom was computed against the router in-flight\ngauge (`true`) or degraded to the full budget because the router poll is\nunconfigured/unreachable (`false`). Operator hint, not a hard error."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeInventory"
+            },
+            "description": "Live nodes with their base engines."
+          }
+        }
+      },
       "FleetMetrics": {
         "type": "object",
         "description": "`GET /api/v1/clusters/metrics` response — one [`ClusterMetrics`] per cluster\nthe caller's workspace touched in-window, plus a `fleet_total` rollup over\nthe same windowed, workspace-scoped row set.",
@@ -15173,6 +15391,83 @@
           }
         }
       },
+      "LoadTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A base engine, addressed by its served model id.",
+            "required": [
+              "Base"
+            ],
+            "properties": {
+              "Base": {
+                "type": "object",
+                "description": "A base engine, addressed by its served model id.",
+                "required": [
+                  "model_id"
+                ],
+                "properties": {
+                  "model_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A LoRA adapter attached to `base`. `source_uri` is where to fetch the\nadapter weights from (optional on unload).",
+            "required": [
+              "Lora"
+            ],
+            "properties": {
+              "Lora": {
+                "type": "object",
+                "description": "A LoRA adapter attached to `base`. `source_uri` is where to fetch the\nadapter weights from (optional on unload).",
+                "required": [
+                  "adapter_id",
+                  "base"
+                ],
+                "properties": {
+                  "adapter_id": {
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "source_uri": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —\n`C` (`max_num_seqs`) is per-engine (per base), shared across that base's\nadapters.\n\nWIRE-IDENTICAL mirror of `executor_llm::model_command::LoadTarget` (externally\ntagged enum — `{\"Base\":{...}}` / `{\"Lora\":{...}}`)."
+      },
+      "LoadedAdapter": {
+        "type": "object",
+        "description": "One LoRA adapter loaded on a base engine (the adapter half of the base↔LoRA\ngraph, attached via each adapter's `base` back-pointer).",
+        "required": [
+          "model_id"
+        ],
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "description": "The adapter's model id (the router routes on this)."
+          },
+          "source_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The adapter-weights URI the load command supplied (e.g. `hf://...`), when\nthe runner reported one."
+          }
+        }
+      },
       "LogRow": {
         "type": "object",
         "required": [
@@ -15415,6 +15710,101 @@
             }
           }
         }
+      },
+      "ModelCatalogResponse": {
+        "type": "object",
+        "description": "`GET /api/v1/model-catalog/{source}` response.",
+        "required": [
+          "source",
+          "models",
+          "cached"
+        ],
+        "properties": {
+          "cached": {
+            "type": "boolean",
+            "description": "`true` when these results were served from the in-process cache."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A fail-soft error hint when the upstream fetch/parse failed (results then\nempty or stale-cached). `None` on a clean fetch."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogModel"
+            },
+            "description": "Browse results (possibly empty on an upstream error — see `error`)."
+          },
+          "source": {
+            "type": "string",
+            "description": "The catalog source echoed back."
+          }
+        }
+      },
+      "ModelCommand": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Make `target` resident: LoRA → load adapter; Base → wake.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "load"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Make `target` absent: LoRA → unload adapter; Base → sleep.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unload"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "**Provision** `target` to disk without making it resident (Ollama\n`/api/pull`; a no-op capability gap on vLLM, whose base is fixed at launch).\nCarries a `Base` target — a later `Load` then warms it cheaply.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "pull"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          }
+        ],
+        "description": "A load/unload command for the node agent. `kind` selects the verb; `target` is\nwhat to act on (a base engine or a LoRA adapter).\n\nWIRE-IDENTICAL mirror of `executor_llm::model_command::ModelCommand`. Serde\ntag = `kind`, snake_case (`\"load\"` / `\"unload\"`); the parity test below locks\nthe exact JSON against the executor's documented envelope."
       },
       "ModelEntry": {
         "type": "object",
@@ -15845,6 +16235,165 @@
           "wireName": {
             "type": "string",
             "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
+      "NodeEngine": {
+        "type": "object",
+        "description": "One base engine live on a node — a base model + its per-engine concurrency\nbudget (`C`), the LoRA adapters it currently serves, and its computed\nheadroom.",
+        "required": [
+          "base",
+          "loaded_adapters"
+        ],
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "The base model id this engine serves."
+          },
+          "headroom": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Free slots = `max_num_seqs − Σ(base + adapters in-flight)`, floored at 0.\n`None` when `max_num_seqs` is unknown (no budget to subtract against).\nFail-soft: when the router in-flight poll is unconfigured/unreachable,\nthis is the FULL budget (`= max_num_seqs`).",
+            "minimum": 0
+          },
+          "loaded_adapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoadedAdapter"
+            },
+            "description": "LoRA adapters loaded on this base engine."
+          },
+          "max_num_seqs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-engine concurrency `C` (vLLM `--max-num-seqs`), SHARED across this\nbase's LoRA adapters. `None` when the runner advertised the base without a\nconfigured budget (older agents / partial catalogs).",
+            "minimum": 0
+          }
+        }
+      },
+      "NodeInventory": {
+        "type": "object",
+        "description": "One live node (runner) and the base engines it is serving.",
+        "required": [
+          "runner_id",
+          "engines"
+        ],
+        "properties": {
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeEngine"
+            },
+            "description": "The base engines live on this node."
+          },
+          "pulled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Models **provisioned to disk** on this node but NOT resident — loadable\nwithout a re-download (the `pulled` superset minus the resident base\nengines above). The runner-local \"ready to load\" browser; empty for a vLLM\nnode (its base is fixed at launch, so provisioned == resident)."
+          },
+          "runner_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The runner (node) id."
+          }
+        }
+      },
+      "NodeReplicaRow": {
+        "type": "object",
+        "description": "One `node_replicas` row — Loop 1's durable reconciliation target + Control-Plane\nread. `desired_nodes`/`observed_nodes`/`observed_slots` are stored `INT`; the\nloop works in `u32` and converts at the edges.\n\n`observed_nodes` is the live head-count of present pool nodes; `observed_slots`\nis the C-weighted aggregate (`Σ present-node C`) from FleetLiveness — the\ncapacity Loop 1 scales against (DERIVED-B). Both are roster-driven; the outcome\nprojector NEVER writes them.",
+        "required": [
+          "id",
+          "workspace_id",
+          "pool_resource_id",
+          "datacenter_resource_id",
+          "desired_nodes",
+          "observed_nodes",
+          "observed_slots",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Resolved `datacenter` resource UUID (the pool carries an alias; the loop\nresolves it before the upsert)."
+          },
+          "desired_nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Last desired NODE count the loop drove."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_actuated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Anchors the durable cooldown gate (survives a mekhan restart)."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native job NAME registered on the cluster (Nomad service-job id for the\ngeneric engine fleet). `None` until first actuation."
+          },
+          "observed_nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live count of present pool nodes (head-count from FleetLiveness)."
+          },
+          "observed_slots": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live C-weighted capacity (`Σ present-node C`) from FleetLiveness — the\naggregate Loop 1 scales against (DERIVED-B)."
+          },
+          "pool_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `node_pool` resource this row reconciles (UNIQUE — one row/pool)."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone recorded for the Control-Plane read + audit (the SINGLE\nzone source — DERIVED-A)."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of `status::*`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -18597,6 +19146,13 @@
               "$ref": "#/components/schemas/ModelEntry"
             },
             "description": "Self-hosted LLM models this runner's node-agent currently serves (docs/29).\nThe live half of the loaded-set AND-gate. Additive JSONB field — a runner\nthat serves no models simply reports an empty list."
+          },
+          "pulled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`\nsuperset; loadable WITHOUT a re-download). A SUPERSET that includes the\nresident `models` ids — the model-pool read excludes already-resident bases\nso the operator sees \"provisioned, ready to load\" distinctly from\n\"serving\". Additive JSONB field; empty for non-model runners."
           },
           "services": {
             "type": "array",

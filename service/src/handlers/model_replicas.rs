@@ -21,7 +21,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use aithericon_resources::types::ModelAutoscalePolicy;
+use aithericon_resources::types::{ModelAutoscalePolicy, NodePoolPolicy};
 
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -128,20 +128,40 @@ pub async fn scale_model_replica(
     let policy: ModelAutoscalePolicy = serde_json::from_value(public_config)
         .map_err(|e| ApiError::internal(format!("unparseable model_policy config: {e}")))?;
 
-    // Resolve the datacenter alias → resource uuid.
+    // After the docs/31 OQ-1 reframe the model_policy no longer carries a
+    // datacenter alias — it references a `node_pool` (which owns the datacenter).
+    // Resolve the pool config, then its datacenter alias → resource uuid.
+    let pool_cfg: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT rv.public_config FROM resources r \
+         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.workspace_id = $1 AND r.resource_type = 'node_pool' AND r.path = $2 \
+           AND r.deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(&policy.node_pool)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("node_pool lookup: {e}")))?;
+    let (pool_config,) = pool_cfg.ok_or_else(|| {
+        ApiError::not_found(format!("node_pool alias '{}' not found", policy.node_pool))
+    })?;
+    let pool: NodePoolPolicy = serde_json::from_value(pool_config)
+        .map_err(|e| ApiError::internal(format!("unparseable node_pool config: {e}")))?;
+
+    // Resolve the pool's datacenter alias → resource uuid.
     let dc: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM resources WHERE workspace_id = $1 AND resource_type = 'datacenter' \
            AND path = $2 AND deleted_at IS NULL",
     )
     .bind(workspace_id)
-    .bind(&policy.datacenter_resource_id)
+    .bind(&pool.datacenter_resource_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiError::internal(format!("datacenter alias lookup: {e}")))?;
     let dc_uuid = dc.map(|(id,)| id).ok_or_else(|| {
         ApiError::not_found(format!(
             "datacenter alias '{}' not found",
-            policy.datacenter_resource_id
+            pool.datacenter_resource_id
         ))
     })?;
 

@@ -26,6 +26,9 @@
 
 pub mod actuate;
 pub mod demand;
+pub mod node_actuate;
+pub mod observe;
+pub mod placement;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,14 +39,17 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use aithericon_resources::types::ModelAutoscalePolicy;
+use aithericon_resources::types::NodePoolPolicy;
 
-use crate::handlers::model_pool::serving_runner_counts;
-use crate::models::model_replicas::{compute_target, in_cooldown, status, ModelReplicaRow};
+use crate::fleet::FleetLiveness;
+use crate::models::model_replicas::in_cooldown;
+use crate::models::node_replicas::{compute_node_target, NodeReplicaRow};
+use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
 use crate::runners_presence::RunnerPresence;
 
 use self::demand::DemandSource;
+use self::observe::pool_serving_capacity;
 
 /// Reconcile cadence. Short enough that a manual scale POST takes effect quickly;
 /// long enough that a stuck datacenter doesn't hammer the engine.
@@ -55,16 +61,27 @@ const RECONCILE_INTERVAL_SECS: u64 = 15;
 pub fn spawn_autoscaler(
     db: PgPool,
     petri: PetriClient,
+    nats: MekhanNats,
     runner_presence: RunnerPresence,
+    fleet: FleetLiveness,
     demand: Option<Arc<dyn DemandSource>>,
 ) {
-    tokio::spawn(run_autoscaler(db, petri, runner_presence, demand));
+    tokio::spawn(run_autoscaler(
+        db,
+        petri,
+        nats,
+        runner_presence,
+        fleet,
+        demand,
+    ));
 }
 
 async fn run_autoscaler(
     db: PgPool,
     petri: PetriClient,
+    nats: MekhanNats,
     runner_presence: RunnerPresence,
+    fleet: FleetLiveness,
     demand: Option<Arc<dyn DemandSource>>,
 ) {
     let mut tick = tokio::time::interval(Duration::from_secs(RECONCILE_INTERVAL_SECS));
@@ -80,186 +97,292 @@ async fn run_autoscaler(
 
     loop {
         tick.tick().await;
-        if let Err(e) = reconcile_once(&db, &petri, &runner_presence, demand.as_deref()).await {
+        if let Err(e) =
+            reconcile_once(&db, &petri, &nats, &runner_presence, &fleet, demand.as_deref()).await
+        {
             tracing::warn!("autoscaler reconcile tick failed: {e}");
         }
     }
 }
 
-/// One reconcile pass over every `model_policy` resource in every workspace.
+/// One reconcile pass. Loop 1 (node-fleet capacity, docs/31 Phase 2) runs FIRST so
+/// the node-provision demand it raises is observable by Loop 2; then Loop 2 (model
+/// placement, docs/31 Phase 3) walks the cheapest-first cascade — adapter-load →
+/// sleep/wake → raise-node-demand → dedicated-job-fallback — per `model_policy`
+/// with demand. Both passes fail-soft as a whole (one pass's error never kills the
+/// other); only a setup `sqlx::Error` kills the tick.
 async fn reconcile_once(
     db: &PgPool,
     petri: &PetriClient,
+    nats: &MekhanNats,
     runner_presence: &RunnerPresence,
+    fleet: &FleetLiveness,
     demand: Option<&dyn DemandSource>,
 ) -> Result<(), sqlx::Error> {
-    // (policy_resource_id, workspace_id, public_config) for every live model_policy.
-    let policies: Vec<(Uuid, Uuid, Value)> = sqlx::query_as(
-        "SELECT r.id, r.workspace_id, rv.public_config \
+    // LOOP 1 — node-fleet capacity scaler. Fail-soft as a whole: a node-pool setup
+    // error must NOT kill the placement pass below.
+    if let Err(e) = reconcile_node_pools(db, petri, runner_presence, fleet, demand).await {
+        tracing::warn!("node-pool reconcile pass failed (placement pass continues): {e}");
+    }
+
+    // LOOP 2 — model placement (the keystone). DEMOTES the per-model Nomad job to
+    // the `dedicated=true` fallback; the default is now packing onto the node fleet
+    // via the load/unload publisher.
+    if let Err(e) = placement::reconcile_placement(db, petri, nats, runner_presence, demand).await {
+        tracing::warn!("placement reconcile pass failed: {e}");
+    }
+
+    Ok(())
+}
+
+// ── Loop 1: node-fleet capacity scaler (docs/31 Phase 2) ─────────────────────
+
+/// One reconcile pass over every `node_pool` capacity resource in every workspace
+/// (docs/31 Loop 1). For each pool:
+///
+/// 1. Resolve the datacenter alias → resource uuid.
+/// 2. OBSERVE the live C-weighted capacity ([`pool_serving_capacity`], DERIVED-B):
+///    `(observed_nodes, observed_slots)` over present pool-tagged runners.
+/// 3. Compute the DESIRED node count: the aggregate model demand routed to this
+///    pool, converted to C-units (`ceil(Σ demand / max_num_seqs)`) and clamped
+///    `[min_nodes, max_nodes]` ([`compute_node_target`]). Gate on the durable
+///    cooldown anchored on `last_actuated_at`.
+/// 4. If desired ≠ observed_nodes and outside cooldown, ACTUATE via
+///    [`node_actuate::actuate_node_pool`] (a generic engine fleet, NO `model_id`).
+/// 5. Upsert the `node_replicas` row (durable target + Control-Plane read).
+///
+/// Per-pool failures fail-soft (recorded on the row + carry on). The aggregate
+/// model demand is summed from `model_policy` rows whose `node_pool` alias matches
+/// the pool's `resources.path`; on L1 (`demand = None`) the per-model demand is
+/// `None` and the pool scales purely off `min_nodes`.
+async fn reconcile_node_pools(
+    db: &PgPool,
+    petri: &PetriClient,
+    runner_presence: &RunnerPresence,
+    fleet: &FleetLiveness,
+    demand: Option<&dyn DemandSource>,
+) -> Result<(), sqlx::Error> {
+    // (pool_resource_id, workspace_id, alias_path, public_config) for every pool.
+    let pools: Vec<(Uuid, Uuid, String, Value)> = sqlx::query_as(
+        "SELECT r.id, r.workspace_id, r.path, rv.public_config \
          FROM resources r \
          JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.resource_type = 'model_policy' AND r.deleted_at IS NULL",
+         WHERE r.resource_type = 'node_pool' AND r.deleted_at IS NULL",
     )
     .fetch_all(db)
     .await?;
 
-    // Cache the per-workspace observed-count map so N policies in one workspace
-    // scan the runner catalogs once.
-    let mut counts_by_ws: HashMap<Uuid, HashMap<String, u32>> = HashMap::new();
+    // Cache the per-workspace pool→aggregate-demand map so N pools in one workspace
+    // scan the model_policy set + scrape demand once.
+    let mut demand_by_ws: HashMap<Uuid, HashMap<String, f64>> = HashMap::new();
 
-    for (policy_id, workspace_id, public_config) in policies {
-        let policy: ModelAutoscalePolicy = match serde_json::from_value(public_config) {
+    for (pool_id, workspace_id, alias_path, public_config) in pools {
+        let pool: NodePoolPolicy = match serde_json::from_value(public_config) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(%policy_id, "skipping unparseable model_policy: {e}");
+                tracing::warn!(%pool_id, "skipping unparseable node_pool: {e}");
                 continue;
             }
         };
 
-        // Compute the per-workspace observed-count map once per tick (the value
-        // is async, so this is an explicit Entry match rather than `or_insert_with`).
-        let counts = match counts_by_ws.entry(workspace_id) {
+        // Aggregate model demand (C-units) routed to each pool in this workspace,
+        // computed once per tick.
+        let demand_map = match demand_by_ws.entry(workspace_id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
-                let m = serving_runner_counts(db, runner_presence, workspace_id).await;
+                let m = aggregate_pool_demand(db, workspace_id, demand).await;
                 e.insert(m)
             }
         };
-        let observed = counts.get(&policy.model_id).copied().unwrap_or(0);
+        let pool_demand = demand_map.get(&alias_path).copied();
 
-        if let Err(e) = reconcile_policy(
+        if let Err(e) = reconcile_node_pool(
             db,
             petri,
+            runner_presence,
+            fleet,
             workspace_id,
-            policy_id,
-            &policy,
-            observed,
-            demand,
+            pool_id,
+            &alias_path,
+            &pool,
+            pool_demand,
         )
         .await
         {
-            // Fail-soft: record on the row + carry on.
-            tracing::warn!(%policy_id, model_id = %policy.model_id, "reconcile failed: {e}");
-            let _ = mark_failed(db, policy_id, workspace_id, &policy, observed, &e).await;
+            tracing::warn!(%pool_id, alias = %alias_path, "node-pool reconcile failed: {e}");
+            let _ = mark_node_failed(db, pool_id, workspace_id, &pool, &e).await;
         }
     }
     Ok(())
 }
 
-async fn reconcile_policy(
+/// Sum the per-model demand of every `model_policy` in `workspace_id`, bucketed by
+/// the pool alias each policy draws from (`node_pool`). On L1 (`demand = None`) the
+/// per-model demand is `None` → contributes 0, so the bucket holds `Σ 0 = 0.0` and
+/// the pool floors at `min_nodes`. A policy whose pool alias is empty is skipped.
+///
+/// The demand is the RAW per-model in-flight signal (the same one the model-policy
+/// pass uses); Loop 1 converts the SUM to a node count later via
+/// `ceil(Σ demand / max_num_seqs)`.
+async fn aggregate_pool_demand(
+    db: &PgPool,
+    workspace_id: Uuid,
+    demand: Option<&dyn DemandSource>,
+) -> HashMap<String, f64> {
+    let policies: Vec<(Value,)> = match sqlx::query_as(
+        "SELECT rv.public_config \
+         FROM resources r \
+         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.resource_type = 'model_policy' AND r.workspace_id = $1 AND r.deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(%workspace_id, "aggregate_pool_demand: model_policy load failed: {e}");
+            return HashMap::new();
+        }
+    };
+
+    use aithericon_resources::types::ModelAutoscalePolicy;
+    let mut buckets: HashMap<String, f64> = HashMap::new();
+    for (public_config,) in policies {
+        let policy: ModelAutoscalePolicy = match serde_json::from_value(public_config) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if policy.node_pool.trim().is_empty() {
+            continue;
+        }
+        let d = match demand {
+            Some(src) => src.demand_for(&policy.model_id).await.unwrap_or(0.0),
+            None => 0.0,
+        };
+        *buckets.entry(policy.node_pool.clone()).or_insert(0.0) += d;
+    }
+    buckets
+}
+
+/// Reconcile ONE `node_pool` to its desired node Count.
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_node_pool(
     db: &PgPool,
     petri: &PetriClient,
+    runner_presence: &RunnerPresence,
+    fleet: &FleetLiveness,
     workspace_id: Uuid,
-    policy_id: Uuid,
-    policy: &ModelAutoscalePolicy,
-    observed: u32,
-    demand: Option<&dyn DemandSource>,
+    pool_id: Uuid,
+    alias_path: &str,
+    pool: &NodePoolPolicy,
+    pool_demand: Option<f64>,
 ) -> Result<(), String> {
-    // Resolve the datacenter ALIAS (policy config) → resource uuid.
+    // Resolve the datacenter ALIAS (pool config) → resource uuid.
     let dc_uuid: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM resources \
          WHERE workspace_id = $1 AND resource_type = 'datacenter' AND path = $2 AND deleted_at IS NULL",
     )
     .bind(workspace_id)
-    .bind(&policy.datacenter_resource_id)
+    .bind(&pool.datacenter_resource_id)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("resolve datacenter alias: {e}"))?;
-    let dc_uuid = dc_uuid.map(|(id,)| id).ok_or_else(|| {
-        format!(
-            "datacenter alias '{}' not found",
-            policy.datacenter_resource_id
-        )
-    })?;
+    let dc_uuid = dc_uuid
+        .map(|(id,)| id)
+        .ok_or_else(|| format!("datacenter alias '{}' not found", pool.datacenter_resource_id))?;
 
     // Existing row (the durable reconciliation state).
-    let existing: Option<ModelReplicaRow> =
-        sqlx::query_as("SELECT * FROM model_replicas WHERE policy_resource_id = $1")
-            .bind(policy_id)
+    let existing: Option<NodeReplicaRow> =
+        sqlx::query_as("SELECT * FROM node_replicas WHERE pool_resource_id = $1")
+            .bind(pool_id)
             .fetch_optional(db)
             .await
-            .map_err(|e| format!("load model_replicas row: {e}"))?;
+            .map_err(|e| format!("load node_replicas row: {e}"))?;
 
     let now = Utc::now();
-    // Demand: L1 → None. L2 calls the source for the reactive modes.
-    let demand_val = match demand {
-        Some(src) => src.demand_for(&policy.model_id).await,
-        None => None,
+
+    // OBSERVED: the C-weighted capacity from FleetLiveness (DERIVED-B). The scaler
+    // tracks node Count against `observed_nodes`; `observed_slots` is recorded as
+    // the live capacity for the Control-Plane read.
+    let obs = pool_serving_capacity(fleet, runner_presence, alias_path).await;
+
+    // DESIRED node count: aggregate demand (C-units) / per-node C, ceil'd + clamped.
+    // `max_num_seqs == 0` would divide-by-zero — treat as "no C declared" → the
+    // pool can only floor at `min_nodes` (demand contributes nothing).
+    let demand_nodes = match pool_demand {
+        Some(d) if pool.max_num_seqs > 0 => Some(d / pool.max_num_seqs as f64),
+        // No demand signal (or no declared C): fall back to the `min_nodes` floor
+        // by passing demand 0.0 (clamp lifts it to min_nodes).
+        _ => Some(0.0),
     };
-    // Manual override = the row's desired_count (seeded from the policy on first
-    // run; the scale endpoint writes it). Only consulted in manual mode.
-    let manual_override = existing.as_ref().map(|r| r.desired_count.max(0) as u32);
-    let target = compute_target(policy, demand_val, manual_override);
+    let target = compute_node_target(pool, demand_nodes, None);
 
     let prev_actuated = existing.as_ref().and_then(|r| r.last_actuated_at);
-    let prev_desired = existing.as_ref().map(|r| r.desired_count.max(0) as u32);
-    let cooled = in_cooldown(prev_actuated, policy.cooldown_secs, now);
+    let prev_desired = existing.as_ref().map(|r| r.desired_nodes.max(0) as u32);
+    let cooled = in_cooldown(prev_actuated, pool.cooldown_secs, now);
 
-    // Decide the intended row state + whether to actuate this tick.
-    struct Decision {
+    struct NodeDecision {
         desired: u32,
         status: &'static str,
         actuate: bool,
         last_actuated_at: Option<DateTime<Utc>>,
     }
+    use crate::models::node_replicas::status as nstatus;
 
     let decision = match target {
-        // No decision (unknown mode, or a reactive mode with no demand on L1).
         None => {
             if existing.is_none() {
-                // Nothing to persist for an undecidable policy with no row yet.
                 return Ok(());
             }
-            Decision {
+            NodeDecision {
                 desired: prev_desired.unwrap_or(0),
                 status: existing
                     .as_ref()
-                    .map(|r| leak_status(&r.status))
-                    .unwrap_or(status::STOPPED),
+                    .map(|r| leak_node_status(&r.status))
+                    .unwrap_or(nstatus::STOPPED),
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
         }
-        Some(t) if t == observed => {
+        Some(t) if t == obs.nodes => {
             // Steady: no actuation, refresh observed + settle status.
-            Decision {
+            NodeDecision {
                 desired: t,
                 status: if t == 0 {
-                    status::STOPPED
+                    nstatus::STOPPED
                 } else {
-                    status::ACTIVE
+                    nstatus::ACTIVE
                 },
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
         }
         Some(t) if cooled => {
-            // Want to change but inside the cooldown window: defer; just refresh
-            // observed, keep prior desired/status/last_actuated.
-            Decision {
+            // Want to change but inside the cooldown window: defer; refresh observed.
+            NodeDecision {
                 desired: prev_desired.unwrap_or(t),
                 status: existing
                     .as_ref()
-                    .map(|r| leak_status(&r.status))
-                    .unwrap_or(status::PROVISIONING),
+                    .map(|r| leak_node_status(&r.status))
+                    .unwrap_or(nstatus::PROVISIONING),
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
         }
         Some(t) => {
-            // Actuate. target==0 with nothing running is already stopped (no net).
             let (st, actuate) = if t == 0 {
-                if observed == 0 {
-                    (status::STOPPED, false)
+                if obs.nodes == 0 {
+                    (nstatus::STOPPED, false)
                 } else {
-                    (status::DRAINING, true)
+                    (nstatus::DRAINING, true)
                 }
-            } else if observed >= 1 {
-                (status::SCALING, true)
+            } else if obs.nodes >= 1 {
+                (nstatus::SCALING, true)
             } else {
-                (status::PROVISIONING, true)
+                (nstatus::PROVISIONING, true)
             };
-            Decision {
+            NodeDecision {
                 desired: t,
                 status: st,
                 actuate,
@@ -268,36 +391,34 @@ async fn reconcile_policy(
         }
     };
 
-    // Upsert the row to the intended state (RETURNING id for the net key).
-    let row = upsert_row(
+    let row = upsert_node_row(
         db,
         workspace_id,
-        policy_id,
-        policy,
+        pool_id,
+        pool,
         dc_uuid,
         decision.desired,
-        observed,
+        obs.nodes,
+        obs.slots,
         decision.status,
         decision.last_actuated_at,
     )
     .await
-    .map_err(|e| format!("upsert model_replicas row: {e}"))?;
+    .map_err(|e| format!("upsert node_replicas row: {e}"))?;
 
     if decision.actuate {
-        // An actuation is an EVENT — discriminate the net id by this actuation's
-        // monotonic stamp so the engine re-seeds + re-fires the one-shot net
-        // (a stable-per-row id never re-fired → the P4-L1 scale/teardown no-op).
-        // `decision.last_actuated_at` is `Some(now)` whenever `actuate` is true.
+        // Generation idiom (verbatim from the model pass): a fresh net id per
+        // actuation re-seeds + re-fires `t_stage` (the `e16db353` fix).
         let generation = decision.last_actuated_at.unwrap_or(now).timestamp_millis();
         let prev_generation = prev_actuated.map(|t| t.timestamp_millis());
-        match actuate::actuate_replica(
+        match node_actuate::actuate_node_pool(
             db,
             petri,
             workspace_id,
             row.id,
             generation,
             prev_generation,
-            policy,
+            pool,
             dc_uuid,
             decision.desired,
         )
@@ -305,27 +426,26 @@ async fn reconcile_policy(
         {
             Ok(slug) => {
                 sqlx::query(
-                    "UPDATE model_replicas SET replica_slug = $2, last_error = NULL, updated_at = NOW() \
+                    "UPDATE node_replicas SET node_slug = $2, last_error = NULL, updated_at = NOW() \
                      WHERE id = $1",
                 )
                 .bind(row.id)
                 .bind(&slug)
                 .execute(db)
                 .await
-                .map_err(|e| format!("record replica slug: {e}"))?;
+                .map_err(|e| format!("record node slug: {e}"))?;
             }
             Err(e) => {
-                // Deploy / fail-closed refusal: record on the row, don't strand.
                 sqlx::query(
-                    "UPDATE model_replicas SET status = 'failed', last_error = $2, updated_at = NOW() \
+                    "UPDATE node_replicas SET status = 'failed', last_error = $2, updated_at = NOW() \
                      WHERE id = $1",
                 )
                 .bind(row.id)
                 .bind(e.to_string())
                 .execute(db)
                 .await
-                .map_err(|e| format!("record actuation failure: {e}"))?;
-                tracing::warn!(%policy_id, "actuation failed: {e}");
+                .map_err(|e| format!("record node actuation failure: {e}"))?;
+                tracing::warn!(%pool_id, "node-pool actuation failed: {e}");
             }
         }
     }
@@ -333,44 +453,47 @@ async fn reconcile_policy(
     Ok(())
 }
 
-/// Map a stored status string back onto the `'static` set (defensive — an
-/// unexpected stored value settles to `provisioning`).
-fn leak_status(s: &str) -> &'static str {
+/// Map a stored node-pool status string back onto the `'static` set (defensive).
+fn leak_node_status(s: &str) -> &'static str {
+    use crate::models::node_replicas::status as nstatus;
     match s {
-        status::PROVISIONING => status::PROVISIONING,
-        status::ACTIVE => status::ACTIVE,
-        status::SCALING => status::SCALING,
-        status::DRAINING => status::DRAINING,
-        status::STOPPED => status::STOPPED,
-        status::FAILED => status::FAILED,
-        _ => status::PROVISIONING,
+        nstatus::PROVISIONING => nstatus::PROVISIONING,
+        nstatus::ACTIVE => nstatus::ACTIVE,
+        nstatus::SCALING => nstatus::SCALING,
+        nstatus::DRAINING => nstatus::DRAINING,
+        nstatus::STOPPED => nstatus::STOPPED,
+        nstatus::FAILED => nstatus::FAILED,
+        _ => nstatus::PROVISIONING,
     }
 }
 
+/// Upsert a `node_replicas` row to the intended state. Writes `desired_nodes` +
+/// the FleetLiveness-driven `observed_nodes`/`observed_slots` every tick (DERIVED-B
+/// — the projector never touches observed).
 #[allow(clippy::too_many_arguments)]
-async fn upsert_row(
+async fn upsert_node_row(
     db: &PgPool,
     workspace_id: Uuid,
-    policy_id: Uuid,
-    policy: &ModelAutoscalePolicy,
+    pool_id: Uuid,
+    pool: &NodePoolPolicy,
     dc_uuid: Uuid,
     desired: u32,
-    observed: u32,
+    observed_nodes: u32,
+    observed_slots: u32,
     status: &str,
     last_actuated_at: Option<DateTime<Utc>>,
-) -> Result<ModelReplicaRow, sqlx::Error> {
-    let residency =
-        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
-    sqlx::query_as::<_, ModelReplicaRow>(
-        "INSERT INTO model_replicas \
-            (workspace_id, policy_resource_id, model_id, datacenter_resource_id, \
-             desired_count, observed_count, status, residency_zone, last_actuated_at) \
+) -> Result<NodeReplicaRow, sqlx::Error> {
+    let residency = (!pool.residency_zone.trim().is_empty()).then(|| pool.residency_zone.clone());
+    sqlx::query_as::<_, NodeReplicaRow>(
+        "INSERT INTO node_replicas \
+            (workspace_id, pool_resource_id, datacenter_resource_id, \
+             desired_nodes, observed_nodes, observed_slots, status, residency_zone, last_actuated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-         ON CONFLICT (policy_resource_id) DO UPDATE SET \
-            model_id = EXCLUDED.model_id, \
+         ON CONFLICT (pool_resource_id) DO UPDATE SET \
             datacenter_resource_id = EXCLUDED.datacenter_resource_id, \
-            desired_count = EXCLUDED.desired_count, \
-            observed_count = EXCLUDED.observed_count, \
+            desired_nodes = EXCLUDED.desired_nodes, \
+            observed_nodes = EXCLUDED.observed_nodes, \
+            observed_slots = EXCLUDED.observed_slots, \
             status = EXCLUDED.status, \
             residency_zone = EXCLUDED.residency_zone, \
             last_actuated_at = EXCLUDED.last_actuated_at, \
@@ -378,11 +501,11 @@ async fn upsert_row(
          RETURNING *",
     )
     .bind(workspace_id)
-    .bind(policy_id)
-    .bind(&policy.model_id)
+    .bind(pool_id)
     .bind(dc_uuid)
     .bind(desired as i32)
-    .bind(observed as i32)
+    .bind(observed_nodes as i32)
+    .bind(observed_slots as i32)
     .bind(status)
     .bind(residency)
     .bind(last_actuated_at)
@@ -390,30 +513,28 @@ async fn upsert_row(
     .await
 }
 
-/// Best-effort failure record when a policy can't be reconciled at all (e.g. the
-/// datacenter alias is gone). Keeps `desired`/`last_actuated_at` at their prior
-/// values (a fresh policy with no row stays unpersisted).
-async fn mark_failed(
+/// Best-effort failure record when a node_pool can't be reconciled at all (e.g. the
+/// datacenter alias is gone). Best-effort — does NOT create the row, and
+/// does NOT touch `observed_nodes`/`observed_slots`.
+async fn mark_node_failed(
     db: &PgPool,
-    policy_id: Uuid,
+    pool_id: Uuid,
     workspace_id: Uuid,
-    policy: &ModelAutoscalePolicy,
-    observed: u32,
+    pool: &NodePoolPolicy,
     error: &str,
 ) -> Result<(), sqlx::Error> {
-    let residency =
-        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
+    let _residency =
+        (!pool.residency_zone.trim().is_empty()).then(|| pool.residency_zone.clone());
     sqlx::query(
-        "UPDATE model_replicas \
-         SET status = 'failed', observed_count = $3, last_error = $4, updated_at = NOW() \
-         WHERE policy_resource_id = $1 AND workspace_id = $2",
+        "UPDATE node_replicas \
+         SET status = 'failed', last_error = $3, updated_at = NOW() \
+         WHERE pool_resource_id = $1 AND workspace_id = $2",
     )
-    .bind(policy_id)
+    .bind(pool_id)
     .bind(workspace_id)
-    .bind(observed as i32)
     .bind(error)
     .execute(db)
     .await?;
-    let _ = residency; // residency recorded on the success path's upsert.
     Ok(())
 }
+

@@ -22,6 +22,7 @@ pub mod petri;
 pub mod process;
 pub mod projections;
 pub mod query;
+pub mod runner_commands;
 pub mod runners_nats;
 pub mod runners_presence;
 pub mod s3;
@@ -229,6 +230,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::model_pool::transition_model
         ))
         .routes(routes!(handlers::model_pool::get_model))
+        // Model-pool reconciliation (docs/31 Phase 0) — the per-node engine
+        // inventory read model both autoscaler loops + the router consume:
+        // base engines, per-engine C, loaded LoRA adapters, headroom.
+        .routes(routes!(handlers::fleet_engines::list_fleet_engines))
         // Model-pool P4 (docs/29 §6') — replica-autoscaler Control-Plane read +
         // manual scale. The autoscaler loop reconciles `model_replicas` rows;
         // these surface them + the L1 manual desired override.
@@ -237,6 +242,15 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::model_replicas::scale_model_replica
         ))
         .routes(routes!(handlers::model_replicas::get_model_replica))
+        // docs/31 Loop 1 — node-pool replica Control-Plane read (read-only;
+        // node provisioning is deferred but the row state is surfaced).
+        .routes(routes!(handlers::node_replicas::list_node_replicas))
+        // Operator load/unload action — publishes a ModelCommand to a runner's
+        // model agent (vLLM admin / Ollama Metal runtime). Control plane only.
+        .routes(routes!(handlers::model_commands::publish_runner_model_command))
+        // Official model-catalog browse (the operator's model browser): scrapes
+        // ollama.com / calls the HF JSON API. Metadata only, cached ~10 min.
+        .routes(routes!(handlers::model_catalog::browse_model_catalog))
         // Model-pool P5 (docs/29 §7') — inference metering audit-ledger read.
         .routes(routes!(
             handlers::inference_metering::list_inference_requests

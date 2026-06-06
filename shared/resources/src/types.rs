@@ -164,15 +164,25 @@ pub struct ModelRegistry {
 /// provision when a non-empty `residency_zone` targets a non-Nomad datacenter
 /// (the Slurm leg ignores residency).
 ///
+/// ## Two-resource split (docs/31 OQ-1)
+///
+/// Engine PROVISIONING moved off this policy onto [`NodePoolPolicy`]: a
+/// `model_policy` is now a PURE per-model demand + residency-requirement policy
+/// that REFERENCES a `node_pool` by alias (`node_pool`) and packs onto its shared
+/// engine fleet. It no longer carries `datacenter_resource_id` / `replica_spec` /
+/// `min_replicas` / `max_replicas` — the pool owns datacenter, engine spec, and
+/// the node COUNT bounds. The placement controller (docs/31 Loop 2) decides where
+/// the model lands (adapter-load → sleep/wake → raise-node-demand → dedicated job).
+///
 /// ## Required vs optional
 ///
-/// `model_id`, `datacenter_resource_id`, `residency_zone`, `min_replicas`,
-/// `max_replicas`, `mode`, `replica_spec` are plain fields ⇒ REQUIRED on create
-/// (schemars `required` array). `desired_replicas` (L1 manual COUNT) and the L2
-/// reactive knobs (`scale_up_threshold`/`scale_down_threshold`/`cooldown_secs`)
-/// are `Option<T> + #[serde(default)]` ⇒ OPTIONAL. No `#[resource(secret)]`
-/// fields — all public config.
-#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+/// `model_id`, `residency_zone`, `mode`, `node_pool` are plain fields ⇒ REQUIRED
+/// on create (schemars `required` array). `desired_replicas` (the demand-slot
+/// ceiling for the dedicated fallback), the L2 reactive knobs
+/// (`scale_up_threshold`/`scale_down_threshold`/`cooldown_secs`), the `base`
+/// back-pointer, and the `dedicated` flag are `Option<T> + #[serde(default)]` ⇒
+/// OPTIONAL. No `#[resource(secret)]` fields — all public config.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema, Clone)]
 #[resource(
     name = "model_policy",
     display_name = "Model Autoscale Policy",
@@ -182,24 +192,20 @@ pub struct ModelAutoscalePolicy {
     /// Router model id this policy scales (matches [`ApprovedModelConfig::model_id`]
     /// and the `ModelEntry.model_id` a runner advertises).
     pub model_id: String,
-    /// Alias (`resources.path`) of the `datacenter` resource this policy
-    /// provisions replicas on. The autoscaler resolves it to the resource row
-    /// uuid before driving the replica net.
-    pub datacenter_resource_id: String,
-    /// HARD Nomad placement zone (GDPR §11). Non-empty ⇒ fail-closed if
-    /// unsatisfiable; the autoscaler refuses to provision a non-empty zone onto a
-    /// non-Nomad datacenter (the Slurm leg silently drops residency).
+    /// HARD Nomad placement zone (GDPR §11). A REQUIREMENT matched against the
+    /// referenced pool's zone (DERIVED-A: the pool is the single zone source) —
+    /// the placement controller refuses to place a zoned model on a pool whose
+    /// `residency_zone` is not strictly equal (OQ-4 fail-closed). An empty zone
+    /// places on any pool.
     pub residency_zone: String,
-    /// Lower bound on replica COUNT.
-    pub min_replicas: u32,
-    /// Upper bound on replica COUNT.
-    pub max_replicas: u32,
     /// One of `manual` | `scale_to_zero` | `keep_warm`. Plain String (matches the
     /// `Capacity.liveness`/`dispatch` convention) — validated service-side, not by
     /// a DB/schema enum.
     pub mode: String,
-    /// L1 manual desired COUNT. Optional (L2 reactive modes omit it and derive
-    /// the count from demand).
+    /// Demand-slot ceiling: the upper bound on the model's effective demand the
+    /// placement controller honors (and the COUNT the `dedicated` fallback
+    /// provisions). Optional (L2 reactive modes derive the count from demand;
+    /// `None` ⇒ unbounded by the policy, bounded only by pool capacity).
     #[serde(default)]
     pub desired_replicas: Option<u32>,
     /// L2 reactive scale-up demand threshold (HARD-BLOCKED on the router /metrics;
@@ -213,10 +219,77 @@ pub struct ModelAutoscalePolicy {
     /// `model_replicas.last_actuated_at` so it survives a mekhan restart.
     #[serde(default)]
     pub cooldown_secs: Option<u64>,
-    /// Opaque replica job spec threaded into `stage_template` (image / entrypoint
-    /// / env / gpus / gpu_type / mem_mb). Schemars renders it as an open schema —
-    /// downstream `build_model_replica_net` reads keys defensively.
-    pub replica_spec: serde_json::Value,
+    /// Alias (`resources.path`) of the [`NodePoolPolicy`] capacity resource this
+    /// model draws engine slots from. The placement controller resolves it to the
+    /// pool's `node_replicas` row / engine fleet. REQUIRED on create (docs/31 OQ-1).
+    pub node_pool: String,
+    /// Back-pointer to the BASE model id this model is a LoRA adapter of (the
+    /// `ModelEntry.base` an adapter advertises). `None` ⇒ this policy IS a base
+    /// engine; `Some(base)` ⇒ it packs onto the base's shared `C` budget (OQ-1:
+    /// base + adapters share one per-engine `max_num_seqs`).
+    #[serde(default)]
+    pub base: Option<String>,
+    /// When `true`, the model gets its OWN single-model service job (the doc-29
+    /// per-model Nomad fallback) instead of packing onto the shared node pool —
+    /// the OQ-5 cold-start / pack-failure escape hatch. Defaults to `false`.
+    #[serde(default)]
+    pub dedicated: Option<bool>,
+}
+
+/// A generic vLLM-engine NODE pool — the CAPACITY half of the docs/31 OQ-1 split.
+///
+/// Where [`ModelAutoscalePolicy`] is per-MODEL demand + a residency requirement,
+/// a `node_pool` is the engine fleet those models pack onto: a homogeneous set of
+/// vLLM nodes scaled by COUNT (loop 1, `node_actuate.rs`), each node serving the
+/// same per-node concurrency budget `C` (`max_num_seqs`) shared across whatever
+/// base + adapters get loaded onto it. It carries **NO `model_id`** — the engine
+/// spec is model-agnostic (image / `--enable-lora` / `--enable-sleep-mode` / gpus);
+/// models are loaded/unloaded onto running nodes by the placement controller.
+///
+/// `residency_zone` here is the SINGLE source of residency truth (DERIVED-A): it
+/// flows to the Nomad render constraint, the placement-equality check, and the
+/// capability tag. A pool has exactly ONE zone (OQ-4: single-zone-per-pool, strict
+/// equality — no multi-zone union, heterogeneous `gpu_class` within a pool is
+/// rejected).
+///
+/// ## Required vs optional
+///
+/// `datacenter_resource_id`, `residency_zone`, `gpu_class`, `max_num_seqs`,
+/// `engine_spec`, `min_nodes`, `max_nodes` are plain fields ⇒ REQUIRED on create.
+/// `cooldown_secs` is `Option + #[serde(default)]` ⇒ OPTIONAL. No
+/// `#[resource(secret)]` fields — all public config.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema, Clone)]
+#[resource(name = "node_pool", display_name = "Node Pool", icon = "lucide-server")]
+pub struct NodePoolPolicy {
+    /// Alias (`resources.path`) of the `datacenter` resource this pool provisions
+    /// nodes on. The autoscaler resolves it to the resource row uuid before driving
+    /// the node-pool net.
+    pub datacenter_resource_id: String,
+    /// HARD Nomad placement zone (GDPR §11) — the SINGLE residency-zone source
+    /// (DERIVED-A) flowing to render + placement-match + capability. Non-empty ⇒
+    /// fail-closed if unsatisfiable; the autoscaler refuses to provision a non-empty
+    /// zone onto a non-Nomad datacenter (the Slurm leg silently drops residency).
+    pub residency_zone: String,
+    /// GPU class every node in this pool runs (e.g. `a100-80gb`). Homogeneous —
+    /// heterogeneous `gpu_class` within a single pool is REJECTED (OQ-4).
+    pub gpu_class: String,
+    /// Declared per-node concurrency budget `C` (vLLM `--max-num-seqs`), SHARED
+    /// across a base's LoRA adapters on that node. One pool, one `C`. Loop 1
+    /// observes `pool_serving_capacity = Σ present-node C` against this.
+    pub max_num_seqs: u32,
+    /// Opaque, model-AGNOSTIC vLLM engine spec threaded into `stage_template`
+    /// (image / gpus / `--enable-lora` / `--enable-sleep-mode` / env). MUST carry
+    /// no `model_id`. Schemars renders it as an open schema — `build_engine_spec`
+    /// reads keys defensively.
+    pub engine_spec: serde_json::Value,
+    /// Lower bound on node COUNT.
+    pub min_nodes: u32,
+    /// Upper bound on node COUNT.
+    pub max_nodes: u32,
+    /// Cooldown between actuations (seconds). Gates off
+    /// `node_replicas.last_actuated_at` so it survives a mekhan restart.
+    #[serde(default)]
+    pub cooldown_secs: Option<u64>,
 }
 
 /// Anthropic API credentials + endpoint binding. Mirrors [`OpenAI`]'s shape
@@ -675,16 +748,28 @@ mod tests {
             .unwrap_or_default();
         for req in [
             "model_id",
-            "datacenter_resource_id",
             "residency_zone",
-            "min_replicas",
-            "max_replicas",
             "mode",
-            "replica_spec",
+            // docs/31 OQ-1 reframe — the pool alias is a REQUIRED field; engine
+            // provisioning (datacenter_resource_id / replica_spec / min/max_replicas)
+            // moved onto `node_pool`.
+            "node_pool",
         ] {
             assert!(
                 required.contains(&req),
                 "{req} must be required, got {required:?}"
+            );
+        }
+        // The reframe DROPPED these engine-provisioning fields off model_policy.
+        for gone in [
+            "datacenter_resource_id",
+            "replica_spec",
+            "min_replicas",
+            "max_replicas",
+        ] {
+            assert!(
+                !required.contains(&gone),
+                "{gone} was moved onto node_pool — must NOT be on model_policy, got {required:?}"
             );
         }
         for opt in [
@@ -692,11 +777,55 @@ mod tests {
             "scale_up_threshold",
             "scale_down_threshold",
             "cooldown_secs",
+            // docs/31 OQ-1 reframe — back-pointer + fallback flag are optional.
+            "base",
+            "dedicated",
         ] {
             assert!(
                 !required.contains(&opt),
                 "{opt} must be optional (Option + #[serde(default)]), got {required:?}"
             );
         }
+    }
+
+    /// The `NodePoolPolicy` struct's `#[derive(ResourceType)]` must register the
+    /// `node_pool` capacity kind, with NO secret fields and the schemars `required`
+    /// array gating exactly the plain (non-Option) fields (docs/31 OQ-1).
+    #[test]
+    fn node_pool_round_trips_through_registry() {
+        let d = lookup("node_pool").expect("node_pool registered via inventory");
+        assert_eq!(d.display_name, "Node Pool");
+        assert_eq!(d.icon, "lucide-server");
+        assert!(!d.dynamic_fields, "node_pool is a typed kind, not kv");
+        assert!(
+            d.secret_fields.is_empty(),
+            "node_pool has no secret fields, got {:?}",
+            d.secret_fields
+        );
+
+        let schema = schema_json_cached(d);
+        let required: Vec<&str> = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        for req in [
+            "datacenter_resource_id",
+            "residency_zone",
+            "gpu_class",
+            "max_num_seqs",
+            "engine_spec",
+            "min_nodes",
+            "max_nodes",
+        ] {
+            assert!(
+                required.contains(&req),
+                "{req} must be required, got {required:?}"
+            );
+        }
+        assert!(
+            !required.contains(&"cooldown_secs"),
+            "cooldown_secs must be optional, got {required:?}"
+        );
     }
 }

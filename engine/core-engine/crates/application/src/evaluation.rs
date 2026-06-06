@@ -674,7 +674,7 @@ pub(crate) async fn evaluate_until_quiescent<
 /// resource in practice). A finalizer that itself errors stops the drain
 /// (best-effort cleanup); the net still fails.
 #[allow(clippy::too_many_arguments)]
-async fn drain_finalizers<E: EventRepository, T: TopologyRepository, S: StateProjection>(
+pub(crate) async fn drain_finalizers<E: EventRepository, T: TopologyRepository, S: StateProjection>(
     events: &E,
     topology: &T,
     projection: &S,

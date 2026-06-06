@@ -34,6 +34,19 @@ use async_trait::async_trait;
 pub trait DemandSource: Send + Sync {
     /// The current demand for `model_id`, or `None` if unavailable (scrape failed).
     async fn demand_for(&self, model_id: &str) -> Option<f64>;
+
+    /// The RAW per-model in-flight count (the `inference_router_model_inflight`
+    /// gauge), WITHOUT the scale-from-zero starved delta that [`demand_for`]
+    /// folds in. `None` when the scrape is unavailable (router unconfigured /
+    /// non-200 / parse miss).
+    ///
+    /// This is the headroom accounting signal (docs/31 Phase 0): per-engine
+    /// headroom for a base = `base.max_num_seqs − Σ(base + adapters in-flight)`.
+    /// It MUST stay separate from `demand_for`'s starved delta — that delta is a
+    /// scale trigger, not a slot-occupancy fact, so folding it into headroom
+    /// would double-count requests that are starved BECAUSE there is no slot.
+    /// Callers fail-soft to full headroom (`= C`) when this returns `None`.
+    async fn inflight_for(&self, model_id: &str) -> Option<f64>;
 }
 
 /// Scrapes the Router `/metrics` Prometheus endpoint for per-model demand.
@@ -55,23 +68,30 @@ impl PrometheusDemandSource {
             prev_starved: Mutex::new(HashMap::new()),
         }
     }
+
+    /// Scrape `{base}/metrics`, returning the Prometheus exposition body or
+    /// `None` (non-200 / transport error). Shared by `demand_for` (folds in the
+    /// starved delta) and `inflight_for` (raw gauge for headroom accounting).
+    async fn scrape(&self) -> Option<String> {
+        let url = format!("{}/metrics", self.base_url);
+        match self.http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => resp.text().await.ok(),
+            Ok(resp) => {
+                tracing::debug!(%url, status = %resp.status(), "router /metrics non-200");
+                None
+            }
+            Err(e) => {
+                tracing::debug!(%url, "router /metrics scrape failed: {e}");
+                None
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl DemandSource for PrometheusDemandSource {
     async fn demand_for(&self, model_id: &str) -> Option<f64> {
-        let url = format!("{}/metrics", self.base_url);
-        let body = match self.http.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => resp.text().await.ok()?,
-            Ok(resp) => {
-                tracing::debug!(%url, status = %resp.status(), "router /metrics non-200");
-                return None;
-            }
-            Err(e) => {
-                tracing::debug!(%url, "router /metrics scrape failed: {e}");
-                return None;
-            }
-        };
+        let body = self.scrape().await?;
 
         let inflight =
             parse_model_metric(&body, "inference_router_model_inflight", model_id).unwrap_or(0);
@@ -87,6 +107,15 @@ impl DemandSource for PrometheusDemandSource {
         };
 
         Some(inflight as f64 + new_starves as f64)
+    }
+
+    async fn inflight_for(&self, model_id: &str) -> Option<f64> {
+        let body = self.scrape().await?;
+        // RAW gauge only — no starved delta (that is a scale trigger, not slot
+        // occupancy). A present-but-absent series reads 0 in-flight.
+        let inflight =
+            parse_model_metric(&body, "inference_router_model_inflight", model_id).unwrap_or(0);
+        Some(inflight as f64)
     }
 }
 
@@ -156,6 +185,20 @@ inference_router_model_starved_total{model=\"cold\"} 5
         assert_eq!(
             parse_model_metric(SAMPLE, "inference_router_model_starved_total", "warm"),
             None
+        );
+    }
+
+    #[test]
+    fn inflight_metric_is_raw_no_starved_fold() {
+        // Headroom accounting reads the gauge directly: `cold` is in-flight 0
+        // even though it has 5 starved requests (a scale trigger, NOT a slot).
+        assert_eq!(
+            parse_model_metric(SAMPLE, "inference_router_model_inflight", "cold"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_model_metric(SAMPLE, "inference_router_model_inflight", "warm"),
+            Some(3)
         );
     }
 
