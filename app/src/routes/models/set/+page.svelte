@@ -57,7 +57,7 @@
 
 <div class="space-y-4" data-testid="models-set">
 	<div class="flex items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Curated model set</h2>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Curated model set</h2>
 		<span class="text-sm text-muted-foreground">approved into the pool · live-runner AND-gate</span>
 	</div>
 
@@ -88,9 +88,9 @@
 							title={m.available ? 'available (loaded + a live runner serves it)' : 'not available'}
 						></span>
 						<span class="truncate font-medium text-foreground">{m.model_id}</span>
-						<span class="ml-auto text-xs {statusTone(String(m.state))}">{m.state}</span>
+						<span class="ml-auto text-sm {statusTone(String(m.state))}">{m.state}</span>
 					</div>
-					<div class="mt-0.5 pl-3.5 text-xs text-muted-foreground">
+					<div class="mt-0.5 pl-3.5 text-sm text-muted-foreground">
 						{#if m.base}LoRA of {m.base} · {/if}replicas {m.replicas}
 						{#if m.note}· {m.note}{/if}
 					</div>
@@ -99,7 +99,7 @@
 						 are rejected by the server (409) and surfaced above. -->
 					<div class="mt-2 flex items-center gap-1.5 border-t border-border/40 pt-2">
 						<select
-							class="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+							class="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-sm text-foreground"
 							value={pending[m.model_id] ?? m.state}
 							onchange={(e) =>
 								(pending[m.model_id] = e.currentTarget.value as ModelState)}
@@ -111,7 +111,7 @@
 						<Button
 							variant="outline"
 							size="sm"
-							class="h-7 shrink-0 px-2 text-xs"
+							class="h-7 shrink-0 px-2 text-sm"
 							disabled={busy !== null ||
 								!pending[m.model_id] ||
 								pending[m.model_id] === m.state}

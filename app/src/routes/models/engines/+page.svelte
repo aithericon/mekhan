@@ -54,10 +54,10 @@
 
 <div class="space-y-4" data-testid="models-engines">
 	<div class="flex items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Engines</h2>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Engines</h2>
 		<span class="text-sm text-muted-foreground">live per-node inventory</span>
 		{#if !engines.headroom_from_router}
-			<span class="text-xs text-muted-foreground/70">
+			<span class="text-sm text-muted-foreground/70">
 				headroom = full budget (router poll unconfigured)
 			</span>
 		{/if}
@@ -65,7 +65,7 @@
 			variant="outline"
 			size="sm"
 			href="/models/catalog"
-			class="ml-auto h-7 gap-1.5 self-center px-2.5 text-xs"
+			class="ml-auto h-7 gap-1.5 self-center px-2.5 text-sm"
 		>
 			<LibraryBig class="size-3.5" />
 			Browse catalog
@@ -96,26 +96,26 @@
 			{#each engines.nodes as node (node.runner_id)}
 				<div class="rounded-lg border border-border/60 bg-card p-3" data-testid="engine-card">
 					<div class="mb-2 flex items-center justify-between">
-						<span class="font-mono text-xs text-muted-foreground">runner {shortId(node.runner_id)}</span>
-						<span class="text-xs text-muted-foreground">{node.engines.length} engine(s)</span>
+						<span class="font-mono text-sm text-muted-foreground">runner {shortId(node.runner_id)}</span>
+						<span class="text-sm text-muted-foreground">{node.engines.length} engine(s)</span>
 					</div>
 
 					{#if node.engines.length === 0}
-						<p class="text-xs text-muted-foreground/70">no models resident</p>
+						<p class="text-sm text-muted-foreground/70">no models resident</p>
 					{:else}
 						<ul class="space-y-1.5">
 							{#each node.engines as e (e.base)}
 								<li class="flex items-center justify-between gap-2 text-sm">
 									<span class="flex items-baseline gap-2 truncate">
 										<span class="truncate font-medium text-foreground">{e.base}</span>
-										<span class="shrink-0 text-xs text-muted-foreground">
+										<span class="shrink-0 text-sm text-muted-foreground">
 											C {e.max_num_seqs ?? '–'} · headroom {e.headroom ?? '–'}
 										</span>
 									</span>
 									<Button
 										variant="ghost"
 										size="sm"
-										class="h-6 shrink-0 px-2 text-xs"
+										class="h-6 shrink-0 px-2 text-sm"
 										disabled={busy !== null}
 										onclick={() => act(node.runner_id, 'unload', e.base)}
 									>
@@ -123,7 +123,7 @@
 									</Button>
 								</li>
 								{#if e.loaded_adapters.length > 0}
-									<li class="pl-3 text-xs text-muted-foreground">
+									<li class="pl-3 text-sm text-muted-foreground">
 										adapters: {e.loaded_adapters.map((a) => a.model_id).join(', ')}
 									</li>
 								{/if}
@@ -134,14 +134,14 @@
 					<!-- Provisioned to disk, NOT resident — one click to load (no re-download). -->
 					{#if (node.pulled ?? []).length > 0}
 						<ul class="mt-2 space-y-1 border-t border-border/40 pt-2">
-							<li class="text-xs font-medium text-muted-foreground/70">ready to load</li>
+							<li class="text-sm font-medium text-muted-foreground/70">ready to load</li>
 							{#each node.pulled ?? [] as p (p)}
 								<li class="flex items-center justify-between gap-2 text-sm">
 									<span class="truncate text-muted-foreground">{p}</span>
 									<Button
 										variant="ghost"
 										size="sm"
-										class="h-6 shrink-0 px-2 text-xs"
+										class="h-6 shrink-0 px-2 text-sm"
 										disabled={busy !== null}
 										onclick={() => act(node.runner_id, 'load', p)}
 									>
@@ -155,14 +155,14 @@
 					<!-- Provision / load a model by id, or browse the catalog. -->
 					<div class="mt-2 flex items-center gap-1.5 border-t border-border/40 pt-2">
 						<input
-							class="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-xs"
+							class="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-sm"
 							placeholder="model id (e.g. llama3.2:1b)"
 							bind:value={loadInputs[node.runner_id]}
 						/>
 						<Button
 							variant="ghost"
 							size="sm"
-							class="h-7 shrink-0 px-2 text-xs"
+							class="h-7 shrink-0 px-2 text-sm"
 							disabled={busy !== null || !loadInputs[node.runner_id]}
 							onclick={() => act(node.runner_id, 'pull', loadInputs[node.runner_id] ?? '')}
 							title="Provision (download) to disk without loading"
@@ -172,7 +172,7 @@
 						<Button
 							variant="outline"
 							size="sm"
-							class="h-7 shrink-0 px-2 text-xs"
+							class="h-7 shrink-0 px-2 text-sm"
 							disabled={busy !== null || !loadInputs[node.runner_id]}
 							onclick={() => act(node.runner_id, 'load', loadInputs[node.runner_id] ?? '')}
 						>

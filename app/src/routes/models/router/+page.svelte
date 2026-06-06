@@ -8,7 +8,7 @@
 
 <div class="space-y-4" data-testid="models-router">
 	<div class="flex items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Router</h2>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Router</h2>
 		<span class="text-sm text-muted-foreground">
 			inference audit — newest first (the router meters directly; inference never crosses the engine net)
 		</span>
