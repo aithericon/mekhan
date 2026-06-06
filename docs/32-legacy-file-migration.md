@@ -113,6 +113,62 @@ inventory.** Dev-tested on a sampled subset of the real dump.
   existing file-ops `copy/move/delete`. Honors `legacy_delete_queue`; deletes source only after a
   verified copy. **Dev-tested on synthetic 2-server temp dirs only.**
 
+### Phase 5 — the pipeline DRIVER (`legacy-migration-driver` bin)
+
+The Phase 5 driver ties the pieces together and runs the pipeline end-to-end on a **synthetic
+NAS** (a local root path standing in for an NFS mount), using the **REAL** Phase 3 op code:
+
+```text
+crawl (real op, in-process)
+  └─▶ fold each emitted batch → reconcile_batch  (verified/mismatch/orphan_disk)
+        └─▶ hash-pending: real probe op on orphan_disk/mismatch rows
+              └─▶ set content_hash + UPSERT catalogue + advance status
+```
+
+- **Location.** Transport-agnostic pipeline logic lives in `service/src/migration_driver/`
+  (`mod.rs` + `synthetic.rs`), a `#[cfg(feature = "migration-driver")] pub mod` on the
+  `mekhan-service` lib so the integration test can call it directly. The
+  `legacy-migration-driver` bin (`service/src/bin/driver/main.rs`,
+  `required-features = ["migration-driver"]`) is a thin clap wrapper. The feature pulls in
+  optional path-deps (`executor-file-ops`, `executor-backend`, `executor-storage` `[opendal]`,
+  `opendal`, `tokio-util`, `tempfile`, `fmeta`); **the default `mekhan-service` lib/bins gain no
+  new mandatory deps.**
+- **Subcommands.** `index-reconcile --file-server-id <id> --root <abs dir> [--batch-size N]`
+  (crawl + fold); `hash-pending --file-server-id <id> --root <abs dir> [--sample-verified PCT]`
+  (probe pending rows → register); `seed-synthetic --file-server-id <id>` (dev-only fixture
+  generator).
+- **In-process op invocation (the seam).** The driver builds a `Local`
+  `StorageConfig { backend: Local, endpoint: <root> }`, builds an OpenDAL `Operator` via
+  `aithericon_executor_storage::build_operator` (the exact path the file-ops backend uses), and
+  calls the op FUNCTIONS directly — `ops::crawl::execute(&cfg, &op, prefix, Some(event_stream),
+  &cancel)` and `ops::probe::execute(&cfg, &op, prefix, run_dir)` (probe's `run_dir` is a
+  tempdir). No `ExecutionBackend`/`RunContext`/`ExecutionJob` reconstruction. The crawl batches
+  are folded inline by a small `EventStream` impl (`ReconcileSink`) whose `item()` runs
+  `reconcile_batch` per batch.
+- **`orphan_disk` → `verified`.** Once an orphan_disk row is hashed (real SHA-256) and a
+  `catalogue_entries` row is UPSERTed by that `content_hash` (`category='observed'`, size from
+  probe), its status advances to `verified` — it's now hashed + registered.
+- **`mismatch` stays `mismatch`.** The freshly-computed probe hash is recorded in
+  `content_hash` + `provenance.probed_hash`, but the size disagreement with the legacy baseline
+  is a curation decision, not auto-resolved by the driver.
+- **Probe checksum-only fallback (Phase 3 op refinement).** A 4M-file NAS corpus is mostly
+  arbitrary binaries no metadata extractor models, so `extract_metadata` returns
+  `UnsupportedFormat`. Since the **checksum is the reconcile linchpin**, the probe op now falls
+  back to `FileMetadata::checksum_only(path)` (new constructor in `fmeta`) when extraction fails
+  **and** a `checksum_algo` is requested — the probe still emits the bare-hex SHA-256
+  `checksum_digest` instead of failing. Format-modeled probes are unchanged.
+
+> **Transport scope note (deferred "real operations" step).** The driver invokes the ops
+> **in-process** as the dev/scaffold harness — no NATS, no runner. In production these SAME ops
+> run inside a co-located runner that pulls jobs over NATS (already supported by the file-ops
+> backend); the NATS-dispatch + SSH-deployed-runner layer is the deferred real-operations step.
+> Only the op-invocation seam changes when it moves behind NATS — the driver's pipeline logic
+> (fold + hash + register) is transport-agnostic.
+
+The e2e test `service/tests/driver_pipeline.rs` (gated on `MEKHAN__DATABASE_URL`, unique
+`test-drv-<uuid>` server, RAII cleanup) builds a synthetic tree + baseline, runs both phases,
+and asserts the four reconcile classes end-to-end.
+
 ## Build: worktree + Workflow
 
 **Setup (serial, once):** `just dev::worktree-add legacy-migration` (auto-slot, ports, .envrc) on

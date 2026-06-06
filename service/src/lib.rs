@@ -14,6 +14,14 @@ pub mod fleet;
 pub mod handlers;
 pub mod inventory;
 pub mod lifecycle;
+/// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic
+/// crawl → reconcile → targeted-hash → register logic, invoking the REAL
+/// executor-file-ops crawl/probe ops IN-PROCESS against a Local
+/// `StorageConfig`. Feature-gated so the default service build pulls in none of
+/// the file-ops / OpenDAL deps. The `legacy-migration-driver` bin is a thin
+/// clap wrapper over this module; the integration test calls it directly.
+#[cfg(feature = "migration-driver")]
+pub mod migration_driver;
 pub mod models;
 pub mod nats;
 pub mod nodes;

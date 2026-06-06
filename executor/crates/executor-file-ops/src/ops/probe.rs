@@ -69,9 +69,24 @@ pub async fn execute(
     // checksum by default; when `checksum_algo` is set we re-run the checksum
     // with the requested algorithm so the result is deterministic and matches
     // the reconcile join key.
-    let mut metadata = aithericon_file_metadata::extract_metadata_async(&tmp_path)
-        .await
-        .map_err(|e| FileOpsError::Metadata(e.to_string()))?;
+    //
+    // When the file's format isn't modeled by any extractor, extraction fails
+    // with `UnsupportedFormat`. For the legacy-migration integrity path the
+    // CHECKSUM is the linchpin, not the format-specific metadata — a ~4M-file
+    // NAS corpus is mostly arbitrary binaries — so when `checksum_algo` is set
+    // we fall back to a checksum-only metadata instead of failing the probe.
+    let mut metadata = match aithericon_file_metadata::extract_metadata_async(&tmp_path).await {
+        Ok(m) => m,
+        Err(e) if config.checksum_algo.is_some() => {
+            debug!(
+                path = %config.path,
+                error = %e,
+                "metadata extraction unsupported; falling back to checksum-only probe"
+            );
+            aithericon_file_metadata::FileMetadata::checksum_only(&tmp_path)
+        }
+        Err(e) => return Err(FileOpsError::Metadata(e.to_string())),
+    };
 
     if let Some(ref algo) = config.checksum_algo {
         let tmp = tmp_path.clone();
