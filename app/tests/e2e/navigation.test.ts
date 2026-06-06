@@ -33,7 +33,8 @@ test.describe('Navigation', () => {
 	test('navigates to instances page via home button', async ({ page }) => {
 		await page.goto('/');
 		await page.getByTestId('btn-view-instances').click();
-		await expect(page).toHaveURL('/instances');
+		// Instances route defaults to a `?status=running` filter; tolerate the query param.
+		await expect(page).toHaveURL(/\/instances(\?|$)/);
 		await expect(page.getByTestId('instances-page')).toBeVisible();
 	});
 

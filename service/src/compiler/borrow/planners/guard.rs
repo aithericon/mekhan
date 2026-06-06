@@ -583,7 +583,9 @@ pub(crate) fn reachable_scope(
 /// the editor type-checks a literal compare the same way `scalar_satisfies`
 /// does); `Json` degrades to `Any`. Kept aligned with `ScalarTy::label` /
 /// `to_field_kind` (the inverse mapping the surface uses).
-fn field_kind_descriptor(kind: &crate::models::template::FieldKind) -> crate::compiler::token_shape::TyDescriptor {
+fn field_kind_descriptor(
+    kind: &crate::models::template::FieldKind,
+) -> crate::compiler::token_shape::TyDescriptor {
     use crate::compiler::token_shape::TyDescriptor;
     use crate::models::template::FieldKind;
     // Names mirror `ScalarTy::label` verbatim (Bool, not Boolean) so a Globals
@@ -600,7 +602,9 @@ fn field_kind_descriptor(kind: &crate::models::template::FieldKind) -> crate::co
         // nested global field goes through its `.schema` structural shadow).
         FieldKind::Object | FieldKind::Array => return TyDescriptor::Any,
         // Text / Textarea / Select / Signature are all string-shaped.
-        FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => "String",
+        FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => {
+            "String"
+        }
     };
     TyDescriptor::Scalar {
         name: name.to_string(),

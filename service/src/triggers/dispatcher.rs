@@ -440,9 +440,15 @@ impl TriggerDispatcher {
         dispatch_options: petri_api_types::DispatchOptions,
         net_parameters: Option<Value>,
     ) -> Result<FireResult, TriggerError> {
-        self.fire_impl(node_id, event_payload, dispatch_options, net_parameters, None)
-            .await
-            .map(|(result, _rx)| result)
+        self.fire_impl(
+            node_id,
+            event_payload,
+            dispatch_options,
+            net_parameters,
+            None,
+        )
+        .await
+        .map(|(result, _rx)| result)
     }
 
     /// Fire a trigger and, for a Spawn, register a WaitForResult waiter.
@@ -657,10 +663,7 @@ impl TriggerDispatcher {
             return Ok((
                 finalize(
                     FireOutcome::Dropped {
-                        reason: format!(
-                            "token rejected by target port '{}': {ve}",
-                            target_port.id
-                        ),
+                        reason: format!("token rejected by target port '{}': {ve}", target_port.id),
                     },
                     false,
                 ),
@@ -785,7 +788,12 @@ impl TriggerDispatcher {
                         active_instance = %active,
                         "single-active-coalesce: fire coalesced into pending follow-up"
                     );
-                    return Ok((FireOutcome::Coalesced { active_instance_id: active }, None));
+                    return Ok((
+                        FireOutcome::Coalesced {
+                            active_instance_id: active,
+                        },
+                        None,
+                    ));
                 }
                 // No active sibling — mark ourselves provisionally active
                 // before spawn so a parallel fire racing through this same
@@ -955,8 +963,7 @@ impl TriggerDispatcher {
                         status.as_str(),
                         "completed" | "cancelled" | "failed" | "archived"
                     ) {
-                        waiters
-                            .resolve(&instance.id, TerminalOutcome { status, result });
+                        waiters.resolve(&instance.id, TerminalOutcome { status, result });
                     }
                 }
                 Some(rx)
@@ -964,7 +971,12 @@ impl TriggerDispatcher {
             None => None,
         };
 
-        Ok((FireOutcome::Spawned { instance_id: instance.id }, rx))
+        Ok((
+            FireOutcome::Spawned {
+                instance_id: instance.id,
+            },
+            rx,
+        ))
     }
 
     async fn fire_signal(

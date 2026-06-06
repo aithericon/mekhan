@@ -250,10 +250,7 @@ pub(crate) fn resources_from_globals(
                 id: g.id,
                 type_name: g.type_name.clone().unwrap_or_default(),
                 latest_version: g.version,
-                public_config: g
-                    .static_vals
-                    .clone()
-                    .unwrap_or(serde_json::Value::Null),
+                public_config: g.static_vals.clone().unwrap_or(serde_json::Value::Null),
             },
         );
     }

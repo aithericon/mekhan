@@ -295,9 +295,14 @@ impl<'a> InstanceLauncher<'a> {
             LaunchError::Database(e.to_string())
         })?;
 
-        if let Err(e) =
-            deploy_instance(self.petri, &net_id, &parameterized, dispatch_options, net_parameters)
-                .await
+        if let Err(e) = deploy_instance(
+            self.petri,
+            &net_id,
+            &parameterized,
+            dispatch_options,
+            net_parameters,
+        )
+        .await
         {
             tracing::error!("failed to deploy instance to petri-lab: {e}");
             // Roll the row back so lifecycle never observes a phantom /

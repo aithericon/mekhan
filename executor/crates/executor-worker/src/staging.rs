@@ -93,7 +93,7 @@ impl Default for StagingPipeline {
 /// 4. `StageInputsHook`          — uses `resolved_input_storage` when present
 /// 5. `NixEnvironmentHook`       — optional
 /// 6. `WriteContextHook`         — serialize context.json (`#[serde(skip)]`
-///                                  drops the resolved fields), `chmod 0600`
+///    drops the resolved fields), `chmod 0600`
 pub fn default_pipeline(
     base_dir: PathBuf,
     store: Option<Arc<dyn ArtifactStore>>,
@@ -844,6 +844,7 @@ mod tests {
     use aithericon_executor_domain::RunDirectory;
     use aithericon_executor_process::ProcessConfig;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::time::Duration;
 
     fn test_job() -> ExecutionJob {
@@ -867,7 +868,7 @@ mod tests {
         }
     }
 
-    fn test_context(base_dir: &PathBuf) -> RunContext {
+    fn test_context(base_dir: &Path) -> RunContext {
         RunContext::for_test(
             "test-staging",
             ProcessConfig {
@@ -964,10 +965,13 @@ mod tests {
             .get("AITHERICON_CHANNELS")
             .expect("AITHERICON_CHANNELS injected");
         let parsed: serde_json::Value = serde_json::from_str(channels_env).unwrap();
-        assert_eq!(parsed, json!([
-            {"name": "progress", "plane": "control", "contract": "signal", "element_kind": "json"},
-            {"name": "frames", "plane": "data", "element_kind": "binary"},
-        ]));
+        assert_eq!(
+            parsed,
+            json!([
+                {"name": "progress", "plane": "control", "contract": "signal", "element_kind": "json"},
+                {"name": "frames", "plane": "data", "element_kind": "binary"},
+            ])
+        );
     }
 
     #[tokio::test]

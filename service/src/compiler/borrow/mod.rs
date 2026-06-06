@@ -95,8 +95,7 @@ mod tests {
         let root = repo_root().join("demos").join("07-ocr-classify-extract");
         let demo = load_demo(&root).expect("07-ocr-classify-extract loads");
         let known = KnownGlobals::new();
-        let borrows =
-            collect_borrows(&demo.graph, &demo.files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&demo.graph, &demo.files, &known).expect("collect_borrows");
 
         // Kreuzberg consumer 'extract_text' borrows start.document (File kind)
         let kreuzberg = borrows
@@ -393,9 +392,7 @@ mod tests {
             "expected exactly one AssetStaging borrow; got: {borrows:?}"
         );
         match &staging[0].resolution {
-            BorrowResolution::AssetStaging {
-                alias, version, ..
-            } => {
+            BorrowResolution::AssetStaging { alias, version, .. } => {
                 assert_eq!(alias, "steel");
                 assert_eq!(*version, 3);
             }
@@ -447,7 +444,10 @@ mod tests {
             .into_iter()
             .filter(|b| matches!(b.resolution, BorrowResolution::AssetStaging { .. }))
             .collect();
-        assert!(!asset_borrows.is_empty(), "fixture must have an asset borrow");
+        assert!(
+            !asset_borrows.is_empty(),
+            "fixture must have an asset borrow"
+        );
 
         let interfaces = InterfaceRegistry::new();
         let mut node_configs = std::collections::HashMap::new();

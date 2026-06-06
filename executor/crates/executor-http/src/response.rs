@@ -107,10 +107,9 @@ async fn read_body_limited(
     // reqwest doesn't have a built-in size limit on response body,
     // so we read in chunks to avoid unbounded allocation.
     let bytes = resp.bytes().await.map_err(|e| {
-        ExecutorError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("failed to read response body: {e}"),
-        ))
+        ExecutorError::Io(std::io::Error::other(format!(
+            "failed to read response body: {e}"
+        )))
     })?;
 
     if bytes.len() > max_bytes {

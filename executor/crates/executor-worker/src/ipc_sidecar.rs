@@ -322,13 +322,8 @@ impl ExecutorSidecar for SidecarService {
         request: Request<proto::PublishChunkRequest>,
     ) -> Result<Response<proto::SidecarResponse>, Status> {
         let req = request.into_inner();
-        let (status, error_message) = handle_publish_chunk(
-            &req,
-            &self.execution_id,
-            &self.channels,
-            &self.transports,
-        )
-        .await;
+        let (status, error_message) =
+            handle_publish_chunk(&req, &self.execution_id, &self.channels, &self.transports).await;
         Ok(Response::new(make_response(status, error_message)))
     }
 
@@ -549,9 +544,7 @@ async fn handle_emit_control(
     let kind = convert_control_kind(req.kind());
     let plane_ok = match kind {
         // open/close are uniform episode brackets — valid on either plane.
-        ControlKind::Open | ControlKind::Close => {
-            entry.plane == "data" || entry.plane == "control"
-        }
+        ControlKind::Open | ControlKind::Close => entry.plane == "data" || entry.plane == "control",
         // item carries a payload element — control plane only.
         ControlKind::Item => entry.plane == "control",
     };
@@ -2038,7 +2031,11 @@ mod tests {
             } else {
                 "application/json".to_string()
             },
-            payload: if eof { Vec::new() } else { format!("{seq}").into_bytes() },
+            payload: if eof {
+                Vec::new()
+            } else {
+                format!("{seq}").into_bytes()
+            },
             is_eof: eof,
         }
     }

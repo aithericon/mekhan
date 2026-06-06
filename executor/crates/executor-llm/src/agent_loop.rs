@@ -7,9 +7,9 @@
 //! 3. For each tool call (in parallel):
 //!    a. Emit SSE `ToolCall` event upstream.
 //!    b. Await `tool_dispatcher.dispatch(call)` (blocks on oneshot fulfilled by
-//!       the pool listener's `POST /v1/runs/{run_id}/tool_results`, which is
-//!       itself fulfilled by cloud-layer-workflow forwarding the clinic's
-//!       `POST /v1/pipelines/{run_id}/tool_results`).
+//!    the pool listener's `POST /v1/runs/{run_id}/tool_results`, which is
+//!    itself fulfilled by cloud-layer-workflow forwarding the clinic's
+//!    `POST /v1/pipelines/{run_id}/tool_results`).
 //!    c. Append tool results to messages; emit SSE `ToolResolved` per call.
 //! 4. Repeat until no tool calls or `max_iterations` reached.
 //!
@@ -38,11 +38,11 @@ use std::collections::HashMap;
 use aithericon_executor_domain::LlmToolCall;
 use async_trait::async_trait;
 
+use crate::config::Role;
 use crate::port::{
     CompletionPort, CompletionRequest, CompletionResponse, LlmError, Message, ResponseFormat,
     ToolError, ToolErrorKind,
 };
-use crate::config::Role;
 
 /// Default maximum number of LLM ↔ tool turns before the loop terminates.
 ///
@@ -162,7 +162,10 @@ pub async fn run_agent_loop(
 
             messages.push(Message {
                 role: Role::User,
-                content: format!("[tool_result call_id={} name={}]\n{}", tc.id, tc.name, content),
+                content: format!(
+                    "[tool_result call_id={} name={}]\n{}",
+                    tc.id, tc.name, content
+                ),
                 images: vec![],
                 tool_call_id: None,
                 tool_calls: vec![],
@@ -180,10 +183,7 @@ async fn dispatch_all(
     dispatcher: &dyn ToolDispatcher,
     calls: &[LlmToolCall],
 ) -> Vec<Result<serde_json::Value, ToolError>> {
-    let futures: Vec<_> = calls
-        .iter()
-        .map(|tc| dispatcher.dispatch(tc))
-        .collect();
+    let futures: Vec<_> = calls.iter().map(|tc| dispatcher.dispatch(tc)).collect();
 
     futures::future::join_all(futures).await
 }
@@ -213,8 +213,8 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
     use crate::port::{CompletionResponse, LlmError, ToolError, ToolErrorKind};
+    use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
 
     // ---------------------------------------------------------------------------
     // Fake CompletionPort: returns scripted responses from a queue.
@@ -228,14 +228,20 @@ mod tests {
         fn new(responses: Vec<Result<CompletionResponse, LlmError>>) -> Self {
             let mut rev = responses;
             rev.reverse();
-            Self { responses: Mutex::new(rev) }
+            Self {
+                responses: Mutex::new(rev),
+            }
         }
     }
 
     fn terminal_response(content: &str) -> CompletionResponse {
         CompletionResponse {
             content: content.to_string(),
-            usage: LlmUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
+            usage: LlmUsage {
+                input_tokens: 5,
+                output_tokens: 10,
+                total_tokens: 15,
+            },
             model: "test-model".to_string(),
             stop_reason: LlmStopReason::EndTurn,
             structured_output: None,
@@ -246,7 +252,11 @@ mod tests {
     fn tool_call_response(calls: Vec<LlmToolCall>) -> CompletionResponse {
         CompletionResponse {
             content: String::new(),
-            usage: LlmUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
+            usage: LlmUsage {
+                input_tokens: 5,
+                output_tokens: 10,
+                total_tokens: 15,
+            },
             model: "test-model".to_string(),
             stop_reason: LlmStopReason::ToolUse,
             structured_output: None,
@@ -268,7 +278,9 @@ mod tests {
                 .unwrap_or(Err(LlmError::Api("script exhausted".into())))
         }
 
-        fn name(&self) -> &str { "scripted" }
+        fn name(&self) -> &str {
+            "scripted"
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -291,7 +303,10 @@ mod tests {
         fn always_err(kind: ToolErrorKind) -> Self {
             Self {
                 results: HashMap::new(),
-                fallback: Err(ToolError { message: "scripted error".into(), kind }),
+                fallback: Err(ToolError {
+                    message: "scripted error".into(),
+                    kind,
+                }),
             }
         }
 
@@ -319,7 +334,9 @@ mod tests {
         }
     }
 
-    fn empty_env() -> HashMap<String, String> { HashMap::new() }
+    fn empty_env() -> HashMap<String, String> {
+        HashMap::new()
+    }
 
     fn make_tool_call(name: &str) -> LlmToolCall {
         LlmToolCall {
@@ -448,7 +465,10 @@ mod tests {
         let result = run_agent_loop(&port, request, &dispatcher, noop_emit, 2, &empty_env()).await;
         match result {
             Err(LlmError::Api(msg)) => {
-                assert!(msg.contains("max tool-iterations"), "unexpected message: {msg}");
+                assert!(
+                    msg.contains("max tool-iterations"),
+                    "unexpected message: {msg}"
+                );
             }
             other => panic!("expected LlmError::Api for max_iterations; got {:?}", other),
         }
@@ -460,10 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn parallel_tool_calls_dispatch_correctly() {
-        let calls = vec![
-            make_tool_call("tool_alpha"),
-            make_tool_call("tool_beta"),
-        ];
+        let calls = vec![make_tool_call("tool_alpha"), make_tool_call("tool_beta")];
         let port = ScriptedPort::new(vec![
             Ok(tool_call_response(calls)),
             Ok(terminal_response("done")),
@@ -514,14 +531,26 @@ mod tests {
         // 2 ToolCall + 2 ToolResolved = 4 events
         assert_eq!(events.len(), 4);
 
-        let call_names: Vec<_> = events.iter().filter_map(|e| match e {
-            SseEvent::ToolCall { name, .. } => Some(name.as_str()),
-            _ => None,
-        }).collect();
-        assert!(call_names.contains(&"tool_alpha"), "tool_alpha missing from ToolCall events");
-        assert!(call_names.contains(&"tool_beta"), "tool_beta missing from ToolCall events");
+        let call_names: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                SseEvent::ToolCall { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            call_names.contains(&"tool_alpha"),
+            "tool_alpha missing from ToolCall events"
+        );
+        assert!(
+            call_names.contains(&"tool_beta"),
+            "tool_beta missing from ToolCall events"
+        );
 
-        let resolved_count = events.iter().filter(|e| matches!(e, SseEvent::ToolResolved { .. })).count();
+        let resolved_count = events
+            .iter()
+            .filter(|e| matches!(e, SseEvent::ToolResolved { .. }))
+            .count();
         assert_eq!(resolved_count, 2);
     }
 
@@ -569,7 +598,9 @@ mod tests {
         assert_eq!(resp.content, "recovered");
 
         let events = sse_events.lock().unwrap();
-        let resolved = events.iter().find(|e| matches!(e, SseEvent::ToolResolved { .. }));
+        let resolved = events
+            .iter()
+            .find(|e| matches!(e, SseEvent::ToolResolved { .. }));
         match resolved.expect("ToolResolved event present") {
             SseEvent::ToolResolved { error, result, .. } => {
                 assert!(error.is_some(), "error field present");

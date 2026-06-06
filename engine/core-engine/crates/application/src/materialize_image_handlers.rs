@@ -36,7 +36,9 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput};
-use crate::resource_lease_handlers::{AllocatorClient, MaterializeImageArgs, MaterializeRequestToken};
+use crate::resource_lease_handlers::{
+    AllocatorClient, MaterializeImageArgs, MaterializeRequestToken,
+};
 
 /// Pulls an OCI image to an Apptainer `.sif` on an external cluster and emits the
 /// typed materialization-result token.

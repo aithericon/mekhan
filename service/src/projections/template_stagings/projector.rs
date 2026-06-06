@@ -180,7 +180,10 @@ mod tests {
         );
         let u = project_staging(&[ev], &net()).expect("update");
         assert_eq!(u.status, "failed");
-        assert_eq!(u.last_error.as_deref(), Some("nomad PUT /v1/job returned 500"));
+        assert_eq!(
+            u.last_error.as_deref(),
+            Some("nomad PUT /v1/job returned 500")
+        );
         assert_eq!(u.staged_at, None);
     }
 

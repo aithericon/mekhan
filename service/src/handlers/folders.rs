@@ -203,12 +203,11 @@ pub async fn update_folder(
     let mut tx = state.db.begin().await?;
 
     // Load the current folder (within a tx so the subtree rewrite is atomic).
-    let current: Option<Folder> = sqlx::query_as(&format!(
-        "SELECT {FOLDER_COLS} FROM folders WHERE id = $1"
-    ))
-    .bind(folder_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let current: Option<Folder> =
+        sqlx::query_as(&format!("SELECT {FOLDER_COLS} FROM folders WHERE id = $1"))
+            .bind(folder_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
     require_role(&state.db, &user, current.workspace_id, Role::Editor)
@@ -231,13 +230,12 @@ pub async fn update_folder(
                 if parent_id == folder_id {
                     return Err(ApiError::bad_request("a folder cannot be its own parent"));
                 }
-                let row: Option<(String,)> = sqlx::query_as(
-                    "SELECT path FROM folders WHERE id = $1 AND workspace_id = $2",
-                )
-                .bind(parent_id)
-                .bind(current.workspace_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+                let row: Option<(String,)> =
+                    sqlx::query_as("SELECT path FROM folders WHERE id = $1 AND workspace_id = $2")
+                        .bind(parent_id)
+                        .bind(current.workspace_id)
+                        .fetch_optional(&mut *tx)
+                        .await?;
                 let p = row
                     .map(|(p,)| p)
                     .ok_or_else(|| ApiError::bad_request("parent folder not in this workspace"))?;
@@ -348,12 +346,11 @@ pub async fn delete_folder(
 ) -> Result<StatusCode, ApiError> {
     let mut tx = state.db.begin().await?;
 
-    let current: Option<Folder> = sqlx::query_as(&format!(
-        "SELECT {FOLDER_COLS} FROM folders WHERE id = $1"
-    ))
-    .bind(folder_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let current: Option<Folder> =
+        sqlx::query_as(&format!("SELECT {FOLDER_COLS} FROM folders WHERE id = $1"))
+            .bind(folder_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
     require_role(&state.db, &user, current.workspace_id, Role::Editor)
@@ -363,11 +360,10 @@ pub async fn delete_folder(
     // Resolve the parent's path (None => root, parent path is empty).
     let parent_path: String = match current.parent_id {
         Some(parent_id) => {
-            let row: Option<(String,)> =
-                sqlx::query_as("SELECT path FROM folders WHERE id = $1")
-                    .bind(parent_id)
-                    .fetch_optional(&mut *tx)
-                    .await?;
+            let row: Option<(String,)> = sqlx::query_as("SELECT path FROM folders WHERE id = $1")
+                .bind(parent_id)
+                .fetch_optional(&mut *tx)
+                .await?;
             row.map(|(p,)| p).unwrap_or_default()
         }
         None => String::new(),
@@ -376,24 +372,21 @@ pub async fn delete_folder(
     // Reparent direct children: their parent becomes the deleted folder's
     // parent, and their slug stays — so each child's new path is
     // parent_path || '/' || child.slug, and their subtrees follow.
-    let children: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, slug, path FROM folders WHERE parent_id = $1",
-    )
-    .bind(folder_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    let children: Vec<(Uuid, String, String)> =
+        sqlx::query_as("SELECT id, slug, path FROM folders WHERE parent_id = $1")
+            .bind(folder_id)
+            .fetch_all(&mut *tx)
+            .await?;
 
     for (child_id, child_slug, child_old_path) in &children {
         let child_new_path = format!("{parent_path}/{child_slug}");
         // Move the child itself.
-        sqlx::query(
-            "UPDATE folders SET parent_id = $1, path = $2 WHERE id = $3",
-        )
-        .bind(current.parent_id)
-        .bind(&child_new_path)
-        .bind(child_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE folders SET parent_id = $1, path = $2 WHERE id = $3")
+            .bind(current.parent_id)
+            .bind(&child_new_path)
+            .bind(child_id)
+            .execute(&mut *tx)
+            .await?;
         // Rewrite the child's descendants.
         sqlx::query(
             "UPDATE folders \

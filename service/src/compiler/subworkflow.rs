@@ -300,7 +300,7 @@ pub fn derive_output_port_typed(graph: &WorkflowGraph) -> Port {
                     schema: declared.schema.clone(),
                     name: name.to_string(),
                     label: name.to_string(),
-                    kind: declared.kind.clone(),
+                    kind: declared.kind,
                     required: false,
                     options: declared.options.clone(),
                     description: declared.description.clone(),

@@ -434,7 +434,11 @@ async fn skip_path_emits_transition_skipped_event_with_skip_mask_reason() {
 
     let router = test_router_nested(app_state.clone());
     let (status, _) = drive_evaluate(router).await;
-    assert_eq!(status, StatusCode::OK, "evaluate after skip-loaded scenario");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "evaluate after skip-loaded scenario"
+    );
 
     let router = test_router_nested(app_state);
     let events = fetch_events(router).await;
@@ -683,9 +687,7 @@ async fn baseline_no_options_yields_consistent_event_stream_shape() {
 
     // Honest-absence: NEITHER baseline run produced any TransitionSkipped
     // event — the new code path must not fire on the empty-options case.
-    let events_a = a["events"]
-        .as_array()
-        .expect("baseline events is an array");
+    let events_a = a["events"].as_array().expect("baseline events is an array");
     assert!(
         !events_a
             .iter()
@@ -755,4 +757,3 @@ async fn skip_path_produces_unit_tokens_on_each_output_arc_place() {
         );
     }
 }
-

@@ -497,9 +497,7 @@ pub enum CompileError {
     /// (e.g. two sibling projects containing this template) both define it, so
     /// picking one would be a silent guess (docs/20 §2). Same posture as
     /// `SlugConflict` — ambiguity is an error, not a guess.
-    #[error(
-        "node '{node_id}': asset binding '{ref_key}' is ambiguous — {detail}"
-    )]
+    #[error("node '{node_id}': asset binding '{ref_key}' is ambiguous — {detail}")]
     AssetBindingAmbiguous {
         node_id: String,
         ref_key: String,

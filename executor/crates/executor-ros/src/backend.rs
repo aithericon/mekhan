@@ -202,7 +202,10 @@ impl ExecutionBackend for RosBackend {
                     Ok(make_cancelled(run_context, start))
                 }
                 Err(ActionFail::TimedOut) => {
-                    info!(timeout_ms = resolved.timeout_ms, "ros action goal timed out");
+                    info!(
+                        timeout_ms = resolved.timeout_ms,
+                        "ros action goal timed out"
+                    );
                     Ok(make_timed_out(run_context, start))
                 }
                 Err(ActionFail::Error(message)) => {
@@ -1044,7 +1047,16 @@ mod tests {
     fn action_feedback_dedups_consecutive_duplicates() {
         let r = |v: f64| json!({ "remaining": v });
         // rosbridge-style duplicated stream: each value emitted twice.
-        let raw = vec![r(0.20), r(0.20), r(0.18), r(0.18), r(0.10), r(0.10), r(0.0), r(0.0)];
+        let raw = vec![
+            r(0.20),
+            r(0.20),
+            r(0.18),
+            r(0.18),
+            r(0.10),
+            r(0.10),
+            r(0.0),
+            r(0.0),
+        ];
         let distinct = dedup_consecutive(&raw);
         assert_eq!(distinct.len(), 4, "8 duplicated frames → 4 distinct");
         assert_eq!(distinct[0], r(0.20));

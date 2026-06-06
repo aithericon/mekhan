@@ -81,7 +81,10 @@ async fn waiting_join_cost_is_decoupled_from_tick_rate() {
     // ever satisfy even an equality guard; the always-false guard fails them all.
     for i in 0..M {
         ctx.service
-            .create_token(pid(&scenario, "a"), TokenColor::Data(serde_json::json!({ "k": i })))
+            .create_token(
+                pid(&scenario, "a"),
+                TokenColor::Data(serde_json::json!({ "k": i })),
+            )
             .await
             .unwrap();
         ctx.service
@@ -94,7 +97,10 @@ async fn waiting_join_cost_is_decoupled_from_tick_rate() {
     }
     // One churn token to drive the ticks.
     ctx.service
-        .create_token(pid(&scenario, "churn"), TokenColor::Data(serde_json::json!({ "n": 0 })))
+        .create_token(
+            pid(&scenario, "churn"),
+            TokenColor::Data(serde_json::json!({ "n": 0 })),
+        )
         .await
         .unwrap();
 
@@ -116,8 +122,16 @@ async fn waiting_join_cost_is_decoupled_from_tick_rate() {
     let marking = ctx.service.get_marking().await;
     assert_eq!(marking.token_count(&pid(&scenario, "a")), M, "a untouched");
     assert_eq!(marking.token_count(&pid(&scenario, "b")), M, "b untouched");
-    assert_eq!(marking.token_count(&pid(&scenario, "sink")), 0, "join never fired");
-    assert_eq!(marking.token_count(&pid(&scenario, "churn")), 1, "churn conserved");
+    assert_eq!(
+        marking.token_count(&pid(&scenario, "sink")),
+        0,
+        "join never fired"
+    );
+    assert_eq!(
+        marking.token_count(&pid(&scenario, "churn")),
+        1,
+        "churn conserved"
+    );
 
     let warm_per_tick_us = warm.as_micros() as f64 / (TICKS - 1) as f64;
     println!(

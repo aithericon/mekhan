@@ -78,6 +78,9 @@
 	// timer — its `refresh()` is folded into the existing 2 s poll below, so
 	// the instance view keeps a single poll. Only created once the instance
 	// actually has a deployed net (net_id present, not `created`).
+	// Created once from the instance's net at mount (the view remounts per
+	// instance id), so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const marking = createInstanceMarkingStore(instance.net_id ?? '');
 
 	// Bump on every marking refresh so the derived predicate / waiting-set

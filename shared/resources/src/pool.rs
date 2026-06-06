@@ -262,4 +262,3 @@ fn schema_value<T: JsonSchema>() -> JsonValue {
     let schema = settings.into_generator().into_root_schema_for::<T>();
     serde_json::to_value(schema).expect("schemars RootSchema serializes to a JSON object")
 }
-

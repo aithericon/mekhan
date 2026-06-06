@@ -274,7 +274,10 @@ pub fn parameterize_for_place(
     for place in places.iter_mut() {
         if place.get("id").and_then(|v| v.as_str()) == Some(air_target_place_id) {
             if let Some(obj) = place.as_object_mut() {
-                obj.insert("initial_tokens".to_string(), Value::Array(vec![seeded_token]));
+                obj.insert(
+                    "initial_tokens".to_string(),
+                    Value::Array(vec![seeded_token]),
+                );
             }
             found = true;
             break;

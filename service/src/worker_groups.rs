@@ -80,7 +80,9 @@ pub async fn ensure_default_worker_group(
     workspace_id: Uuid,
 ) -> Result<Uuid, ApiError> {
     // Fast path: already seeded.
-    if let Some(id) = resolve_worker_group_uuid(&state.db, workspace_id, DEFAULT_WORKER_GROUP_PATH).await? {
+    if let Some(id) =
+        resolve_worker_group_uuid(&state.db, workspace_id, DEFAULT_WORKER_GROUP_PATH).await?
+    {
         return Ok(id);
     }
 
@@ -107,7 +109,8 @@ pub async fn ensure_default_worker_group(
             // A concurrent seed (409 on the unique path constraint) is benign —
             // re-resolve the row the other boot wrote. Any other error is real.
             if let Some(id) =
-                resolve_worker_group_uuid(&state.db, workspace_id, DEFAULT_WORKER_GROUP_PATH).await?
+                resolve_worker_group_uuid(&state.db, workspace_id, DEFAULT_WORKER_GROUP_PATH)
+                    .await?
             {
                 return Ok(id);
             }

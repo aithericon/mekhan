@@ -279,7 +279,10 @@ impl EffectHandler for ExecutorStreamFeedHandler {
             })?;
 
         // `is_eof` defaults to false.
-        let is_eof = data.get("is_eof").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_eof = data
+            .get("is_eof")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Value is required unless is_eof is true.
         let value = data.get("value").cloned().unwrap_or(JsonValue::Null);
@@ -290,9 +293,12 @@ impl EffectHandler for ExecutorStreamFeedHandler {
         }
 
         // Sequence is required.
-        let sequence = data.get("sequence").and_then(|v| v.as_u64()).ok_or_else(|| {
-            EffectError::Fatal("Missing sequence in stream feed input".to_string())
-        })?;
+        let sequence = data
+            .get("sequence")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                EffectError::Fatal("Missing sequence in stream feed input".to_string())
+            })?;
 
         self.client
             .feed_chunk(execution_id, value, sequence, is_eof)
@@ -423,9 +429,11 @@ impl EffectHandler for ControlEmitHandler {
     async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
         // The emit arrives as the single input token (routed in from the node's
         // control inbox).
-        let data = input.inputs.values().next().ok_or_else(|| {
-            EffectError::Fatal("ControlEmitHandler requires an input".into())
-        })?;
+        let data = input
+            .inputs
+            .values()
+            .next()
+            .ok_or_else(|| EffectError::Fatal("ControlEmitHandler requires an input".into()))?;
 
         let channel = data
             .get("channel")

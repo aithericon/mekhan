@@ -102,10 +102,7 @@ fn bad_gateway(msg: &str) -> Response {
 // GET /api/cloud-layer/runs/{run_id}/topology
 // ---------------------------------------------------------------------------
 
-pub async fn get_topology(
-    State(_state): State<AppState>,
-    Path(run_id): Path<Uuid>,
-) -> Response {
+pub async fn get_topology(State(_state): State<AppState>, Path(run_id): Path<Uuid>) -> Response {
     let (secret, tenant_id) = match cloud_layer_env() {
         Some(v) => v,
         None => {
@@ -170,10 +167,7 @@ pub async fn get_topology(
 // GET /api/cloud-layer/runs/{run_id}/stream  (SSE passthrough)
 // ---------------------------------------------------------------------------
 
-pub async fn get_stream(
-    State(_state): State<AppState>,
-    Path(run_id): Path<Uuid>,
-) -> Response {
+pub async fn get_stream(State(_state): State<AppState>, Path(run_id): Path<Uuid>) -> Response {
     let (secret, tenant_id) = match cloud_layer_env() {
         Some(v) => v,
         None => {
@@ -322,13 +316,7 @@ pub async fn get_token_payload(
 mod tests {
     use std::net::SocketAddr;
 
-    use axum::{
-        body::Body,
-        http::Request,
-        response::Response,
-        routing::get,
-        Router,
-    };
+    use axum::{body::Body, http::Request, response::Response, routing::get, Router};
 
     /// Spin up an in-process axum server on an ephemeral port; returns the
     /// bound address. The server is dropped when the JoinHandle is dropped —
@@ -342,16 +330,16 @@ mod tests {
         (addr, handle)
     }
 
-    /// Build a minimal Router that mimics our 3 proxy handlers but calls the
-    /// real env-reading functions from the parent module.
-    ///
-    /// These tests don't exercise AppState — they drive the proxy logic
-    /// directly by spinning a fake cloud-layer and pointing CLOUD_LAYER_BASE_URL
-    /// at it via environment variables set per-test.
-    ///
-    /// Each test uses a unique env-var scope via serial_test / std::env::set_var.
-    /// (Env-var mutation in tests is inherently racy across parallel threads,
-    /// so we scope each test carefully.)
+    // Build a minimal Router that mimics our 3 proxy handlers but calls the
+    // real env-reading functions from the parent module.
+    //
+    // These tests don't exercise AppState — they drive the proxy logic
+    // directly by spinning a fake cloud-layer and pointing CLOUD_LAYER_BASE_URL
+    // at it via environment variables set per-test.
+    //
+    // Each test uses a unique env-var scope via serial_test / std::env::set_var.
+    // (Env-var mutation in tests is inherently racy across parallel threads,
+    // so we scope each test carefully.)
 
     // ── helper: build a fake cloud-layer server ────────────────────────────
 
@@ -400,10 +388,7 @@ mod tests {
 
     // ── helper: invoke a handler function directly via reqwest ─────────────
 
-    async fn proxy_request(
-        handler_path: &str,
-        base_url: &str,
-    ) -> reqwest::Response {
+    async fn proxy_request(handler_path: &str, base_url: &str) -> reqwest::Response {
         let client = reqwest::Client::new();
         client
             .get(format!("{}{}", base_url, handler_path))
@@ -427,17 +412,10 @@ mod tests {
         let mut val = Validation::new(Algorithm::HS256);
         val.set_audience(&["placeholder"]); // We don't set aud in our claims
         val.validate_aud = false;
-        let data = decode::<Value>(
-            &token,
-            &DecodingKey::from_secret(secret.as_bytes()),
-            &val,
-        )
-        .unwrap();
+        let data =
+            decode::<Value>(&token, &DecodingKey::from_secret(secret.as_bytes()), &val).unwrap();
 
-        assert_eq!(
-            data.claims["tenant_id"].as_str().unwrap(),
-            tenant
-        );
+        assert_eq!(data.claims["tenant_id"].as_str().unwrap(), tenant);
         assert_eq!(
             data.claims["requester_role"].as_str().unwrap(),
             "super_admin"
@@ -501,7 +479,11 @@ mod tests {
                 "Authorization",
                 format!(
                     "Bearer {}",
-                    super::mint_jwt("test-secret-topology", "00000000-0000-0000-0000-000000000001").unwrap()
+                    super::mint_jwt(
+                        "test-secret-topology",
+                        "00000000-0000-0000-0000-000000000001"
+                    )
+                    .unwrap()
                 ),
             )
             .send()
@@ -533,11 +515,7 @@ mod tests {
         let base = format!("http://127.0.0.1:{}", addr.port());
         let url = format!("{}/v1/pipelines/{}/mekhan-stream", base, run_id);
 
-        let resp = reqwest::Client::new()
-            .get(&url)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
 
         assert_eq!(resp.status().as_u16(), 200);
         assert_eq!(
@@ -552,7 +530,10 @@ mod tests {
         // Read full body — keep-alive frames and all.
         let body = resp.bytes().await.unwrap();
         let body_str = std::str::from_utf8(&body).unwrap();
-        assert_eq!(body_str, expected, "SSE bytes must travel through unchanged");
+        assert_eq!(
+            body_str, expected,
+            "SSE bytes must travel through unchanged"
+        );
     }
 
     // ── upstream 404 relayed as 404 ────────────────────────────────────────
@@ -654,12 +635,8 @@ mod tests {
         use serde_json::Value;
         let mut val = Validation::new(Algorithm::HS256);
         val.validate_aud = false;
-        let data = decode::<Value>(
-            token,
-            &DecodingKey::from_secret(secret.as_bytes()),
-            &val,
-        )
-        .unwrap();
+        let data =
+            decode::<Value>(token, &DecodingKey::from_secret(secret.as_bytes()), &val).unwrap();
         assert_eq!(data.claims["tenant_id"].as_str().unwrap(), tenant);
     }
 }

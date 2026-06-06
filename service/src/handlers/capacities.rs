@@ -160,10 +160,7 @@ pub async fn list_capacities(
 
     let mut out = Vec::with_capacity(rows.len());
     for (id, path, display_name, resource_type, public_config) in rows {
-        let public_map: Map<String, Value> = public_config
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let public_map: Map<String, Value> = public_config.as_object().cloned().unwrap_or_default();
 
         let axes = axes_for_resource(&resource_type, &public_map);
         // A `capacity` whose config doesn't parse still lists; default its
@@ -173,14 +170,12 @@ pub async fn list_capacities(
             .unwrap_or(CapacityBackend::Deferred);
 
         let live = match backend {
-            CapacityBackend::Tokens => {
-                tokens_live(&state, id, axes).await
+            CapacityBackend::Tokens => tokens_live(&state, id, axes).await,
+            CapacityBackend::Presence => {
+                presence_live(&state, workspace_id, &path, &presence).await
             }
-            CapacityBackend::Presence => presence_live(&state, workspace_id, &path, &presence).await,
             CapacityBackend::Queue => queue_live(&state, workspace_id, &path).await,
-            CapacityBackend::Scheduler => {
-                scheduler_live(clusters.get(&id.to_string()))
-            }
+            CapacityBackend::Scheduler => scheduler_live(clusters.get(&id.to_string())),
             CapacityBackend::Deferred => CapacityLive::None,
         };
 

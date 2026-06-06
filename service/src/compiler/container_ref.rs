@@ -55,7 +55,10 @@ mod tests {
 
     #[test]
     fn sanitize_matches_engine_vectors() {
-        assert_eq!(sanitize_image_ref("ghcr.io/org/img:tag"), "ghcr_io_org_img_tag");
+        assert_eq!(
+            sanitize_image_ref("ghcr.io/org/img:tag"),
+            "ghcr_io_org_img_tag"
+        );
         assert_eq!(sanitize_image_ref("python:3.12-slim"), "python_3_12_slim");
         assert_eq!(sanitize_image_ref("a@@b"), "a_b");
     }

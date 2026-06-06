@@ -245,6 +245,9 @@
 	// Needed because an empty object schema reads as `multi`-with-no-fields
 	// but we want the user to be able to switch to `scalar` even when the
 	// stored shape is empty.
+	// Seed the picked mode from the initially-detected shape; the $effect below
+	// re-applies later shape changes via untrack, so the initial read is intended.
+	// svelte-ignore state_referenced_locally
 	let activeMode = $state<'multi' | 'scalar' | 'raw_only'>(
 		shape.kind === 'raw_only' ? 'raw_only' : shape.kind
 	);

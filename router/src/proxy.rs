@@ -101,7 +101,7 @@ pub async fn chat_completions(
             return error_json(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &format!("no live replica serves model `{model}`"),
-            )
+            );
         }
         Err(e @ RouteError::ResidencyUnsatisfiable { .. }) => {
             // Fail closed — never cross-zone, never external auto-offload.

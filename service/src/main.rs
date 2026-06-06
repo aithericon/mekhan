@@ -157,10 +157,12 @@ async fn main() -> anyhow::Result<()> {
     // Allocations projection (PETRI_GLOBAL domain events → allocations table).
     // Folds resource-lease acquire/release effects + accounting signals into
     // per-grant rows for the control-plane allocations / instance overlays.
-    tokio::spawn(mekhan_service::projections::allocations::start_allocations_ingest(
-        mekhan_nats.clone(),
-        db.clone(),
-    ));
+    tokio::spawn(
+        mekhan_service::projections::allocations::start_allocations_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
 
     // Template-stagings projection (PETRI_GLOBAL → template_stagings). Folds each
     // generated staging net's terminal `stage_template` effect into its staging
@@ -240,12 +242,16 @@ async fn main() -> anyhow::Result<()> {
     // per-model demand so `scale_to_zero`/`keep_warm` policies react to load.
     // Unset ⇒ L1 (`demand = None`, only `manual` policies actuate).
     let demand: Option<std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>> =
-        std::env::var("AUTOSCALER_DEMAND_URL").ok().filter(|u| !u.is_empty()).map(|url| {
-            tracing::info!(%url, "autoscaler L2 reactive mode: scraping router /metrics");
-            std::sync::Arc::new(mekhan_service::autoscaler::demand::PrometheusDemandSource::new(
-                url,
-            )) as std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>
-        });
+        std::env::var("AUTOSCALER_DEMAND_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .map(|url| {
+                tracing::info!(%url, "autoscaler L2 reactive mode: scraping router /metrics");
+                std::sync::Arc::new(
+                    mekhan_service::autoscaler::demand::PrometheusDemandSource::new(url),
+                )
+                    as std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>
+            });
     mekhan_service::autoscaler::spawn_autoscaler(
         db.clone(),
         petri.clone(),
@@ -360,8 +366,9 @@ async fn main() -> anyhow::Result<()> {
     // Asset resolver — publish-time materialization of node-bound asset records
     // into the spliced `__assets` envelope (docs/20 §5). Same `Arc`-shared
     // shape as `resource_resolver`.
-    let asset_resolver =
-        Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()));
+    let asset_resolver = Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
+        db.clone(),
+    ));
 
     let state = AppState {
         db,

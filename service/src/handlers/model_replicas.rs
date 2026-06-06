@@ -46,13 +46,12 @@ pub async fn list_model_replicas(
     user: AuthUser,
 ) -> Result<Json<Vec<ModelReplicaRow>>, ApiError> {
     let workspace_id = caller_workspace(&user);
-    let rows: Vec<ModelReplicaRow> = sqlx::query_as(
-        "SELECT * FROM model_replicas WHERE workspace_id = $1 ORDER BY model_id",
-    )
-    .bind(workspace_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("model_replicas lookup: {e}")))?;
+    let rows: Vec<ModelReplicaRow> =
+        sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1 ORDER BY model_id")
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("model_replicas lookup: {e}")))?;
     Ok(Json(rows))
 }
 
@@ -82,7 +81,9 @@ pub async fn get_model_replica(
     .await
     .map_err(|e| ApiError::internal(format!("model_replicas lookup: {e}")))?;
     let row = row.ok_or_else(|| {
-        ApiError::not_found("no replica row for that policy yet (the autoscaler creates it on its first reconcile)")
+        ApiError::not_found(
+            "no replica row for that policy yet (the autoscaler creates it on its first reconcile)",
+        )
     })?;
     Ok(Json(row))
 }

@@ -155,9 +155,7 @@ pub(crate) fn find_valid_binding(
     if let Some(guard_script) = &transition.guard {
         if input_arcs.len() >= 2 {
             let constraints = extract_join_constraints(guard_script);
-            if let Some(plan) =
-                JoinPlan::build(transition, input_arcs, &arc_tokens, &constraints)
-            {
+            if let Some(plan) = JoinPlan::build(transition, input_arcs, &arc_tokens, &constraints) {
                 let ctx = JoinCtx {
                     executor,
                     transition,
@@ -667,7 +665,10 @@ impl JoinCtx<'_> {
                 indices,
                 self.schema_registry,
             )?;
-            return match self.executor.evaluate_guard(self.guard_script, &binding.port_inputs) {
+            return match self
+                .executor
+                .evaluate_guard(self.guard_script, &binding.port_inputs)
+            {
                 Ok(true) => Some(binding),
                 _ => None,
             };
@@ -1260,7 +1261,7 @@ mod tests {
             .map(|arc| marking.tokens_at(&arc.place_id).iter().collect())
             .collect();
         let sizes: Vec<usize> = arc_tokens.iter().map(|t| t.len()).collect();
-        if sizes.iter().any(|&s| s == 0) {
+        if sizes.contains(&0) {
             return None;
         }
         for indices in CombinationIterator::new(sizes) {
@@ -1283,7 +1284,14 @@ mod tests {
     /// Build a 2-input guarded transition + its arcs over two places.
     fn guarded_pair(
         guard: &str,
-    ) -> (TransitionExecutor, Transition, PlaceId, PlaceId, PetriArc, PetriArc) {
+    ) -> (
+        TransitionExecutor,
+        Transition,
+        PlaceId,
+        PlaceId,
+        PetriArc,
+        PetriArc,
+    ) {
         let executor = TransitionExecutor::new();
         let pa = PlaceId::named("place_a");
         let pb = PlaceId::named("place_b");

@@ -116,8 +116,7 @@ pub trait StreamTransport: Send + Sync {
     /// adapter awaits durable acceptance (JetStream ack, an object PUT) this
     /// back-pressures a too-fast producer (docs/25 §5). `seq` keys per-locator
     /// dedup/ordering.
-    async fn write(&self, locator: &str, envelope: &ChunkMessage)
-        -> Result<(), async_nats::Error>;
+    async fn write(&self, locator: &str, envelope: &ChunkMessage) -> Result<(), async_nats::Error>;
 
     /// Publish the in-band EOF sentinel at `locator` (producer close). The
     /// consumer drains up to and including this and ends its stream.
@@ -172,11 +171,7 @@ impl JetStreamTransport {
 
 #[async_trait::async_trait]
 impl StreamTransport for JetStreamTransport {
-    async fn write(
-        &self,
-        subject: &str,
-        envelope: &ChunkMessage,
-    ) -> Result<(), async_nats::Error> {
+    async fn write(&self, subject: &str, envelope: &ChunkMessage) -> Result<(), async_nats::Error> {
         let msg_id = format!("{subject}-{}", envelope.seq);
         let (headers, body) = encode_envelope(envelope, &msg_id);
         let ack = self
@@ -284,11 +279,7 @@ impl NatsLatestTransport {
 
 #[async_trait::async_trait]
 impl StreamTransport for NatsLatestTransport {
-    async fn write(
-        &self,
-        subject: &str,
-        envelope: &ChunkMessage,
-    ) -> Result<(), async_nats::Error> {
+    async fn write(&self, subject: &str, envelope: &ChunkMessage) -> Result<(), async_nats::Error> {
         // Fire-and-forget core publish: NO ack await ⇒ NO back-pressure (lossy).
         // The `Nats-Msg-Id` header is harmless here (core NATS ignores it); we
         // reuse the shared encoder so the wire framing matches JetStream exactly.
@@ -443,11 +434,7 @@ const S3_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1
 #[cfg(feature = "opendal")]
 #[async_trait::async_trait]
 impl StreamTransport for S3Transport {
-    async fn write(
-        &self,
-        locator: &str,
-        envelope: &ChunkMessage,
-    ) -> Result<(), async_nats::Error> {
+    async fn write(&self, locator: &str, envelope: &ChunkMessage) -> Result<(), async_nats::Error> {
         let key = s3_chunk_key(&self.prefix, locator, envelope.seq);
         // Await the PUT — durable acceptance IS the back-pressure here.
         self.operator.write(&key, s3_encode(envelope)).await?;

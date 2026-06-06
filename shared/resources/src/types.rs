@@ -682,7 +682,10 @@ mod tests {
             "mode",
             "replica_spec",
         ] {
-            assert!(required.contains(&req), "{req} must be required, got {required:?}");
+            assert!(
+                required.contains(&req),
+                "{req} must be required, got {required:?}"
+            );
         }
         for opt in [
             "desired_replicas",

@@ -148,18 +148,12 @@ async fn set_template_folder(
                 .method("PUT")
                 .uri(format!("/api/v1/templates/{template_id}/folder"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "folder_id": folder_id }).to_string(),
-                ))
+                .body(Body::from(json!({ "folder_id": folder_id }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NO_CONTENT,
-        "set_template_folder"
-    );
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "set_template_folder");
 }
 
 // -- B1: per-project OpenAPI bundle ------------------------------------------

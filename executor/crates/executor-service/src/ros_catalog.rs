@@ -159,7 +159,10 @@ async fn introspect_and_publish(
     let topics = catalog["topics"].as_array().map_or(0, Vec::len);
     let services = catalog["services"].as_array().map_or(0, Vec::len);
     let actions = catalog["actions"].as_array().map_or(0, Vec::len);
-    info!(topics, services, actions, "ROS interface catalog introspected");
+    info!(
+        topics,
+        services, actions, "ROS interface catalog introspected"
+    );
 
     crate::catalog_publish::publish_catalog(runner_id, mekhan_url, &token, &catalog).await
 }
@@ -300,14 +303,22 @@ async fn service_typedefs(client: &RosbridgeClient, ty: &str) -> Option<Value> {
     if is_infra_type(ty) {
         return None;
     }
-    let req = call(client, "/rosapi/service_request_details", &json!({ "type": ty }))
-        .await
-        .ok()
-        .and_then(|r| nonempty_typedefs(&r));
-    let resp = call(client, "/rosapi/service_response_details", &json!({ "type": ty }))
-        .await
-        .ok()
-        .and_then(|r| nonempty_typedefs(&r));
+    let req = call(
+        client,
+        "/rosapi/service_request_details",
+        &json!({ "type": ty }),
+    )
+    .await
+    .ok()
+    .and_then(|r| nonempty_typedefs(&r));
+    let resp = call(
+        client,
+        "/rosapi/service_response_details",
+        &json!({ "type": ty }),
+    )
+    .await
+    .ok()
+    .and_then(|r| nonempty_typedefs(&r));
     merge_typedefs([req, resp])
 }
 
@@ -447,8 +458,11 @@ mod tests {
             { "type": "geometry_msgs/Twist", "fieldnames": ["linear"],
               "fieldtypes": ["geometry_msgs/Vector3"], "fieldarraylen": [-1] }
         ]);
-        let got =
-            entry_with_typedefs("/turtle1/cmd_vel", "geometry_msgs/msg/Twist", Some(td.clone()));
+        let got = entry_with_typedefs(
+            "/turtle1/cmd_vel",
+            "geometry_msgs/msg/Twist",
+            Some(td.clone()),
+        );
         assert_eq!(got["name"], "/turtle1/cmd_vel");
         assert_eq!(got["type"], "geometry_msgs/msg/Twist");
         assert_eq!(got["typedefs"], td);
@@ -510,7 +524,9 @@ mod tests {
         // topics/services are introspected.
         assert!(is_infra_type("rcl_interfaces/srv/DescribeParameters"));
         assert!(is_infra_type("rcl_interfaces/msg/ParameterEvent"));
-        assert!(is_infra_type("type_description_interfaces/srv/GetTypeDescription"));
+        assert!(is_infra_type(
+            "type_description_interfaces/srv/GetTypeDescription"
+        ));
         assert!(is_infra_type("rosbridge_msgs/msg/ConnectedClients"));
         assert!(!is_infra_type("turtlesim/srv/TeleportAbsolute"));
         assert!(!is_infra_type("turtlesim/Pose"));

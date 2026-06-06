@@ -238,8 +238,7 @@ mod tests {
         // Honest-absence: pool name must NOT collide with executor-llm's
         // ${hostname}-executor (which ends with -executor, not -executor-surya).
         assert!(
-            !name.ends_with("-executor")
-                || name.ends_with("-executor-surya"),
+            !name.ends_with("-executor") || name.ends_with("-executor-surya"),
             "Surya pool name MUST NOT collide with executor-llm's -executor suffix"
         );
 

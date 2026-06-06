@@ -195,7 +195,12 @@ pub async fn trigger_staging(
     .fetch_optional(db)
     .await
     .map_err(|e| err(format!("load template version: {e}")))?
-    .ok_or_else(|| err(format!("template '{}' has no version {version}", template.slug)))?;
+    .ok_or_else(|| {
+        err(format!(
+            "template '{}' has no version {version}",
+            template.slug
+        ))
+    })?;
 
     // (b) Resolve the target cluster connection + flavor-match.
     let conn = resolve_datacenter_connection(db, workspace_id, datacenter_resource_id)
@@ -243,7 +248,10 @@ pub async fn trigger_staging(
         &template.slug,
         &conn,
         version_row.common_spec.clone(),
-        version_row.escape_hatch.clone().unwrap_or_else(|| json!({})),
+        version_row
+            .escape_hatch
+            .clone()
+            .unwrap_or_else(|| json!({})),
         package_ref,
     )) {
         Ok(v) => v,
@@ -326,7 +334,8 @@ pub fn build_materialize_image_net(
         obj.insert("image_ref".to_string(), json!(image_ref));
     }
 
-    let start: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("start", "Materialize Request");
+    let start: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.state("start", "Materialize Request");
     let materialized: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.terminal("materialized", "Materialized");
     let failed: aithericon_sdk::PlaceHandle<DynamicToken> =

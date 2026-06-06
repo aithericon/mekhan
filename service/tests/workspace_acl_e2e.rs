@@ -293,9 +293,7 @@ async fn folder_filing_filters_listing() {
                 .method("PUT")
                 .uri(format!("/api/v1/templates/{tpl_in}/folder"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "folder_id": folder_id }).to_string(),
-                ))
+                .body(Body::from(json!({ "folder_id": folder_id }).to_string()))
                 .unwrap(),
         )
         .await

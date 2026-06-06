@@ -57,7 +57,9 @@
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 
-	// Yjs session + binding
+	// Yjs session + binding — bound once for the active template; the route
+	// remounts on id change, so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const session = getSession(templateId);
 	const binding = new YjsGraphBinding(session.doc);
 

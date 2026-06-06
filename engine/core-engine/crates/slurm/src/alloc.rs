@@ -440,7 +440,10 @@ pub fn parse_materialize_output(stdout: &str) -> Option<(String, String, Option<
 /// Both the launcher ([`render_apptainer_pull_launch`]) and the caller's poll
 /// loop compute it from the sanitized stem so they agree without threading state.
 pub fn materialize_log_path(image_ref: &str) -> String {
-    format!("/tmp/petri-materialize-{}.log", sanitize_image_ref(image_ref))
+    format!(
+        "/tmp/petri-materialize-{}.log",
+        sanitize_image_ref(image_ref)
+    )
 }
 
 /// Build a fire-and-forget launcher that runs the apptainer pull DETACHED on the
@@ -554,19 +557,15 @@ pub fn render_sbatch_script(
     let mut lines: Vec<String> = vec!["#!/bin/bash".to_string()];
     lines.push(format!("#SBATCH --job-name={}", slug));
 
-    if let Some(cpus) = spec
-        .get("cpus")
-        .and_then(|v| v.as_i64())
-        .filter(|c| *c > 0)
-    {
+    if let Some(cpus) = spec.get("cpus").and_then(|v| v.as_i64()).filter(|c| *c > 0) {
         lines.push(format!("#SBATCH --cpus-per-task={cpus}"));
     }
-    if let Some(gpus) = spec
-        .get("gpus")
-        .and_then(|v| v.as_i64())
-        .filter(|g| *g > 0)
-    {
-        let gres = match spec.get("gpu_type").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    if let Some(gpus) = spec.get("gpus").and_then(|v| v.as_i64()).filter(|g| *g > 0) {
+        let gres = match spec
+            .get("gpu_type")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             Some(ty) => format!("gpu:{ty}:{gpus}"),
             None => format!("gpu:{gpus}"),
         };
@@ -579,10 +578,18 @@ pub fn render_sbatch_script(
     {
         lines.push(format!("#SBATCH --mem={mem}M"));
     }
-    if let Some(time_limit) = spec.get("time_limit").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    if let Some(time_limit) = spec
+        .get("time_limit")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         lines.push(format!("#SBATCH --time={time_limit}"));
     }
-    if let Some(partition) = spec.get("partition").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    if let Some(partition) = spec
+        .get("partition")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         lines.push(format!("#SBATCH --partition={partition}"));
     }
 
@@ -889,14 +896,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_image_ref() {
-        assert_eq!(sanitize_image_ref("ghcr.io/org/img:tag"), "ghcr_io_org_img_tag");
+        assert_eq!(
+            sanitize_image_ref("ghcr.io/org/img:tag"),
+            "ghcr_io_org_img_tag"
+        );
         assert_eq!(sanitize_image_ref("python:3.12-slim"), "python_3_12_slim");
         assert_eq!(sanitize_image_ref("a@@b"), "a_b");
     }
 
     #[test]
     fn test_parse_materialize_output() {
-        let out = "some noise\nPETRI_MATERIALIZE digest=abc123 sif=/shared/sif/abc123.sif size=42\n";
+        let out =
+            "some noise\nPETRI_MATERIALIZE digest=abc123 sif=/shared/sif/abc123.sif size=42\n";
         let (d, s, sz) = parse_materialize_output(out).unwrap();
         assert_eq!(d, "abc123");
         assert_eq!(s, "/shared/sif/abc123.sif");

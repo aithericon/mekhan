@@ -31,7 +31,10 @@ thread_local! {
 ///
 /// The restore runs from a `Drop` guard so the previous map is reinstated even
 /// if `f` unwinds — a stale `$ref` context must never leak onto the thread.
-pub(crate) fn with_definitions<R>(definitions: &BTreeMap<String, Value>, f: impl FnOnce() -> R) -> R {
+pub(crate) fn with_definitions<R>(
+    definitions: &BTreeMap<String, Value>,
+    f: impl FnOnce() -> R,
+) -> R {
     struct Restore(Option<BTreeMap<String, Value>>);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -104,9 +107,8 @@ pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> Tok
         // workflow `definitions` made available for the current analyze pass
         // via [`with_definitions`] (empty otherwise → `$ref` → `Any`).
         if let Some(schema) = &f.schema {
-            let structural = with_active_definitions(|defs| {
-                json_schema_to_token_shape(schema, defs)
-            });
+            let structural =
+                with_active_definitions(|defs| json_schema_to_token_shape(schema, defs));
             o.insert(
                 &f.name,
                 TokenShape::Schema {

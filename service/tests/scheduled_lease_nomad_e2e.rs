@@ -831,7 +831,11 @@ async fn leased_loop_fails_fast_when_held_nomad_alloc_dies() {
         .unwrap();
     let dc_status = resp.status();
     let dc_body = body_json(resp.into_body()).await;
-    assert_eq!(dc_status, StatusCode::CREATED, "create datacenter: {dc_body}");
+    assert_eq!(
+        dc_status,
+        StatusCode::CREATED,
+        "create datacenter: {dc_body}"
+    );
     let resource_id: Uuid = dc_body["id"].as_str().unwrap().parse().unwrap();
 
     let pool_net_id = format!("pool-{resource_id}");
@@ -906,7 +910,11 @@ async fn leased_loop_fails_fast_when_held_nomad_alloc_dies() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // ── (4) Wait for THIS run's dispatched drain executor + its alloc RUNNING
@@ -959,13 +967,14 @@ async fn leased_loop_fails_fast_when_held_nomad_alloc_dies() {
         if Instant::now() > fail_deadline {
             // Diagnostics: dump the adapter net's terminal records so a failure
             // here shows whether t_lease_died fired (and over which route).
-            let pool_state: Value = reqwest::get(format!("{}/api/nets/{pool_net_id}/state", engine_url()))
-                .await
-                .ok()
-                .map(|r| r.json())
-                .unwrap()
-                .await
-                .unwrap_or(Value::Null);
+            let pool_state: Value =
+                reqwest::get(format!("{}/api/nets/{pool_net_id}/state", engine_url()))
+                    .await
+                    .ok()
+                    .map(|r| r.json())
+                    .unwrap()
+                    .await
+                    .unwrap_or(Value::Null);
             panic!(
                 "instance did not fail within 150s of SIGKILLing the held alloc \
                  (status: {st}) — the held-alloc-death → lease_failed → t_lease_died \

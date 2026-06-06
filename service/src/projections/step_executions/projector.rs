@@ -746,7 +746,7 @@ impl State {
                         status: StepStatus::Skipped,
                         inputs: None,
                         outputs: None,
-                execution_id: None,
+                        execution_id: None,
                         branch_taken: None,
                         started_at: None,
                         completed_at: None,

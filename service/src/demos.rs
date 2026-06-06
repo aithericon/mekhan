@@ -959,10 +959,10 @@ fn guess_content_type(filename: &str) -> &'static str {
 
 /// One asset fixture: a self-contained asset-type schema + the asset (ref-key)
 /// + its records. The type is created (or reused if a same-named type already
-/// exists in the demo workspace) before the asset, so several fixtures can
-/// share a type without ordering ceremony. A record's `File`-field value may be
-/// `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
-/// bundled file and substitutes the resulting storage path.
+///   exists in the demo workspace) before the asset, so several fixtures can
+///   share a type without ordering ceremony. A record's `File`-field value may be
+///   `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
+///   bundled file and substitutes the resulting storage path.
 #[derive(serde::Deserialize)]
 struct AssetFixture {
     asset_type: crate::models::asset::CreateAssetTypeRequest,
@@ -1882,7 +1882,11 @@ mod tests {
             .expect("merge-extraction node must exist");
         match &merge.data {
             WorkflowNodeData::Join { mode, output, .. } => {
-                assert_eq!(*mode, JoinMode::Any, "branching demo uses XOR-join (mode=any)");
+                assert_eq!(
+                    *mode,
+                    JoinMode::Any,
+                    "branching demo uses XOR-join (mode=any)"
+                );
                 assert!(
                     output.fields.iter().any(|f| f.name == "fields"),
                     "merge-extraction.output must declare a `fields` field"
@@ -1967,11 +1971,11 @@ mod tests {
     /// AIR is fully self-contained — no S3 dependency.
     #[test]
     fn dump_document_pipeline_branching_v1_air() {
+        use crate::compiler::rhai_gen::json_to_rhai_literal;
         use crate::compiler::{
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
             ConfigStorage,
         };
-        use crate::compiler::rhai_gen::json_to_rhai_literal;
 
         let Some(out_path) = std::env::var_os("DUMP_BRANCHING_AIR") else {
             return;
@@ -2012,14 +2016,12 @@ mod tests {
             .expect("AIR must carry a transitions array");
         let mut inlined = 0usize;
         for (node_id, config) in &node_configs {
-            let storage_key =
-                ConfigStorage::ephemeral().key(node_id);
+            let storage_key = ConfigStorage::ephemeral().key(node_id);
             let needle = format!(
                 "\"config_ref\": #{{ \"storage_path\": \"{}\" }}",
                 storage_key.replace('\\', "\\\\").replace('"', "\\\"")
             );
-            let replacement =
-                format!("\"config\": {}", json_to_rhai_literal(config));
+            let replacement = format!("\"config\": {}", json_to_rhai_literal(config));
 
             let prepare_id = format!("{node_id}/prepare");
             let t = transitions
@@ -2036,8 +2038,7 @@ mod tests {
                  looked for: {needle}"
             );
             let rewritten = src.replace(&needle, &replacement);
-            *t.pointer_mut("/logic/source").unwrap() =
-                serde_json::Value::String(rewritten);
+            *t.pointer_mut("/logic/source").unwrap() = serde_json::Value::String(rewritten);
             inlined += 1;
         }
         assert_eq!(

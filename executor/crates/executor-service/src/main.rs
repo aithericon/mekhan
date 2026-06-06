@@ -13,43 +13,42 @@ use aithericon_executor_domain::ExecutionJob;
 use aithericon_executor_http::HttpBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
-#[cfg(feature = "surya")]
-use aithericon_executor_surya::SuryaBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
 use aithericon_executor_logs::{
     CompositeLogSink, FileLogSink, LevelFilterSink, LogSink, LogSinkConfig, NatsLogSink,
 };
+#[cfg(feature = "loki")]
+use aithericon_executor_loki::LokiBackend;
 use aithericon_executor_metrics::{
     CompositeMetricSink, InMemoryMetricSink, LokiMetricSink, MetricSink, MetricSinkConfig,
     NatsMetricSink,
 };
+#[cfg(feature = "postgres")]
+use aithericon_executor_postgres::PostgresBackend;
 use aithericon_executor_process::ProcessBackend;
+#[cfg(feature = "prometheus")]
+use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "python")]
 use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 #[cfg(feature = "python")]
 use aithericon_executor_python::PythonBackend;
-#[cfg(feature = "smtp")]
-use aithericon_executor_smtp::SmtpBackend;
-#[cfg(feature = "postgres")]
-use aithericon_executor_postgres::PostgresBackend;
-#[cfg(feature = "loki")]
-use aithericon_executor_loki::LokiBackend;
-#[cfg(feature = "prometheus")]
-use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "ros")]
 use aithericon_executor_ros::RosBackend;
+#[cfg(feature = "smtp")]
+use aithericon_executor_smtp::SmtpBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
+#[cfg(feature = "surya")]
+use aithericon_executor_surya::SuryaBackend;
 use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
-    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker,
-    DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
-    LiveModelState, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
-    TransportRegistry,
+    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker, DrainConfig,
+    ExecutorConfig, JobExecutor, JobSource, Lifetime, LiveModelState, NatsCancelListener,
+    NixEnvironmentHook, SidecarLogConfig, StatusReporter, TransportRegistry,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -184,7 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return Err(e.into());
         }
         info!(
-            allow_network = config.sandbox.as_ref().map(|s| s.allow_network).unwrap_or(false),
+            allow_network = config
+                .sandbox
+                .as_ref()
+                .map(|s| s.allow_network)
+                .unwrap_or(false),
             "sandbox enabled — process/python jobs run under nsjail"
         );
     }
@@ -486,11 +489,9 @@ async fn run_nats_daemon(
                 ..Default::default()
             };
 
-            let storage = NatsStorage::<ExecutionJob>::new_with_config(
-                nats_client.clone(),
-                nats_config,
-            )
-            .await?;
+            let storage =
+                NatsStorage::<ExecutionJob>::new_with_config(nats_client.clone(), nats_config)
+                    .await?;
 
             // Worker name must stay unique across the served backends; include
             // the routing partition so logs disambiguate co-located groups, but
@@ -518,7 +519,10 @@ async fn run_nats_daemon(
         // carried so the fleet view can render which group each worker competes
         // in (the actual queue partition is the group's UUID, bound above).
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
-        let presence_id = config.worker_id.clone().unwrap_or_else(|| config.name.clone());
+        let presence_id = config
+            .worker_id
+            .clone()
+            .unwrap_or_else(|| config.name.clone());
         spawn_worker_presence_task(
             nats_client_for_cancel.clone(),
             presence_id.clone(),
@@ -851,8 +855,7 @@ fn register_executor_backend(
     match meta.wire_name {
         "process" => {
             info!("process backend registered");
-            let mut process =
-                ProcessBackend::new().with_max_output_bytes(config.max_output_bytes);
+            let mut process = ProcessBackend::new().with_max_output_bytes(config.max_output_bytes);
             if let Some(cfg) = &sandbox_cfg {
                 process = process.with_sandbox(cfg.clone());
             }

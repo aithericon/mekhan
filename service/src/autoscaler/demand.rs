@@ -73,8 +73,8 @@ impl DemandSource for PrometheusDemandSource {
             }
         };
 
-        let inflight = parse_model_metric(&body, "inference_router_model_inflight", model_id)
-            .unwrap_or(0);
+        let inflight =
+            parse_model_metric(&body, "inference_router_model_inflight", model_id).unwrap_or(0);
         let starved = parse_model_metric(&body, "inference_router_model_starved_total", model_id)
             .unwrap_or(0);
 
@@ -136,14 +136,23 @@ inference_router_model_starved_total{model=\"cold\"} 5
 
     #[test]
     fn parses_per_model_values() {
-        assert_eq!(parse_model_metric(SAMPLE, "inference_router_model_inflight", "warm"), Some(3));
-        assert_eq!(parse_model_metric(SAMPLE, "inference_router_model_inflight", "cold"), Some(0));
+        assert_eq!(
+            parse_model_metric(SAMPLE, "inference_router_model_inflight", "warm"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_model_metric(SAMPLE, "inference_router_model_inflight", "cold"),
+            Some(0)
+        );
         assert_eq!(
             parse_model_metric(SAMPLE, "inference_router_model_starved_total", "cold"),
             Some(5)
         );
         // Absent model / absent series → None.
-        assert_eq!(parse_model_metric(SAMPLE, "inference_router_model_inflight", "ghost"), None);
+        assert_eq!(
+            parse_model_metric(SAMPLE, "inference_router_model_inflight", "ghost"),
+            None
+        );
         assert_eq!(
             parse_model_metric(SAMPLE, "inference_router_model_starved_total", "warm"),
             None
@@ -154,6 +163,9 @@ inference_router_model_starved_total{model=\"cold\"} 5
     fn metric_prefix_is_not_greedy() {
         // `..._inflight` must not match a hypothetical `..._inflight_total`.
         let body = "inference_router_model_inflight_total{model=\"x\"} 9\n";
-        assert_eq!(parse_model_metric(body, "inference_router_model_inflight", "x"), None);
+        assert_eq!(
+            parse_model_metric(body, "inference_router_model_inflight", "x"),
+            None
+        );
     }
 }

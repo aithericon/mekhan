@@ -93,7 +93,11 @@ pub enum Exclusivity {
 /// `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
 /// live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case", tag = "capacity_kind", content = "capacity_amount")]
+#[serde(
+    rename_all = "snake_case",
+    tag = "capacity_kind",
+    content = "capacity_amount"
+)]
 pub enum CapacityAmount {
     /// A configured integer unit count (the worker pool's `N`).
     Fixed(u32),
@@ -183,10 +187,7 @@ impl CapacityBackend {
 ///   connection), so it dispatches through here by these fixed axes —
 ///   `.backend()` of the result is always [`CapacityBackend::Scheduler`].
 /// - anything else (postgres, smtp, …) ⇒ `None`: not a pool.
-pub fn axes_for_resource(
-    resource_type: &str,
-    public: &Map<String, Value>,
-) -> Option<CapacityAxes> {
+pub fn axes_for_resource(resource_type: &str, public: &Map<String, Value>) -> Option<CapacityAxes> {
     match resource_type {
         "capacity" => serde_json::from_value(Value::Object(public.clone())).ok(),
         "datacenter" => Some(datacenter_lease_axes()),
@@ -304,7 +305,8 @@ impl CapacityAxes {
         }
 
         let mut warnings = Vec::new();
-        if matches!(self.dispatch, Dispatch::Pull) && matches!(self.eligibility, Eligibility::Predicate)
+        if matches!(self.dispatch, Dispatch::Pull)
+            && matches!(self.eligibility, Eligibility::Predicate)
         {
             warnings.push(
                 "scale-mismatch: a `predicate` (rich match) eligibility on a `pull` \
@@ -424,7 +426,9 @@ mod tests {
             CapacityAmount::Fixed(4),
             Eligibility::Partition,
         );
-        let err = a.validate().expect_err("competing_consumer × push must reject");
+        let err = a
+            .validate()
+            .expect_err("competing_consumer × push must reject");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(msg(&err).contains("pull-only"), "wrong message: {err:?}");
     }
@@ -455,7 +459,9 @@ mod tests {
             CapacityAmount::Elastic,
             Eligibility::Predicate,
         );
-        let err = a.validate().expect_err("elastic × push (presence-less) must reject");
+        let err = a
+            .validate()
+            .expect_err("elastic × push (presence-less) must reject");
         // The pull-only message wins (it is the more specific addressee failure).
         assert!(msg(&err).contains("incoherent capacity"));
     }
@@ -512,7 +518,9 @@ mod tests {
             CapacityAmount::Fixed(2),
             Eligibility::Predicate,
         );
-        let warnings = a.validate().expect("pull × predicate must pass (warn only)");
+        let warnings = a
+            .validate()
+            .expect("pull × predicate must pass (warn only)");
         assert_eq!(warnings.len(), 1, "expected one scale-mismatch warning");
         assert!(warnings[0].contains("scale-mismatch"));
     }
@@ -556,7 +564,10 @@ mod tests {
     #[test]
     fn backend_pool_backend_mapping() {
         use aithericon_resources::pool::PoolBackend;
-        assert_eq!(CapacityBackend::Tokens.pool_backend(), Some(PoolBackend::Tokens));
+        assert_eq!(
+            CapacityBackend::Tokens.pool_backend(),
+            Some(PoolBackend::Tokens)
+        );
         assert_eq!(
             CapacityBackend::Presence.pool_backend(),
             Some(PoolBackend::Presence)
@@ -619,10 +630,19 @@ mod tests {
         let worker = preset_by_name("worker").unwrap().axes;
         let v = serde_json::to_value(worker).unwrap();
         let obj = v.as_object().unwrap();
-        assert!(obj.contains_key("capacity_kind"), "missing capacity_kind: {v}");
-        assert!(obj.contains_key("capacity_amount"), "missing capacity_amount: {v}");
+        assert!(
+            obj.contains_key("capacity_kind"),
+            "missing capacity_kind: {v}"
+        );
+        assert!(
+            obj.contains_key("capacity_amount"),
+            "missing capacity_amount: {v}"
+        );
         assert!(!obj.contains_key("kind"), "stale `kind` key leaked: {v}");
-        assert!(!obj.contains_key("amount"), "stale `amount` key leaked: {v}");
+        assert!(
+            !obj.contains_key("amount"),
+            "stale `amount` key leaked: {v}"
+        );
         // And the descriptor's allowed public fields all round-trip back.
         let back: CapacityAxes = serde_json::from_value(v).unwrap();
         assert_eq!(back, worker);

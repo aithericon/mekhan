@@ -73,14 +73,7 @@ pub trait EventStream: Send + Sync {
     /// ROS action backend calls this once per DISTINCT action feedback message
     /// when its node declares a Control `out` channel. Fire-and-forget: the
     /// engine never gates the emit (it rides JetStream).
-    async fn item(
-        &self,
-        _channel: String,
-        _episode_uid: String,
-        _idx: u64,
-        _payload: Value,
-    ) {
-    }
+    async fn item(&self, _channel: String, _episode_uid: String, _idx: u64, _payload: Value) {}
 
     /// Emit one streaming-channel `close` control token (docs/25, consumer-join)
     /// — the in-process equivalent of the Python SDK's episode context exit,

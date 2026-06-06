@@ -442,10 +442,10 @@ impl NatsTestContext {
 
 /// Check if NATS is available at a specific URL.
 pub async fn nats_available_at(url: &str) -> bool {
-    match tokio::time::timeout(Duration::from_secs(2), async_nats::connect(url)).await {
-        Ok(Ok(_)) => true,
-        _ => false,
-    }
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), async_nats::connect(url)).await,
+        Ok(Ok(_))
+    )
 }
 
 #[cfg(test)]

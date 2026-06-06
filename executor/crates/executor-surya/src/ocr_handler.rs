@@ -86,7 +86,10 @@ pub async fn ocr_extract(
         // upstream Surya wrapper couldn't process the content (corrupt
         // PDF, unsupported codec, subprocess down). Operator sees the
         // adapter's error string in the response body.
-        (StatusCode::UNPROCESSABLE_ENTITY, format!("Surya OCR failed: {e}"))
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Surya OCR failed: {e}"),
+        )
     })?;
 
     Ok(Json(OcrExtractResponse {

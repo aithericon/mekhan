@@ -550,8 +550,18 @@ mod tests {
     fn valid_requirements_compile_clean() {
         let reqs = Requirements {
             constraints: vec![
-                c("xrd", "max_2theta", ConstraintOp::Gte, serde_json::json!(160.0)),
-                c("xrd", "source", ConstraintOp::Exists, serde_json::Value::Null),
+                c(
+                    "xrd",
+                    "max_2theta",
+                    ConstraintOp::Gte,
+                    serde_json::json!(160.0),
+                ),
+                c(
+                    "xrd",
+                    "source",
+                    ConstraintOp::Exists,
+                    serde_json::Value::Null,
+                ),
                 c(
                     "xrd",
                     "source",
@@ -585,7 +595,12 @@ mod tests {
     #[test]
     fn unknown_field_is_compile_error() {
         let reqs = Requirements {
-            constraints: vec![c("xrd", "nonexistent", ConstraintOp::Exists, serde_json::Value::Null)],
+            constraints: vec![c(
+                "xrd",
+                "nonexistent",
+                ConstraintOp::Exists,
+                serde_json::Value::Null,
+            )],
         };
         let errs = validate_requirements_against_registry(&step_with(Some(reqs)), &registry());
         assert_eq!(errs.len(), 1);
@@ -630,8 +645,18 @@ mod tests {
     #[test]
     fn caps_satisfy_mirror_matches_engine_semantics() {
         let constraints = vec![
-            c("xrd", "max_2theta", ConstraintOp::Gte, serde_json::json!(160.0)),
-            c("xrd", "source", ConstraintOp::Exists, serde_json::Value::Null),
+            c(
+                "xrd",
+                "max_2theta",
+                ConstraintOp::Gte,
+                serde_json::json!(160.0),
+            ),
+            c(
+                "xrd",
+                "source",
+                ConstraintOp::Exists,
+                serde_json::Value::Null,
+            ),
         ];
         // A runner with max_2theta=180 + source present satisfies.
         let good = serde_json::json!({ "xrd": { "max_2theta": 180.0, "source": "synchrotron" } });

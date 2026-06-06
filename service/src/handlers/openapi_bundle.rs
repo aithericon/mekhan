@@ -20,6 +20,7 @@
 //!       - `POST /api/v1/triggers/{node_id}/fire`   (async, 202 `{instance_id}`)
 //!       - `POST /api/v1/triggers/{node_id}/invoke` (sync, 200 success envelope
 //!         `{ ok, value }`, or 202 `{instance_id}` on timeout)
+//!
 //!     The request body is the workflow's **declared input contract** — the
 //!     target `Start.initial` port reached by the trigger's outgoing edge —
 //!     yielding *precise* typed properties (that's the win over the old loose
@@ -196,9 +197,7 @@ pub async fn folder_openapi_bundle(
     // Session cookie + machine PAT (bearer) both authenticate the protected
     // `/fire` + `/invoke` routes (RFC 7662 introspection in
     // `require_auth_middleware`). Advertise both whenever a manual op exists.
-    let manual_present = paths
-        .keys()
-        .any(|p| p.starts_with("/api/v1/triggers/"));
+    let manual_present = paths.keys().any(|p| p.starts_with("/api/v1/triggers/"));
     if manual_present {
         security_schemes.insert(
             "sessionCookie".to_string(),
@@ -270,7 +269,9 @@ fn resolve_trigger_input_port(graph: &WorkflowGraph, trigger_id: &str) -> Option
 /// Does this port declare at least one `File`-kind field? File fields earn a
 /// `multipart/form-data` content alternative on the requestBody.
 fn port_has_file(port: &Port) -> bool {
-    port.fields.iter().any(|f| matches!(f.kind, FieldKind::File))
+    port.fields
+        .iter()
+        .any(|f| matches!(f.kind, FieldKind::File))
 }
 
 /// Build the requestBody `content` map for a typed input `Port`.
@@ -424,7 +425,12 @@ fn emit_manual(
         },
     });
     x_ext(&mut fire);
-    insert_op(paths, &format!("/api/v1/triggers/{node_id}/fire"), "post", fire);
+    insert_op(
+        paths,
+        &format!("/api/v1/triggers/{node_id}/fire"),
+        "post",
+        fire,
+    );
 
     // --- /invoke (sync 200 envelope, 202 timeout) ---
     let mut invoke = json!({
@@ -568,7 +574,12 @@ fn emit_webhook(
         }
     }
 
-    insert_op(paths, &format!("/api/triggers/webhook/{}", hook.slug), &method, op);
+    insert_op(
+        paths,
+        &format!("/api/triggers/webhook/{}", hook.slug),
+        &method,
+        op,
+    );
 }
 
 /// Slot an operation into the `paths` map under the given path + lowercase
@@ -610,9 +621,7 @@ impl WebhookAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::template::{
-        ManualTrigger, Port, Position, WorkflowNode,
-    };
+    use crate::models::template::{ManualTrigger, Port, Position, WorkflowNode};
 
     fn trigger_node(id: &str, source: TriggerSource, enabled: bool) -> WorkflowNode {
         WorkflowNode {
@@ -635,7 +644,11 @@ mod tests {
         }
     }
 
-    fn port_field(name: &str, kind: FieldKind, required: bool) -> crate::models::template::PortField {
+    fn port_field(
+        name: &str,
+        kind: FieldKind,
+        required: bool,
+    ) -> crate::models::template::PortField {
         crate::models::template::PortField {
             name: name.into(),
             label: name.into(),
@@ -798,13 +811,11 @@ mod tests {
 
         let content = &paths["/api/v1/triggers/t_file/fire"]["post"]["requestBody"]["content"];
         // application/json — File is a storage-path string.
-        let json_props =
-            &content["application/json"]["schema"]["properties"];
+        let json_props = &content["application/json"]["schema"]["properties"];
         assert_eq!(json_props["attachment"]["type"], json!("string"));
         assert!(json_props["attachment"].get("format").is_none());
         // multipart/form-data — File becomes a binary upload, others mirror.
-        let mp_props =
-            &content["multipart/form-data"]["schema"]["properties"];
+        let mp_props = &content["multipart/form-data"]["schema"]["properties"];
         assert_eq!(mp_props["attachment"]["type"], json!("string"));
         assert_eq!(mp_props["attachment"]["format"], json!("binary"));
         assert_eq!(mp_props["note"]["type"], json!("string"));
@@ -860,7 +871,15 @@ mod tests {
         let mut schemas = BTreeMap::new();
         let mut sec = BTreeMap::new();
         emit_webhook(
-            "wh_2", "Secure", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut schemas,
+            "wh_2",
+            "Secure",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut schemas,
             &mut sec,
         );
         let op = &paths["/api/triggers/webhook/secure"]["post"];
@@ -880,7 +899,18 @@ mod tests {
         });
         let mut paths = BTreeMap::new();
         let (mut s, mut sec) = (BTreeMap::new(), BTreeMap::new());
-        emit_webhook("w", "A", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut s, &mut sec);
+        emit_webhook(
+            "w",
+            "A",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut s,
+            &mut sec,
+        );
         assert!(paths["/api/triggers/webhook/a"]["post"].is_object());
 
         // Explicit PUT.
@@ -891,7 +921,18 @@ mod tests {
         });
         let mut paths = BTreeMap::new();
         let (mut s, mut sec) = (BTreeMap::new(), BTreeMap::new());
-        emit_webhook("w", "B", None, &source, &Uuid::nil(), "", 1, &mut paths, &mut s, &mut sec);
+        emit_webhook(
+            "w",
+            "B",
+            None,
+            &source,
+            &Uuid::nil(),
+            "",
+            1,
+            &mut paths,
+            &mut s,
+            &mut sec,
+        );
         assert!(paths["/api/triggers/webhook/b"]["put"].is_object());
     }
 
@@ -931,12 +972,11 @@ mod tests {
             .nodes
             .iter()
             .filter(|n| match &n.data {
-                WorkflowNodeData::Trigger { source, enabled, .. } => {
+                WorkflowNodeData::Trigger {
+                    source, enabled, ..
+                } => {
                     *enabled
-                        && matches!(
-                            source,
-                            TriggerSource::Manual(_) | TriggerSource::Webhook(_)
-                        )
+                        && matches!(source, TriggerSource::Manual(_) | TriggerSource::Webhook(_))
                 }
                 _ => false,
             })
@@ -951,10 +991,7 @@ mod tests {
             TriggerSource::Manual(ManualTrigger { form: vec![] }),
             false,
         );
-        let enabled = matches!(
-            &node.data,
-            WorkflowNodeData::Trigger { enabled: true, .. }
-        );
+        let enabled = matches!(&node.data, WorkflowNodeData::Trigger { enabled: true, .. });
         assert!(!enabled);
     }
 

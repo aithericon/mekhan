@@ -8,6 +8,15 @@ test.describe('Node Deletion', () => {
 	});
 
 	test('start and end nodes are initially visible', async ({ page }) => {
+		// The redesigned editor hydrates its canvas from the live Yjs document,
+		// NOT from the REST template GET — so the mocked `gotoDemoEditor` helper
+		// (which only stubs the REST response, leaving the Yjs WS unmocked)
+		// yields an empty canvas. To preserve this test's intent (the initial
+		// Start/End nodes of a seeded workflow render on the canvas), navigate to
+		// a real seeded demo template whose Yjs doc has exactly one Start and one
+		// End node — "Email Welcome" (`…030`).
+		await page.goto('/templates/00000000-0000-0000-0000-000000000030');
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
 		await expect(page.getByTestId('node-start')).toBeVisible();
 		await expect(page.getByTestId('node-end')).toBeVisible();
 	});

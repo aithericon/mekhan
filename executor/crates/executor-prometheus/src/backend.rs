@@ -115,11 +115,10 @@ impl ExecutionBackend for PrometheusBackend {
         // config when there were no secret templates (preserves the unit-test
         // path that never runs the hook).
         let config = match run_context.resolved_config.as_ref() {
-            Some(resolved) => {
-                serde_json::from_value::<PrometheusConfig>(resolved.clone()).map_err(|e| {
+            Some(resolved) => serde_json::from_value::<PrometheusConfig>(resolved.clone())
+                .map_err(|e| {
                     ExecutorError::Config(format!("invalid prometheus backend config: {e}"))
-                })?
-            }
+                })?,
             None => serde_json::from_value::<PrometheusConfig>(run_context.spec.config.clone())
                 .map_err(|e| {
                     ExecutorError::Config(format!("invalid prometheus backend config: {e}"))
@@ -210,7 +209,9 @@ impl ExecutionBackend for PrometheusBackend {
             operation: config.operation,
         };
         run_context.backend_state = serde_json::to_value(&resolved).map_err(|e| {
-            ExecutorError::Config(format!("failed to serialize resolved prometheus config: {e}"))
+            ExecutorError::Config(format!(
+                "failed to serialize resolved prometheus config: {e}"
+            ))
         })?;
         Ok(run_context)
     }
@@ -295,7 +296,12 @@ fn validate_static(config: &PrometheusConfig) -> Result<(), ExecutorError> {
         ));
     }
     if config.operation == PrometheusOperation::QueryRange
-        && config.step.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && config
+            .step
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
     {
         return Err(ExecutorError::Config(
             "prometheus config: range queries require a `step`".into(),
@@ -809,8 +815,7 @@ mod tests {
             serde_json::json!({ "job": "evil\"} or up{x=\"pwned" }),
         );
         let context = build_promql_context(&c, "metrics").unwrap();
-        let rendered =
-            render_promql(r#"up{job="{{ start.job }}"}"#, &context, "query").unwrap();
+        let rendered = render_promql(r#"up{job="{{ start.job }}"}"#, &context, "query").unwrap();
         // The quote inside the value is escaped, the surrounding literal quotes
         // are not — the value cannot terminate the matcher early.
         assert_eq!(rendered, r#"up{job="evil\"} or up{x=\"pwned"}"#);
@@ -823,10 +828,13 @@ mod tests {
     fn promql_escape_handles_backslash() {
         let td = tempfile::TempDir::new().unwrap();
         let mut c = ctx(&td);
-        stage_envelope(&mut c, "start", serde_json::json!({ "path": r"C:\metrics" }));
+        stage_envelope(
+            &mut c,
+            "start",
+            serde_json::json!({ "path": r"C:\metrics" }),
+        );
         let context = build_promql_context(&c, "metrics").unwrap();
-        let rendered =
-            render_promql(r#"up{path="{{ start.path }}"}"#, &context, "query").unwrap();
+        let rendered = render_promql(r#"up{path="{{ start.path }}"}"#, &context, "query").unwrap();
         assert_eq!(rendered, r#"up{path="C:\\metrics"}"#);
     }
 

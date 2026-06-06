@@ -379,6 +379,32 @@ impl TransitionGuard {
     }
 }
 
+impl ScenarioDefinition {
+    /// Create a new empty scenario
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            places: vec![],
+            transitions: vec![],
+            groups: vec![],
+            mock_adapters: vec![],
+            definitions: HashMap::new(),
+            requirements: vec![],
+        }
+    }
+
+    /// Serialize to pretty JSON
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Serialize to compact JSON
+    pub fn to_json_compact(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,31 +559,5 @@ mod tests {
         let port: ScenarioPort = serde_json::from_str(json).unwrap();
         assert_eq!(port.name, "task");
         assert_eq!(port.cardinality, "single"); // Default cardinality
-    }
-}
-
-impl ScenarioDefinition {
-    /// Create a new empty scenario
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: None,
-            places: vec![],
-            transitions: vec![],
-            groups: vec![],
-            mock_adapters: vec![],
-            definitions: HashMap::new(),
-            requirements: vec![],
-        }
-    }
-
-    /// Serialize to pretty JSON
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
-    }
-
-    /// Serialize to compact JSON
-    pub fn to_json_compact(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
     }
 }

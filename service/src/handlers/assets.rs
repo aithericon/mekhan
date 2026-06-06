@@ -35,10 +35,10 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::asset::{
-    AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow,
-    AssetTypeSummary, AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest,
-    CreateAssetTypeRequest, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
-    ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
+    AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
+    AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
+    GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery, ReplaceRecordsRequest,
+    ScopeKind, UpdateAssetTypeRequest,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{PaginatedResponse, Port, PortField};
@@ -140,7 +140,9 @@ fn clash_to_api_error(c: scope::IncomparableClash) -> ApiError {
 /// Deserialize an `asset_types.fields_json` JSONB blob into `Vec<PortField>`.
 fn parse_fields(fields_json: &Value) -> Result<Vec<PortField>, ApiError> {
     serde_json::from_value::<Vec<PortField>>(fields_json.clone()).map_err(|e| {
-        ApiError::internal(format!("asset type schema is not a valid Vec<PortField>: {e}"))
+        ApiError::internal(format!(
+            "asset type schema is not a valid Vec<PortField>: {e}"
+        ))
     })
 }
 
@@ -255,8 +257,7 @@ fn check_additive_evolution(old: &[PortField], new: &[PortField]) -> Result<(), 
         }
     }
     // Newly-added fields must be optional.
-    let old_names: std::collections::HashSet<&str> =
-        old.iter().map(|f| f.name.as_str()).collect();
+    let old_names: std::collections::HashSet<&str> = old.iter().map(|f| f.name.as_str()).collect();
     for nf in new {
         if !old_names.contains(nf.name.as_str()) && nf.required {
             breaks.push(format!(
@@ -1083,10 +1084,7 @@ pub async fn asset_usage(
                     m.iter().find_map(|(alias, pin)| {
                         let aid = pin.get("asset_id").and_then(Value::as_str)?;
                         (aid == target).then(|| {
-                            let v = pin
-                                .get("version")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(0) as i32;
+                            let v = pin.get("version").and_then(Value::as_i64).unwrap_or(0) as i32;
                             (alias.clone(), v)
                         })
                     })
@@ -1188,7 +1186,7 @@ fn row_scope(scope_kind: &str, scope_id: Uuid) -> Option<Scope> {
 fn folder_matches(display_path: Option<&str>, folder: Option<&str>) -> bool {
     match folder {
         None => true,
-        Some(prefix) if prefix.is_empty() => true,
+        Some("") => true,
         Some(prefix) => match display_path {
             None => false,
             Some(dp) => dp == prefix || dp.starts_with(&format!("{prefix}/")),
@@ -1338,7 +1336,7 @@ async fn require_editor(
     scope_kind: ScopeKind,
     scope_id: Uuid,
 ) -> Result<(), ApiError> {
-    use crate::auth::membership::{map_to_api_error, require_role, Role, MembershipError};
+    use crate::auth::membership::{map_to_api_error, require_role, MembershipError, Role};
 
     // The workspace whose membership governs this write. For a workspace scope
     // it's the scope id itself; for project/template scopes we fall back to the
@@ -1453,11 +1451,7 @@ async fn write_records(
 /// cell per the field's [`crate::models::template::FieldKind`]. Header mode maps
 /// columns by name (unmapped columns ignored); headerless mode maps columns
 /// positionally to the type's field order.
-fn parse_csv(
-    bytes: &[u8],
-    fields: &[PortField],
-    has_header: bool,
-) -> Result<Vec<Value>, ApiError> {
+fn parse_csv(bytes: &[u8], fields: &[PortField], has_header: bool) -> Result<Vec<Value>, ApiError> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(has_header)
         .flexible(true)
@@ -1483,8 +1477,7 @@ fn parse_csv(
 
     let mut records: Vec<Value> = Vec::new();
     for (line, result) in reader.records().enumerate() {
-        let row = result
-            .map_err(|e| ApiError::bad_request(format!("bad csv row {line}: {e}")))?;
+        let row = result.map_err(|e| ApiError::bad_request(format!("bad csv row {line}: {e}")))?;
         let mut obj = serde_json::Map::new();
         for (i, cell) in row.iter().enumerate() {
             let Some(field) = column_fields.get(i).copied().flatten() else {
@@ -1518,8 +1511,9 @@ fn coerce_csv_cell(field: &PortField, cell: &str) -> Value {
             "false" | "0" | "no" | "n" => Value::Bool(false),
             _ => Value::String(cell.to_string()),
         },
-        FieldKind::Json => serde_json::from_str::<Value>(cell)
-            .unwrap_or_else(|_| Value::String(cell.to_string())),
+        FieldKind::Json => {
+            serde_json::from_str::<Value>(cell).unwrap_or_else(|_| Value::String(cell.to_string()))
+        }
         _ => Value::String(cell.to_string()),
     }
 }
@@ -1576,7 +1570,10 @@ mod tests {
     #[test]
     fn additive_add_optional_ok() {
         let old = vec![pf("a", FieldKind::Text, true)];
-        let new = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Number, false)];
+        let new = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Number, false),
+        ];
         assert!(check_additive_evolution(&old, &new).is_ok());
     }
 
@@ -1589,7 +1586,10 @@ mod tests {
 
     #[test]
     fn additive_remove_rejected() {
-        let old = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Text, false)];
+        let old = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Text, false),
+        ];
         let new = vec![pf("a", FieldKind::Text, true)];
         assert!(check_additive_evolution(&old, &new).is_err());
     }
@@ -1611,7 +1611,10 @@ mod tests {
     #[test]
     fn additive_new_required_field_rejected() {
         let old = vec![pf("a", FieldKind::Text, true)];
-        let new = vec![pf("a", FieldKind::Text, true), pf("b", FieldKind::Text, true)];
+        let new = vec![
+            pf("a", FieldKind::Text, true),
+            pf("b", FieldKind::Text, true),
+        ];
         assert!(check_additive_evolution(&old, &new).is_err());
     }
 

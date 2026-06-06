@@ -123,15 +123,17 @@ fn get_or_build_pool(resource: &PostgresResource) -> Result<PgPool, sqlx::Error>
         .application_name(APPLICATION_NAME)
         .log_statements(tracing::log::LevelFilter::Debug);
     if let Some(mode) = resource.sslmode.as_deref().filter(|s| !s.is_empty()) {
-        let ssl_mode = mode
-            .parse::<sqlx::postgres::PgSslMode>()
-            .map_err(|e| sqlx::Error::Configuration(format!("invalid sslmode '{mode}': {e}").into()))?;
+        let ssl_mode = mode.parse::<sqlx::postgres::PgSslMode>().map_err(|e| {
+            sqlx::Error::Configuration(format!("invalid sslmode '{mode}': {e}").into())
+        })?;
         opts = opts.ssl_mode(ssl_mode);
     }
 
     // Lazy pool — `connect_lazy_with` defers the first TCP connect to query
     // time so building the pool never blocks the cache lock on network I/O.
-    let pool = PgPoolOptions::new().max_connections(8).connect_lazy_with(opts);
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .connect_lazy_with(opts);
 
     let mut cache = pool_cache().lock().expect("pool cache lock");
     // Double-check: another job may have inserted while we built.
@@ -634,9 +636,7 @@ fn bind_one(args: &mut PgArguments, idx: usize, value: &Value) -> Result<(), sql
             }
         }
         Value::Array(items) => bind_array(args, idx, items),
-        Value::Object(_) => args
-            .add(sqlx::types::Json(value.clone()))
-            .map_err(enc),
+        Value::Object(_) => args.add(sqlx::types::Json(value.clone())).map_err(enc),
     }
 }
 
@@ -935,7 +935,11 @@ fn make_config_error(run_context: &RunContext, start: Instant, message: String) 
     error_result(run_context, start, message)
 }
 
-fn make_backend_error(run_context: &RunContext, start: Instant, err: sqlx::Error) -> ExecutionResult {
+fn make_backend_error(
+    run_context: &RunContext,
+    start: Instant,
+    err: sqlx::Error,
+) -> ExecutionResult {
     error_result(run_context, start, err.to_string())
 }
 
@@ -979,8 +983,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use aithericon_executor_domain::{ExecutionSpec, RunDirectory};
     use crate::config::RlsContext;
+    use aithericon_executor_domain::{ExecutionSpec, RunDirectory};
 
     fn cfg(operation: PgOperation, projection: Vec<&str>) -> PostgresConfig {
         PostgresConfig {
@@ -1190,7 +1194,10 @@ mod tests {
     #[test]
     fn enforce_row_limit_wraps_select() {
         let wrapped = enforce_row_limit("SELECT 1", 10);
-        assert_eq!(wrapped, "SELECT * FROM (SELECT 1) AS __pg_backend_subq LIMIT 11");
+        assert_eq!(
+            wrapped,
+            "SELECT * FROM (SELECT 1) AS __pg_backend_subq LIMIT 11"
+        );
     }
 
     #[test]

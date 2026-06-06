@@ -516,7 +516,7 @@ mod tests {
         serde_json::from_slice(&bytes).expect("payload is JSON")
     }
 
-    fn allow_list<'a>(claims: &'a Value, dir: &str) -> Vec<String> {
+    fn allow_list(claims: &Value, dir: &str) -> Vec<String> {
         claims["nats"][dir]["allow"]
             .as_array()
             .map(|a| {
@@ -666,7 +666,12 @@ mod tests {
         let user_pub = KeyPair::new_user().public_key();
         for bad in ["*", ">", "a.b", "x.>", "has space", "g*"] {
             let err = signer
-                .mint_worker_jwt(&user_pub, Uuid::new_v4(), Some(bad), &["python".to_string()])
+                .mint_worker_jwt(
+                    &user_pub,
+                    Uuid::new_v4(),
+                    Some(bad),
+                    &["python".to_string()],
+                )
                 .expect_err("a worker group with NATS subject metacharacters must be rejected");
             assert!(matches!(err, MintError::InvalidPool(_)), "group {bad:?}");
         }

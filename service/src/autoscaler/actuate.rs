@@ -81,8 +81,7 @@ pub fn build_model_replica_net(
 
     let effect_config = conn.effect_config();
 
-    let start: aithericon_sdk::PlaceHandle<DynamicToken> =
-        ctx.state("start", "Replica Request");
+    let start: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("start", "Replica Request");
     let staged: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.terminal("staged", "Actuated");
     let failed: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.terminal("failed", "Actuation Failed (fatal)");
@@ -130,7 +129,13 @@ pub fn build_replica_spec(policy: &ModelAutoscalePolicy, target: u32) -> Value {
 pub fn replica_slug(model_id: &str, replica_id: Uuid) -> String {
     let sanitized: String = model_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     let short = &replica_id.to_string()[..8];
     format!("model-{sanitized}-{short}")
@@ -190,8 +195,10 @@ pub async fn actuate_replica(
 
     let slug = replica_slug(&policy.model_id, replica_id);
     let spec = build_replica_spec(policy, target);
-    let air = serde_json::to_value(build_model_replica_net(replica_id, generation, &slug, &conn, spec))
-        .map_err(|e| ActuateError::new(format!("serialize model-replica net AIR: {e}")))?;
+    let air = serde_json::to_value(build_model_replica_net(
+        replica_id, generation, &slug, &conn, spec,
+    ))
+    .map_err(|e| ActuateError::new(format!("serialize model-replica net AIR: {e}")))?;
     let net_id = well_known::model_replica_net_id(replica_id, generation);
 
     crate::petri::instance::deploy_instance(

@@ -19,8 +19,7 @@ pub(super) use crate::compiler::well_known;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    PhaseUpdateStatus, Port, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;
 pub(super) use aithericon_sdk::components::executor_lifecycle::{
@@ -473,6 +472,7 @@ pub(crate) mod decision;
 pub(crate) mod delay;
 pub(crate) mod end;
 pub(crate) mod failure;
+pub(crate) mod gather;
 pub(crate) mod human_task;
 pub(crate) mod join;
 pub(crate) mod lease_bridge;
@@ -482,7 +482,6 @@ pub(crate) mod map;
 pub(crate) mod parallel_split;
 pub(crate) mod phase_update;
 pub(crate) mod progress_update;
-pub(crate) mod gather;
 pub(crate) mod scope;
 pub(crate) mod start;
 pub(crate) mod subworkflow;

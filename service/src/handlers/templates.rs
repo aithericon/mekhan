@@ -211,7 +211,9 @@ fn append_template_where(
         // folder. Recursive: the home folder is the selected folder OR any
         // descendant, resolved by materialized-path prefix via a self-join on
         // `folders` (so the caller need not pre-resolve the path).
-        qb.push(" JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id)");
+        qb.push(
+            " JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id)",
+        );
         if extras.recursive {
             qb.push(" JOIN folders f ON f.id = tf.folder_id");
             qb.push(" JOIN folders sel ON sel.id = ");

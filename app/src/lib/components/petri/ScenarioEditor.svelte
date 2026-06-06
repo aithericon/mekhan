@@ -145,10 +145,10 @@
 
 		<!-- Target net -->
 		<div class="px-4 py-2 border-b bg-muted flex items-center gap-3">
-			<label class="text-sm text-muted-foreground flex items-center gap-2">
+			<div class="text-sm text-muted-foreground flex items-center gap-2">
 				Target net:
 				<span class="px-2 py-1 text-sm font-mono border rounded bg-background">{netId}</span>
-			</label>
+			</div>
 		</div>
 
 		<!-- Editor -->

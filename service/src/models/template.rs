@@ -371,7 +371,11 @@ pub enum WorkflowNodeData {
         /// node code reads. `#[serde(default)]` ⇒ existing templates (field
         /// absent → empty) round-trip unchanged (same precedent as
         /// `deployment_model`/`channels`).
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     #[serde(rename = "decision")]
@@ -517,7 +521,11 @@ pub enum WorkflowNodeData {
         /// instead of from an upstream producer read-arc. `#[serde(default)]` ⇒
         /// existing templates (field absent → empty) round-trip unchanged (same
         /// precedent as AutomatedStep's `asset_bindings`).
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
@@ -756,7 +764,11 @@ pub enum WorkflowNodeData {
         /// Node-level asset bindings (docs/20 §5) — same field, defaults and
         /// semantics as `AutomatedStep::asset_bindings`. The agent's inference
         /// turns read the staged asset(s) as ordinary inputs.
-        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            rename = "assetBindings",
+            default,
+            skip_serializing_if = "Vec::is_empty"
+        )]
         asset_bindings: Vec<AssetBinding>,
     },
     /// Calls another published template as a child net and returns its
@@ -1352,7 +1364,11 @@ pub enum DeploymentModel {
         /// slug into `job_template`. `None` ⇒ the bare `job_template` string is
         /// used verbatim (legacy/manual path). The actual staging mechanism is
         /// Phase 4 — this field only drives resolve+validate at publish.
-        #[serde(rename = "jobTemplateRef", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "jobTemplateRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         job_template_ref: Option<TemplateRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
@@ -1557,17 +1573,12 @@ pub enum ElementType {
 /// barrier (the old `scatter` path) that collects all items, sorts by
 /// `__map_idx`, and projects a single array — sized by the episode's own
 /// `close.count`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelJoin {
+    #[default]
     Each,
     Gather,
-}
-
-impl Default for ChannelJoin {
-    fn default() -> Self {
-        ChannelJoin::Each
-    }
 }
 
 /// Which out-of-band transport a DATA channel's bytes ride (docs/25 §6). This
@@ -1878,7 +1889,9 @@ impl FieldKind {
     pub fn base_schema(&self) -> serde_json::Value {
         use serde_json::json;
         match self {
-            Self::Text | Self::Textarea | Self::Select | Self::Signature => json!({"type": "string"}),
+            Self::Text | Self::Textarea | Self::Select | Self::Signature => {
+                json!({"type": "string"})
+            }
             Self::Number => json!({"type": "number"}),
             Self::Bool => json!({"type": "boolean"}),
             Self::Timestamp => json!({"type": "string", "format": "date-time"}),
@@ -2786,9 +2799,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef,
-        Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
-        WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
+        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 

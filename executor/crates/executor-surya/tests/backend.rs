@@ -47,7 +47,10 @@ use aithericon_executor_surya::{SuryaBackend, SURYA_BASE_URL_ENV};
 #[derive(Clone)]
 enum MockBehaviour {
     /// Return a valid wire-shape response immediately.
-    Success { full_text: String, page_count: usize },
+    Success {
+        full_text: String,
+        page_count: usize,
+    },
     /// Sleep before responding — used for timeout + cancellation tests.
     Delay(Duration),
     /// Return HTTP 500 with the given body — error-mapping test.
@@ -131,11 +134,10 @@ async fn spawn_mock_surya(behaviour: MockBehaviour) -> (String, CancellationToke
                                 }
                             }
                         }
-                        MockBehaviour::InternalError(body) => (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            body.clone(),
-                        )
-                            .into_response(),
+                        MockBehaviour::InternalError(body) => {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, body.clone())
+                                .into_response()
+                        }
                     }
                 }
             }
@@ -169,9 +171,11 @@ use axum::response::IntoResponse;
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn noop_status_cb() -> StatusCallback {
-    Box::new(|_status: ExecutionStatus, _payload: serde_json::Value| -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async {})
-    })
+    Box::new(
+        |_status: ExecutionStatus,
+         _payload: serde_json::Value|
+         -> Pin<Box<dyn Future<Output = ()> + Send>> { Box::pin(async {}) },
+    )
 }
 
 async fn make_staged_pdf(_name: &str) -> (PathBuf, NamedTempFile) {
@@ -181,7 +185,9 @@ async fn make_staged_pdf(_name: &str) -> (PathBuf, NamedTempFile) {
     // the bytes, but we want a realistic on-disk file the backend can
     // base64-encode.
     let mut file = tokio::fs::File::create(&path).await.expect("create");
-    file.write_all(b"%PDF-1.4\nstub for test\n").await.expect("write");
+    file.write_all(b"%PDF-1.4\nstub for test\n")
+        .await
+        .expect("write");
     drop(file);
     (path, tmp)
 }
@@ -274,10 +280,16 @@ async fn execute_single_success_round_trip() {
         result.outcome
     );
     assert_eq!(result.outputs["ocr_text"], serde_json::json!("hello world"));
-    assert_eq!(result.outputs["full_text"], serde_json::json!("hello world"));
+    assert_eq!(
+        result.outputs["full_text"],
+        serde_json::json!("hello world")
+    );
     assert_eq!(result.outputs["page_count"], serde_json::json!(2));
     assert_eq!(result.outputs["engine"], serde_json::json!("surya"));
-    assert_eq!(result.outputs["mime_type"], serde_json::json!("application/pdf"));
+    assert_eq!(
+        result.outputs["mime_type"],
+        serde_json::json!("application/pdf")
+    );
 
     // Structured geometry surfaces: the flattened `words` list carries one
     // word per page (2 here), each with a normalised bounding box and the
@@ -309,7 +321,11 @@ async fn execute_single_success_round_trip() {
 
     // Honest-absence: no error log entries on success.
     assert_eq!(
-        result.logs.as_ref().and_then(|l| l.count_by_level.get("error")).copied(),
+        result
+            .logs
+            .as_ref()
+            .and_then(|l| l.count_by_level.get("error"))
+            .copied(),
         None,
     );
 
@@ -395,8 +411,10 @@ async fn execute_single_timeout_returns_timed_out_outcome() {
 
 #[tokio::test]
 async fn execute_single_http_500_maps_to_backend_error() {
-    let (base_url, server_cancel) =
-        spawn_mock_surya(MockBehaviour::InternalError("simulated upstream failure".into())).await;
+    let (base_url, server_cancel) = spawn_mock_surya(MockBehaviour::InternalError(
+        "simulated upstream failure".into(),
+    ))
+    .await;
 
     let (pdf_path, _keep) = make_staged_pdf("file").await;
     let staged = HashMap::from([("file".to_string(), pdf_path)]);
@@ -454,10 +472,7 @@ async fn execute_batch_success_round_trip_two_files() {
 
     let (path_a, _keep_a) = make_staged_pdf("a").await;
     let (path_b, _keep_b) = make_staged_pdf("b").await;
-    let staged = HashMap::from([
-        ("a".to_string(), path_a),
-        ("b".to_string(), path_b),
-    ]);
+    let staged = HashMap::from([("a".to_string(), path_a), ("b".to_string(), path_b)]);
     let spec = make_spec(serde_json::json!({ "mode": "batch" }));
     let job = make_job(&spec);
     let ctx = make_run_context(spec.clone(), Duration::from_secs(10), &base_url, staged);

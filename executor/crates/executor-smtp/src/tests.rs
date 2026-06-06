@@ -3,7 +3,7 @@
 //! `executor-service/tests/conformance_smtp.rs`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
@@ -37,7 +37,7 @@ impl MessageSink for CapturingSink {
     }
 }
 
-fn write_input(dir: &PathBuf, name: &str, v: serde_json::Value) {
+fn write_input(dir: &Path, name: &str, v: serde_json::Value) {
     std::fs::write(dir.join(name), serde_json::to_vec(&v).unwrap()).unwrap();
 }
 

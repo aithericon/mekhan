@@ -83,9 +83,7 @@ pub fn in_cooldown(
     now: DateTime<Utc>,
 ) -> bool {
     match (last_actuated_at, cooldown_secs) {
-        (Some(t), Some(c)) if c > 0 => {
-            now < t + chrono::Duration::seconds(c as i64)
-        }
+        (Some(t), Some(c)) if c > 0 => now < t + chrono::Duration::seconds(c as i64),
         _ => false,
     }
 }
@@ -204,7 +202,7 @@ mod tests {
         assert!(!in_cooldown(Some(ts(990)), Some(0), now));
         // Within the window → gated.
         assert!(in_cooldown(Some(ts(990)), Some(60), now)); // 990+60=1050 > 1000
-        // Past the window → free.
+                                                            // Past the window → free.
         assert!(!in_cooldown(Some(ts(900)), Some(60), now)); // 900+60=960 < 1000
     }
 }

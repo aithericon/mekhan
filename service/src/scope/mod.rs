@@ -196,10 +196,7 @@ pub fn resolve_one<T: Clone>(
     ref_key: &str,
     items: Vec<ScopedItem<T>>,
 ) -> Result<Option<ScopedItem<T>>, IncomparableClash> {
-    let matching: Vec<ScopedItem<T>> = items
-        .into_iter()
-        .filter(|i| i.ref_key == ref_key)
-        .collect();
+    let matching: Vec<ScopedItem<T>> = items.into_iter().filter(|i| i.ref_key == ref_key).collect();
     if matching.is_empty() {
         return Ok(None);
     }
@@ -214,8 +211,10 @@ pub fn resolve_visible<T: Clone>(
     visible: &VisibleScopes,
     items: Vec<ScopedItem<T>>,
 ) -> Result<BTreeMap<String, ScopedItem<T>>, IncomparableClash> {
-    let filtered: Vec<ScopedItem<T>> =
-        items.into_iter().filter(|i| visible.contains(&i.scope)).collect();
+    let filtered: Vec<ScopedItem<T>> = items
+        .into_iter()
+        .filter(|i| visible.contains(&i.scope))
+        .collect();
     resolve_refs(filtered)
 }
 

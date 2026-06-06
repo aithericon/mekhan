@@ -363,9 +363,10 @@ fn lease_field_model() -> LeaseFieldModel {
     let mut core = BTreeSet::new();
     let mut per_flavor: HashMap<String, BTreeSet<String>> = HashMap::new();
 
-    let schema =
-        aithericon_resources::pool::schemas_for_backend(aithericon_resources::pool::PoolBackend::Scheduler)
-            .lease;
+    let schema = aithericon_resources::pool::schemas_for_backend(
+        aithericon_resources::pool::PoolBackend::Scheduler,
+    )
+    .lease;
     let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
         return LeaseFieldModel { core, per_flavor };
     };
@@ -490,7 +491,7 @@ fn lease_field_violation(model: &LeaseFieldModel, flavor: &str, segs: &[String])
     };
     if field == "scheduler" {
         let sub = match segs.get(2) {
-            None => return None,          // whole `scheduler` object.
+            None => return None, // whole `scheduler` object.
             Some(s) => s.as_str(),
         };
         if sub == "flavor" {
@@ -582,7 +583,6 @@ pub(crate) fn validate_timeout(
     }
     Ok(())
 }
-
 
 pub(crate) fn validate_map(
     node: &WorkflowNode,
@@ -901,7 +901,6 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
                 }
             }
         }
-
     }
 
     // Cross-plane wiring coherence: a channel edge must not splice a data-plane
@@ -941,7 +940,9 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
-        let Some(src_ch) = node_channels.get(edge.source.as_str()).and_then(|m| m.get(src_h))
+        let Some(src_ch) = node_channels
+            .get(edge.source.as_str())
+            .and_then(|m| m.get(src_h))
         else {
             if edge.join.is_some() {
                 return Err(CompileError::ChannelInvalid {
@@ -952,7 +953,9 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
-        let Some(tgt_ch) = node_channels.get(edge.target.as_str()).and_then(|m| m.get(tgt_h))
+        let Some(tgt_ch) = node_channels
+            .get(edge.target.as_str())
+            .and_then(|m| m.get(tgt_h))
         else {
             continue;
         };
@@ -1253,10 +1256,7 @@ pub fn node_output_fields(
                 }
                 out.insert(node.id.clone(), fields);
             }
-            WorkflowNodeData::Loop {
-                accumulators,
-                ..
-            } => {
+            WorkflowNodeData::Loop { accumulators, .. } => {
                 let mut fields = std::collections::BTreeMap::new();
                 fields.insert("iteration".to_string(), FieldKind::Number);
                 // Accumulators are opaque-Rhai parked fields: `Json` escape

@@ -91,6 +91,7 @@
 	// so the handles never render — without this gate the resizer would draw,
 	// xyflow would mutate the local nodes array on drag, but persistence
 	// would silently no-op, leaving the user with a phantom resize.
+	// svelte-ignore state_referenced_locally
 	if (!readonly) {
 		const reportResize: ResizeReport = (id, params) => {
 			const change = {
@@ -114,9 +115,15 @@
 	}
 
 	// Track graph identity to avoid re-syncing our own changes
+	// svelte-ignore state_referenced_locally
 	let lastGraphRef: WorkflowGraph | null = graph;
 
+	// Local canvas state is seeded from the initial graph/readonly and then
+	// owned here; the {@const}/lastGraphRef sync below re-applies upstream
+	// graph swaps, so the initial-value capture is deliberate.
+	// svelte-ignore state_referenced_locally
 	let nodes = $state.raw<Node[]>(toFlowNodes(graph));
+	// svelte-ignore state_referenced_locally
 	let edges = $state.raw<Edge[]>(toFlowEdges(graph, readonly));
 
 	// Container kinds — must come before their children in the node array so

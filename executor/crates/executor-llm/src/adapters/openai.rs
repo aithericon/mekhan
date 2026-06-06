@@ -748,7 +748,7 @@ mod tests {
         );
         // A pure tool-call assistant turn omits content entirely.
         assert!(
-            assistant.get("content").map_or(true, |c| c.is_null()),
+            assistant.get("content").is_none_or(|c| c.is_null()),
             "pure tool-call assistant turn must omit content: {assistant}"
         );
 

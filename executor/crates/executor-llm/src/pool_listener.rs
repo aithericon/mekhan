@@ -197,7 +197,10 @@ async fn tool_results(
                 ToolResultErrorKind::Timeout => ToolErrorKind::Timeout,
                 ToolResultErrorKind::NotFound => ToolErrorKind::NotFound,
             };
-            Err(ToolError { message: err.message, kind })
+            Err(ToolError {
+                message: err.message,
+                kind,
+            })
         }
         None => Ok(req.result.unwrap_or(serde_json::Value::Null)),
     };
@@ -207,7 +210,10 @@ async fn tool_results(
     tx.send(payload).map_err(|_| {
         (
             StatusCode::CONFLICT,
-            format!("call_id {} receiver already dropped (run may have finished)", req.call_id),
+            format!(
+                "call_id {} receiver already dropped (run may have finished)",
+                req.call_id
+            ),
         )
     })?;
 

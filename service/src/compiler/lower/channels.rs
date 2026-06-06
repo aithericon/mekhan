@@ -48,9 +48,7 @@
 //!     emit's `channel` field and deposits the token onto the resolved place.
 
 use super::*;
-use crate::models::template::{
-    Channel, ChannelDirection, ChannelJoin, ChannelPlane, WorkflowEdge,
-};
+use crate::models::template::{Channel, ChannelDirection, ChannelJoin, ChannelPlane, WorkflowEdge};
 use std::collections::HashMap;
 
 /// One synthesized channel place, ready to fold into the node's `NodePorts`.
@@ -80,7 +78,13 @@ pub(crate) struct LoweredChannels {
 /// with `_` so a stray name can never break the synthesized place id.
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -153,7 +157,9 @@ fn resolve_channel_joins(
 /// deposits its `open`/`close` bracket tokens — all via `control_emit`. Mirrors
 /// the `out_channels` filter in [`lower_channels`] so the two never drift.
 pub(crate) fn has_out_channel(channels: &[Channel]) -> bool {
-    channels.iter().any(|c| matches!(c.direction, ChannelDirection::Out))
+    channels
+        .iter()
+        .any(|c| matches!(c.direction, ChannelDirection::Out))
 }
 
 /// Pre-create the `control_emit` inbox place when the node has ≥1 OUT channel
@@ -232,8 +238,10 @@ pub(crate) fn lower_channels(
     // `open` descriptor token rides the SAME seam — so it joins `out_channels`
     // and gets a deposit place / output arc just like a control channel. Build
     // the seam only if any OUT channel exists.
-    let out_channels: Vec<&Channel> =
-        channels.iter().filter(|c| matches!(c.direction, ChannelDirection::Out)).collect();
+    let out_channels: Vec<&Channel> = channels
+        .iter()
+        .filter(|c| matches!(c.direction, ChannelDirection::Out))
+        .collect();
 
     // `channel_routes`: channel name → synthesized RAW DEPOSIT place id. The
     // producer always deposits its `open | item* | close` episode here; the
@@ -271,8 +279,10 @@ pub(crate) fn lower_channels(
                 format!("p_{id}_{seg}"),
                 format!("{label} - Data Channel '{}'", ch.name),
             );
-            channel_routes
-                .insert(ch.name.clone(), serde_json::Value::String(p_chan.id().to_string()));
+            channel_routes.insert(
+                ch.name.clone(),
+                serde_json::Value::String(p_chan.id().to_string()),
+            );
             deposit_places.push(p_chan.clone());
 
             // CLOSE sink: a producer-status place the `close` bracket lands on,
@@ -282,10 +292,15 @@ pub(crate) fn lower_channels(
             // keeps the consumer firing EXACTLY once, on `open`.
             let p_close: PlaceHandle<DynamicToken> = ctx.state(
                 format!("p_{id}_{seg}_close"),
-                format!("{label} - Data Channel '{}' Close (producer status)", ch.name),
+                format!(
+                    "{label} - Data Channel '{}' Close (producer status)",
+                    ch.name
+                ),
             );
-            channel_close_routes
-                .insert(ch.name.clone(), serde_json::Value::String(p_close.id().to_string()));
+            channel_close_routes.insert(
+                ch.name.clone(),
+                serde_json::Value::String(p_close.id().to_string()),
+            );
             deposit_places.push(p_close.clone());
 
             ports.push(ChannelPort {
@@ -303,8 +318,10 @@ pub(crate) fn lower_channels(
             format!("p_{id}_{seg}"),
             format!("{label} - Channel '{}' (raw)", ch.name),
         );
-        channel_routes
-            .insert(ch.name.clone(), serde_json::Value::String(p_raw.id().to_string()));
+        channel_routes.insert(
+            ch.name.clone(),
+            serde_json::Value::String(p_raw.id().to_string()),
+        );
         deposit_places.push(p_raw.clone());
 
         let join = joins.get(&ch.name).copied().unwrap_or_default();
@@ -421,7 +438,10 @@ pub(crate) fn lower_channels(
     // consumer's `stream(name)` reads it as the consumer job's input (then
     // connects to the descriptor's out-of-band transport). Register an inbound
     // place edges target by `targetHandle == name`.
-    for ch in channels.iter().filter(|c| matches!(c.direction, ChannelDirection::In)) {
+    for ch in channels
+        .iter()
+        .filter(|c| matches!(c.direction, ChannelDirection::In))
+    {
         // An IN channel aliases the node's MAIN input place: the upstream's OPEN
         // descriptor token (data) — or a future inbound control token — must both
         // TRIGGER the node's job (the submit transition consumes `input_place`)
@@ -523,10 +543,7 @@ mod tests {
     /// channel of the same name) wires off `step`'s source handle carrying the
     /// given `join` (`"each"`/`"gather"`/absent). This is the path the producer
     /// lowering reads to pick the fold discipline.
-    fn graph_with_consumer_join(
-        chan: serde_json::Value,
-        join: Option<&str>,
-    ) -> WorkflowGraph {
+    fn graph_with_consumer_join(chan: serde_json::Value, join: Option<&str>) -> WorkflowGraph {
         let name = chan["name"].as_str().unwrap().to_string();
         // Consumer IN channel mirrors the producer's plane so the only thing
         // under test is the `join` (a cross-plane edge would error first).
@@ -636,10 +653,16 @@ mod tests {
             .or_else(|| t["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("each transition rhai source");
-        assert!(src.contains("item.payload"), "each must project item.payload; got {src}");
+        assert!(
+            src.contains("item.payload"),
+            "each must project item.payload; got {src}"
+        );
         let guard = t["guard"].as_str().or_else(|| t["guard"]["expr"].as_str());
         if let Some(g) = guard {
-            assert!(g.contains(r#"item.kind == "item""#), "each guard wrong: {g}");
+            assert!(
+                g.contains(r#"item.kind == "item""#),
+                "each guard wrong: {g}"
+            );
         }
 
         // The control_emit transition carries the channel_routes effect_config.
@@ -710,11 +733,18 @@ mod tests {
     #[test]
     fn explicit_each_join_lowers_to_each() {
         let graph = graph_with_consumer_join(each_channel(), Some("each"));
-        let air =
-            compile_to_air(&graph, "ch-each-explicit", "d", &std::collections::HashMap::new())
-                .unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-each-explicit",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let places = place_ids(&air);
-        assert!(places.iter().any(|p| p == "p_step_events_each"), "each place missing: {places:?}");
+        assert!(
+            places.iter().any(|p| p == "p_step_events_each"),
+            "each place missing: {places:?}"
+        );
         for absent in ["p_step_events_count", "p_step_events_gathered"] {
             assert!(
                 !places.iter().any(|p| p == absent),
@@ -729,19 +759,33 @@ mod tests {
     #[test]
     fn gather_split_uses_collapsed_kind_strings() {
         let graph = graph_with_consumer_join(gather_channel(), Some("gather"));
-        let air =
-            compile_to_air(&graph, "ch-gather-kinds", "d", &std::collections::HashMap::new())
-                .unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-gather-kinds",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let close = transition(&air, "t_step_items_close");
-        let guard = close["guard"].as_str().or_else(|| close["guard"]["expr"].as_str());
+        let guard = close["guard"]
+            .as_str()
+            .or_else(|| close["guard"]["expr"].as_str());
         if let Some(g) = guard {
-            assert!(g.contains(r#"close.kind == "close""#), "close guard wrong: {g}");
+            assert!(
+                g.contains(r#"close.kind == "close""#),
+                "close guard wrong: {g}"
+            );
             assert!(!g.contains("scatter_close"), "retired kind leaked: {g}");
         }
         let item = transition(&air, "t_step_items_item");
-        let iguard = item["guard"].as_str().or_else(|| item["guard"]["expr"].as_str());
+        let iguard = item["guard"]
+            .as_str()
+            .or_else(|| item["guard"]["expr"].as_str());
         if let Some(g) = iguard {
-            assert!(g.contains(r#"item.kind == "item""#), "item guard wrong: {g}");
+            assert!(
+                g.contains(r#"item.kind == "item""#),
+                "item guard wrong: {g}"
+            );
             assert!(!g.contains("scatter_item"), "retired kind leaked: {g}");
         }
     }
@@ -758,7 +802,11 @@ mod tests {
         // be a control_emit output arc, for BOTH join disciplines. Each: default
         // join (no consumer edge); Gather: a gather consumer edge.
         for (label, graph, deposit) in [
-            ("each", graph_with_channels(json!([each_channel()])), "p_step_events"),
+            (
+                "each",
+                graph_with_channels(json!([each_channel()])),
+                "p_step_events",
+            ),
             (
                 "gather",
                 graph_with_consumer_join(gather_channel(), Some("gather")),
@@ -768,9 +816,9 @@ mod tests {
             let air = compile_to_air(&graph, "ch-arc", "d", &std::collections::HashMap::new())
                 .unwrap_or_else(|e| panic!("{label} compile failed: {e:?}"));
             let t = transition(&air, "t_step_control_emit");
-            let outs = t["outputs"].as_array().unwrap_or_else(|| {
-                panic!("{label}: t_step_control_emit has no output arcs: {t}")
-            });
+            let outs = t["outputs"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{label}: t_step_control_emit has no output arcs: {t}"));
             assert!(
                 outs.iter().any(|a| a["place"] == deposit),
                 "{label}: control_emit must declare an output arc to deposit place '{deposit}'; got {outs:?}"
@@ -892,8 +940,13 @@ mod tests {
     #[test]
     fn data_channel_open_place_is_control_emit_output_arc() {
         let graph = graph_with_channels(json!([data_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-data-arc", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-data-arc",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let t = transition(&air, "t_step_control_emit");
         let outs = t["outputs"]
             .as_array()
@@ -914,8 +967,13 @@ mod tests {
     #[test]
     fn data_channel_close_routes_to_separate_sink() {
         let graph = graph_with_channels(json!([data_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-data-close", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-data-close",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
 
         let places = place_ids(&air);
         assert!(
@@ -987,8 +1045,13 @@ mod tests {
         // registered as the producer's `output_place`: an unregistered handle
         // would have failed `find_output_place` ("no output place for
         // source_handle 'frames'") instead of compiling.
-        let air = compile_to_air(&graph, "ch-data-wire", "d", &std::collections::HashMap::new())
-            .expect("data channel must be edge-wireable off its source handle");
+        let air = compile_to_air(
+            &graph,
+            "ch-data-wire",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .expect("data channel must be edge-wireable off its source handle");
         let places = place_ids(&air);
         assert!(
             places.iter().any(|p| p == "p_step_frames"),
@@ -999,8 +1062,13 @@ mod tests {
     #[test]
     fn manifest_is_baked_into_job_spec() {
         let graph = graph_with_channels(json!([each_channel(), gather_channel()]));
-        let air =
-            compile_to_air(&graph, "ch-manifest", "d", &std::collections::HashMap::new()).unwrap();
+        let air = compile_to_air(
+            &graph,
+            "ch-manifest",
+            "d",
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         let prepare = transition(&air, "step/prepare");
         let src = prepare["logic"]
             .get("Rhai")
@@ -1008,7 +1076,10 @@ mod tests {
             .or_else(|| prepare["logic"].get("source"))
             .and_then(|s| s.as_str())
             .expect("prepare rhai source");
-        assert!(src.contains(r#""channels":"#), "manifest key missing: {src}");
+        assert!(
+            src.contains(r#""channels":"#),
+            "manifest key missing: {src}"
+        );
         assert!(src.contains(r#""name": "events""#), "events entry missing");
         assert!(src.contains(r#""name": "items""#), "items entry missing");
         // The manifest carries NO fold contract — the fold lives on the consumer

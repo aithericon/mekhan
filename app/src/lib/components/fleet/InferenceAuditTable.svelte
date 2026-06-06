@@ -32,6 +32,7 @@
 	// Snapshot the prop once: this component either renders a fixed `rows` set
 	// (tests) or self-loads on mount — it never reactively follows the prop, so
 	// we capture the initial value into local state and own it thereafter.
+	// svelte-ignore state_referenced_locally
 	const initialRows = rowsProp;
 	let rows = $state<InferenceRequestLogRow[]>(initialRows ?? []);
 	let loading = $state(initialRows === null);

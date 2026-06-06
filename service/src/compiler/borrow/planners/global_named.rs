@@ -33,7 +33,9 @@ use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
 use crate::compiler::error::CompileError;
 use crate::compiler::named_global::{GlobalKind, NamedGlobal};
 use crate::compiler::rhai_gen::json_to_rhai_literal;
-use crate::models::template::{AssetBinding, ExecutionBackendType, WorkflowGraph, WorkflowNodeData};
+use crate::models::template::{
+    AssetBinding, ExecutionBackendType, WorkflowGraph, WorkflowNodeData,
+};
 
 pub(crate) struct GlobalNamedSource;
 
@@ -108,9 +110,10 @@ fn emit_constant_inlines(
                 conditions.iter().map(|c| c.guard.as_str()).collect()
             }
             WorkflowNodeData::Loop { loop_condition, .. } => vec![loop_condition.as_str()],
-            WorkflowNodeData::End { result_mapping, .. } => {
-                result_mapping.iter().map(|m| m.expression.as_str()).collect()
-            }
+            WorkflowNodeData::End { result_mapping, .. } => result_mapping
+                .iter()
+                .map(|m| m.expression.as_str())
+                .collect(),
             WorkflowNodeData::Failure {
                 error_result_mapping,
                 ..

@@ -303,7 +303,10 @@ mod tests {
     #[test]
     fn non_enclosed_scheduled_body_still_unresolved() {
         let g = graph(
-            vec![loop_node("lp", "scope_missing"), scheduled_child("body", "lp")],
+            vec![
+                loop_node("lp", "scope_missing"),
+                scheduled_child("body", "lp"),
+            ],
             None,
         );
         // `lp`'s parent does not exist → no enclosing LeaseScope → body unresolved.

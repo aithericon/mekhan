@@ -20,9 +20,9 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_storage::ArtifactStore;
 use aithericon_executor_worker::{
-    handle_execution, BackendRegistry, CancellationRegistry, CleanupPolicy,
-    JetStreamTransport, JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline,
-    StatusReporter, StreamTransport,
+    handle_execution, BackendRegistry, CancellationRegistry, CleanupPolicy, JetStreamTransport,
+    JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline, StatusReporter,
+    TransportRegistry,
 };
 
 use crate::nats::shared_nats_url;
@@ -39,9 +39,10 @@ pub struct ExecutorTestContext {
     pub pipeline: Arc<StagingPipeline>,
     pub base_dir: PathBuf,
     pub cancel_registry: CancellationRegistry,
-    /// Data-plane byte transport over this context's isolated NATS — backs a
-    /// producer job's `PublishChunk`.
-    transport: Option<Arc<dyn StreamTransport>>,
+    /// Transport REGISTRY mirroring the worker's, over this context's isolated
+    /// NATS — backs a producer job's `PublishChunk`. No object store is wired in
+    /// tests, so an "s3" channel fails loudly.
+    transports: Option<TransportRegistry>,
     nats_client: async_nats::Client,
     jetstream: jetstream::Context,
     status_stream_name: String,
@@ -126,8 +127,8 @@ impl ExecutorTestContext {
         JetStreamTransport::ensure_stream(&js, 1)
             .await
             .expect("ensure EXECUTOR_DATASTREAM");
-        let transport: Option<Arc<dyn StreamTransport>> =
-            Some(Arc::new(JetStreamTransport::new(js.clone())));
+        let transports: Option<TransportRegistry> =
+            Some(TransportRegistry::new(js.clone(), nats_client.clone()));
 
         Self {
             prefix,
@@ -137,7 +138,7 @@ impl ExecutorTestContext {
             pipeline,
             base_dir,
             cancel_registry,
-            transport,
+            transports,
             nats_client,
             jetstream: js,
             status_stream_name,
@@ -265,7 +266,7 @@ impl ExecutorTestContext {
             cancel_registry: self.cancel_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
-            transport: self.transport.clone(),
+            transports: self.transports.clone(),
         });
         let storage = self.storage.clone();
 
@@ -301,7 +302,7 @@ impl ExecutorTestContext {
             cancel_registry: self.cancel_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
-            transport: self.transport.clone(),
+            transports: self.transports.clone(),
         });
         let storage = self.storage.clone();
 
@@ -337,7 +338,7 @@ impl ExecutorTestContext {
             cancel_registry: self.cancel_registry.clone(),
             log_config,
             completion_tracker: None,
-            transport: self.transport.clone(),
+            transports: self.transports.clone(),
         });
         let storage = self.storage.clone();
 
@@ -375,7 +376,7 @@ impl ExecutorTestContext {
             cancel_registry: self.cancel_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: Some(tracker.clone()),
-            transport: self.transport.clone(),
+            transports: self.transports.clone(),
         });
         let storage = self.storage.clone();
 
@@ -406,7 +407,7 @@ impl ExecutorTestContext {
             cancel_registry: self.cancel_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
-            transport: self.transport.clone(),
+            transports: self.transports.clone(),
         })
     }
 

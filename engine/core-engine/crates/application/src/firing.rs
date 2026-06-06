@@ -547,8 +547,11 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
             // unknown IDs fail closed at scenario-load time, so a present
             // override here is guaranteed to target a declared transition.
             // No-op when there is no override entry for this transition.
-            let patched_effect_config =
-                apply_stage_override(&transition.effect_config, dispatch_options, &transition_id.0);
+            let patched_effect_config = apply_stage_override(
+                &transition.effect_config,
+                dispatch_options,
+                &transition_id.0,
+            );
 
             // Resolve secrets in config (just-in-time, transient copy)
             let resolved_config = match (secret_store, &patched_effect_config) {

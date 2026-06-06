@@ -629,7 +629,11 @@ mod scope_reachability_tests {
         let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
         // Two field refs ({{cand.x}}, {{cand.y}}) on the same item var collapse
         // to one staged `cand.json`.
-        assert_eq!(borrows.len(), 1, "exactly one item-var borrow; got: {borrows:?}");
+        assert_eq!(
+            borrows.len(),
+            1,
+            "exactly one item-var borrow; got: {borrows:?}"
+        );
         match &borrows[0] {
             AutomatedStepDataBorrow::MapItemVar {
                 consumer_node_id,
@@ -700,8 +704,7 @@ mod scope_reachability_tests {
         );
         files.insert("producer".to_string(), pf);
 
-        let air = compile_to_air(&g, "ros-map", "", &files)
-            .expect("ros-map graph compiles to AIR");
+        let air = compile_to_air(&g, "ros-map", "", &files).expect("ros-map graph compiles to AIR");
         let air_str = serde_json::to_string(&air).expect("serialize AIR");
 
         assert!(

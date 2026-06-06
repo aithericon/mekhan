@@ -304,12 +304,7 @@ mod tests {
     #[test]
     fn build_payload_emits_kreuzberg_block_when_enabled() {
         let config = fixture_config(true);
-        let payload = build_payload_from_parts(
-            &config,
-            "0.x-test",
-            vec![],
-            "Ready",
-        );
+        let payload = build_payload_from_parts(&config, "0.x-test", vec![], "Ready");
         assert_eq!(
             payload["services"]["kreuzberg"]["healthy"], true,
             "heartbeat MUST advertise kreuzberg healthy=true when enabled — got {payload}"
@@ -323,12 +318,7 @@ mod tests {
     #[test]
     fn build_payload_omits_services_key_when_kreuzberg_disabled() {
         let config = fixture_config(false);
-        let payload = build_payload_from_parts(
-            &config,
-            "0.x-test",
-            vec![],
-            "Ready",
-        );
+        let payload = build_payload_from_parts(&config, "0.x-test", vec![], "Ready");
         assert!(
             payload.get("services").is_none(),
             "heartbeat MUST omit `services` key entirely when no feature advertises — got {:?}",

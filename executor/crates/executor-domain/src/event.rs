@@ -250,15 +250,11 @@ impl ExecutionEvent {
                 };
                 format!("{}-phase-{}-{}", self.execution_id, phase_name, status_str)
             }
-            StatusDetail::MetricPointLogged { name, step, .. } => match step {
-                Some(s) => format!("{}-metric_pt-{}-{}", self.execution_id, name, s),
-                None => format!(
-                    "{}-{}-{}",
-                    self.execution_id,
-                    self.category.as_str(),
-                    self.sequence
-                ),
-            },
+            StatusDetail::MetricPointLogged {
+                name,
+                step: Some(s),
+                ..
+            } => format!("{}-metric_pt-{}-{}", self.execution_id, name, s),
             _ => format!(
                 "{}-{}-{}",
                 self.execution_id,

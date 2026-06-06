@@ -225,9 +225,10 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
             conditions.iter().map(|c| c.guard.as_str()).collect()
         }
         WorkflowNodeData::Loop { loop_condition, .. } => vec![loop_condition.as_str()],
-        WorkflowNodeData::End { result_mapping, .. } => {
-            result_mapping.iter().map(|m| m.expression.as_str()).collect()
-        }
+        WorkflowNodeData::End { result_mapping, .. } => result_mapping
+            .iter()
+            .map(|m| m.expression.as_str())
+            .collect(),
         WorkflowNodeData::Failure {
             error_result_mapping,
             ..

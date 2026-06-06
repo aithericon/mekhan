@@ -299,7 +299,12 @@ impl ExecutorNatsClient {
         let channels = request
             .token_data
             .get("channels")
-            .or_else(|| request.token_data.get("spec").and_then(|s| s.get("channels")))
+            .or_else(|| {
+                request
+                    .token_data
+                    .get("spec")
+                    .and_then(|s| s.get("channels"))
+            })
             .and_then(|v| {
                 serde_json::from_value::<Vec<aithericon_executor_domain::ChannelManifestEntry>>(
                     v.clone(),
@@ -517,9 +522,8 @@ impl ExecutorClient for ExecutorNatsClient {
             "is_eof": is_eof,
         });
 
-        let payload_vec = serde_json::to_vec(&payload).map_err(|e| {
-            ExecutorError::Fatal(format!("Failed to serialize chunk: {}", e))
-        })?;
+        let payload_vec = serde_json::to_vec(&payload)
+            .map_err(|e| ExecutorError::Fatal(format!("Failed to serialize chunk: {}", e)))?;
 
         let mut headers = async_nats::HeaderMap::new();
         // Use the same Nats-Msg-Id format as the listener's dedup window.
@@ -528,7 +532,9 @@ impl ExecutorClient for ExecutorNatsClient {
         self.jetstream
             .publish_with_headers(subject, headers, Bytes::from(payload_vec))
             .await
-            .map_err(|e| ExecutorError::SubmissionFailed(format!("NATS chunk publish failed: {}", e)))?
+            .map_err(|e| {
+                ExecutorError::SubmissionFailed(format!("NATS chunk publish failed: {}", e))
+            })?
             .await
             .map_err(|e| {
                 ExecutorError::SubmissionFailed(format!("NATS chunk publish ack failed: {}", e))

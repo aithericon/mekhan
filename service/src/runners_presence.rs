@@ -275,7 +275,10 @@ async fn inject_acquire(
     executor_namespace: &str,
     caps: &serde_json::Value,
 ) {
-    let subject = format!("petri.bridge.{pool_net_id}.{}", well_known::POOL_PRESENCE_ACQUIRE_INBOX);
+    let subject = format!(
+        "petri.bridge.{pool_net_id}.{}",
+        well_known::POOL_PRESENCE_ACQUIRE_INBOX
+    );
     let unit_id = format!("{runner_id}#{slot}");
     // `CrossNetTokenTransfer` shape (engine `cross_net_bridge.rs`). source_* are
     // informational; we tag them so causality/tracing attributes the unit to the
@@ -308,8 +311,10 @@ async fn inject_acquire(
 /// reply routing — signals are injected routing-less; the "fail" routing for a
 /// held unit rides the HOLD, not this signal.
 async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, runner_id: Uuid) {
-    let subject =
-        format!("petri.signal.{pool_net_id}.{}", well_known::POOL_PRESENCE_EXPIRED_SIGNAL);
+    let subject = format!(
+        "petri.signal.{pool_net_id}.{}",
+        well_known::POOL_PRESENCE_EXPIRED_SIGNAL
+    );
     let envelope = json!({
         "source": "presence",
         "signal_key": format!("presence-expire-{runner_id}-{}", Utc::now().timestamp_millis()),
@@ -335,7 +340,11 @@ async fn publish_jetstream(
             return;
         }
     };
-    match nats.jetstream().publish(subject.to_string(), bytes.into()).await {
+    match nats
+        .jetstream()
+        .publish(subject.to_string(), bytes.into())
+        .await
+    {
         Ok(ack) => {
             if let Err(e) = ack.await {
                 tracing::warn!(subject, "{what} publish ack failed: {e}");
@@ -394,7 +403,8 @@ async fn handle_presence(
                 // Compute the grow delta. SHRINK is lazy (just lower the target);
                 // GROW eagerly injects the new slots below. A pool-less
                 // (liveness-only) entry never injects.
-                let new_slots = grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
+                let new_slots =
+                    grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
                 let grow = new_slots.map(|s| (entry.pool_net_id.clone(), s));
                 // Always record the new target C (grow OR shrink).
                 entry.concurrency = concurrency;
@@ -490,7 +500,15 @@ async fn handle_presence(
     // lease; they share `runner_id` so the reap-all-by-runner_id signals match
     // any of them.
     for slot in 0..concurrency {
-        inject_acquire(nats, &pool_net_id, runner_id, slot, &executor_namespace, &caps).await;
+        inject_acquire(
+            nats,
+            &pool_net_id,
+            runner_id,
+            slot,
+            &executor_namespace,
+            &caps,
+        )
+        .await;
     }
 
     // Commit the present edge AFTER injecting so a crash between inject + map
@@ -620,7 +638,16 @@ pub(crate) async fn start_presence_subscriber(
             continue;
         };
         let (backends, concurrency) = parse_presence(&msg.payload);
-        handle_presence(&db, &nats, &presence, &fleet, runner_id, backends, concurrency).await;
+        handle_presence(
+            &db,
+            &nats,
+            &presence,
+            &fleet,
+            runner_id,
+            backends,
+            concurrency,
+        )
+        .await;
     }
 
     tracing::warn!("presence subscriber stream ended");
@@ -845,7 +872,11 @@ mod tests {
         // ... and C distinct dedup ids (the highest-risk line: keying dedup on the
         // runner alone would collapse all C-1 extra acquires to one).
         let distinct_dedup: std::collections::HashSet<&String> = dedup_ids.iter().collect();
-        assert_eq!(distinct_dedup.len(), c as usize, "per-slot dedup keys distinct");
+        assert_eq!(
+            distinct_dedup.len(),
+            c as usize,
+            "per-slot dedup keys distinct"
+        );
         // ... all sharing the one runner_id prefix.
         assert!(unit_ids.iter().all(|u| u.starts_with(&format!("{rid}#"))));
     }

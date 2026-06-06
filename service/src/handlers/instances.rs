@@ -783,8 +783,10 @@ pub async fn list_instance_allocations(
     .fetch_all(&state.db)
     .await?;
 
-    let response: Vec<AllocationResponse> =
-        rows.into_iter().map(AllocationResponse::with_duration).collect();
+    let response: Vec<AllocationResponse> = rows
+        .into_iter()
+        .map(AllocationResponse::with_duration)
+        .collect();
 
     Ok(Json(response))
 }

@@ -258,7 +258,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
     let resource_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO resources (id, workspace_id, path, resource_type, display_name, created_by) \
-         VALUES ($1, $2, 'local_slurm', 'datacenter', 'Local Slurm', $3)"
+         VALUES ($1, $2, 'local_slurm', 'datacenter', 'Local Slurm', $3)",
     )
     .bind(resource_id)
     .bind(Uuid::nil())
@@ -320,14 +320,22 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .send()
         .await
         .expect("deploy lease adapter");
-    assert_eq!(deploy_resp.status(), StatusCode::OK, "deploy lease adapter failed");
+    assert_eq!(
+        deploy_resp.status(),
+        StatusCode::OK,
+        "deploy lease adapter failed"
+    );
     let activate_resp = reqwest::Client::new()
         .put(format!("{}/api/nets/{net_id}/run-mode", engine_url()))
         .json(&serde_json::json!({"mode": "running"}))
         .send()
         .await
         .expect("activate lease adapter");
-    assert_eq!(activate_resp.status(), StatusCode::OK, "activate lease adapter failed");
+    assert_eq!(
+        activate_resp.status(),
+        StatusCode::OK,
+        "activate lease adapter failed"
+    );
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(

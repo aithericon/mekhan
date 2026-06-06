@@ -542,10 +542,14 @@ mod tests {
         assert_eq!(
             all,
             vec![
-                "--bindmount_ro", "/usr:/usr",
-                "--bindmount_ro", "/lib:/lib",
-                "--bindmount_ro", "/lib64:/lib64",
-                "--bindmount_ro", "/bin:/bin",
+                "--bindmount_ro",
+                "/usr:/usr",
+                "--bindmount_ro",
+                "/lib:/lib",
+                "--bindmount_ro",
+                "/lib64:/lib64",
+                "--bindmount_ro",
+                "/bin:/bin",
             ]
         );
         // None present → no binds (nsjail would abort on a missing source).
@@ -588,7 +592,10 @@ mod tests {
         // allow_network → self-test mirrors the shared-netns behaviour.
         let mut net = base_config();
         net.allow_network = true;
-        assert!(contains(&net.self_test_args("/bin/true"), "--disable_clone_newnet"));
+        assert!(contains(
+            &net.self_test_args("/bin/true"),
+            "--disable_clone_newnet"
+        ));
     }
 
     #[test]
@@ -701,8 +708,7 @@ mod tests {
         );
 
         // and absent when false
-        let (_bin2, argv2) =
-            cfg.build_nsjail_args(&proc_spec(), &run_ctx(serde_json::Value::Null));
+        let (_bin2, argv2) = cfg.build_nsjail_args(&proc_spec(), &run_ctx(serde_json::Value::Null));
         assert!(
             !contains(&argv2, "--keep_env"),
             "inherit_env=false must NOT emit --keep_env"

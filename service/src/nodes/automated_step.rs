@@ -54,13 +54,16 @@ fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // without a static field contract. Channel-less steps add nothing, so the
     // port list is byte-stable.
     let mut ports = vec![input.clone()];
-    ports.extend(channels.iter().filter(|c| matches!(c.direction, ChannelDirection::In)).map(
-        |c| Port {
-            id: c.name.clone(),
-            label: c.name.clone(),
-            fields: vec![],
-        },
-    ));
+    ports.extend(
+        channels
+            .iter()
+            .filter(|c| matches!(c.direction, ChannelDirection::In))
+            .map(|c| Port {
+                id: c.name.clone(),
+                label: c.name.clone(),
+                fields: vec![],
+            }),
+    );
     ports
 }
 
@@ -92,13 +95,16 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
             fields: vec![],
         },
     ];
-    ports.extend(channels.iter().filter(|c| matches!(c.direction, ChannelDirection::Out)).map(
-        |c| Port {
-            id: c.name.clone(),
-            label: c.name.clone(),
-            fields: vec![],
-        },
-    ));
+    ports.extend(
+        channels
+            .iter()
+            .filter(|c| matches!(c.direction, ChannelDirection::Out))
+            .map(|c| Port {
+                id: c.name.clone(),
+                label: c.name.clone(),
+                fields: vec![],
+            }),
+    );
     ports
 }
 

@@ -9,6 +9,7 @@
 
 	const { screenToFlowPosition } = useSvelteFlow();
 
-	// Expose the helper to the parent immediately
+	// Expose the helper to the parent immediately — one-time call at mount.
+	// svelte-ignore state_referenced_locally
 	oninit({ screenToFlowPosition });
 </script>

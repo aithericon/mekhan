@@ -450,7 +450,7 @@ impl JobExecutor {
                             };
                             match promote_file_output_to_store(
                                 store.as_ref(),
-                                &execution_id,
+                                execution_id,
                                 &decl.name,
                                 value,
                                 &run_context.run_dir.outputs_dir,
@@ -928,10 +928,7 @@ async fn promote_file_output_to_store(
     // Rewrite the value's key to the shared object key.
     let promoted = match value {
         serde_json::Value::Object(mut map) => {
-            map.insert(
-                "key".to_string(),
-                serde_json::Value::String(shared_key),
-            );
+            map.insert("key".to_string(), serde_json::Value::String(shared_key));
             serde_json::Value::Object(map)
         }
         // A bare string value becomes the shared key directly.
@@ -969,16 +966,11 @@ mod tests {
             "media_type": "image/png",
         });
 
-        let promoted = promote_file_output_to_store(
-            &store,
-            "exec-abc",
-            "page_1",
-            value,
-            run_dir.path(),
-        )
-        .await
-        .unwrap()
-        .expect("a local file is promotable");
+        let promoted =
+            promote_file_output_to_store(&store, "exec-abc", "page_1", value, run_dir.path())
+                .await
+                .unwrap()
+                .expect("a local file is promotable");
 
         // The rewritten key is the deterministic shared key.
         let shared_key = promoted
@@ -1024,7 +1016,10 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        assert_eq!(promoted, serde_json::json!("artifacts/e1/outputs/img/doc.png"));
+        assert_eq!(
+            promoted,
+            serde_json::json!("artifacts/e1/outputs/img/doc.png")
+        );
     }
 
     /// A value whose `key` is NOT an existing local file (e.g. already a shared
@@ -1063,7 +1058,9 @@ mod tests {
         let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
 
         let rel = "page_0002.png";
-        tokio::fs::write(run_dir.path().join(rel), b"p2").await.unwrap();
+        tokio::fs::write(run_dir.path().join(rel), b"p2")
+            .await
+            .unwrap();
 
         let value = serde_json::json!({ "key": rel, "page": 2 });
         let promoted = promote_file_output_to_store(&store, "e3", "page_1", value, run_dir.path())

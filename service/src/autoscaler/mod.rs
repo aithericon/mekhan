@@ -70,7 +70,11 @@ async fn run_autoscaler(
     let mut tick = tokio::time::interval(Duration::from_secs(RECONCILE_INTERVAL_SECS));
     tracing::info!(
         interval_secs = RECONCILE_INTERVAL_SECS,
-        mode = if demand.is_some() { "reactive(L2)" } else { "manual(L1)" },
+        mode = if demand.is_some() {
+            "reactive(L2)"
+        } else {
+            "manual(L1)"
+        },
         "model autoscaler started"
     );
 
@@ -161,9 +165,12 @@ async fn reconcile_policy(
     .fetch_optional(db)
     .await
     .map_err(|e| format!("resolve datacenter alias: {e}"))?;
-    let dc_uuid = dc_uuid
-        .map(|(id,)| id)
-        .ok_or_else(|| format!("datacenter alias '{}' not found", policy.datacenter_resource_id))?;
+    let dc_uuid = dc_uuid.map(|(id,)| id).ok_or_else(|| {
+        format!(
+            "datacenter alias '{}' not found",
+            policy.datacenter_resource_id
+        )
+    })?;
 
     // Existing row (the durable reconciliation state).
     let existing: Option<ModelReplicaRow> =
@@ -205,7 +212,10 @@ async fn reconcile_policy(
             }
             Decision {
                 desired: prev_desired.unwrap_or(0),
-                status: existing.as_ref().map(|r| leak_status(&r.status)).unwrap_or(status::STOPPED),
+                status: existing
+                    .as_ref()
+                    .map(|r| leak_status(&r.status))
+                    .unwrap_or(status::STOPPED),
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
@@ -214,7 +224,11 @@ async fn reconcile_policy(
             // Steady: no actuation, refresh observed + settle status.
             Decision {
                 desired: t,
-                status: if t == 0 { status::STOPPED } else { status::ACTIVE },
+                status: if t == 0 {
+                    status::STOPPED
+                } else {
+                    status::ACTIVE
+                },
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
@@ -224,7 +238,10 @@ async fn reconcile_policy(
             // observed, keep prior desired/status/last_actuated.
             Decision {
                 desired: prev_desired.unwrap_or(t),
-                status: existing.as_ref().map(|r| leak_status(&r.status)).unwrap_or(status::PROVISIONING),
+                status: existing
+                    .as_ref()
+                    .map(|r| leak_status(&r.status))
+                    .unwrap_or(status::PROVISIONING),
                 actuate: false,
                 last_actuated_at: prev_actuated,
             }
@@ -342,7 +359,8 @@ async fn upsert_row(
     status: &str,
     last_actuated_at: Option<DateTime<Utc>>,
 ) -> Result<ModelReplicaRow, sqlx::Error> {
-    let residency = (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
+    let residency =
+        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
     sqlx::query_as::<_, ModelReplicaRow>(
         "INSERT INTO model_replicas \
             (workspace_id, policy_resource_id, model_id, datacenter_resource_id, \
@@ -383,7 +401,8 @@ async fn mark_failed(
     observed: u32,
     error: &str,
 ) -> Result<(), sqlx::Error> {
-    let residency = (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
+    let residency =
+        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
     sqlx::query(
         "UPDATE model_replicas \
          SET status = 'failed', observed_count = $3, last_error = $4, updated_at = NOW() \

@@ -33,6 +33,7 @@
 	// Single reactive store shared with every subroute. Subpages mutate
 	// `instance`/`processes`/etc. through `reload()`; we never re-assign the
 	// object itself so the context handle stays stable.
+	// svelte-ignore state_referenced_locally
 	const ctx = $state<InstanceContext>({
 		instanceId,
 		instance: null,

@@ -48,7 +48,7 @@ fn apply_constant_borrows(scenario: &mut ScenarioDefinition, borrows: &[Borrow])
     // clobbering `a.b.c`. The dispatcher already groups by consumer, but a
     // single group can carry several refs of varying depth.
     let mut ordered: Vec<&Borrow> = borrows.iter().collect();
-    ordered.sort_by(|a, b| needle_len(b).cmp(&needle_len(a)));
+    ordered.sort_by_key(|b| std::cmp::Reverse(needle_len(b)));
 
     for b in ordered {
         let BorrowResolution::ConstantInline {
@@ -161,7 +161,7 @@ mod tests {
             let needle = format!("{root}.{}", segs.join("."));
             repls.push((needle, json_to_rhai_literal(cur)));
         }
-        repls.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        repls.sort_by_key(|b| std::cmp::Reverse(b.0.len()));
         for (needle, lit) in repls {
             replace_token(src, &needle, &lit);
         }

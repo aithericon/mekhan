@@ -221,7 +221,7 @@ async fn scheduled_automated_step_runs_through_nomad() {
     let resource_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO resources (id, workspace_id, path, resource_type, display_name, created_by) \
-         VALUES ($1, $2, 'local_nomad', 'datacenter', 'Local Nomad', $3)"
+         VALUES ($1, $2, 'local_nomad', 'datacenter', 'Local Nomad', $3)",
     )
     .bind(resource_id)
     .bind(Uuid::nil())
@@ -257,7 +257,8 @@ async fn scheduled_automated_step_runs_through_nomad() {
 
     // Deploy the datacenter lease adapter net for our seeded resource.
     // In production, mekhan-service deploys this automatically on resource create/publish.
-    let nomad_url = std::env::var("TEST_NOMAD_URL").unwrap_or_else(|_| "http://localhost:4646".to_string());
+    let nomad_url =
+        std::env::var("TEST_NOMAD_URL").unwrap_or_else(|_| "http://localhost:4646".to_string());
     let conn = mekhan_service::petri::pool_net::DatacenterConnection {
         resource_id,
         resource_version: 1,
@@ -282,14 +283,22 @@ async fn scheduled_automated_step_runs_through_nomad() {
         .send()
         .await
         .expect("deploy lease adapter");
-    assert_eq!(deploy_resp.status(), StatusCode::OK, "deploy lease adapter failed");
+    assert_eq!(
+        deploy_resp.status(),
+        StatusCode::OK,
+        "deploy lease adapter failed"
+    );
     let activate_resp = reqwest::Client::new()
         .put(format!("{}/api/nets/{net_id}/run-mode", engine_url()))
         .json(&serde_json::json!({"mode": "running"}))
         .send()
         .await
         .expect("activate lease adapter");
-    assert_eq!(activate_resp.status(), StatusCode::OK, "activate lease adapter failed");
+    assert_eq!(
+        activate_resp.status(),
+        StatusCode::OK,
+        "activate lease adapter failed"
+    );
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(

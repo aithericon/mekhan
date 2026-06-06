@@ -941,19 +941,18 @@ impl petri_nats::NetCreator for RegistryNetCreator {
         // ScenarioDefinition input is also tolerated here via a fallback
         // deserialize, since this code path (NATS dispatch CLI driver) loads
         // scenarios from on-disk JSON files that may pre-date the envelope.
-        let envelope: petri_api::dto::LoadScenarioRequest = serde_json::from_value(
-            request.scenario.clone(),
-        )
-        .or_else(|_envelope_err| {
-            // Fallback: parse as bare ScenarioDefinition for CLI/file-based
-            // dispatch (envelope wire shape is cloud-layer-only). Tracked by
-            // workstream #110 (envelope-uniform CLI loader).
-            serde_json::from_value::<petri_api::dto::ScenarioDefinition>(
-                request.scenario.clone(),
-            )
-            .map(petri_api::dto::LoadScenarioRequest::from_scenario)
-        })
-        .map_err(|e| format!("Invalid scenario JSON: {}", e))?;
+        let envelope: petri_api::dto::LoadScenarioRequest =
+            serde_json::from_value(request.scenario.clone())
+                .or_else(|_envelope_err| {
+                    // Fallback: parse as bare ScenarioDefinition for CLI/file-based
+                    // dispatch (envelope wire shape is cloud-layer-only). Tracked by
+                    // workstream #110 (envelope-uniform CLI loader).
+                    serde_json::from_value::<petri_api::dto::ScenarioDefinition>(
+                        request.scenario.clone(),
+                    )
+                    .map(petri_api::dto::LoadScenarioRequest::from_scenario)
+                })
+                .map_err(|e| format!("Invalid scenario JSON: {}", e))?;
 
         let scenario = envelope.into_scenario();
 

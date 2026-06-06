@@ -278,10 +278,7 @@ impl SlurmAllocatorClient {
     /// via the held SSH session. `escape_hatch.sbatch_directives` is spliced
     /// verbatim after the typed `#SBATCH` directives. NOTE: Slurm is implemented
     /// compile-correct + best-effort and is NOT live-tested in this phase.
-    async fn stage_template(
-        &self,
-        args: &StageTemplateArgs,
-    ) -> Result<JsonValue, SlurmAllocError> {
+    async fn stage_template(&self, args: &StageTemplateArgs) -> Result<JsonValue, SlurmAllocError> {
         let mut guard = self.ssh.lock().await;
         if guard.is_none() {
             *guard = Some(SshSession::connect(&self.config).await?);
@@ -305,12 +302,8 @@ impl SlurmAllocatorClient {
         // (None when empty → renderer omits the block).
         let directives = (!args.escape_hatch.sbatch_directives.is_empty())
             .then(|| args.escape_hatch.sbatch_directives.join("\n"));
-        let script = alloc::render_sbatch_script(
-            &args.slug,
-            &spec,
-            directives.as_deref(),
-            &args.spec.env,
-        );
+        let script =
+            alloc::render_sbatch_script(&args.slug, &spec, directives.as_deref(), &args.spec.env);
 
         let remote_path = format!(
             "{}/{}.sh",
@@ -354,7 +347,10 @@ impl SlurmAllocatorClient {
         let log_path = alloc::materialize_log_path(&args.image_ref);
         self.exec(&launch).await?;
 
-        let poll = format!("cat '{}' 2>/dev/null || true", log_path.replace('\'', "'\\''"));
+        let poll = format!(
+            "cat '{}' 2>/dev/null || true",
+            log_path.replace('\'', "'\\''")
+        );
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_secs(MATERIALIZE_PULL_TIMEOUT_SECS);
         loop {
@@ -366,8 +362,8 @@ impl SlurmAllocatorClient {
                         args.image_ref
                     )));
                 }
-                let (digest, sif_path, size_bytes) =
-                    alloc::parse_materialize_output(&log).ok_or_else(|| {
+                let (digest, sif_path, size_bytes) = alloc::parse_materialize_output(&log)
+                    .ok_or_else(|| {
                         SlurmAllocError::BadOutput(format!(
                             "pull finished rc=0 but no PETRI_MATERIALIZE line for {}; log:\n{log}",
                             args.image_ref
@@ -450,7 +446,9 @@ impl AllocatorClient for SlurmAllocatorClient {
         let remote_ref = out
             .get("remote_ref")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AllocatorError::BadResponse("slurm stage returned no remote_ref".into()))?
+            .ok_or_else(|| {
+                AllocatorError::BadResponse("slurm stage returned no remote_ref".into())
+            })?
             .to_string();
         Ok(StageOutcome { remote_ref })
     }

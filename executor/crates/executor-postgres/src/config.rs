@@ -12,6 +12,4 @@
 //! backend builds/caches a `PgPool` keyed by connection identity at
 //! execute-time. See `backend.rs` for the cache.
 
-pub use aithericon_executor_backend_configs::postgres::{
-    PgOperation, PostgresConfig, RlsContext,
-};
+pub use aithericon_executor_backend_configs::postgres::{PgOperation, PostgresConfig, RlsContext};

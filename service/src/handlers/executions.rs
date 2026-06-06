@@ -195,7 +195,11 @@ pub async fn tap_channel_data(
     validate_subject_token("execution_id", &execution_id)?;
     validate_subject_token("channel", &channel)?;
     // Replay (bounded) vs follow (live tail with wide idle patience).
-    let idle = if query.follow() { FOLLOW_IDLE } else { IDLE_TIMEOUT };
+    let idle = if query.follow() {
+        FOLLOW_IDLE
+    } else {
+        IDLE_TIMEOUT
+    };
 
     let subject = format!("executor.datastream.{execution_id}.{channel}");
     let js = state.nats.jetstream().clone();
@@ -205,7 +209,10 @@ pub async fn tap_channel_data(
     // `inactive_threshold` lets NATS reap it shortly after we stop pulling
     // (client disconnect / stream end) rather than leaning on the server default.
     let stream_h = js.get_stream(DATASTREAM_STREAM).await.map_err(|e| {
-        ApiError::new(StatusCode::BAD_GATEWAY, format!("datastream stream unavailable: {e}"))
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("datastream stream unavailable: {e}"),
+        )
     })?;
     let consumer = stream_h
         .create_consumer(jetstream::consumer::pull::Config {
@@ -236,8 +243,9 @@ pub async fn tap_channel_data(
     // envelope to settle the Content-Type, or fall through to a 200-empty response.
     match tokio::time::timeout(idle, messages.next()).await {
         Ok(Some(item)) => {
-            let msg = item
-                .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("datastream read: {e}")))?;
+            let msg = item.map_err(|e| {
+                ApiError::new(StatusCode::BAD_GATEWAY, format!("datastream read: {e}"))
+            })?;
             let (seq, ct, is_eof) = parse_headers(msg.headers.as_ref());
             let payload = Bytes::from(msg.payload.to_vec());
             let _ = msg.ack().await;
@@ -306,7 +314,9 @@ pub async fn tap_channel_data(
 /// Parse `(seq, content_type, is_eof)` out of an envelope's NATS headers. A
 /// missing/garbled `seq` defaults to 0 (mirrors `executor_worker::chunks`).
 fn parse_headers(headers: Option<&async_nats::HeaderMap>) -> (u64, Option<String>, bool) {
-    let seq = header_str(headers, HDR_SEQ).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let seq = header_str(headers, HDR_SEQ)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let content_type = header_str(headers, HDR_CONTENT_TYPE);
     let is_eof = header_str(headers, HDR_EOF).as_deref() == Some("1");
     (seq, content_type, is_eof)

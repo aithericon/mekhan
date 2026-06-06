@@ -95,10 +95,7 @@ pub async fn list_capability_types(
     .await?;
 
     Ok(Json(PaginatedResponse {
-        items: rows
-            .into_iter()
-            .map(CapabilityTypeSummary::from)
-            .collect(),
+        items: rows.into_iter().map(CapabilityTypeSummary::from).collect(),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -158,7 +155,9 @@ pub async fn create_capability_type(
 
     let name = req.name.trim().to_string();
     if name.is_empty() {
-        return Err(ApiError::bad_request("capability type `name` cannot be empty"));
+        return Err(ApiError::bad_request(
+            "capability type `name` cannot be empty",
+        ));
     }
 
     // Field-shape validation: every field needs a non-empty name, and a
@@ -169,7 +168,9 @@ pub async fn create_capability_type(
     for field in &req.fields {
         let fname = field.name.trim();
         if fname.is_empty() {
-            return Err(ApiError::bad_request("capability field `name` cannot be empty"));
+            return Err(ApiError::bad_request(
+                "capability field `name` cannot be empty",
+            ));
         }
         if !seen.insert(fname) {
             return Err(ApiError::bad_request(format!(
@@ -211,10 +212,11 @@ pub async fn create_capability_type(
         return Err(ApiError::internal(e.to_string()));
     }
 
-    let row = sqlx::query_as::<_, CapabilityTypeRow>("SELECT * FROM capability_types WHERE id = $1")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let row =
+        sqlx::query_as::<_, CapabilityTypeRow>("SELECT * FROM capability_types WHERE id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
     Ok((StatusCode::CREATED, Json(CapabilityTypeSummary::from(row))))
 }
 

@@ -414,7 +414,10 @@ mod tests {
             "projection": ["id"],
         });
         let (canonical, inputs) = validate_cfg(cfg).expect("must compile");
-        assert!(inputs.is_empty(), "envelope refs stage via borrow planner, not here");
+        assert!(
+            inputs.is_empty(),
+            "envelope refs stage via borrow planner, not here"
+        );
         assert_eq!(canonical["resource_alias"], "warehouse");
     }
 

@@ -429,17 +429,13 @@ impl NomadWatcher {
                     // (payload-only enrichment). Non-terminal events keep just
                     // the base fields.
                     if job_status.is_terminal() {
-                        let metrics =
-                            build_nomad_metrics(alloc, task_state, Some(task_event));
+                        let metrics = build_nomad_metrics(alloc, task_state, Some(task_event));
                         flatten_metrics(&mut payload, &metrics);
                     } else {
                         // Preserve the historical `exit_code` field on
                         // non-terminal events for back-compat.
                         if let Some(obj) = payload.as_object_mut() {
-                            obj.insert(
-                                "exit_code".into(),
-                                serde_json::json!(task_event.exit_code),
-                            );
+                            obj.insert("exit_code".into(), serde_json::json!(task_event.exit_code));
                         }
                     }
 

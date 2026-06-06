@@ -68,7 +68,9 @@
 	// null, the reference panel disables its "insert" affordance.
 	let editorApi = $state<CodeEditorApi | null>(null);
 
-	// Yjs session
+	// Yjs session — bound once for the active template; the route remounts on
+	// id change, so the initial-value read is intended.
+	// svelte-ignore state_referenced_locally
 	const session = getSession(templateId);
 	const binding = new YjsGraphBinding(session.doc);
 

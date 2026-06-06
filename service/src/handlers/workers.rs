@@ -112,7 +112,12 @@ pub async fn worker_coverage(
     // surface uncovered backends (worker_count == 0) — the actionable signal.
     let backends: Vec<BackendCoverageEntry> = aithericon_backends::BACKENDS
         .iter()
-        .filter(|m| matches!(m.dispatch_mode, aithericon_backends::DispatchMode::ExecutorJob))
+        .filter(|m| {
+            matches!(
+                m.dispatch_mode,
+                aithericon_backends::DispatchMode::ExecutorJob
+            )
+        })
         .map(|m| {
             let worker_count = snapshot
                 .iter()
@@ -319,7 +324,9 @@ pub async fn enroll_worker(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| {
-        ApiError::forbidden("registration token is no longer usable (revoked, expired, or exhausted)")
+        ApiError::forbidden(
+            "registration token is no longer usable (revoked, expired, or exhausted)",
+        )
     })?;
 
     // 5. Resolve the ROUTING PARTITION (unified worker dispatch, docs/23/24): the
@@ -502,12 +509,13 @@ pub async fn issue_worker_nats_creds(
     }
 
     // Load the live worker row (revoked rows are excluded → 404).
-    let row =
-        sqlx::query_as::<_, WorkerRow>("SELECT * FROM workers WHERE id = $1 AND revoked_at IS NULL")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or_else(|| ApiError::not_found("worker not found"))?;
+    let row = sqlx::query_as::<_, WorkerRow>(
+        "SELECT * FROM workers WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("worker not found"))?;
 
     let pubkey = row
         .nats_public_key

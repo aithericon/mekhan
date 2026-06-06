@@ -405,7 +405,11 @@ mod tests {
                     *captured_body.lock().unwrap() = Some(raw[pos + 4..].to_string());
                 }
 
-                let reason = if response_status == 200 { "OK" } else { "Error" };
+                let reason = if response_status == 200 {
+                    "OK"
+                } else {
+                    "Error"
+                };
                 let resp = format!(
                     "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response_status, reason, response_body.len(), response_body
@@ -503,10 +507,17 @@ mod tests {
             // no required_model — surya is model-free
         });
         let input = make_input_with_config("job", json!({"file_b64": "abc"}), Some(config));
-        let _ = handler.execute(input).await.expect("model-free dispatch must succeed");
+        let _ = handler
+            .execute(input)
+            .await
+            .expect("model-free dispatch must succeed");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let body_str = captured_body
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("captured body");
         let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
         assert!(
             parsed.get("model").is_none(),
@@ -544,18 +555,24 @@ mod tests {
         let input = make_input_with_config("job", token_data, Some(config));
         let output = handler.execute(input).await.expect("handler must succeed");
 
-        let headers = captured_headers.lock().unwrap();
-        assert!(
-            headers
-                .iter()
-                .any(|h| h.to_lowercase().contains("bearer-test-token-xyz")),
-            "expected Bearer token in Authorization header, got: {:?}",
-            headers
-        );
+        {
+            let headers = captured_headers.lock().unwrap();
+            assert!(
+                headers
+                    .iter()
+                    .any(|h| h.to_lowercase().contains("bearer-test-token-xyz")),
+                "expected Bearer token in Authorization header, got: {:?}",
+                headers
+            );
+        }
 
         // Generic ExecuteRequest wire shape.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let body_str = captured_body
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("captured body");
         let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
         assert_eq!(parsed["backend"], "llm");
         assert_eq!(parsed["task_kind"], "Vision");
@@ -711,17 +728,27 @@ mod tests {
         let _ = handler.execute(input).await.expect("dispatch must succeed");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let body_str = captured_body
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("captured body");
         let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
 
         // task_kind passes through on the wire untouched.
         assert_eq!(parsed["task_kind"], "Agent");
         // The enriched config is forwarded verbatim under `config` — the pool
         // reads system_prompt / tool_catalogue from there.
-        assert_eq!(parsed["config"]["system_prompt"], "You are a clinical assistant.");
+        assert_eq!(
+            parsed["config"]["system_prompt"],
+            "You are a clinical assistant."
+        );
         assert_eq!(parsed["config"]["tool_catalogue"][0]["name"], "lookup_drug");
         // Domain payload survives under `input`; system fields stripped.
-        assert_eq!(parsed["input"]["claims"][0]["claim"], "patient has diabetes");
+        assert_eq!(
+            parsed["input"]["claims"][0]["claim"],
+            "patient has diabetes"
+        );
         assert!(parsed["input"].get("_template_id").is_none());
     }
 

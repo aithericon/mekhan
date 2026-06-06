@@ -226,7 +226,9 @@ fn expand_capacity_preset(resource_type: &str, config: &mut Value) -> Result<(),
     let Value::Object(axis_map) = serde_json::to_value(preset.axes)
         .map_err(|e| ApiError::internal(format!("preset serialize: {e}")))?
     else {
-        return Err(ApiError::internal("preset axes did not serialize to an object"));
+        return Err(ApiError::internal(
+            "preset axes did not serialize to an object",
+        ));
     };
     for (k, v) in axis_map {
         map.entry(k).or_insert(v);
@@ -770,8 +772,8 @@ async fn list_resources_scoped(
         })
         .collect();
 
-    let resolved = scope::resolve_visible(&visible, items)
-        .map_err(|c| ApiError::conflict(c.to_string()))?;
+    let resolved =
+        scope::resolve_visible(&visible, items).map_err(|c| ApiError::conflict(c.to_string()))?;
 
     // Optional folder prefix filter on display_path.
     let mut winning: Vec<ResourceRow> = resolved
@@ -779,7 +781,7 @@ async fn list_resources_scoped(
         .map(|si| si.item)
         .filter(|r| match params.folder.as_deref() {
             None => true,
-            Some(prefix) if prefix.is_empty() => true,
+            Some("") => true,
             Some(prefix) => r
                 .display_path
                 .as_deref()
@@ -829,8 +831,7 @@ pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
             // Surface the trait-space presets on the `capacity` type so the
             // create form can offer "worker / limit / instrument" with their
             // locked axes (doc 23 §7). No other kind has presets.
-            capacity_presets: (d.name == "capacity")
-                .then(crate::models::capacity::presets),
+            capacity_presets: (d.name == "capacity").then(crate::models::capacity::presets),
         })
         .collect();
     Json(infos)

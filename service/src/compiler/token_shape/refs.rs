@@ -189,14 +189,23 @@ mod head_token_tests {
     #[test]
     fn matches_bare_token() {
         // The case the dotted scanner misses: a collection asset used bare.
-        assert!(references_head_token("material_count = len(metals_db)", "metals_db"));
-        assert!(references_head_token("for m in metals_db:\n    pass", "metals_db"));
+        assert!(references_head_token(
+            "material_count = len(metals_db)",
+            "metals_db"
+        ));
+        assert!(references_head_token(
+            "for m in metals_db:\n    pass",
+            "metals_db"
+        ));
         assert!(references_head_token("metals_db", "metals_db"));
     }
 
     #[test]
     fn matches_dotted_and_indexed_root() {
-        assert!(references_head_token("x = steel_spec.yield_strength", "steel_spec"));
+        assert!(references_head_token(
+            "x = steel_spec.yield_strength",
+            "steel_spec"
+        ));
         assert!(references_head_token("first = metals_db[0]", "metals_db"));
     }
 
