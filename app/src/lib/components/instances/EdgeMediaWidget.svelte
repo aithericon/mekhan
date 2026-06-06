@@ -192,8 +192,8 @@
 		if (!c) return;
 		const ctx = c.getContext('2d');
 		if (!ctx) return;
-		const w = c.width || c.clientWidth || 240;
-		const h = c.height || c.clientHeight || 80;
+		const w = c.width || c.clientWidth || 320;
+		const h = c.height || c.clientHeight || 120;
 		ctx.clearRect(0, 0, w, h);
 		ctx.globalAlpha = 0.5;
 		ctx.fillStyle = '#6b7280';
@@ -396,8 +396,8 @@
 				<canvas
 					bind:this={canvasEl}
 					class="wave"
-					width="240"
-					height="80"
+					width="320"
+					height="120"
 					aria-label={`Live ${feed.channelName} audio waveform`}
 				></canvas>
 				{#if !frozen}
@@ -460,8 +460,8 @@
 	}
 	.frame {
 		position: relative;
-		width: 240px;
-		height: 136px;
+		width: 320px;
+		height: 180px;
 		border-radius: 6px;
 		overflow: hidden;
 		background: #000;
@@ -470,7 +470,7 @@
 	}
 	/* Audio waveform frame is shorter (no video raster) and dark. */
 	.frame.audio {
-		height: 80px;
+		height: 120px;
 		background: #0b0f0a;
 	}
 	/* The edge that currently OWNS audio gets a glowing ring. */
