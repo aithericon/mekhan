@@ -42,6 +42,26 @@ export type ModelState = components['schemas']['ModelState'];
 /** Request body for the operator state-machine step. */
 export type TransitionRequest = components['schemas']['TransitionRequest'];
 
+/** Per-node engine inventory (docs/31 Phase 0) — `GET /api/v1/fleet/engines`. */
+export type FleetEnginesResponse = components['schemas']['FleetEnginesResponse'];
+/** One node's engines in the inventory. */
+export type NodeInventory = components['schemas']['NodeInventory'];
+/** One base engine on a node: base id, C, headroom, loaded adapters. */
+export type NodeEngine = components['schemas']['NodeEngine'];
+/** Per-policy model-replica autoscaler row (docs/29 §6'). */
+export type ModelReplicaRow = components['schemas']['ModelReplicaRow'];
+/** Per-pool node-replica autoscaler row (docs/31 Loop 1). */
+export type NodeReplicaRow = components['schemas']['NodeReplicaRow'];
+/** The load/unload/pull command wire envelope. */
+export type ModelCommand = components['schemas']['ModelCommand'];
+
+/** One model in an upstream catalog browse result (Ollama library / HF). */
+export type CatalogModel = components['schemas']['CatalogModel'];
+/** `GET /api/v1/model-catalog/{source}` response. */
+export type ModelCatalogResponse = components['schemas']['ModelCatalogResponse'];
+/** A model-browser catalog source. */
+export type CatalogSource = 'ollama' | 'huggingface';
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
@@ -82,6 +102,61 @@ export async function transitionModel(
 		await client.POST('/api/v1/models/{model_id}/transition', {
 			params: { path: { model_id: modelId } },
 			body: { target, note: note ?? null }
+		})
+	);
+}
+
+/** GET /api/v1/fleet/engines — the live per-node engine inventory (Phase 0). */
+export async function listFleetEngines(): Promise<FleetEnginesResponse> {
+	return unwrap(await client.GET('/api/v1/fleet/engines', {}));
+}
+
+/** GET /api/v1/models/replicas — per-policy model-replica autoscaler rows. */
+export async function listModelReplicas(): Promise<ModelReplicaRow[]> {
+	return unwrap(await client.GET('/api/v1/models/replicas', {}));
+}
+
+/** GET /api/v1/node-replicas — per-pool node-replica autoscaler rows. */
+export async function listNodeReplicas(): Promise<NodeReplicaRow[]> {
+	return unwrap(await client.GET('/api/v1/node-replicas', {}));
+}
+
+/**
+ * POST /api/v1/runners/{runner_id}/model-commands — place/evict a model on a
+ * runner's local engine. `202` accepted (fire-and-forget; the agent applies it
+ * and re-publishes its catalog, so the engine board reflects it on the next poll).
+ */
+export async function publishModelCommand(
+	runnerId: string,
+	cmd: ModelCommand
+): Promise<void> {
+	const r = await client.POST('/api/v1/runners/{runner_id}/model-commands', {
+		params: { path: { runner_id: runnerId } },
+		body: cmd
+	});
+	if (r.error !== undefined) {
+		throw new Error(`API error ${r.response.status}: ${JSON.stringify(r.error)}`);
+	}
+}
+
+/** Convenience: load/unload/pull a BASE model on a runner. */
+export function baseCommand(verb: 'load' | 'unload' | 'pull', modelId: string): ModelCommand {
+	return { kind: verb, target: { Base: { model_id: modelId } } } as ModelCommand;
+}
+
+/**
+ * GET /api/v1/model-catalog/{source} — browse an upstream OFFICIAL catalog
+ * (`ollama` scrapes ollama.com; `huggingface` calls the HF JSON API). Metadata
+ * only; the result is cached server-side ~10 min. `q` is an optional free-text
+ * search (empty ⇒ the upstream's popular/trending list).
+ */
+export async function listModelCatalog(
+	source: CatalogSource,
+	q?: string
+): Promise<ModelCatalogResponse> {
+	return unwrap(
+		await client.GET('/api/v1/model-catalog/{source}', {
+			params: { path: { source }, query: q ? { q } : {} }
 		})
 	);
 }

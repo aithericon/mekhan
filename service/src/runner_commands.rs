@@ -39,13 +39,17 @@ use crate::nats::MekhanNats;
 /// WIRE-IDENTICAL mirror of `executor_llm::model_command::ModelCommand`. Serde
 /// tag = `kind`, snake_case (`"load"` / `"unload"`); the parity test below locks
 /// the exact JSON against the executor's documented envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModelCommand {
     /// Make `target` resident: LoRA → load adapter; Base → wake.
     Load { target: LoadTarget },
     /// Make `target` absent: LoRA → unload adapter; Base → sleep.
     Unload { target: LoadTarget },
+    /// **Provision** `target` to disk without making it resident (Ollama
+    /// `/api/pull`; a no-op capability gap on vLLM, whose base is fixed at launch).
+    /// Carries a `Base` target — a later `Load` then warms it cheaply.
+    Pull { target: LoadTarget },
 }
 
 /// What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —
@@ -54,7 +58,7 @@ pub enum ModelCommand {
 ///
 /// WIRE-IDENTICAL mirror of `executor_llm::model_command::LoadTarget` (externally
 /// tagged enum — `{"Base":{...}}` / `{"Lora":{...}}`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum LoadTarget {
     /// A base engine, addressed by its served model id.
     Base { model_id: String },
@@ -83,6 +87,7 @@ pub async fn publish_model_command(
     let verb = match cmd {
         ModelCommand::Load { .. } => "load",
         ModelCommand::Unload { .. } => "unload",
+        ModelCommand::Pull { .. } => "pull",
     };
     let subject = format!("runner.{runner_id}.{verb}");
 
@@ -142,6 +147,24 @@ mod tests {
             serde_json::json!({
                 "kind": "unload",
                 "target": { "Base": { "model_id": "meta-llama/Llama-3-8B" } }
+            })
+        );
+    }
+
+    #[test]
+    fn pull_base_serializes_to_executor_envelope() {
+        // Wire-identical to the executor mirror's `pull_base_serializes_*` test.
+        let cmd = ModelCommand::Pull {
+            target: LoadTarget::Base {
+                model_id: "llama3.2:1b".into(),
+            },
+        };
+        let v: serde_json::Value = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "kind": "pull",
+                "target": { "Base": { "model_id": "llama3.2:1b" } }
             })
         );
     }

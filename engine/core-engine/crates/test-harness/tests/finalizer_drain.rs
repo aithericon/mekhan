@@ -195,3 +195,60 @@ async fn finalizer_does_not_fire_without_a_failure() {
         "the scope output is produced on the success path"
     );
 }
+
+/// CANCEL PATH: a leased net cancelled while still holding (the body never
+/// completed, so the success-path `t_exit` can never fire) must release the
+/// held lease via a FORCED finalizer drain. This is the strand `terminate` used
+/// to leak before the fix — cancellation tears the net down without reaching
+/// the permanent-error arm that the failure path drains through, so the lease
+/// sat in the pool's `in_use` forever. The drain method exercised here is
+/// exactly what `NetRegistry::terminate` now runs before emitting NetCancelled.
+#[tokio::test]
+async fn cancelled_leased_net_releases_via_forced_finalizer_drain() {
+    let scenario = build_leased_net(/* body_throws = */ false);
+    let ctx = new_ctx(&scenario).await;
+
+    // Lease acquired, but the body never runs to completion (mid-run cancel):
+    // only the held token is parked, so `t_exit` (gated on the body_out token)
+    // can never fire. This is the marking a cancel hits on a wedged leased net.
+    ctx.service
+        .create_token(pid(&scenario, "held"), data(serde_json::json!({ "grant_id": "g3" })))
+        .await
+        .unwrap();
+
+    // Normal evaluation must NOT release — the finalizer is invisible to Normal
+    // selection even though its input (the held token) is continuously enabled.
+    ctx.service.evaluate_until_quiescent(50).await.expect("evaluate");
+    assert_eq!(
+        ctx.service.get_marking().await.token_count(&pid(&scenario, "held")),
+        1,
+        "normal evaluation must not fire the finalizer — the lease stays held until teardown"
+    );
+
+    // Forced drain — exactly what `terminate` runs before NetCancelled.
+    let fired = ctx.service.drain_finalizers().await;
+    assert!(!fired.is_empty(), "the forced drain must fire the parked finalizer on cancel");
+
+    let marking = ctx.service.get_marking().await;
+    assert_eq!(
+        marking.token_count(&pid(&scenario, "held")),
+        0,
+        "cancel must release the held lease via the forced drain (not strand it)"
+    );
+    assert_eq!(
+        release_grant_ids(&marking, &scenario),
+        vec!["g3".to_string()],
+        "exactly one release carrying the held grant_id must be emitted on cancel"
+    );
+
+    // Idempotent: a second drain (double-cancel, or a cancel racing the reap)
+    // finds no held token and is a no-op — the single held-token invariant keeps
+    // it release-exactly-once.
+    let again = ctx.service.drain_finalizers().await;
+    assert!(again.is_empty(), "a second drain must be a no-op (the held token is gone)");
+    assert_eq!(
+        release_grant_ids(&ctx.service.get_marking().await, &scenario),
+        vec!["g3".to_string()],
+        "double-cancel must not double-release"
+    );
+}

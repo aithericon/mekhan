@@ -21,8 +21,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A load/unload command for the node agent. `kind` selects the verb; `target`
-/// is what to act on (a base engine or a LoRA adapter).
+/// A load/unload/pull command for the node agent. `kind` selects the verb;
+/// `target` is what to act on (a base engine or a LoRA adapter).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModelCommand {
@@ -30,6 +30,13 @@ pub enum ModelCommand {
     Load { target: LoadTarget },
     /// Make `target` absent: LoRA → `unload_lora_adapter`; Base → `sleep`.
     Unload { target: LoadTarget },
+    /// **Provision** `target` onto the node's local engine WITHOUT making it
+    /// resident — fetch the weights to disk so a later `Load` is cheap. The
+    /// Metal-native (Ollama) path is `POST /api/pull`; on vLLM, where the base is
+    /// fixed at engine launch and HF weights are pulled then, this is a logged
+    /// capability gap (no-op). A `Pull` carries a `Base` target (pulling a bare
+    /// LoRA without a host engine is meaningless).
+    Pull { target: LoadTarget },
 }
 
 /// What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —
@@ -112,6 +119,22 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn pull_base_serializes_with_snake_case_kind() {
+        let cmd = ModelCommand::Pull {
+            target: LoadTarget::Base {
+                model_id: "llama3.2:1b".into(),
+            },
+        };
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "kind": "pull", "target": { "Base": { "model_id": "llama3.2:1b" } } })
+        );
+        let back: ModelCommand = serde_json::from_value(v).unwrap();
+        assert_eq!(cmd, back);
     }
 
     #[test]

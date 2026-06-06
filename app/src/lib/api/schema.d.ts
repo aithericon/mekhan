@@ -1293,6 +1293,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-catalog/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/model-catalog/{source}` — browse an upstream OFFICIAL catalog
+         *     (`ollama` scrape | `huggingface` JSON API). Session/human authed; metadata
+         *     only (no inference, no workspace data). Cached ~10 min; fail-soft to empty.
+         */
+        get: operations["browse_model_catalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models": {
         parameters: {
             query?: never;
@@ -1407,6 +1428,23 @@ export interface paths {
          *     move (with the live-runner AND-gate recomputed).
          */
         post: operations["transition_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-replicas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/node-replicas` — list every node-pool replica row in the workspace. */
+        get: operations["list_node_replicas"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2095,6 +2133,28 @@ export interface paths {
          *     Long-lived (no expiry) — calling this again rotates it.
          */
         post: operations["issue_runner_nats_creds"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{runner_id}/model-commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{runner_id}/model-commands` — publish a load/unload
+         *     command to a runner's model agent. Body is the wire [`ModelCommand`]
+         *     (`{kind, target:{Base|Lora}}`). `202`: accepted (fire-and-forget,
+         *     desired-state — the agent applies it and re-publishes its catalog).
+         */
+        post: operations["publish_runner_model_command"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3911,6 +3971,34 @@ export interface components {
          * @enum {string}
          */
         Cardinality: "object" | "collection";
+        /** @description One model in an upstream catalog browse result. */
+        CatalogModel: {
+            /** @description Capability tags (Ollama `tools`/`vision`/…; HF pipeline/library tags). */
+            capabilities?: string[];
+            /** @description A one-line blurb when the upstream provides one. */
+            description?: string | null;
+            /**
+             * @description The provision id — the exact string a `Pull`/`Load` command takes. Ollama
+             *     library slug (`llama3.2`) or HF repo id (`meta-llama/Llama-3.2-1B`).
+             */
+            id: string;
+            /** @description Human display name (== `id` for HF; the title for Ollama). */
+            name: string;
+            /**
+             * @description Popularity hint — Ollama's "5M" pull count, or HF's download integer as a
+             *     string. Display-only.
+             */
+            pulls?: string | null;
+            /**
+             * @description Parameter-size tags the upstream advertises (Ollama `1b`/`3b`/…); empty for
+             *     HF (which exposes no clean size facet here).
+             */
+            sizes?: string[];
+            /** @description Which catalog this came from (`ollama` | `huggingface`). */
+            source: string;
+            /** @description Link to the model's upstream page. */
+            url?: string | null;
+        };
         CatalogTrigger: {
             /**
              * @description If true, the dispatcher walks existing catalogue entries matching the
@@ -5744,6 +5832,30 @@ export interface components {
             name: string;
         };
         /**
+         * @description What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —
+         *     `C` (`max_num_seqs`) is per-engine (per base), shared across that base's
+         *     adapters.
+         *
+         *     WIRE-IDENTICAL mirror of `executor_llm::model_command::LoadTarget` (externally
+         *     tagged enum — `{"Base":{...}}` / `{"Lora":{...}}`).
+         */
+        LoadTarget: {
+            /** @description A base engine, addressed by its served model id. */
+            Base: {
+                model_id: string;
+            };
+        } | {
+            /**
+             * @description A LoRA adapter attached to `base`. `source_uri` is where to fetch the
+             *     adapter weights from (optional on unload).
+             */
+            Lora: {
+                adapter_id: string;
+                base: string;
+                source_uri?: string | null;
+            };
+        };
+        /**
          * @description One LoRA adapter loaded on a base engine (the adapter half of the base↔LoRA
          *     graph, attached via each adapter's `base` back-pointer).
          */
@@ -5931,6 +6043,41 @@ export interface components {
             series: {
                 [key: string]: components["schemas"]["MetricPoint"][];
             };
+        };
+        /** @description `GET /api/v1/model-catalog/{source}` response. */
+        ModelCatalogResponse: {
+            /** @description `true` when these results were served from the in-process cache. */
+            cached: boolean;
+            /**
+             * @description A fail-soft error hint when the upstream fetch/parse failed (results then
+             *     empty or stale-cached). `None` on a clean fetch.
+             */
+            error?: string | null;
+            /** @description Browse results (possibly empty on an upstream error — see `error`). */
+            models: components["schemas"]["CatalogModel"][];
+            /** @description The catalog source echoed back. */
+            source: string;
+        };
+        /**
+         * @description A load/unload command for the node agent. `kind` selects the verb; `target` is
+         *     what to act on (a base engine or a LoRA adapter).
+         *
+         *     WIRE-IDENTICAL mirror of `executor_llm::model_command::ModelCommand`. Serde
+         *     tag = `kind`, snake_case (`"load"` / `"unload"`); the parity test below locks
+         *     the exact JSON against the executor's documented envelope.
+         */
+        ModelCommand: {
+            /** @enum {string} */
+            kind: "load";
+            target: components["schemas"]["LoadTarget"];
+        } | {
+            /** @enum {string} */
+            kind: "unload";
+            target: components["schemas"]["LoadTarget"];
+        } | {
+            /** @enum {string} */
+            kind: "pull";
+            target: components["schemas"]["LoadTarget"];
         };
         /**
          * @description One model a runner advertises in its interface catalog — the live half of the
@@ -6210,10 +6357,82 @@ export interface components {
             /** @description The base engines live on this node. */
             engines: components["schemas"]["NodeEngine"][];
             /**
+             * @description Models **provisioned to disk** on this node but NOT resident — loadable
+             *     without a re-download (the `pulled` superset minus the resident base
+             *     engines above). The runner-local "ready to load" browser; empty for a vLLM
+             *     node (its base is fixed at launch, so provisioned == resident).
+             */
+            pulled?: string[];
+            /**
              * Format: uuid
              * @description The runner (node) id.
              */
             runner_id: string;
+        };
+        /**
+         * @description One `node_replicas` row — Loop 1's durable reconciliation target + Control-Plane
+         *     read. `desired_nodes`/`observed_nodes`/`observed_slots` are stored `INT`; the
+         *     loop works in `u32` and converts at the edges.
+         *
+         *     `observed_nodes` is the live head-count of present pool nodes; `observed_slots`
+         *     is the C-weighted aggregate (`Σ present-node C`) from FleetLiveness — the
+         *     capacity Loop 1 scales against (DERIVED-B). Both are roster-driven; the outcome
+         *     projector NEVER writes them.
+         */
+        NodeReplicaRow: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Resolved `datacenter` resource UUID (the pool carries an alias; the loop
+             *     resolves it before the upsert).
+             */
+            datacenter_resource_id: string;
+            /**
+             * Format: int32
+             * @description Last desired NODE count the loop drove.
+             */
+            desired_nodes: number;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Anchors the durable cooldown gate (survives a mekhan restart).
+             */
+            last_actuated_at?: string | null;
+            last_error?: string | null;
+            /**
+             * @description Native job NAME registered on the cluster (Nomad service-job id for the
+             *     generic engine fleet). `None` until first actuation.
+             */
+            node_slug?: string | null;
+            /**
+             * Format: int32
+             * @description Live count of present pool nodes (head-count from FleetLiveness).
+             */
+            observed_nodes: number;
+            /**
+             * Format: int32
+             * @description Live C-weighted capacity (`Σ present-node C`) from FleetLiveness — the
+             *     aggregate Loop 1 scales against (DERIVED-B).
+             */
+            observed_slots: number;
+            /**
+             * Format: uuid
+             * @description The `node_pool` resource this row reconciles (UNIQUE — one row/pool).
+             */
+            pool_resource_id: string;
+            /**
+             * @description HARD residency zone recorded for the Control-Plane read + audit (the SINGLE
+             *     zone source — DERIVED-A).
+             */
+            residency_zone?: string | null;
+            /** @description One of `status::*`. */
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            workspace_id: string;
         };
         OcrSettings: {
             /** @description OCR backend: "tesseract" (default) or "paddle-ocr". */
@@ -7507,6 +7726,14 @@ export interface components {
              *     that serves no models simply reports an empty list.
              */
             models?: components["schemas"]["ModelEntry"][];
+            /**
+             * @description Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`
+             *     superset; loadable WITHOUT a re-download). A SUPERSET that includes the
+             *     resident `models` ids — the model-pool read excludes already-resident bases
+             *     so the operator sees "provisioned, ready to load" distinctly from
+             *     "serving". Additive JSONB field; empty for non-model runners.
+             */
+            pulled?: string[];
             services?: components["schemas"]["InterfaceEntry"][];
             topics?: components["schemas"]["InterfaceEntry"][];
         };
@@ -12201,6 +12428,39 @@ export interface operations {
             };
         };
     };
+    browse_model_catalog: {
+        parameters: {
+            query?: {
+                /** @description Free-text search; empty / absent ⇒ the upstream's popular/trending list. */
+                q?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Catalog source: `ollama` or `huggingface` */
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Upstream model browse results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogResponse"];
+                };
+            };
+            /** @description Unknown catalog source */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_loaded_models: {
         parameters: {
             query?: never;
@@ -12382,6 +12642,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_node_replicas: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-pool node-replica reconciliation rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeReplicaRow"][];
                 };
             };
         };
@@ -13815,6 +14095,40 @@ export interface operations {
             };
             /** @description Runner not found or no stored nats_public_key */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    publish_runner_model_command: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description target runner id */
+                runner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelCommand"];
+            };
+        };
+        responses: {
+            /** @description Command published to the runner's model agent */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description NATS publish failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

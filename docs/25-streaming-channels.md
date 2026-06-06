@@ -380,3 +380,43 @@ Not yet pinned to the byte level; resolve at build time:
   of the default should be loud-and-wrong, not silent-and-stuck.
 - Typed-stub codegen from declared channels (vs. string-keys + runtime
   validation, which v1 ships).
+
+## 11. Presentation layer — on-edge live feeds
+
+The PRESENTATION-side analog of §6's transport dispatch: where the wire selects
+a *byte* adapter off the `open` descriptor's `transport` tag, the browser selects
+a *render* adapter off the channel element's `content_type`, one layer up. This
+section renders a data-plane channel's live bytes **directly on its graph edge**
+in the instance/run view (the same `?follow=1` tap the Channels panel uses), so a
+running workflow shows its video/audio/camera streams in-place on the canvas.
+
+Pieces (all in `app/src/lib/`):
+
+- **`channels/renderers.ts` — `planLiveRender(content_type)`** is the single
+  classifier: `→ {kind:'pcm'|'mse'|'mjpeg', mediaKind:'audio'|'video'|'image',
+  mime}` or `null`. One classifier, many consumers (panel + edge widget).
+- **`channels/liveTapRegistry.ts`** ref-counts ONE `authFetch(?follow=1)` source
+  read per `executionId::channelName` and fans each chunk to per-sink streams, so
+  the panel's "Play live" and the on-edge widget share a single network read.
+- **`channels/liveFeedCap.ts`** is a module-singleton slot cap (`MAX_LIVE_FEEDS`
+  ≈ 6) bounding how many edges hold an OPEN tap at once — a busy graph can have
+  many renderable edges and each tap is a live decode pipeline.
+- **`components/instances/edge-feed-context.ts`** — `provideEdgeFeeds` (from
+  `WorkflowGraphView`) / `useEdgeFeeds` (in `DeletableEdge`). The pure
+  `deriveEdgeFeeds(graph, …, terminal)` builds the `edgeId → EdgeFeed` map: a
+  feed for every data-plane **binary** channel edge with a tappable
+  `execution_id`. A renderable `content_type` carries a `plan`; a non-renderable
+  one carries `plan: null` (the edge then shows a liveness dot only). Absent
+  provider (plain editor) ⇒ edges render nothing extra.
+- **`components/instances/EdgeMediaWidget.svelte`** renders the feed inside an
+  `EdgeLabel`, gated on liveness AND viewport (`IntersectionObserver`) AND zoom
+  LOD AND a free cap slot:
+  - **PASSIVE** by default — video/MJPEG show frames; audio (pcm or mse) shows an
+    amplitude-only scrolling waveform (`channels/audioWaveform.ts`), no sound.
+  - **ACTIVE** on click — `channels/audioExclusivity.svelte.ts` enforces a single
+    audible owner graph-wide (claiming one edge steals sound from the prior).
+  - **END-STATE** — when the channel `close` token lands OR the instance goes
+    terminal (`edgeFeedLifecycle`), the widget FREEZES the last frame (video
+    paused but not cleared, MJPEG held, waveform flattened to baseline), releases
+    its tap + cap slot, and shows an `ended` badge. It never auto-loads a
+    durable/replay stream on the edge.
