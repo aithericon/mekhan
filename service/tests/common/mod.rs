@@ -103,7 +103,6 @@ pub fn test_config() -> AppConfig {
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.
         demos: mekhan_service::config::DemosConfig::default(),
-        livekit: None,
     }
 }
 
