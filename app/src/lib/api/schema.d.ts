@@ -809,6 +809,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/executions/{execution_id}/channels/{channel}/livekit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/executions/{execution_id}/channels/{channel}/livekit
+         * @description Mint a subscribe-only LiveKit viewer token so the browser can join the room
+         *     the executor publishes this execution+channel's video frames to. The room
+         *     name (`lk_{execution_id}__{channel}`) is the integration seam with the
+         *     executor's `LiveKitTransport` publisher — they MUST agree.
+         *
+         *     The token grants `room_join` + `can_subscribe` only (`can_publish = false`),
+         *     so a viewer can watch but never inject media. Each call uses a fresh random
+         *     participant identity so multiple browser tabs don't collide on identity.
+         *
+         *     Returns 503 when `[livekit]` is unconfigured (no server URL / credentials);
+         *     the data-plane `…/data` tap remains the configuration-free fallback.
+         */
+        get: operations["livekit_viewer_token"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -4002,9 +4032,14 @@ export interface components {
          *       archived media). A different transport SHAPE (key/value, not pub/sub),
          *       proving the dispatch port is genuinely store-agnostic. Requires the worker
          *       to have a `[storage]` backend configured.
+         *     * `LiveKit` — an EGRESS / presentation transport: the producer publishes the
+         *       channel's frames as a WebRTC video track into a LiveKit room for live
+         *       in-browser viewing. Unlike the other transports it has **no node-side
+         *       consumer** — nothing on the net subscribes to it; the only subscriber is a
+         *       browser viewer that mints a room token from mekhan. Data plane only.
          * @enum {string}
          */
-        ChannelTransport: "jetstream" | "nats-latest" | "s3";
+        ChannelTransport: "jetstream" | "nats-latest" | "s3" | "livekit";
         /**
          * @description A single message in conversation history.
          *
@@ -5581,6 +5616,21 @@ export interface components {
             size_bytes?: number | null;
             storage_path?: string | null;
             user_metadata: unknown;
+        };
+        /**
+         * @description Response of the LiveKit viewer-token endpoint: everything a browser needs to
+         *     join the room the executor publishes annotated frames to.
+         */
+        LiveKitViewerToken: {
+            /**
+             * @description Room name — must match what the executor publishes to:
+             *     `lk_{execution_id}__{channel}`.
+             */
+            room: string;
+            /** @description LiveKit WebSocket signalling URL the browser connects to. */
+            server_url: string;
+            /** @description Subscribe-only JWT (room_join + can_subscribe, no publish). */
+            token: string;
         };
         LiveLogEvent: {
             detail: unknown;
@@ -11082,6 +11132,49 @@ export interface operations {
             };
             /** @description JetStream consumer could not be opened. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    livekit_viewer_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AutomatedStep execution id (the `execution_id` stamped on the parked output envelope). */
+                execution_id: string;
+                /** @description Data-plane channel name (Rhai-identifier-safe slug). */
+                channel: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscribe-only viewer token + the room/server the executor publishes to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveKitViewerToken"];
+                };
+            };
+            /** @description Malformed execution_id or channel path component. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description LiveKit is not configured on this mekhan instance. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

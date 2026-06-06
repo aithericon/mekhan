@@ -104,7 +104,8 @@
             "name": "annotated",
             "direction": "out",
             "plane": "data",
-            "element": { "type": "binary", "content_type": "image/jpeg" }
+            "element": { "type": "binary", "content_type": "image/jpeg" },
+            "transport": "livekit"
           }
         ],
         "executionSpec": {

@@ -50,6 +50,10 @@ futures = "0.3"
 # Configuration
 config = "0.15"
 
+# LiveKit viewer-token minting (subscribe-only browser tokens). mekhan needs
+# ONLY the token-signing surface — no libwebrtc / `livekit` runtime crate here.
+livekit-api = { version = "0.5", default-features = false, features = ["access-token", "rustls-tls-native-roots"] }
+
 # IDs and time
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

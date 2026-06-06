@@ -44,6 +44,9 @@ use tracing::{debug, warn};
 
 use aithericon_executor_ipc::proto::ChunkMessage;
 
+#[cfg(feature = "livekit")]
+use crate::config::LiveKitConfig;
+
 /// NATS header carrying the envelope's `seq`.
 const HDR_SEQ: &str = "X-Chunk-Seq";
 /// NATS header carrying the envelope's `content_type`.
@@ -502,6 +505,267 @@ impl StreamTransport for S3Transport {
     }
 }
 
+/// LiveKit egress adapter — a PRESENTATION-ONLY [`StreamTransport`]
+/// (`transport: "livekit"`) that publishes a producer's JPEG frames as a WebRTC
+/// VP8 video track into a per-stream LiveKit room. Where the JetStream / NATS /
+/// S3 adapters move opaque bytes producer→consumer, this one is a one-way
+/// EGRESS sink: there is no in-net consumer — a browser viewer subscribes to the
+/// room directly (mekhan mints a subscribe-only token). So `subscribe` is a hard
+/// error; a `transport: "livekit"` channel cannot be read by another node.
+///
+/// Room contract (MUST match mekhan's token mint): the opaque `locator` is the
+/// datastream subject `executor.datastream.{execution_id}.{channel}`; we strip
+/// the `executor.datastream.` prefix and `rsplit_once('.')` to recover
+/// `(execution_id, channel)`, then publish into `lk_{execution_id}__{channel}`.
+///
+/// One LiveKit [`Room`] connection + video source is held per locator (lazily on
+/// the first frame, sized to that frame's WxH). `Room` is not trivially
+/// Send-cloneable, so it lives behind an `Arc` in a per-locator session map.
+#[cfg(feature = "livekit")]
+pub struct LiveKitTransport {
+    config: LiveKitConfig,
+    sessions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, LkSession>>>,
+}
+
+/// One live LiveKit publish session (room + video source + published track),
+/// keyed by locator. Created on the first frame for a locator, torn down on
+/// `close` (or EOF).
+#[cfg(feature = "livekit")]
+struct LkSession {
+    room: Arc<::livekit::Room>,
+    source: ::livekit::webrtc::video_source::native::NativeVideoSource,
+    track: ::livekit::track::LocalVideoTrack,
+    width: u32,
+    height: u32,
+    /// Session start instant — frames are stamped with `elapsed().as_micros()`
+    /// so libwebrtc's VP8 encoder/pacer sees monotonically advancing
+    /// timestamps. `VideoFrame::new` defaults `timestamp_us` to 0; publishing
+    /// every frame at t=0 makes the decoder render a frozen/black image.
+    started: std::time::Instant,
+}
+
+#[cfg(feature = "livekit")]
+impl LiveKitTransport {
+    pub fn new(config: LiveKitConfig) -> Self {
+        Self {
+            config,
+            sessions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Recover `(execution_id, channel)` from the opaque datastream locator
+    /// `executor.datastream.{execution_id}.{channel}` and build the room name
+    /// `lk_{execution_id}__{channel}`. Neither part contains a `.`, so a single
+    /// `rsplit_once('.')` after stripping the fixed prefix is exact.
+    fn room_for_locator(locator: &str) -> Result<String, async_nats::Error> {
+        let rest = locator.strip_prefix("executor.datastream.").ok_or_else(|| {
+            async_nats::Error::from(format!(
+                "livekit transport: locator {locator:?} is not an executor.datastream.* subject"
+            ))
+        })?;
+        let (execution_id, channel) = rest.rsplit_once('.').ok_or_else(|| {
+            async_nats::Error::from(format!(
+                "livekit transport: locator {locator:?} has no .{{channel}} suffix"
+            ))
+        })?;
+        Ok(format!("lk_{execution_id}__{channel}"))
+    }
+
+    /// Mint a PUBLISH-scoped room token for the executor's egress identity.
+    fn mint_publish_token(&self, room: &str) -> Result<String, async_nats::Error> {
+        ::livekit_api::access_token::AccessToken::with_api_key(
+            &self.config.api_key,
+            &self.config.api_secret,
+        )
+        .with_identity("executor-publisher")
+        .with_name("executor-publisher")
+        .with_grants(::livekit_api::access_token::VideoGrants {
+            room_join: true,
+            room: room.to_string(),
+            can_publish: true,
+            can_subscribe: false,
+            ..Default::default()
+        })
+        .to_jwt()
+        .map_err(|e| async_nats::Error::from(format!("livekit token mint failed: {e}")))
+    }
+
+    /// Decode a JPEG and pack it into an I420 buffer (BT.601 full-range). Copied
+    /// from the verified reference flow.
+    fn jpeg_to_i420(
+        jpeg: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<::livekit::webrtc::prelude::I420Buffer, async_nats::Error> {
+        use ::image::ImageReader;
+        let img = ImageReader::new(std::io::Cursor::new(jpeg))
+            .with_guessed_format()
+            .map_err(|e| async_nats::Error::from(format!("livekit: jpeg read failed: {e}")))?
+            .decode()
+            .map_err(|e| async_nats::Error::from(format!("livekit: jpeg decode failed: {e}")))?
+            .to_rgb8();
+        let mut buf = ::livekit::webrtc::prelude::I420Buffer::new(w, h);
+        let (sy, su, _sv) = buf.strides();
+        let (y, u, v) = buf.data_mut();
+        for j in 0..h as usize {
+            for i in 0..w as usize {
+                let px = img.get_pixel(
+                    (i as u32).min(img.width() - 1),
+                    (j as u32).min(img.height() - 1),
+                );
+                let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
+                y[j * sy as usize + i] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+                if j % 2 == 0 && i % 2 == 0 {
+                    let ci = (j / 2) * su as usize + (i / 2);
+                    u[ci] = (-0.169 * r - 0.331 * g + 0.5 * b + 128.0) as u8;
+                    v[ci] = (0.5 * r - 0.419 * g - 0.081 * b + 128.0) as u8;
+                }
+            }
+        }
+        Ok(buf)
+    }
+
+    /// Lazily connect + publish a track for `locator` sized to the first frame.
+    async fn ensure_session(
+        &self,
+        locator: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), async_nats::Error> {
+        use ::livekit::options::{TrackPublishOptions, VideoCodec};
+        use ::livekit::track::{LocalTrack, LocalVideoTrack};
+        use ::livekit::webrtc::prelude::{RtcVideoSource, VideoResolution};
+        use ::livekit::webrtc::video_source::native::NativeVideoSource;
+        use ::livekit::{Room, RoomOptions};
+
+        let mut sessions = self.sessions.lock().await;
+        if sessions.contains_key(locator) {
+            return Ok(());
+        }
+
+        let room_name = Self::room_for_locator(locator)?;
+        let token = self.mint_publish_token(&room_name)?;
+        let (room, _rx) = Room::connect(&self.config.url, &token, RoomOptions::default())
+            .await
+            .map_err(|e| async_nats::Error::from(format!("livekit room connect failed: {e}")))?;
+
+        let source = NativeVideoSource::new(VideoResolution { width, height }, false);
+        let track = LocalVideoTrack::create_video_track(
+            "annotated",
+            RtcVideoSource::Native(source.clone()),
+        );
+        room.local_participant()
+            .publish_track(
+                LocalTrack::Video(track.clone()),
+                TrackPublishOptions {
+                    video_codec: VideoCodec::VP8,
+                    simulcast: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| async_nats::Error::from(format!("livekit publish_track failed: {e}")))?;
+
+        debug!(%locator, room = %room_name, width, height, "livekit egress session opened");
+        sessions.insert(
+            locator.to_string(),
+            LkSession {
+                room: Arc::new(room),
+                source,
+                track,
+                width,
+                height,
+                started: std::time::Instant::now(),
+            },
+        );
+        Ok(())
+    }
+}
+
+#[cfg(feature = "livekit")]
+#[async_trait::async_trait]
+impl StreamTransport for LiveKitTransport {
+    async fn write(&self, locator: &str, envelope: &ChunkMessage) -> Result<(), async_nats::Error> {
+        // EOF closes the session — same in-band sentinel as the other adapters.
+        if envelope.is_eof {
+            return self.close(locator, envelope.seq).await;
+        }
+
+        // Decode the JPEG to learn its dimensions (the first frame sizes the
+        // track; subsequent frames keep the session's WxH).
+        let buffer = {
+            // Probe dimensions first (cheap header read happens inside decode).
+            use ::image::ImageReader;
+            let dims = ImageReader::new(std::io::Cursor::new(&envelope.payload))
+                .with_guessed_format()
+                .map_err(|e| async_nats::Error::from(format!("livekit: jpeg read failed: {e}")))?
+                .into_dimensions()
+                .map_err(|e| {
+                    async_nats::Error::from(format!("livekit: jpeg dimension probe failed: {e}"))
+                })?;
+            self.ensure_session(locator, dims.0, dims.1).await?;
+            // Pack against the SESSION's WxH (the track is fixed at first-frame
+            // size; later frames are sampled into that buffer).
+            let (w, h) = {
+                let sessions = self.sessions.lock().await;
+                let s = sessions.get(locator).ok_or_else(|| {
+                    async_nats::Error::from("livekit: session vanished after ensure")
+                })?;
+                (s.width, s.height)
+            };
+            Self::jpeg_to_i420(&envelope.payload, w, h)?
+        };
+
+        let mut frame = ::livekit::webrtc::prelude::VideoFrame::new(
+            ::livekit::webrtc::prelude::VideoRotation::VideoRotation0,
+            buffer,
+        );
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(locator)
+            .ok_or_else(|| async_nats::Error::from("livekit: session vanished before capture"))?;
+        // Monotonically advancing capture timestamp (µs) — without it every
+        // frame lands at t=0 and the VP8 decoder renders a frozen/black image.
+        frame.timestamp_us = session.started.elapsed().as_micros() as i64;
+        session.source.capture_frame(&frame);
+        Ok(())
+    }
+
+    async fn close(&self, locator: &str, _final_seq: u64) -> Result<(), async_nats::Error> {
+        // Idempotent: take the session out (if any) and tear it down.
+        let session = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(locator)
+        };
+        if let Some(session) = session {
+            session
+                .room
+                .local_participant()
+                .unpublish_track(&session.track.sid())
+                .await
+                .ok();
+            session.room.close().await.ok();
+            debug!(%locator, "livekit egress session closed");
+        }
+        Ok(())
+    }
+
+    async fn subscribe(
+        &self,
+        locator: String,
+        _sink: mpsc::Sender<ChunkMessage>,
+        _shutdown: CancellationToken,
+    ) -> Result<JoinHandle<()>, async_nats::Error> {
+        // EGRESS-ONLY: a livekit channel is consumed by a browser viewer over
+        // WebRTC, never by another workflow node. Fail loudly rather than spawn a
+        // task that would never receive anything.
+        let _ = locator;
+        Err(async_nats::Error::from(
+            "livekit transport is presentation/egress-only; a livekit channel cannot be consumed by another node",
+        ))
+    }
+}
+
 /// Resolves a channel's declared transport tag to its [`StreamTransport`]
 /// adapter. ONE registry per worker, cloned cheaply (Arc-backed) into each job's
 /// IPC sidecar. The producer's executor dispatches on the manifest entry's
@@ -519,6 +783,13 @@ pub struct TransportRegistry {
     /// the `opendal` feature.
     #[cfg(feature = "opendal")]
     object_store: Option<Arc<S3Transport>>,
+    /// Presentation-only LiveKit egress adapter (`transport: "livekit"`). `None`
+    /// until a [`LiveKitConfig`] is attached via
+    /// [`TransportRegistry::with_livekit`] — so a `transport: "livekit"` channel
+    /// on a worker with no `[livekit]` configured fails loudly (`get` → `None`)
+    /// instead of silently mis-routing. Only present with the `livekit` feature.
+    #[cfg(feature = "livekit")]
+    livekit: Option<Arc<LiveKitTransport>>,
 }
 
 impl TransportRegistry {
@@ -531,6 +802,8 @@ impl TransportRegistry {
             nats_latest: Arc::new(NatsLatestTransport::new(nats)),
             #[cfg(feature = "opendal")]
             object_store: None,
+            #[cfg(feature = "livekit")]
+            livekit: None,
         }
     }
 
@@ -541,6 +814,15 @@ impl TransportRegistry {
     #[cfg(feature = "opendal")]
     pub fn with_object_store(mut self, operator: ::opendal::Operator, prefix: String) -> Self {
         self.object_store = Some(Arc::new(S3Transport::new(operator, prefix)));
+        self
+    }
+
+    /// Attach the presentation-only LiveKit egress adapter (`transport:
+    /// "livekit"`), built from the executor's `[livekit]` config. Builder-style
+    /// so the three `new(...)` call sites wire it uniformly.
+    #[cfg(feature = "livekit")]
+    pub fn with_livekit(mut self, config: LiveKitConfig) -> Self {
+        self.livekit = Some(Arc::new(LiveKitTransport::new(config)));
         self
     }
 
@@ -557,6 +839,8 @@ impl TransportRegistry {
                 .object_store
                 .clone()
                 .map(|t| t as Arc<dyn StreamTransport>),
+            #[cfg(feature = "livekit")]
+            "livekit" => self.livekit.clone().map(|t| t as Arc<dyn StreamTransport>),
             _ => None,
         }
     }

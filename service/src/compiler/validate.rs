@@ -834,7 +834,7 @@ pub(crate) fn warn_unmerged_fan_in(
 ///   barrier is sized by the episode's own `close.count`, so no producer-side
 ///   cap is needed. Data edges must not set `join`.
 pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
-    use crate::models::template::{ChannelJoin, ChannelPlane, ElementType};
+    use crate::models::template::{ChannelJoin, ChannelPlane, ChannelTransport, ElementType};
 
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
@@ -876,6 +876,16 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
                     // No producer-side knobs: the fold discipline lives on the
                     // consumer edge's join, and the gather barrier sizes itself
                     // on the episode's own close.count.
+                    //
+                    // Transport is a Data-plane concept (control payloads ride
+                    // the net, not a transport). `LiveKit` is additionally an
+                    // egress/presentation transport with no node-side consumer,
+                    // so it is meaningless on a control channel — reject it.
+                    if matches!(ch.transport, ChannelTransport::LiveKit) {
+                        return Err(invalid(
+                            "the 'livekit' transport is only valid on a data channel".to_string(),
+                        ));
+                    }
                 }
                 ChannelPlane::Data => {
                     // A `Binary` element must carry a non-empty content_type so

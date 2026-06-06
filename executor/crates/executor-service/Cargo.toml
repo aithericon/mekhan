@@ -56,6 +56,7 @@ aithericon-backends = { workspace = true }
 [features]
 default = []
 opendal = ["aithericon-executor-storage/opendal", "aithericon-executor-worker/opendal"]
+livekit = ["aithericon-executor-worker/livekit"]
 url-inputs = ["aithericon-executor-worker/url-inputs"]
 opendal-s3 = ["opendal", "aithericon-executor-storage/opendal-s3"]
 opendal-gcs = ["opendal", "aithericon-executor-storage/opendal-gcs"]

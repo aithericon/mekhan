@@ -56,13 +56,14 @@
 	const transportLabels: Record<ChannelTransport, string> = {
 		jetstream: 'JetStream · durable, ordered',
 		'nats-latest': 'NATS latest · lossy, latest-only',
-		s3: 'S3 / object store · durable, replayable'
+		s3: 'S3 / object store · durable, replayable',
+		livekit: 'LiveKit · live WebRTC video track (egress-only)'
 	};
 
 	const DIRECTIONS: ChannelDirection[] = ['out', 'in'];
 	const PLANES: ChannelPlane[] = ['data', 'control'];
 	const ELEMENT_KINDS: ElementKind[] = ['binary', 'json', 'any'];
-	const TRANSPORTS: ChannelTransport[] = ['jetstream', 'nats-latest', 's3'];
+	const TRANSPORTS: ChannelTransport[] = ['jetstream', 'nats-latest', 's3', 'livekit'];
 
 	const transport = $derived<ChannelTransport>(channel.transport ?? 'jetstream');
 	// Transport only governs a DATA channel's out-of-band bytes; it's ignored for

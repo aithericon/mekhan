@@ -39,9 +39,12 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
 use futures::StreamExt;
-use serde::Deserialize;
+use livekit_api::access_token::{AccessToken, VideoGrants};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::models::error::ApiError;
 use crate::AppState;
@@ -327,6 +330,81 @@ fn header_str(headers: Option<&async_nats::HeaderMap>, name: &str) -> Option<Str
     headers
         .and_then(|h| h.get(name))
         .map(|v| v.as_str().to_string())
+}
+
+/// Response of the LiveKit viewer-token endpoint: everything a browser needs to
+/// join the room the executor publishes annotated frames to.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LiveKitViewerToken {
+    /// LiveKit WebSocket signalling URL the browser connects to.
+    pub server_url: String,
+    /// Subscribe-only JWT (room_join + can_subscribe, no publish).
+    pub token: String,
+    /// Room name — must match what the executor publishes to:
+    /// `lk_{execution_id}__{channel}`.
+    pub room: String,
+}
+
+/// GET /api/v1/executions/{execution_id}/channels/{channel}/livekit
+///
+/// Mint a subscribe-only LiveKit viewer token so the browser can join the room
+/// the executor publishes this execution+channel's video frames to. The room
+/// name (`lk_{execution_id}__{channel}`) is the integration seam with the
+/// executor's `LiveKitTransport` publisher — they MUST agree.
+///
+/// The token grants `room_join` + `can_subscribe` only (`can_publish = false`),
+/// so a viewer can watch but never inject media. Each call uses a fresh random
+/// participant identity so multiple browser tabs don't collide on identity.
+///
+/// Returns 503 when `[livekit]` is unconfigured (no server URL / credentials);
+/// the data-plane `…/data` tap remains the configuration-free fallback.
+#[utoipa::path(
+    get,
+    path = "/api/v1/executions/{execution_id}/channels/{channel}/livekit",
+    params(
+        ("execution_id" = String, Path, description = "AutomatedStep execution id (the `execution_id` stamped on the parked output envelope)."),
+        ("channel" = String, Path, description = "Data-plane channel name (Rhai-identifier-safe slug)."),
+    ),
+    responses(
+        (status = 200, description = "Subscribe-only viewer token + the room/server the executor publishes to.", body = LiveKitViewerToken),
+        (status = 400, description = "Malformed execution_id or channel path component.", body = crate::models::error::ErrorResponse),
+        (status = 503, description = "LiveKit is not configured on this mekhan instance.", body = crate::models::error::ErrorResponse),
+    ),
+    tag = "executions",
+)]
+pub async fn livekit_viewer_token(
+    State(state): State<AppState>,
+    Path((execution_id, channel)): Path<(String, String)>,
+) -> Result<Json<LiveKitViewerToken>, ApiError> {
+    validate_subject_token("execution_id", &execution_id)?;
+    validate_subject_token("channel", &channel)?;
+
+    let cfg = state.config.livekit.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable("livekit not configured")
+    })?;
+
+    // Room-name contract: must match the executor's publisher
+    // (`lk_{execution_id}__{channel}`).
+    let room = format!("lk_{execution_id}__{channel}");
+
+    let token = AccessToken::with_api_key(&cfg.api_key, &cfg.api_secret)
+        .with_identity(&format!("viewer-{}", uuid::Uuid::new_v4()))
+        .with_name("viewer")
+        .with_grants(VideoGrants {
+            room_join: true,
+            room: room.clone(),
+            can_subscribe: true,
+            can_publish: false,
+            ..Default::default()
+        })
+        .to_jwt()
+        .map_err(|e| ApiError::internal(format!("livekit token mint failed: {e}")))?;
+
+    Ok(Json(LiveKitViewerToken {
+        server_url: cfg.url.clone(),
+        token,
+        room,
+    }))
 }
 
 #[cfg(test)]

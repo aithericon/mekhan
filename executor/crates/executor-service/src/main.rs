@@ -344,8 +344,11 @@ async fn run_nats_daemon(
     // the registry so producer-write/consumer-read dispatch the adapter off the
     // channel's declared transport (`jetstream` durable | `nats-latest` lossy).
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> = Some(attach_object_store(
-        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+    let transports: Option<TransportRegistry> = Some(attach_livekit(
+        attach_object_store(
+            TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+            &config,
+        ),
         &config,
     ));
 
@@ -626,8 +629,11 @@ async fn run_nats_drain(
 
     // Data-plane byte transport REGISTRY (see `run_nats_daemon` for the rationale).
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> = Some(attach_object_store(
-        TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+    let transports: Option<TransportRegistry> = Some(attach_livekit(
+        attach_object_store(
+            TransportRegistry::new(jetstream.clone(), nats_client_for_cancel.clone()),
+            &config,
+        ),
         &config,
     ));
 
@@ -763,8 +769,11 @@ async fn run_manifest(
     // Data-plane transport REGISTRY: a manifest job MAY be a producer
     // (`open_output`) or a consumer (`stream`), so wire it here too.
     TransportRegistry::ensure_streams(&jetstream, config.status_replicas).await?;
-    let transports: Option<TransportRegistry> = Some(attach_object_store(
-        TransportRegistry::new(jetstream.clone(), nats_client.clone()),
+    let transports: Option<TransportRegistry> = Some(attach_livekit(
+        attach_object_store(
+            TransportRegistry::new(jetstream.clone(), nats_client.clone()),
+            &config,
+        ),
         &config,
     ));
     // Manifest mode is its own single-namespace dispatcher — no per-backend
@@ -1205,6 +1214,27 @@ fn attach_object_store(registry: TransportRegistry, config: &ExecutorConfig) -> 
 /// absent from the registry (and the `get("s3")` match arm compiles to `None`).
 #[cfg(not(feature = "opendal"))]
 fn attach_object_store(registry: TransportRegistry, _config: &ExecutorConfig) -> TransportRegistry {
+    registry
+}
+
+/// Attach the presentation-only LiveKit egress data-plane transport
+/// (`transport: "livekit"`) to a [`TransportRegistry`], when the `livekit`
+/// feature is on and a `[livekit]` section is configured. A worker with no
+/// `[livekit]` simply has no `"livekit"` transport — a `transport: "livekit"`
+/// channel then fails loudly at dispatch (clear error, never a panic).
+#[cfg(feature = "livekit")]
+fn attach_livekit(registry: TransportRegistry, config: &ExecutorConfig) -> TransportRegistry {
+    let Some(livekit) = &config.livekit else {
+        return registry;
+    };
+    info!(url = %livekit.url, "data-plane livekit egress transport enabled (transport=livekit)");
+    registry.with_livekit(livekit.clone())
+}
+
+/// No-op without the `livekit` feature — the `"livekit"` transport is then simply
+/// absent from the registry (and the `get("livekit")` match arm compiles to `None`).
+#[cfg(not(feature = "livekit"))]
+fn attach_livekit(registry: TransportRegistry, _config: &ExecutorConfig) -> TransportRegistry {
     registry
 }
 

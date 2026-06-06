@@ -1618,6 +1618,11 @@ pub enum ChannelJoin {
 ///   archived media). A different transport SHAPE (key/value, not pub/sub),
 ///   proving the dispatch port is genuinely store-agnostic. Requires the worker
 ///   to have a `[storage]` backend configured.
+/// * `LiveKit` — an EGRESS / presentation transport: the producer publishes the
+///   channel's frames as a WebRTC video track into a LiveKit room for live
+///   in-browser viewing. Unlike the other transports it has **no node-side
+///   consumer** — nothing on the net subscribes to it; the only subscriber is a
+///   browser viewer that mints a room token from mekhan. Data plane only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChannelTransport {
@@ -1625,6 +1630,9 @@ pub enum ChannelTransport {
     Jetstream,
     NatsLatest,
     S3,
+    /// Render `kebab-case` as exactly `livekit` (not `live-kit`) on the wire.
+    #[serde(rename = "livekit")]
+    LiveKit,
 }
 
 impl ChannelTransport {
@@ -1636,6 +1644,7 @@ impl ChannelTransport {
             ChannelTransport::Jetstream => "jetstream",
             ChannelTransport::NatsLatest => "nats-latest",
             ChannelTransport::S3 => "s3",
+            ChannelTransport::LiveKit => "livekit",
         }
     }
 }

@@ -35,6 +35,21 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub demos: DemosConfig,
+    /// LiveKit server credentials. When set, mekhan mints subscribe-only viewer
+    /// tokens (`/api/v1/executions/{id}/channels/{channel}/livekit`) so a browser
+    /// can join the room the executor publishes frames to. Unset ⇒ the endpoint
+    /// returns 503. Parsed from `MEKHAN__LIVEKIT__*`.
+    #[serde(default)]
+    pub livekit: Option<LiveKitConfig>,
+}
+
+/// LiveKit server connection + API credentials. `url` is the WebSocket signalling
+/// URL the browser connects to; `api_key`/`api_secret` sign the viewer JWT.
+#[derive(Debug, Deserialize, Clone)]
+pub struct LiveKitConfig {
+    pub url: String,
+    pub api_key: String,
+    pub api_secret: String,
 }
 
 /// Built-in-demo seeder controls. The seeder runs at service startup,

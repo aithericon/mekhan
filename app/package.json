@@ -66,6 +66,7 @@
 		"d3-scale": "^4.0.2",
 		"echarts": "^6.0.0",
 		"layerchart": "^2.0.0-next.43",
+		"livekit-client": "^2.19.1",
 		"mode-watcher": "^1.1.0",
 		"monaco-editor": "^0.55.1",
 		"openapi-fetch": "^0.13.0",

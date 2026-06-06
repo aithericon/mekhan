@@ -279,6 +279,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // (`executor.datastream.{execution_id}.{channel}`); ephemeral consumer,
         // streams payload bytes chunk-by-chunk until the EOF envelope.
         .routes(routes!(handlers::executions::tap_channel_data))
+        // Executions — subscribe-only LiveKit viewer token. Mints a JWT for the
+        // room (`lk_{execution_id}__{channel}`) the executor publishes annotated
+        // video frames to, so the browser can join and watch.
+        .routes(routes!(handlers::executions::livekit_viewer_token))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))

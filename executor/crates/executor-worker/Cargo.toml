@@ -39,12 +39,19 @@ sysinfo = "0.34"
 aithericon-secrets = { workspace = true }
 reqwest = { workspace = true, optional = true }
 opendal = { workspace = true, optional = true }
+# LiveKit egress transport (`transport: "livekit"`): publish JPEG frames as a
+# WebRTC VP8 video track. Versions/features are PROVEN to compile against
+# livekit 0.7.44 / livekit-api 0.5.1 / libwebrtc 0.3.35 — do not bump.
+livekit = { version = "0.7", default-features = false, features = ["tokio", "rustls-tls-native-roots"], optional = true }
+livekit-api = { version = "0.5", default-features = false, features = ["access-token", "rustls-tls-native-roots"], optional = true }
+image = { version = "0.25", optional = true }
 
 [features]
 default = []
 vault = ["aithericon-secrets/vault"]
 opendal = ["dep:opendal", "aithericon-executor-storage/opendal"]
 url-inputs = ["dep:reqwest"]
+livekit = ["dep:livekit", "dep:livekit-api", "dep:image"]
 
 [dev-dependencies]
 aithericon-executor-process = { workspace = true }
