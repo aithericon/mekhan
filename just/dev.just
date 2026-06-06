@@ -83,6 +83,7 @@ up:
     @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
+    @just dev::xarm-up || true
     @just dev::_summary
 
 # Same as `up` but with auth ENABLED: mekhan-service runs in BFF mode (real
@@ -100,6 +101,7 @@ up-auth:
     @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
+    @just dev::xarm-up || true
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
 
 # Stop everything: native daemons first, then infra
