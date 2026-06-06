@@ -81,6 +81,12 @@ pub struct NodeInventory {
     pub runner_id: Uuid,
     /// The base engines live on this node.
     pub engines: Vec<NodeEngine>,
+    /// Models **provisioned to disk** on this node but NOT resident — loadable
+    /// without a re-download (the `pulled` superset minus the resident base
+    /// engines above). The runner-local "ready to load" browser; empty for a vLLM
+    /// node (its base is fixed at launch, so provisioned == resident).
+    #[serde(default)]
+    pub pulled: Vec<String>,
 }
 
 /// `GET /api/v1/fleet/engines` response — the per-node engine inventory.
@@ -117,6 +123,12 @@ pub async fn list_fleet_engines(
     let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
     let inventory = serving_runner_inventory(&state.db, &state.runner_presence, workspace_id).await;
+    // Provisioned-to-disk superset per node (the "ready to load" set). Resident
+    // bases are subtracted below so a node lists only what it could load without
+    // a re-download.
+    let mut pulled_by_node =
+        crate::handlers::model_pool::serving_runner_pulled(&state.db, &state.runner_presence, workspace_id)
+            .await;
 
     // Router in-flight poll for headroom. Constructed per-request from the same
     // env knob the autoscaler uses (`AUTOSCALER_DEMAND_URL`); unset/empty ⇒ no
@@ -207,9 +219,25 @@ pub async fn list_fleet_engines(
             engine.headroom = Some(c.saturating_sub(used));
         }
 
+        let engines: Vec<NodeEngine> = engines.into_values().collect();
+
+        // "Ready to load" = provisioned-to-disk minus the resident bases already
+        // shown as engines. Deduped + ordered for a stable read.
+        let resident: std::collections::HashSet<&str> =
+            engines.iter().map(|e| e.base.as_str()).collect();
+        let mut pulled: Vec<String> = pulled_by_node
+            .remove(&runner_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| !resident.contains(m.as_str()))
+            .collect();
+        pulled.sort();
+        pulled.dedup();
+
         nodes.push(NodeInventory {
             runner_id,
-            engines: engines.into_values().collect(),
+            engines,
+            pulled,
         });
     }
 

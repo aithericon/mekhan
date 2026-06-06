@@ -8,6 +8,7 @@
 	// Ollama Metal runtime) — control plane only, never inference.
 	import { Button } from '$lib/components/ui/button';
 	import Cpu from '@lucide/svelte/icons/cpu';
+	import Search from '@lucide/svelte/icons/search';
 	import {
 		listFleetEngines,
 		listLoadedModels,
@@ -21,6 +22,7 @@
 		type NodeReplicaRow
 	} from '$lib/api/models';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import ModelBrowser from './ModelBrowser.svelte';
 
 	let engines = $state<FleetEnginesResponse>({ headroom_from_router: false, nodes: [] });
 	let models = $state<ModelSetView[]>([]);
@@ -32,6 +34,11 @@
 	let busy = $state<string | null>(null);
 	let loadInputs = $state<Record<string, string>>({});
 
+	// Model browser: opened against a specific runner; "Provision" pulls the
+	// chosen model onto it.
+	let browserOpen = $state(false);
+	let browserRunner = $state<string | null>(null);
+
 	async function poll() {
 		try {
 			const [e, m, mr, nr, pol, pl] = await Promise.all([
@@ -39,8 +46,8 @@
 				listLoadedModels(),
 				listModelReplicas(),
 				listNodeReplicas(),
-				listResources({ resource_type: 'model_policy', per_page: 100 }),
-				listResources({ resource_type: 'node_pool', per_page: 100 })
+				listResources({ resource_type: 'model_policy', perPage: 100 }),
+				listResources({ resource_type: 'node_pool', perPage: 100 })
 			]);
 			engines = e;
 			models = m;
@@ -65,19 +72,31 @@
 	const nodeReplicaFor = (poolId: string) => nodeReplicas.find((r) => r.pool_resource_id === poolId);
 	const shortId = (id: string) => id.slice(0, 8);
 
-	async function act(runnerId: string, verb: 'load' | 'unload', modelId: string) {
+	async function act(runnerId: string, verb: 'load' | 'unload' | 'pull', modelId: string) {
 		if (!modelId) return;
 		busy = `${runnerId}:${modelId}:${verb}`;
 		try {
 			await publishModelCommand(runnerId, baseCommand(verb, modelId));
-			// Fire-and-forget: give the agent a moment to apply + re-publish its catalog.
-			await new Promise((r) => setTimeout(r, 1500));
+			// Fire-and-forget: give the agent a moment to apply + re-publish its
+			// catalog. A pull downloads weights (can be slow); the agent re-publishes
+			// when done and the next 5s poll surfaces it under "ready to load".
+			await new Promise((r) => setTimeout(r, verb === 'pull' ? 800 : 1500));
 			await poll();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Command failed';
 		} finally {
 			busy = null;
 		}
+	}
+
+	function openBrowser(runnerId: string) {
+		browserRunner = runnerId;
+		browserOpen = true;
+	}
+
+	/** Provision (pull) the browser-selected model onto the open browser's runner. */
+	function onProvision(provisionId: string) {
+		if (browserRunner) void act(browserRunner, 'pull', provisionId);
 	}
 
 	function statusTone(s: string): string {
@@ -159,13 +178,45 @@
 							</ul>
 						{/if}
 
-						<!-- Load a base model onto this runner -->
+						<!-- Provisioned to disk, NOT resident — one click to load (no
+							 re-download). The runner-local "ready to load" browser. -->
+						{#if (node.pulled ?? []).length > 0}
+							<ul class="mt-2 space-y-1 border-t border-border/40 pt-2">
+								<li class="text-xs font-medium text-muted-foreground/70">ready to load</li>
+								{#each node.pulled ?? [] as p (p)}
+									<li class="flex items-center justify-between gap-2 text-sm">
+										<span class="truncate text-muted-foreground">{p}</span>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="h-6 shrink-0 px-2 text-xs"
+											disabled={busy !== null}
+											onclick={() => act(node.runner_id, 'load', p)}
+										>
+											{busy === `${node.runner_id}:${p}:load` ? '…' : 'Load'}
+										</Button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+
+						<!-- Provision / load a model by id, or browse official catalogs. -->
 						<div class="mt-2 flex items-center gap-1.5 border-t border-border/40 pt-2">
 							<input
 								class="h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-xs"
 								placeholder="model id (e.g. llama3.2:1b)"
 								bind:value={loadInputs[node.runner_id]}
 							/>
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-7 shrink-0 px-2 text-xs"
+								disabled={busy !== null || !loadInputs[node.runner_id]}
+								onclick={() => act(node.runner_id, 'pull', loadInputs[node.runner_id] ?? '')}
+								title="Provision (download) to disk without loading"
+							>
+								Pull
+							</Button>
 							<Button
 								variant="outline"
 								size="sm"
@@ -174,6 +225,18 @@
 								onclick={() => act(node.runner_id, 'load', loadInputs[node.runner_id] ?? '')}
 							>
 								Load
+							</Button>
+						</div>
+						<div class="mt-1.5 flex justify-end">
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-6 gap-1 px-2 text-xs text-muted-foreground"
+								disabled={busy !== null}
+								onclick={() => openBrowser(node.runner_id)}
+							>
+								<Search class="size-3.5" />
+								Browse catalog
 							</Button>
 						</div>
 					</div>
@@ -279,3 +342,10 @@
 		{/if}
 	</div>
 </section>
+
+<!-- Model browser — opened against a runner; "Provision" pulls onto it. -->
+<ModelBrowser
+	bind:open={browserOpen}
+	runnerLabel={browserRunner ? `runner ${shortId(browserRunner)}` : ''}
+	onprovision={onProvision}
+/>

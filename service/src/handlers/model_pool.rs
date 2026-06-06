@@ -152,6 +152,36 @@ pub(crate) async fn serving_runner_inventory(
     fold_serving_inventory(present_catalogs(&present, catalogs))
 }
 
+/// RETAIN `runner_id → [pulled model id]` — the provisioned-to-disk fork (the
+/// `RunnerInterfaceCatalog.pulled` superset). Same `presence ∩ catalog` join +
+/// fail-soft posture as [`serving_runner_inventory`]; surfaces the "ready to
+/// load" set the `/fleet/engines` read excludes resident bases from.
+pub(crate) async fn serving_runner_pulled(
+    db: &sqlx::PgPool,
+    runner_presence: &crate::runners_presence::RunnerPresence,
+    workspace_id: Uuid,
+) -> HashMap<Uuid, Vec<String>> {
+    let present: HashSet<Uuid> = runner_presence
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| s.present)
+        .map(|s| s.runner_id)
+        .collect();
+
+    let catalogs: Vec<(Uuid, serde_json::Value)> =
+        sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_all(db)
+            .await
+            .unwrap_or_default();
+
+    present_catalogs(&present, catalogs)
+        .into_iter()
+        .map(|(runner_id, catalog)| (runner_id, catalog.pulled))
+        .collect()
+}
+
 /// `GET /api/v1/models` — the loaded-set projection (the editor model picker's
 /// data source). Every `model_states` row in the workspace, AND-gated against the
 /// live runner interface catalog. Session/human authed, workspace-scoped,

@@ -3725,6 +3725,53 @@
         }
       }
     },
+    "/api/v1/model-catalog/{source}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/model-catalog/{source}` — browse an upstream OFFICIAL catalog\n(`ollama` scrape | `huggingface` JSON API). Session/human authed; metadata\nonly (no inference, no workspace data). Cached ~10 min; fail-soft to empty.",
+        "operationId": "browse_model_catalog",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "Catalog source: `ollama` or `huggingface`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free-text search; empty / absent ⇒ the upstream's popular/trending list.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upstream model browse results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown catalog source"
+          }
+        }
+      }
+    },
     "/api/v1/models": {
       "get": {
         "tags": [
@@ -11001,6 +11048,64 @@
           "collection"
         ]
       },
+      "CatalogModel": {
+        "type": "object",
+        "description": "One model in an upstream catalog browse result.",
+        "required": [
+          "id",
+          "name",
+          "source"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capability tags (Ollama `tools`/`vision`/…; HF pipeline/library tags)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A one-line blurb when the upstream provides one."
+          },
+          "id": {
+            "type": "string",
+            "description": "The provision id — the exact string a `Pull`/`Load` command takes. Ollama\nlibrary slug (`llama3.2`) or HF repo id (`meta-llama/Llama-3.2-1B`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human display name (== `id` for HF; the title for Ollama)."
+          },
+          "pulls": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Popularity hint — Ollama's \"5M\" pull count, or HF's download integer as a\nstring. Display-only."
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Parameter-size tags the upstream advertises (Ollama `1b`/`3b`/…); empty for\nHF (which exposes no clean size facet here)."
+          },
+          "source": {
+            "type": "string",
+            "description": "Which catalog this came from (`ollama` | `huggingface`)."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Link to the model's upstream page."
+          }
+        }
+      },
       "CatalogTrigger": {
         "type": "object",
         "properties": {
@@ -15606,6 +15711,39 @@
           }
         }
       },
+      "ModelCatalogResponse": {
+        "type": "object",
+        "description": "`GET /api/v1/model-catalog/{source}` response.",
+        "required": [
+          "source",
+          "models",
+          "cached"
+        ],
+        "properties": {
+          "cached": {
+            "type": "boolean",
+            "description": "`true` when these results were served from the in-process cache."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A fail-soft error hint when the upstream fetch/parse failed (results then\nempty or stale-cached). `None` on a clean fetch."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogModel"
+            },
+            "description": "Browse results (possibly empty on an upstream error — see `error`)."
+          },
+          "source": {
+            "type": "string",
+            "description": "The catalog source echoed back."
+          }
+        }
+      },
       "ModelCommand": {
         "oneOf": [
           {
@@ -15639,6 +15777,25 @@
                 "type": "string",
                 "enum": [
                   "unload"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "**Provision** `target` to disk without making it resident (Ollama\n`/api/pull`; a no-op capability gap on vLLM, whose base is fixed at launch).\nCarries a `Base` target — a later `Load` then warms it cheaply.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "pull"
                 ]
               },
               "target": {
@@ -16134,6 +16291,13 @@
               "$ref": "#/components/schemas/NodeEngine"
             },
             "description": "The base engines live on this node."
+          },
+          "pulled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Models **provisioned to disk** on this node but NOT resident — loadable\nwithout a re-download (the `pulled` superset minus the resident base\nengines above). The runner-local \"ready to load\" browser; empty for a vLLM\nnode (its base is fixed at launch, so provisioned == resident)."
           },
           "runner_id": {
             "type": "string",
@@ -18982,6 +19146,13 @@
               "$ref": "#/components/schemas/ModelEntry"
             },
             "description": "Self-hosted LLM models this runner's node-agent currently serves (docs/29).\nThe live half of the loaded-set AND-gate. Additive JSONB field — a runner\nthat serves no models simply reports an empty list."
+          },
+          "pulled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`\nsuperset; loadable WITHOUT a re-download). A SUPERSET that includes the\nresident `models` ids — the model-pool read excludes already-resident bases\nso the operator sees \"provisioned, ready to load\" distinctly from\n\"serving\". Additive JSONB field; empty for non-model runners."
           },
           "services": {
             "type": "array",

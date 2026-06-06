@@ -258,6 +258,9 @@ use utoipa::OpenApi;
             // Operator load/unload action — the model-command wire envelope.
             crate::runner_commands::ModelCommand,
             crate::runner_commands::LoadTarget,
+            // Official model-catalog browse (operator model browser).
+            crate::handlers::model_catalog::CatalogModel,
+            crate::handlers::model_catalog::ModelCatalogResponse,
             // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
             crate::models::inference_metering::InferenceRequestLogRow,
         ),

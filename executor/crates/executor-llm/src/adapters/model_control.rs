@@ -100,6 +100,77 @@ impl OllamaControlAdapter {
             .collect())
     }
 
+    /// Probe the models **pulled to disk** via `GET /api/tags` — the superset of
+    /// `/api/ps` (resident). These are loadable WITHOUT a re-download, so the
+    /// control plane surfaces them as "provisioned, ready to load". Each maps to a
+    /// [`LoadedModel::Base`] (Ollama has no runtime-LoRA notion here).
+    pub async fn probe_pulled_models(&self) -> Result<Vec<LoadedModel>, LlmError> {
+        let url = format!("{}/api/tags", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| LlmError::Api(format!("ollama /api/tags failed: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Api(format!("ollama /api/tags returned {status}: {text}")));
+        }
+        let body: OllamaModelsResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::Api(format!("ollama /api/tags parse: {e}")))?;
+        Ok(body
+            .models
+            .into_iter()
+            .map(|m| {
+                let id = if !m.name.is_empty() { m.name } else { m.model };
+                LoadedModel::Base {
+                    model_id: id,
+                    max_num_seqs: None,
+                }
+            })
+            .collect())
+    }
+
+    /// Provision a model to disk via `POST /api/pull {model, stream:false}` —
+    /// blocks until the weights are fully fetched (Ollama streams progress; with
+    /// `stream:false` it returns once on completion). Multi-GB downloads take
+    /// minutes, so this is issued on a per-call client with a generous timeout
+    /// rather than the struct's shared 180s client. The post-condition is "pulled
+    /// to disk" (visible via `/api/tags`), NOT resident — a later `load_base`
+    /// warms it into VRAM.
+    pub async fn pull_base(&self, model_id: &str) -> Result<(), LlmError> {
+        let url = format!("{}/api/pull", self.base_url);
+        let body = serde_json::json!({ "model": model_id, "stream": false });
+        // A dedicated long-timeout client: a cold pull of a large model can run
+        // many minutes; the shared 180s client would abort it.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3600))
+            .build()
+            .unwrap_or_else(|_| self.client.clone());
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Api(format!("ollama pull failed: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Api(format!("ollama pull {model_id} returned {status}: {text}")));
+        }
+        // `stream:false` still returns a final JSON body `{status:"success"}` on
+        // success; a non-"success" status field is a soft failure (e.g. a bad
+        // model name returns 200 with `{error:...}` on some builds).
+        let v: serde_json::Value = resp.json().await.unwrap_or_default();
+        if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+            return Err(LlmError::Api(format!("ollama pull {model_id}: {err}")));
+        }
+        Ok(())
+    }
+
     /// Warm a base model into VRAM via `POST /api/generate {model, keep_alive}`
     /// with no prompt — Ollama treats a prompt-less generate as a model LOAD and
     /// returns `{done_reason: "load"}`. `keep_alive` keeps it resident. This is
@@ -189,6 +260,30 @@ impl ModelBackend {
         match self {
             ModelBackend::Vllm(a) => a.probe_loaded_models().await,
             ModelBackend::Ollama(a) => a.probe_loaded_models().await,
+        }
+    }
+
+    /// Probe the models **provisioned to disk** (loadable without a re-download).
+    /// Ollama → `GET /api/tags` (the pulled superset of resident). vLLM → its
+    /// served set (`/v1/models`): a vLLM engine's base is fixed at launch, so
+    /// "provisioned" and "resident" coincide.
+    pub async fn probe_pulled_models(&self) -> Result<Vec<LoadedModel>, LlmError> {
+        match self {
+            ModelBackend::Vllm(a) => a.probe_loaded_models().await,
+            ModelBackend::Ollama(a) => a.probe_pulled_models().await,
+        }
+    }
+
+    /// Provision a base model to disk (no residency change). Ollama → `/api/pull`.
+    /// vLLM → logged no-op: the base is fixed at engine launch and HF weights are
+    /// fetched then, so there is no runtime pull (capability gap).
+    pub async fn pull_base(&self, model_id: &str) -> Result<(), LlmError> {
+        match self {
+            ModelBackend::Vllm(_) => {
+                warn!(%model_id, "vllm backend does not support a runtime pull (base is fixed at launch); skipping");
+                Ok(())
+            }
+            ModelBackend::Ollama(a) => a.pull_base(model_id).await,
         }
     }
 

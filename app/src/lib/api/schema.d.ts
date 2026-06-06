@@ -1263,6 +1263,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-catalog/{source}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/model-catalog/{source}` — browse an upstream OFFICIAL catalog
+         *     (`ollama` scrape | `huggingface` JSON API). Session/human authed; metadata
+         *     only (no inference, no workspace data). Cached ~10 min; fail-soft to empty.
+         */
+        get: operations["browse_model_catalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models": {
         parameters: {
             query?: never;
@@ -3920,6 +3941,34 @@ export interface components {
          * @enum {string}
          */
         Cardinality: "object" | "collection";
+        /** @description One model in an upstream catalog browse result. */
+        CatalogModel: {
+            /** @description Capability tags (Ollama `tools`/`vision`/…; HF pipeline/library tags). */
+            capabilities?: string[];
+            /** @description A one-line blurb when the upstream provides one. */
+            description?: string | null;
+            /**
+             * @description The provision id — the exact string a `Pull`/`Load` command takes. Ollama
+             *     library slug (`llama3.2`) or HF repo id (`meta-llama/Llama-3.2-1B`).
+             */
+            id: string;
+            /** @description Human display name (== `id` for HF; the title for Ollama). */
+            name: string;
+            /**
+             * @description Popularity hint — Ollama's "5M" pull count, or HF's download integer as a
+             *     string. Display-only.
+             */
+            pulls?: string | null;
+            /**
+             * @description Parameter-size tags the upstream advertises (Ollama `1b`/`3b`/…); empty for
+             *     HF (which exposes no clean size facet here).
+             */
+            sizes?: string[];
+            /** @description Which catalog this came from (`ollama` | `huggingface`). */
+            source: string;
+            /** @description Link to the model's upstream page. */
+            url?: string | null;
+        };
         CatalogTrigger: {
             /**
              * @description If true, the dispatcher walks existing catalogue entries matching the
@@ -5945,6 +5994,20 @@ export interface components {
                 [key: string]: components["schemas"]["MetricPoint"][];
             };
         };
+        /** @description `GET /api/v1/model-catalog/{source}` response. */
+        ModelCatalogResponse: {
+            /** @description `true` when these results were served from the in-process cache. */
+            cached: boolean;
+            /**
+             * @description A fail-soft error hint when the upstream fetch/parse failed (results then
+             *     empty or stale-cached). `None` on a clean fetch.
+             */
+            error?: string | null;
+            /** @description Browse results (possibly empty on an upstream error — see `error`). */
+            models: components["schemas"]["CatalogModel"][];
+            /** @description The catalog source echoed back. */
+            source: string;
+        };
         /**
          * @description A load/unload command for the node agent. `kind` selects the verb; `target` is
          *     what to act on (a base engine or a LoRA adapter).
@@ -5960,6 +6023,10 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "unload";
+            target: components["schemas"]["LoadTarget"];
+        } | {
+            /** @enum {string} */
+            kind: "pull";
             target: components["schemas"]["LoadTarget"];
         };
         /**
@@ -6239,6 +6306,13 @@ export interface components {
         NodeInventory: {
             /** @description The base engines live on this node. */
             engines: components["schemas"]["NodeEngine"][];
+            /**
+             * @description Models **provisioned to disk** on this node but NOT resident — loadable
+             *     without a re-download (the `pulled` superset minus the resident base
+             *     engines above). The runner-local "ready to load" browser; empty for a vLLM
+             *     node (its base is fixed at launch, so provisioned == resident).
+             */
+            pulled?: string[];
             /**
              * Format: uuid
              * @description The runner (node) id.
@@ -7602,6 +7676,14 @@ export interface components {
              *     that serves no models simply reports an empty list.
              */
             models?: components["schemas"]["ModelEntry"][];
+            /**
+             * @description Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`
+             *     superset; loadable WITHOUT a re-download). A SUPERSET that includes the
+             *     resident `models` ids — the model-pool read excludes already-resident bases
+             *     so the operator sees "provisioned, ready to load" distinctly from
+             *     "serving". Additive JSONB field; empty for non-model runners.
+             */
+            pulled?: string[];
             services?: components["schemas"]["InterfaceEntry"][];
             topics?: components["schemas"]["InterfaceEntry"][];
         };
@@ -12246,6 +12328,39 @@ export interface operations {
         responses: {
             /** @description Override cleared */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    browse_model_catalog: {
+        parameters: {
+            query?: {
+                /** @description Free-text search; empty / absent ⇒ the upstream's popular/trending list. */
+                q?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Catalog source: `ollama` or `huggingface` */
+                source: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Upstream model browse results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogResponse"];
+                };
+            };
+            /** @description Unknown catalog source */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

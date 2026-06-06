@@ -52,8 +52,15 @@ export type NodeEngine = components['schemas']['NodeEngine'];
 export type ModelReplicaRow = components['schemas']['ModelReplicaRow'];
 /** Per-pool node-replica autoscaler row (docs/31 Loop 1). */
 export type NodeReplicaRow = components['schemas']['NodeReplicaRow'];
-/** The load/unload command wire envelope. */
+/** The load/unload/pull command wire envelope. */
 export type ModelCommand = components['schemas']['ModelCommand'];
+
+/** One model in an upstream catalog browse result (Ollama library / HF). */
+export type CatalogModel = components['schemas']['CatalogModel'];
+/** `GET /api/v1/model-catalog/{source}` response. */
+export type ModelCatalogResponse = components['schemas']['ModelCatalogResponse'];
+/** A model-browser catalog source. */
+export type CatalogSource = 'ollama' | 'huggingface';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -132,7 +139,24 @@ export async function publishModelCommand(
 	}
 }
 
-/** Convenience: load/unload a BASE model on a runner. */
-export function baseCommand(verb: 'load' | 'unload', modelId: string): ModelCommand {
+/** Convenience: load/unload/pull a BASE model on a runner. */
+export function baseCommand(verb: 'load' | 'unload' | 'pull', modelId: string): ModelCommand {
 	return { kind: verb, target: { Base: { model_id: modelId } } } as ModelCommand;
+}
+
+/**
+ * GET /api/v1/model-catalog/{source} — browse an upstream OFFICIAL catalog
+ * (`ollama` scrapes ollama.com; `huggingface` calls the HF JSON API). Metadata
+ * only; the result is cached server-side ~10 min. `q` is an optional free-text
+ * search (empty ⇒ the upstream's popular/trending list).
+ */
+export async function listModelCatalog(
+	source: CatalogSource,
+	q?: string
+): Promise<ModelCatalogResponse> {
+	return unwrap(
+		await client.GET('/api/v1/model-catalog/{source}', {
+			params: { path: { source }, query: q ? { q } : {} }
+		})
+	);
 }

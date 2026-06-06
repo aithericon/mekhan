@@ -351,6 +351,13 @@ pub struct RunnerInterfaceCatalog {
     /// that serves no models simply reports an empty list.
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+    /// Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`
+    /// superset; loadable WITHOUT a re-download). A SUPERSET that includes the
+    /// resident `models` ids — the model-pool read excludes already-resident bases
+    /// so the operator sees "provisioned, ready to load" distinctly from
+    /// "serving". Additive JSONB field; empty for non-model runners.
+    #[serde(default)]
+    pub pulled: Vec<String>,
 }
 
 /// Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,

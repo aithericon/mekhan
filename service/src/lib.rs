@@ -248,6 +248,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Operator load/unload action — publishes a ModelCommand to a runner's
         // model agent (vLLM admin / Ollama Metal runtime). Control plane only.
         .routes(routes!(handlers::model_commands::publish_runner_model_command))
+        // Official model-catalog browse (the operator's model browser): scrapes
+        // ollama.com / calls the HF JSON API. Metadata only, cached ~10 min.
+        .routes(routes!(handlers::model_catalog::browse_model_catalog))
         // Model-pool P5 (docs/29 §7') — inference metering audit-ledger read.
         .routes(routes!(
             handlers::inference_metering::list_inference_requests
