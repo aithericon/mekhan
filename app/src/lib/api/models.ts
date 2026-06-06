@@ -41,6 +41,12 @@ export type ModelEntry = components['schemas']['ModelEntry'];
 export type ModelState = components['schemas']['ModelState'];
 /** Request body for the operator state-machine step. */
 export type TransitionRequest = components['schemas']['TransitionRequest'];
+/** Request body for operator curation — add a model to the workspace SET. */
+export type CreateModelRequest = components['schemas']['CreateModelRequest'];
+/** Request body for the runner-targeted load/unload (carries `runner_id`). */
+export type LoadModelRequest = components['schemas']['LoadModelRequest'];
+/** One live presence row from `GET /api/v1/runners/presence`. */
+export type RunnerPresenceSnapshot = components['schemas']['RunnerPresenceSnapshot'];
 
 /** Per-node engine inventory (docs/31 Phase 0) — `GET /api/v1/fleet/engines`. */
 export type FleetEnginesResponse = components['schemas']['FleetEnginesResponse'];
@@ -77,6 +83,31 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
 	return result.data;
 }
 
+/**
+ * Extract a human-readable message from an unknown thrown value. `unwrap` throws
+ * `Error("API error <status>: <body>")` where `<body>` is the JSON-stringified
+ * error payload; this peels that back to the server's `error`/`message` field so
+ * callers can surface a clean toast instead of the raw envelope.
+ */
+export function apiErrorMessage(err: unknown): string {
+	if (err instanceof Error) {
+		const m = err.message.match(/^API error \d+: (.*)$/s);
+		if (m) {
+			const tail = m[1];
+			try {
+				const parsed = JSON.parse(tail) as { error?: unknown; message?: unknown };
+				const field = parsed.error ?? parsed.message;
+				if (typeof field === 'string') return field;
+			} catch {
+				// tail wasn't JSON — fall through to the raw tail
+			}
+			return tail;
+		}
+		return err.message;
+	}
+	return String(err);
+}
+
 // ── Model-pool endpoints ─────────────────────────────────────────────────────
 
 /**
@@ -104,6 +135,65 @@ export async function transitionModel(
 			body: { target, note: note ?? null }
 		})
 	);
+}
+
+/**
+ * POST /api/v1/models — operator curation: add a model to the workspace SET. The
+ * row lands in `approved` with zero replicas. 409 on the `(workspace, model_id)`
+ * PK conflict (surfaced as a thrown `Error`). Returns the projected view.
+ */
+export async function createModel(body: CreateModelRequest): Promise<ModelSetView> {
+	return unwrap(await client.POST('/api/v1/models', { body }));
+}
+
+/**
+ * DELETE /api/v1/models/{model_id} — hard-delete a curated model row. `204` on
+ * success; 404 when no row was removed (thrown by `unwrap`).
+ */
+export async function deleteModel(modelId: string): Promise<void> {
+	const r = await client.DELETE('/api/v1/models/{model_id}', {
+		params: { path: { model_id: modelId } }
+	});
+	if (r.error !== undefined) {
+		throw new Error(`API error ${r.response.status}: ${JSON.stringify(r.error)}`);
+	}
+}
+
+/**
+ * POST /api/v1/models/{model_id}/load — operator load against a SPECIFIC runner.
+ * UPSERTs the lifecycle row to `loading` then publishes a `Load{Base}` command to
+ * the runner's model agent (fire-and-forget). Returns the projected view.
+ */
+export async function loadModel(modelId: string, runnerId: string): Promise<ModelSetView> {
+	return unwrap(
+		await client.POST('/api/v1/models/{model_id}/load', {
+			params: { path: { model_id: modelId } },
+			body: { runner_id: runnerId }
+		})
+	);
+}
+
+/**
+ * POST /api/v1/models/{model_id}/unload — operator unload against a SPECIFIC
+ * runner. Moves a `loaded`/`loading` row to `draining` and ALWAYS publishes an
+ * `Unload{Base}` command to the runner. Returns the projected view.
+ */
+export async function unloadModel(modelId: string, runnerId: string): Promise<ModelSetView> {
+	return unwrap(
+		await client.POST('/api/v1/models/{model_id}/unload', {
+			params: { path: { model_id: modelId } },
+			body: { runner_id: runnerId }
+		})
+	);
+}
+
+/**
+ * GET /api/v1/runners/presence — the live in-memory presence snapshot (the actual
+ * pool-capacity signal). One row per runner in the caller's workspace, carrying
+ * its advertised `backends` and whether it is currently `present`.
+ */
+export async function listRunnerPresence(): Promise<RunnerPresenceSnapshot[]> {
+	return unwrap(await client.GET('/api/v1/runners/presence', {}));
 }
 
 /** GET /api/v1/fleet/engines — the live per-node engine inventory (Phase 0). */

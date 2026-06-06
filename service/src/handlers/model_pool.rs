@@ -22,14 +22,19 @@ use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     Json,
 };
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
-use crate::models::model_pool::{ModelSetView, ModelState, ModelStateRow, TransitionRequest};
+use crate::models::model_pool::{
+    reconcile_observed_state, CreateModelRequest, LoadModelRequest, ModelSetView, ModelState,
+    ModelStateRow, TransitionRequest,
+};
 use crate::models::runner::RunnerInterfaceCatalog;
+use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
 use crate::AppState;
 
 /// Caller-implicit workspace (session workspace, nil fallback for legacy dev).
@@ -182,6 +187,59 @@ pub(crate) async fn serving_runner_pulled(
         .collect()
 }
 
+/// Read-time reconcile: fold the LIVE observed serving count back into the
+/// operator-curated lifecycle state via [`reconcile_observed_state`]. When a
+/// transition is implied (`loading`→`loaded` once a runner serves it,
+/// `draining`→`unloaded` once none do), issue a SINGLE guarded UPDATE keyed on
+/// the OLD state (so steady-state reads never write, and a concurrent operator
+/// transition between read + write is not clobbered) and return the new state to
+/// fold into the view. FAIL-SOFT: a reconcile-write error is logged, not
+/// propagated — the read proceeds with the observed (new) state.
+async fn reconcile_row_state(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    model_id: &str,
+    observed: ModelState,
+    serving: u32,
+) -> ModelState {
+    match reconcile_observed_state(observed, serving) {
+        None => observed,
+        Some(new_state) => {
+            let write = sqlx::query(
+                "UPDATE model_states SET state = $3, last_transition_at = NOW() \
+                 WHERE workspace_id = $1 AND model_id = $2 AND state = $4",
+            )
+            .bind(workspace_id)
+            .bind(model_id)
+            .bind(new_state.as_str())
+            .bind(observed.as_str())
+            .execute(db)
+            .await;
+            if let Err(e) = write {
+                tracing::warn!(%workspace_id, %model_id, "model-state reconcile write failed (fail-soft): {e}");
+            }
+            new_state
+        }
+    }
+}
+
+/// Build a [`ModelSetView`] for a row after reconciling its state against the
+/// observed serving count. Centralizes the "reconcile-then-project" step shared by
+/// the list + single-model reads so the two cannot drift.
+async fn project_with_reconcile(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    row: ModelStateRow,
+    serving: u32,
+) -> ModelSetView {
+    let observed = ModelState::parse(&row.state).unwrap_or(ModelState::Unloaded);
+    let reconciled = reconcile_row_state(db, workspace_id, &row.model_id, observed, serving).await;
+    let mut view = row.into_view(serving);
+    view.state = reconciled;
+    view.available = reconciled == ModelState::Loaded && serving > 0;
+    view
+}
+
 /// `GET /api/v1/models` — the loaded-set projection (the editor model picker's
 /// data source). Every `model_states` row in the workspace, AND-gated against the
 /// live runner interface catalog. Session/human authed, workspace-scoped,
@@ -211,13 +269,11 @@ pub async fn list_loaded_models(
 
     let counts = serving_runner_counts(&state.db, &state.runner_presence, workspace_id).await;
 
-    let out = rows
-        .into_iter()
-        .map(|row| {
-            let serving = counts.get(&row.model_id).copied().unwrap_or(0);
-            row.into_view(serving)
-        })
-        .collect();
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let serving = counts.get(&row.model_id).copied().unwrap_or(0);
+        out.push(project_with_reconcile(&state.db, workspace_id, row, serving).await);
+    }
 
     Ok(Json(out))
 }
@@ -260,7 +316,9 @@ pub async fn get_model(
         .copied()
         .unwrap_or(0);
 
-    Ok(Json(row.into_view(serving)))
+    Ok(Json(
+        project_with_reconcile(&state.db, workspace_id, row, serving).await,
+    ))
 }
 
 /// `POST /api/v1/models/{model_id}/transition` — the operator state-machine step.
@@ -333,6 +391,239 @@ pub async fn transition_model(
         .unwrap_or(0);
 
     Ok(Json(updated.into_view(serving)))
+}
+
+/// `POST /api/v1/models` — operator curation: add a model to the workspace SET.
+/// The row lands in `approved` with zero replicas. 400 on an empty `model_id`,
+/// 409 on the `(workspace_id, model_id)` PK conflict. Session/human authed,
+/// workspace-scoped. Returns the projected view (serving recomputed live).
+#[utoipa::path(
+    post,
+    path = "/api/v1/models",
+    request_body = CreateModelRequest,
+    responses(
+        (status = 200, description = "Model curated into the workspace SET; the projected view", body = ModelSetView),
+        (status = 400, description = "Empty model_id", body = ErrorResponse),
+        (status = 409, description = "Model already curated in this workspace", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn create_model(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<CreateModelRequest>,
+) -> Result<Json<ModelSetView>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    if req.model_id.trim().is_empty() {
+        return Err(ApiError::bad_request("model_id must not be empty"));
+    }
+
+    let inserted: ModelStateRow = sqlx::query_as(
+        "INSERT INTO model_states \
+            (workspace_id, registry_resource_id, model_id, state, base, replicas, note) \
+         VALUES ($1, $2, $3, 'approved', $4, 0, $5) \
+         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+    )
+    .bind(workspace_id)
+    .bind(req.registry_resource_id)
+    .bind(&req.model_id)
+    .bind(&req.base)
+    .bind(&req.note)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.is_unique_violation() {
+                return ApiError::conflict(format!(
+                    "model {} already curated in this workspace",
+                    req.model_id
+                ));
+            }
+        }
+        ApiError::internal(format!("model_states create: {e}"))
+    })?;
+
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
+        .await
+        .get(&inserted.model_id)
+        .copied()
+        .unwrap_or(0);
+
+    Ok(Json(inserted.into_view(serving)))
+}
+
+/// `DELETE /api/v1/models/{model_id}` — hard-delete a curated model row from the
+/// workspace SET. 404 when no row was removed. Session/human authed,
+/// workspace-scoped. `204 No Content` on success.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/models/{model_id}",
+    params(("model_id" = String, Path, description = "Model id")),
+    responses(
+        (status = 204, description = "Model removed from the workspace SET"),
+        (status = 404, description = "No such model in this workspace", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn delete_model(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(model_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    let res = sqlx::query("DELETE FROM model_states WHERE workspace_id = $1 AND model_id = $2")
+        .bind(workspace_id)
+        .bind(&model_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("model_states delete: {e}")))?;
+
+    if res.rows_affected() == 0 {
+        return Err(ApiError::not_found("no such model in this workspace"));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/models/{model_id}/load` — operator load against a SPECIFIC
+/// runner. UPSERTs the lifecycle row to `loading` (an already-`loaded` row is left
+/// loaded) THEN publishes a `Load{Base}` `ModelCommand` to the runner's model
+/// agent (fire-and-forget, `runner.{id}.load`). Session/human authed,
+/// workspace-scoped. Returns the projected view.
+#[utoipa::path(
+    post,
+    path = "/api/v1/models/{model_id}/load",
+    params(("model_id" = String, Path, description = "Model id")),
+    request_body = LoadModelRequest,
+    responses(
+        (status = 200, description = "Row upserted + load command published; the projected view", body = ModelSetView),
+        (status = 500, description = "DB write or NATS publish failed", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn load_model(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(model_id): Path<String>,
+    Json(req): Json<LoadModelRequest>,
+) -> Result<Json<ModelSetView>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    // UPSERT: insert `loading` if absent; on conflict bump to `loading` UNLESS the
+    // row is already `loaded` (leave a live model loaded).
+    let upserted: ModelStateRow = sqlx::query_as(
+        "INSERT INTO model_states \
+            (workspace_id, registry_resource_id, model_id, state, base, replicas, note) \
+         VALUES ($1, NULL, $2, 'loading', NULL, 0, NULL) \
+         ON CONFLICT (workspace_id, model_id) DO UPDATE \
+            SET state = CASE WHEN model_states.state = 'loaded' THEN 'loaded' ELSE 'loading' END, \
+                last_transition_at = NOW() \
+         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+    )
+    .bind(workspace_id)
+    .bind(&model_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states load upsert: {e}")))?;
+
+    // Publish the load command (same construction as the model_commands handler).
+    let cmd = ModelCommand::Load {
+        target: LoadTarget::Base {
+            model_id: model_id.clone(),
+        },
+    };
+    publish_model_command(&state.nats, req.runner_id, &cmd)
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "publish load command to runner {}: {e}",
+                req.runner_id
+            ))
+        })?;
+
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
+        .await
+        .get(&upserted.model_id)
+        .copied()
+        .unwrap_or(0);
+
+    Ok(Json(upserted.into_view(serving)))
+}
+
+/// `POST /api/v1/models/{model_id}/unload` — operator unload against a SPECIFIC
+/// runner. If a row exists in `loaded`/`loading`, moves it to `draining`; ALWAYS
+/// publishes an `Unload{Base}` `ModelCommand` to the runner (fire-and-forget,
+/// `runner.{id}.unload`). Session/human authed, workspace-scoped. Returns the
+/// projected view (a synthesized `draining` view when no row exists).
+#[utoipa::path(
+    post,
+    path = "/api/v1/models/{model_id}/unload",
+    params(("model_id" = String, Path, description = "Model id")),
+    request_body = LoadModelRequest,
+    responses(
+        (status = 200, description = "Row drained (if present) + unload command published; the projected view", body = ModelSetView),
+        (status = 500, description = "DB write or NATS publish failed", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn unload_model(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(model_id): Path<String>,
+    Json(req): Json<LoadModelRequest>,
+) -> Result<Json<ModelSetView>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    // Move loaded/loading → draining (guarded; no-op if absent or elsewhere).
+    let updated: Option<ModelStateRow> = sqlx::query_as(
+        "UPDATE model_states SET state = 'draining', last_transition_at = NOW() \
+         WHERE workspace_id = $1 AND model_id = $2 AND state IN ('loaded', 'loading') \
+         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+    )
+    .bind(workspace_id)
+    .bind(&model_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states unload write: {e}")))?;
+
+    // ALWAYS publish the unload command, even with no row / a non-draining row.
+    let cmd = ModelCommand::Unload {
+        target: LoadTarget::Base {
+            model_id: model_id.clone(),
+        },
+    };
+    publish_model_command(&state.nats, req.runner_id, &cmd)
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "publish unload command to runner {}: {e}",
+                req.runner_id
+            ))
+        })?;
+
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
+        .await
+        .get(&model_id)
+        .copied()
+        .unwrap_or(0);
+
+    // If a row was drained, project it; otherwise synthesize a draining view.
+    let view = match updated {
+        Some(row) => row.into_view(serving),
+        None => ModelSetView {
+            model_id: model_id.clone(),
+            state: ModelState::Draining,
+            base: None,
+            replicas: 0,
+            available: false,
+            serving_runners: serving,
+            note: None,
+        },
+    };
+
+    Ok(Json(view))
 }
 
 #[cfg(test)]

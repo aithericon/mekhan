@@ -70,6 +70,13 @@
 		</h3>
 		{#if policies.length === 0}
 			<p class="text-sm text-muted-foreground/70">No model policies.</p>
+			<p class="text-sm text-muted-foreground/70">
+				Create a <a
+					href="/resources"
+					class="font-medium text-foreground underline underline-offset-2 hover:text-primary"
+					>model_policy resource</a
+				> to give the autoscaler per-model desired counts.
+			</p>
 		{:else}
 			<div class="grid gap-2 sm:grid-cols-2">
 				{#each policies as p (p.id)}
@@ -105,6 +112,13 @@
 		</h3>
 		{#if pools.length === 0}
 			<p class="text-sm text-muted-foreground/70">No node pools.</p>
+			<p class="text-sm text-muted-foreground/70">
+				Create a <a
+					href="/resources"
+					class="font-medium text-foreground underline underline-offset-2 hover:text-primary"
+					>node_pool resource</a
+				> to declare engine capacity for the autoscaler to fill.
+			</p>
 		{:else}
 			<div class="grid gap-2 sm:grid-cols-2">
 				{#each pools as p (p.id)}

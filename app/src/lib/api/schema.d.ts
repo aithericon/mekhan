@@ -1329,7 +1329,13 @@ export interface paths {
          */
         get: operations["list_loaded_models"];
         put?: never;
-        post?: never;
+        /**
+         * `POST /api/v1/models` — operator curation: add a model to the workspace SET.
+         *     The row lands in `approved` with zero replicas. 400 on an empty `model_id`,
+         *     409 on the `(workspace_id, model_id)` PK conflict. Session/human authed,
+         *     workspace-scoped. Returns the projected view (serving recomputed live).
+         */
+        post: operations["create_model"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1406,6 +1412,34 @@ export interface paths {
         get: operations["get_model"];
         put?: never;
         post?: never;
+        /**
+         * `DELETE /api/v1/models/{model_id}` — hard-delete a curated model row from the
+         *     workspace SET. 404 when no row was removed. Session/human authed,
+         *     workspace-scoped. `204 No Content` on success.
+         */
+        delete: operations["delete_model"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/{model_id}/load` — operator load against a SPECIFIC
+         *     runner. UPSERTs the lifecycle row to `loading` (an already-`loaded` row is left
+         *     loaded) THEN publishes a `Load{Base}` `ModelCommand` to the runner's model
+         *     agent (fire-and-forget, `runner.{id}.load`). Session/human authed,
+         *     workspace-scoped. Returns the projected view.
+         */
+        post: operations["load_model"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1428,6 +1462,29 @@ export interface paths {
          *     move (with the live-runner AND-gate recomputed).
          */
         post: operations["transition_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/unload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/{model_id}/unload` — operator unload against a SPECIFIC
+         *     runner. If a row exists in `loaded`/`loading`, moves it to `draining`; ALWAYS
+         *     publishes an `Unload{Base}` `ModelCommand` to the runner (fire-and-forget,
+         *     `runner.{id}.unload`). Session/human authed, workspace-scoped. Returns the
+         *     projected view (a synthesized `draining` view when no row exists).
+         */
+        post: operations["unload_model"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4504,6 +4561,23 @@ export interface components {
              */
             workspace_id?: string | null;
         };
+        /**
+         * @description Request body for `POST /api/v1/models` — operator curation (add a model to the
+         *     workspace SET). The row lands in `approved` with zero replicas.
+         */
+        CreateModelRequest: {
+            /** @description For a LoRA, the base model id it layers on. */
+            base?: string | null;
+            /** @description The model id (router routes on this; the `model_states` PK with workspace). */
+            model_id: string;
+            /** @description Optional operator note recorded on creation. */
+            note?: string | null;
+            /**
+             * Format: uuid
+             * @description Optional `model_registry` resource this model was curated from.
+             */
+            registry_resource_id?: string | null;
+        };
         /** @description Request body for `POST /api/v1/runners/registration-tokens`. */
         CreateRegistrationTokenRequest: {
             /** Format: date-time */
@@ -5830,6 +5904,18 @@ export interface components {
             arguments: unknown;
             id: string;
             name: string;
+        };
+        /**
+         * @description Request body for `POST /api/v1/models/{model_id}/{load,unload}` — the operator
+         *     load/unload action against a SPECIFIC runner. Upserts the lifecycle row AND
+         *     publishes a `ModelCommand` to the runner's model agent.
+         */
+        LoadModelRequest: {
+            /**
+             * Format: uuid
+             * @description The runner whose model agent should load/unload the model.
+             */
+            runner_id: string;
         };
         /**
          * @description What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —
@@ -12481,6 +12567,48 @@ export interface operations {
             };
         };
     };
+    create_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Model curated into the workspace SET; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description Empty model_id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Model already curated in this workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_model_replicas: {
         parameters: {
             query?: never;
@@ -12601,6 +12729,72 @@ export interface operations {
             };
         };
     };
+    delete_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Model removed from the workspace SET */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    load_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoadModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Row upserted + load command published; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description DB write or NATS publish failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     transition_model: {
         parameters: {
             query?: never;
@@ -12637,6 +12831,42 @@ export interface operations {
             };
             /** @description Illegal state-machine edge */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    unload_model: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoadModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Row drained (if present) + unload command published; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description DB write or NATS publish failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

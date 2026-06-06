@@ -106,6 +106,47 @@ pub struct TransitionRequest {
     pub note: Option<String>,
 }
 
+/// Request body for `POST /api/v1/models` — operator curation (add a model to the
+/// workspace SET). The row lands in `approved` with zero replicas.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateModelRequest {
+    /// The model id (router routes on this; the `model_states` PK with workspace).
+    pub model_id: String,
+    /// For a LoRA, the base model id it layers on.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// Optional `model_registry` resource this model was curated from.
+    #[serde(default)]
+    pub registry_resource_id: Option<Uuid>,
+    /// Optional operator note recorded on creation.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Request body for `POST /api/v1/models/{model_id}/{load,unload}` — the operator
+/// load/unload action against a SPECIFIC runner. Upserts the lifecycle row AND
+/// publishes a `ModelCommand` to the runner's model agent.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct LoadModelRequest {
+    /// The runner whose model agent should load/unload the model.
+    pub runner_id: Uuid,
+}
+
+/// Read-time reconcile of the operator-curated lifecycle state against the LIVE
+/// observed serving count. PURE — the handler turns a `Some(new_state)` into a
+/// single guarded UPDATE so steady-state reads do NOT write.
+///
+/// - `Loading` + ≥1 serving runner → `Loaded` (the node confirmed warm).
+/// - `Draining` + 0 serving runners → `Unloaded` (the node finished tearing down).
+/// - anything else → `None` (no transition: steady state or not-yet-converged).
+pub fn reconcile_observed_state(state: ModelState, serving: u32) -> Option<ModelState> {
+    match (state, serving) {
+        (ModelState::Loading, s) if s > 0 => Some(ModelState::Loaded),
+        (ModelState::Draining, 0) => Some(ModelState::Unloaded),
+        _ => None,
+    }
+}
+
 /// One row of the loaded-set projection (`GET /api/v1/models` and
 /// `GET /api/v1/models/{model_id}`).
 ///
@@ -261,5 +302,38 @@ mod tests {
         let view = bad.into_view(5);
         assert_eq!(view.state, ModelState::Unloaded);
         assert!(!view.available);
+    }
+
+    #[test]
+    fn reconcile_loading_with_serving_becomes_loaded() {
+        assert_eq!(
+            reconcile_observed_state(ModelState::Loading, 1),
+            Some(ModelState::Loaded)
+        );
+        assert_eq!(
+            reconcile_observed_state(ModelState::Loading, 5),
+            Some(ModelState::Loaded)
+        );
+    }
+
+    #[test]
+    fn reconcile_draining_with_zero_serving_becomes_unloaded() {
+        assert_eq!(
+            reconcile_observed_state(ModelState::Draining, 0),
+            Some(ModelState::Unloaded)
+        );
+    }
+
+    #[test]
+    fn reconcile_is_noop_otherwise() {
+        // Loading not yet serving → no transition (still converging).
+        assert_eq!(reconcile_observed_state(ModelState::Loading, 0), None);
+        // Draining still serving → no transition (still draining).
+        assert_eq!(reconcile_observed_state(ModelState::Draining, 3), None);
+        // Steady states never reconcile, regardless of the observed count.
+        for s in [ModelState::Approved, ModelState::Loaded, ModelState::Unloaded] {
+            assert_eq!(reconcile_observed_state(s, 0), None);
+            assert_eq!(reconcile_observed_state(s, 7), None);
+        }
     }
 }

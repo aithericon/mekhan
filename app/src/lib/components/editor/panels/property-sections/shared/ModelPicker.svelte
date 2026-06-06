@@ -95,7 +95,7 @@
 	{:else if available.length === 0 && loaded}
 		<p class="text-sm italic text-muted-foreground">
 			No models are currently loaded in the pool. An operator must load a model under
-			<code class="font-mono">/control-plane</code> before it can be selected here.
+			<code class="font-mono">/models</code> before it can be selected here.
 		</p>
 	{:else if selected}
 		<p class="text-sm italic text-muted-foreground">
