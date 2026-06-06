@@ -92,6 +92,13 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // lowering as 45; the point is the PRESENTATION dispatch routing this to the
     // `<video>` + MSE path, live-verified in the browser.
     "46-live-video-stream",
+    // 47-stream-object-detection: the AI capstone — a real clip flows over a
+    // binary DATA channel (Start File borrow → stream step re-muxes to fragmented
+    // MP4), a detector step CONSUMES that data stream and EMITS a CONTROL stream
+    // of recognized objects on `detections`, and a `join: gather` edge folds them
+    // in `summary`. Pins that consume-data-channel + emit-control-channel + gather
+    // all lower together in one node graph; the YOLO inference itself is live-only.
+    "47-stream-object-detection",
 ];
 
 fn repo_root() -> PathBuf {
@@ -329,6 +336,11 @@ fn snapshot_45_live_fmp4_stream() {
 #[test]
 fn snapshot_46_live_video_stream() {
     run("46-live-video-stream");
+}
+
+#[test]
+fn snapshot_47_stream_object_detection() {
+    run("47-stream-object-detection");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
