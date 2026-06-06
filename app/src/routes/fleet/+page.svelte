@@ -24,8 +24,6 @@
 	import BoardHeader from '$lib/components/fleet/BoardHeader.svelte';
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
-	import InferenceAuditTable from '$lib/components/fleet/InferenceAuditTable.svelte';
-	import ModelsSection from '$lib/components/fleet/ModelsSection.svelte';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -269,21 +267,9 @@
 				{#snippet emptyIcon()}<Boxes class="size-10 text-muted-foreground/40" />{/snippet}
 			</CapacitySection>
 
-			<!-- MODELS — the self-hosted model pool (docs/28-31): live engine
-				 inventory + load/unload, curated set, placement policies, node pools.
-				 Inference bypasses the engine net; this is the control surface. -->
-			<ModelsSection />
-
-			<!-- INFERENCE AUDIT — the durable metering / GDPR ledger. Inference
-				 bypasses the engine net (the HTTP router meters directly), so this
-				 read-only table is the only durable record of served requests. -->
-			<section data-testid="inference-audit-section" class="space-y-3">
-				<div class="flex items-baseline gap-3">
-					<h2 class="text-sm font-semibold tracking-tight text-foreground">Inference audit</h2>
-					<span class="text-sm text-muted-foreground">recent requests, newest first</span>
-				</div>
-				<InferenceAuditTable />
-			</section>
+			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
+				 placement, router/inference-audit) now lives on its own page at
+				 /models — see the "Models" top-nav entry. -->
 		</div>
 	</div>
 </div>
