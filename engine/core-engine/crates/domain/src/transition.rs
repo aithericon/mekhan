@@ -3,6 +3,12 @@ use utoipa::ToSchema;
 
 use crate::{Port, TransitionId};
 
+/// serde `skip_serializing_if` helper — omit `finalizer: false` so existing AIR
+/// round-trips byte-identically (only `finalizer: true` is emitted).
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Simulation configuration for async mock behavior.
 /// When present, the frontend will simulate a delay before firing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -75,6 +81,20 @@ pub struct Transition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
 
+    /// Finalizer flag. When `true`, this transition is **never** selected during
+    /// normal evaluation, and fires ONLY during the engine's post-failure
+    /// finalizer drain (see `evaluate_until_quiescent`). It exists to release
+    /// resources a net still holds when it fails permanently — e.g. a
+    /// `LeaseScope`'s held presence/datacenter lease, whose normal release
+    /// (`t_<id>_exit`) is gated on body SUCCESS and so can never fire on the
+    /// failure path. The finalizer consumes the still-parked held token and
+    /// emits the release to the pool net, so the lease is reclaimed
+    /// exactly-once on failure too — fully event-sourced (it fires as an
+    /// ordinary `TransitionFired` BEFORE the driver appends `NetFailed`), so a
+    /// restart replays the release and the unit is never stranded.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub finalizer: bool,
+
     /// Simulation configuration for async mock behavior.
     /// When present, the frontend will simulate a delay before firing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,6 +140,7 @@ impl Transition {
             guard: None,
             script: script.into(),
             priority: None,
+            finalizer: false,
             simulation: None,
             group_id: None,
             effect_handler_id: None,
@@ -165,6 +186,13 @@ impl Transition {
     /// Higher values = higher priority.
     pub fn with_priority(mut self, priority: impl Into<String>) -> Self {
         self.priority = Some(priority.into());
+        self
+    }
+
+    /// Mark this transition as a finalizer (fires only during the post-failure
+    /// finalizer drain). See [`Transition::finalizer`].
+    pub fn with_finalizer(mut self, finalizer: bool) -> Self {
+        self.finalizer = finalizer;
         self
     }
 

@@ -204,6 +204,22 @@ pub(crate) fn transition_enabling_time(
     }
 }
 
+/// Which class of transitions [`select_next_transition`] considers — the gate
+/// that keeps finalizers out of normal evaluation and restricts the
+/// post-failure drain to finalizers only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SelectPhase {
+    /// Normal evaluation: finalizer transitions are NEVER selected (a finalizer
+    /// is enabled by its own input arcs — e.g. the held lease token — for the
+    /// whole scope lifetime, so selecting it normally would steal the lease
+    /// before the body runs).
+    Normal,
+    /// Post-failure drain: ONLY finalizer transitions are selected, so a net
+    /// about to be torn down releases the resources it still holds (and nothing
+    /// else makes forward progress past the failure point).
+    Finalizing,
+}
+
 /// Select the next transition to fire based on enabling time, specificity, and token priority.
 ///
 /// Priority order:
@@ -211,12 +227,15 @@ pub(crate) fn transition_enabling_time(
 /// 2. More specific transitions (more input arcs)
 /// 3. Higher token priority (from priority expression)
 /// 4. Transition ID (alphabetical tiebreaker)
+///
+/// `phase` gates which transitions are eligible at all (see [`SelectPhase`]).
 pub(crate) fn select_next_transition(
     executor: &TransitionExecutor,
     topology: &impl TopologyRepository,
     marking: &Marking,
     schema_registry: Option<&SchemaRegistry>,
     memo: Option<&RwLock<crate::binding_memo::BindingMemo>>,
+    phase: SelectPhase,
 ) -> Result<Option<TransitionId>, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -234,6 +253,15 @@ pub(crate) fn select_next_transition(
     let mut newly_empty: Vec<TransitionId> = Vec::new();
 
     for transition in net.transitions.values() {
+        // Phase gate (BEFORE the memo + binding check, so finalizers never
+        // enter the negative-binding memo): a finalizer is eligible ONLY in the
+        // Finalizing drain; everything else ONLY in Normal evaluation.
+        match phase {
+            SelectPhase::Normal if transition.finalizer => continue,
+            SelectPhase::Finalizing if !transition.finalizer => continue,
+            _ => {}
+        }
+
         if let Some(known) = &known_empty {
             if known.contains(&transition.id) {
                 continue;
@@ -403,8 +431,14 @@ pub(crate) async fn evaluate_until_quiescent<
         reconcile_binding_memo(binding_memo, topology, &delta);
 
         // Select next transition to fire
-        let next_transition =
-            select_next_transition(executor, topology, &marking, schema_registry, Some(binding_memo))?;
+        let next_transition = select_next_transition(
+            executor,
+            topology,
+            &marking,
+            schema_registry,
+            Some(binding_memo),
+            SelectPhase::Normal,
+        )?;
 
         match next_transition {
             None => {
@@ -478,6 +512,32 @@ pub(crate) async fn evaluate_until_quiescent<
                         // (so callers/tests see them in EvaluateResult.events;
                         // the driver also re-reads the store for SSE).
                         events_generated.extend(events.events_from(idx_before).await);
+                        // Failure-path resource cleanup: release any lease/hold
+                        // the net still carries before it is torn down. The
+                        // finalizer drain fires each `t_<id>_finally` once,
+                        // emitting the release to the pool net as a journaled
+                        // event ahead of the driver's NetFailed — so a
+                        // permanently-failed leased net no longer strands its
+                        // runner/allocation (which would survive engine restart).
+                        let finalizer_events = drain_finalizers::<E, T, S>(
+                            events,
+                            topology,
+                            projection,
+                            executor,
+                            effect_handlers,
+                            execution_mode,
+                            replay_cursor,
+                            wf_id,
+                            cached_state,
+                            binding_memo,
+                            schema_registry,
+                            secret_store,
+                            net_parameters,
+                            pre_dispatch,
+                            dispatch_options,
+                        )
+                        .await;
+                        events_generated.extend(finalizer_events);
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
@@ -531,6 +591,27 @@ pub(crate) async fn evaluate_until_quiescent<
                             "{}",
                             synthesized
                         );
+                        // Release any held lease before teardown (same
+                        // failure-path cleanup as the permanent-error arm).
+                        let finalizer_events = drain_finalizers::<E, T, S>(
+                            events,
+                            topology,
+                            projection,
+                            executor,
+                            effect_handlers,
+                            execution_mode,
+                            replay_cursor,
+                            wf_id,
+                            cached_state,
+                            binding_memo,
+                            schema_registry,
+                            secret_store,
+                            net_parameters,
+                            pre_dispatch,
+                            dispatch_options,
+                        )
+                        .await;
+                        events_generated.extend(finalizer_events);
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
@@ -563,6 +644,108 @@ pub(crate) async fn evaluate_until_quiescent<
         terminal_reached: None,
         failure_reached: None,
     })
+}
+
+/// Drain a permanently-failing net's **finalizer** transitions before it is
+/// torn down, so any resource it still holds is released exactly-once on the
+/// failure path too.
+///
+/// A finalizer (`Transition::finalizer == true`, e.g. a `LeaseScope`'s
+/// `t_<id>_finally`) is never selected during normal evaluation — its only
+/// input is the still-parked held token, which exists for the whole scope
+/// lifetime, so a normal selection would steal the lease before the body runs.
+/// On the SUCCESS path the scope's `t_<id>_exit` consumes that held token, so
+/// here (Finalizing phase) the finalizer has no binding and the drain is a
+/// no-op. On the FAILURE path `t_<id>_exit` could never fire (gated on body
+/// completion), so the held token survives and the finalizer fires once,
+/// emitting the release to the pool net.
+///
+/// Each finalizer fires through the ordinary `fire_transition` path, so its
+/// release is a journaled `TransitionFired` (and the cross-net release bridge
+/// is published) BEFORE the driver appends `NetFailed`. On replay the release
+/// re-applies deterministically, so a restart never re-strands the unit. The
+/// memo is intentionally bypassed (`memo: None`) — finalizers never enter it —
+/// and the loop is bounded as a runaway backstop (one finalizer per held
+/// resource in practice). A finalizer that itself errors stops the drain
+/// (best-effort cleanup); the net still fails.
+#[allow(clippy::too_many_arguments)]
+async fn drain_finalizers<E: EventRepository, T: TopologyRepository, S: StateProjection>(
+    events: &E,
+    topology: &T,
+    projection: &S,
+    executor: &TransitionExecutor,
+    effect_handlers: &RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
+    execution_mode: &RwLock<ExecutionMode>,
+    replay_cursor: &RwLock<usize>,
+    wf_id: Option<uuid::Uuid>,
+    cached_state: &RwLock<Option<(u64, Marking)>>,
+    binding_memo: &RwLock<crate::binding_memo::BindingMemo>,
+    schema_registry: Option<&SchemaRegistry>,
+    secret_store: Option<&dyn SecretStore>,
+    net_parameters: Option<&serde_json::Value>,
+    pre_dispatch: Option<&PreDispatchRuntime>,
+    dispatch_options: &petri_domain::DispatchOptions,
+) -> Vec<PersistedEvent> {
+    /// Runaway backstop — far above any real net's held-resource count.
+    const MAX_FINALIZER_STEPS: usize = 64;
+
+    let mut fired = Vec::new();
+    for _ in 0..MAX_FINALIZER_STEPS {
+        let (marking, delta) = advance_marking(events, projection, cached_state).await;
+        // Honor the "every advance_marking reconciles the memo" invariant even
+        // on the teardown path (the net is about to die, but cached_state's
+        // cursor advanced — keep the two in lockstep).
+        reconcile_binding_memo(binding_memo, topology, &delta);
+
+        let next = match select_next_transition(
+            executor,
+            topology,
+            &marking,
+            schema_registry,
+            None,
+            SelectPhase::Finalizing,
+        ) {
+            Ok(Some(t)) => t,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(error = %e, "finalizer selection failed during teardown; stopping drain");
+                break;
+            }
+        };
+
+        let idx_before = events.len().await;
+        match fire_transition::<E, T, S>(
+            events,
+            topology,
+            executor,
+            effect_handlers,
+            execution_mode,
+            replay_cursor,
+            wf_id,
+            &marking,
+            next.clone(),
+            schema_registry,
+            secret_store,
+            net_parameters,
+            pre_dispatch,
+            dispatch_options,
+        )
+        .await
+        {
+            Ok(event) => fired.push(event),
+            Err(e) => {
+                tracing::warn!(
+                    transition_id = %next,
+                    error = %e,
+                    "finalizer firing failed during teardown; stopping drain (net still fails)"
+                );
+                // Surface any audit events the firing layer appended.
+                fired.extend(events.events_from(idx_before).await);
+                break;
+            }
+        }
+    }
+    fired
 }
 
 /// Check if any terminal place in the topology has tokens.
@@ -799,6 +982,146 @@ mod tests {
         m
     }
 
+    // ── Finalizer phase gate ────────────────────────────────────────────
+    //
+    // A finalizer transition (e.g. a LeaseScope's `t_<id>_finally`) is enabled
+    // by its own input arc (the held token) for the whole scope lifetime, so it
+    // must be invisible to NORMAL selection and visible ONLY to the post-failure
+    // Finalizing drain. This is the gate `drain_finalizers` relies on to release
+    // a held lease exactly-once on the failure path.
+
+    fn finalizer_gate_net() -> PetriNet {
+        let mut net = PetriNet::new();
+        net.add_place(Place::internal("p_trigger"));
+        net.add_place(Place::internal("p_held"));
+        net.add_place(Place::internal("p_out"));
+        net.add_place(Place::internal("p_release"));
+
+        // Ordinary work transition — eligible only in Normal phase.
+        net.add_transition(
+            Transition::new("t_normal", "#{ output: input }").with_input_port(Port::new("input")),
+        );
+        // Finalizer — eligible only in Finalizing phase.
+        net.add_transition(
+            Transition::new("t_finally", "#{ release: held }")
+                .with_input_port(Port::new("held"))
+                .with_finalizer(true),
+        );
+
+        let t_normal = TransitionId("t_normal".to_string());
+        let t_finally = TransitionId("t_finally".to_string());
+        net.add_arc(PetriArc::input(
+            PlaceId("p_trigger".to_string()),
+            t_normal.clone(),
+            "input",
+        ));
+        net.add_arc(PetriArc::output(
+            t_normal,
+            "output",
+            PlaceId("p_out".to_string()),
+        ));
+        net.add_arc(PetriArc::input(
+            PlaceId("p_held".to_string()),
+            t_finally.clone(),
+            "held",
+        ));
+        net.add_arc(PetriArc::output(
+            t_finally,
+            "release",
+            PlaceId("p_release".to_string()),
+        ));
+        net
+    }
+
+    fn finalizer_gate_marking(trigger: bool, held: bool) -> Marking {
+        let mut m = Marking::new();
+        if trigger {
+            m.add_token(
+                PlaceId("p_trigger".to_string()),
+                Token::new(TokenColor::Data(serde_json::json!({ "k": 1 }))),
+            );
+        }
+        if held {
+            m.add_token(
+                PlaceId("p_held".to_string()),
+                Token::new(TokenColor::Data(serde_json::json!({ "grant_id": "g1" }))),
+            );
+        }
+        m
+    }
+
+    #[test]
+    fn finalizer_never_selected_in_normal_phase() {
+        let exec = crate::TransitionExecutor::new();
+        let topo = TestTopology(Some(finalizer_gate_net()));
+
+        // Both enabled: Normal selects the ordinary transition, never the finalizer.
+        let picked = select_next_transition(
+            &exec,
+            &topo,
+            &finalizer_gate_marking(true, true),
+            None,
+            None,
+            SelectPhase::Normal,
+        )
+        .unwrap();
+        assert_eq!(picked, Some(TransitionId("t_normal".to_string())));
+
+        // Only the held token present (the body is gone): Normal finds NOTHING —
+        // the finalizer is gated out even though its input arc is satisfied.
+        let picked = select_next_transition(
+            &exec,
+            &topo,
+            &finalizer_gate_marking(false, true),
+            None,
+            None,
+            SelectPhase::Normal,
+        )
+        .unwrap();
+        assert_eq!(
+            picked, None,
+            "a finalizer must be invisible to normal selection even when enabled"
+        );
+    }
+
+    #[test]
+    fn finalizing_phase_selects_only_finalizers() {
+        let exec = crate::TransitionExecutor::new();
+        let topo = TestTopology(Some(finalizer_gate_net()));
+
+        // Held token present: the Finalizing drain picks the finalizer.
+        let picked = select_next_transition(
+            &exec,
+            &topo,
+            &finalizer_gate_marking(true, true),
+            None,
+            None,
+            SelectPhase::Finalizing,
+        )
+        .unwrap();
+        assert_eq!(
+            picked,
+            Some(TransitionId("t_finally".to_string())),
+            "Finalizing must release the held lease, ignoring the still-enabled ordinary transition"
+        );
+
+        // Held already released (success path consumed it): the drain is a no-op
+        // even though the ordinary transition is still enabled.
+        let picked = select_next_transition(
+            &exec,
+            &topo,
+            &finalizer_gate_marking(true, false),
+            None,
+            None,
+            SelectPhase::Finalizing,
+        )
+        .unwrap();
+        assert_eq!(
+            picked, None,
+            "Finalizing must ignore non-finalizer transitions entirely"
+        );
+    }
+
     #[test]
     fn cascade_keeps_declaration_order_despite_specificity() {
         let exec = crate::TransitionExecutor::new();
@@ -810,7 +1133,8 @@ mod tests {
         // has FEWER input arcs and the engine's specificity rule would favor
         // branch 1.
         let topo = TestTopology(Some(cascade_net("(d_prod.score > 0) && !(true)")));
-        let picked = select_next_transition(&exec, &topo, &marking, None, None).unwrap();
+        let picked =
+            select_next_transition(&exec, &topo, &marking, None, None, SelectPhase::Normal).unwrap();
         assert_eq!(
             picked,
             Some(TransitionId("t_dec_branch_0".to_string())),
@@ -822,7 +1146,9 @@ mod tests {
         // branch 1 wins purely on rule-2 specificity (2 input arcs > 1),
         // beating branch 0's higher priority. This is the regression.
         let topo_buggy = TestTopology(Some(cascade_net("d_prod.score > 0")));
-        let picked_buggy = select_next_transition(&exec, &topo_buggy, &marking, None, None).unwrap();
+        let picked_buggy =
+            select_next_transition(&exec, &topo_buggy, &marking, None, None, SelectPhase::Normal)
+                .unwrap();
         assert_eq!(
             picked_buggy,
             Some(TransitionId("t_dec_branch_1".to_string())),

@@ -350,6 +350,80 @@ mod presence_lease_tests {
         );
     }
 
+    /// The lease bridge emits a FAILURE-PATH release finalizer
+    /// (`t_<id>_finally`): marked `finalizer: true` (so the engine fires it only
+    /// during the post-failure drain, never normally), consuming the single
+    /// held token and emitting the SAME `grant_id` release the success-path
+    /// `t_<id>_exit` does. This is what stops a permanently-failed leased net
+    /// from stranding its held runner/allocation.
+    #[test]
+    fn lease_scope_emits_failure_release_finalizer() {
+        let air = compile(&presence_lease_graph());
+
+        let t = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("t_lease_finally"))
+            .expect("lease bridge must emit a t_<id>_finally release finalizer");
+
+        // It is a finalizer — never selected in normal evaluation.
+        assert_eq!(
+            t.get("finalizer").and_then(|v| v.as_bool()),
+            Some(true),
+            "t_lease_finally must carry finalizer: true; got:\n{t:#}"
+        );
+
+        // It consumes the single held token (release-exactly-once) — a
+        // CONSUMING arc (not a read arc) from the held place.
+        let held_arc = t
+            .get("inputs")
+            .and_then(|a| a.as_array())
+            .expect("inputs array")
+            .iter()
+            .find(|a| {
+                a.get("place").and_then(|v| v.as_str()) == Some("p_lease_held")
+            })
+            .expect("finalizer must consume p_lease_held");
+        assert_ne!(
+            held_arc.get("read").and_then(|v| v.as_bool()),
+            Some(true),
+            "the finalizer must CONSUME the held token, not read it"
+        );
+
+        // It emits the release on the release bridge with the same shape as exit.
+        let finally_logic = logic_source(&air, "t_lease_finally");
+        assert!(
+            finally_logic.contains("grant_id: held.grant_id"),
+            "finalizer release must carry the held grant_id; got:\n{finally_logic}"
+        );
+        let release_arc = t
+            .get("outputs")
+            .and_then(|a| a.as_array())
+            .expect("outputs array")
+            .iter()
+            .find(|a| a.get("place").and_then(|v| v.as_str()) == Some("p_lease_release_out"));
+        assert!(
+            release_arc.is_some(),
+            "finalizer must route its release to the pool release bridge"
+        );
+
+        // The normal exit is NOT a finalizer (it fires on body success).
+        let exit = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .unwrap()
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("t_lease_exit"))
+            .expect("t_lease_exit exists");
+        assert_ne!(
+            exit.get("finalizer").and_then(|v| v.as_bool()),
+            Some(true),
+            "the success-path exit must NOT be a finalizer"
+        );
+    }
+
     fn transition_ids(air: &serde_json::Value) -> Vec<String> {
         air.get("transitions")
             .and_then(|t| t.as_array())

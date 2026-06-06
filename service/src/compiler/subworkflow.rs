@@ -105,6 +105,7 @@ fn forward_transition(
         outputs: vec![arc(to_place, "tok")],
         guard: None,
         priority: None,
+        finalizer: false,
         logic: TransitionLogic::Rhai {
             source: "#{ tok: tok }".to_string(),
         },

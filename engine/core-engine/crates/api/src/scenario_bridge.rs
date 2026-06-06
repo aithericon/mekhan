@@ -130,6 +130,7 @@ impl ScenarioBridge {
             effect_config: None, // From top-level field if added
             guard,
             priority,
+            finalizer: transition.finalizer,
             simulation,
             group_id: transition.group_id.clone(),
             inputs: transition.inputs.iter().map(Self::convert_arc).collect(),

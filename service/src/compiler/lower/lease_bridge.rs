@@ -323,6 +323,42 @@ pub(super) fn emit_lease_bridge(
     ))
     .done();
 
+    // ── Failure-path lease release (engine FINALIZER) ───────────────────
+    // t_{id}_finally — release the held unit when the holder net FAILS
+    // permanently. The caller's normal release (`t_{id}_exit`) is gated on the
+    // body's completion token, so if any interior step fails permanently
+    // (throw → NetFailed) that exit can never fire and the single `p_held`
+    // token would strand the unit in the pool's `in_use` FOREVER — and because
+    // the hold is event-sourced, an engine restart replays it still-held, so a
+    // shared lab runner / datacenter alloc is lost until a manual reset.
+    //
+    // This transition consumes that SAME single `p_held` token and emits the
+    // release, so the lease is reclaimed exactly-once on the failure path too.
+    // It is marked `.finalizer()` so the engine NEVER selects it during normal
+    // evaluation (its only input — the held token — is present for the whole
+    // scope lifetime; a normal selection would release the lease before the
+    // body even runs). It fires ONLY during the engine's post-failure finalizer
+    // drain (`drain_finalizers`), as a journaled `TransitionFired` ahead of
+    // `NetFailed`, so the release survives restart.
+    //
+    // Release-exactly-once is preserved STRUCTURALLY: on success `t_{id}_exit`
+    // consumes `p_held` first, leaving the finalizer no token to bind; on
+    // failure `t_{id}_exit` never fired, so exactly one of the two consumes the
+    // single held token. (When the failure is a held-UNIT death — `t_reap_held`
+    // / `t_lease_died` already reclaimed the pool hold — this release simply
+    // finds no matching `in_use` hold and harmlessly orphans in the release
+    // inbox; the unit is not double-freed.) The release shape mirrors
+    // `t_{id}_exit` exactly so both pool backends correlate it on `grant_id`.
+    ctx.transition(
+        format!("t_{id}_finally"),
+        format!("{label} - Release on failure"),
+    )
+    .auto_input("held", &p_held)
+    .auto_output("release", &p_release_out)
+    .finalizer()
+    .logic_rhai("#{ release: #{ grant_id: held.grant_id } }")
+    .done();
+
     LeaseBridge {
         p_input,
         p_body_in,

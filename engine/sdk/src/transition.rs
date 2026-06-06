@@ -43,6 +43,8 @@ pub struct TransitionBuilder<'ctx> {
     outputs: Vec<ScenarioArc>,
     guard: Option<TransitionGuard>,
     priority: Option<TransitionPriority>,
+    /// Finalizer flag — fires only during the engine's post-failure drain.
+    finalizer: bool,
     logic: Option<TransitionLogic>,
     /// Collected input type names for schema composition
     input_types: Vec<String>,
@@ -73,6 +75,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             outputs: vec![],
             guard: None,
             priority: None,
+            finalizer: false,
             logic: None,
             input_types: vec![],
             output_types: vec![],
@@ -881,6 +884,19 @@ impl<'ctx> TransitionBuilder<'ctx> {
         self
     }
 
+    /// Mark this transition as a **finalizer**: it is NEVER selected during
+    /// normal evaluation and fires ONLY during the engine's post-failure
+    /// finalizer drain (see engine `evaluate_until_quiescent`). Use it to
+    /// release a resource the net still holds when it fails permanently — e.g.
+    /// a LeaseScope's held lease, whose normal release is gated on body success
+    /// and so can never fire on the failure path. The finalizer must be enabled
+    /// purely by its own input arcs (e.g. consume the single held token); do
+    /// NOT gate it on a guard that only the success path satisfies.
+    pub fn finalizer(mut self) -> Self {
+        self.finalizer = true;
+        self
+    }
+
     /// Annotate this transition as both starting and completing a process step.
     ///
     /// Convenience method that sets both `process_step_started` and `process_step_completed`
@@ -980,6 +996,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             outputs: self.outputs,
             guard,
             priority: self.priority,
+            finalizer: self.finalizer,
             logic,
             effect_config,
             caused_signals: self.caused_signals,
