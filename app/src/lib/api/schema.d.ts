@@ -9415,7 +9415,13 @@ export interface operations {
     };
     create_asset_type: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.
+                 *     Omitted → falls back to the body scope, then the caller's workspace.
+                 */
+                scope?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9650,7 +9656,13 @@ export interface operations {
     };
     create_asset: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.
+                 *     Omitted → falls back to the body scope, then the caller's workspace.
+                 */
+                scope?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;

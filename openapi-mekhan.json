@@ -228,6 +228,20 @@
         ],
         "summary": "`POST /api/v1/asset-types` — define a new schema. Editor-or-above gated.",
         "operationId": "create_asset_type",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.\nOmitted → falls back to the body scope, then the caller's workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -553,6 +567,20 @@
         ],
         "summary": "`POST /api/v1/assets` — create an empty asset of a given type. Records are\nwritten separately via `PUT /records` or `POST /import-csv`.",
         "operationId": "create_asset",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.\nOmitted → falls back to the body scope, then the caller's workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

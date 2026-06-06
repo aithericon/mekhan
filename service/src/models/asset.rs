@@ -328,6 +328,17 @@ pub struct ImportCsvParams {
 
 // ── Query params ───────────────────────────────────────────────────────────
 
+/// Query params for the asset/asset-type **create** endpoints. Lets callers
+/// specify the owner scope the same way the list endpoints do (`?scope=`),
+/// instead of (or in agreement with) the body's `scope_kind`/`scope_id`. When
+/// both are given they must agree; conflict → 400.
+#[derive(Debug, Default, Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct CreateScopeQuery {
+    /// Owner scope. Format: `workspace`, `folder:<uuid>`, or `template:<uuid>`.
+    /// Omitted → falls back to the body scope, then the caller's workspace.
+    pub scope: Option<String>,
+}
+
 /// Query params for `GET /api/v1/asset-types`.
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
 pub struct ListAssetTypesQuery {
