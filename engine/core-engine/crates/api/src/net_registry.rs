@@ -1431,6 +1431,26 @@ where
             .get(net_id)
             .ok_or_else(|| format!("Net '{}' not found", net_id))?;
 
+        // Failure-path parity for cancellation: fire any `t_<id>_finally`
+        // finalizer BEFORE NetCancelled tears the net down. A leased net's
+        // success-path release (`t_<id>_exit`) is gated on the body completing,
+        // so a net cancelled mid-run never releases — the single held token sits
+        // in the pool's `in_use` forever (event-sourced → survives restart →
+        // strands the runner/allocation). The drain journals the release ahead
+        // of NetCancelled, so the pool net frees the unit and a replay re-applies
+        // it. Generalizes the datacenter-only `release_held_leases_for_instance`
+        // pre-terminate hook to presence leases (and any held resource) at the
+        // petri level. No-op when nothing is held; single-token invariant keeps
+        // it release-exactly-once against a natural `t_exit`.
+        let finalizer_events = instance.service.drain_finalizers().await;
+        if !finalizer_events.is_empty() {
+            tracing::info!(
+                net_id = %net_id,
+                count = finalizer_events.len(),
+                "terminate: drained finalizers (released held resources before teardown)"
+            );
+        }
+
         // Emit NetCancelled event
         let event = petri_domain::DomainEvent::NetCancelled {
             net_id: net_id.to_string(),
