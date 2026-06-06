@@ -16,12 +16,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::traits::{EventStream, ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
-    ExecutionJob, ExecutionOutcome, ExecutionSpec, ExecutionStatus, JobPriority, RunContext,
-    RunDirectory,
+    ExecutionJob, ExecutionOutcome, ExecutionSpec, ExecutionStatus, JobPriority, LogLevel,
+    RunContext, RunDirectory,
 };
 use aithericon_executor_file_ops::FileOpsBackend;
+use async_trait::async_trait;
 use opendal::Operator;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -1414,6 +1415,248 @@ async fn backend_input_resolution_with_string_interpolation() {
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&inputs_dir);
+}
+
+// ---------------------------------------------------------------------------
+// Crawl op tests — recursive streaming walk with a capturing EventStream
+// ---------------------------------------------------------------------------
+
+/// A recorded `item` emission from the crawl op.
+#[derive(Clone)]
+struct ItemCall {
+    channel: String,
+    episode_uid: String,
+    idx: u64,
+    payload: Value,
+}
+
+/// A recorded `close` emission.
+#[derive(Clone)]
+struct CloseCall {
+    channel: String,
+    episode_uid: String,
+    count: u64,
+}
+
+/// Capturing `EventStream` — records every `item`/`close` the crawl op emits so
+/// the test can assert batch count, file count, and per-entry sizes.
+#[derive(Default)]
+struct CapturingEventStream {
+    items: Mutex<Vec<ItemCall>>,
+    closes: Mutex<Vec<CloseCall>>,
+}
+
+#[async_trait]
+impl EventStream for CapturingEventStream {
+    async fn log(&self, _level: LogLevel, _message: String, _fields: HashMap<String, String>) {}
+
+    async fn item(&self, channel: String, episode_uid: String, idx: u64, payload: Value) {
+        self.items.lock().unwrap().push(ItemCall {
+            channel,
+            episode_uid,
+            idx,
+            payload,
+        });
+    }
+
+    async fn close(&self, channel: String, episode_uid: String, count: u64) {
+        self.closes.lock().unwrap().push(CloseCall {
+            channel,
+            episode_uid,
+            count,
+        });
+    }
+}
+
+#[tokio::test]
+async fn backend_crawl_streams_batches() {
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+
+    // Seed a nested tree: 5 files across nested subdirs, each non-empty so we
+    // can prove per-entry stat populated `size`.
+    env.operator.write("nas/a.txt", "aaaa").await.unwrap();
+    env.operator.write("nas/b.txt", "bbbbbb").await.unwrap();
+    env.operator
+        .write("nas/sub/c.txt", "cc")
+        .await
+        .unwrap();
+    env.operator
+        .write("nas/sub/deep/d.txt", "dddddddd")
+        .await
+        .unwrap();
+    env.operator
+        .write("nas/sub/deep/e.txt", "ee")
+        .await
+        .unwrap();
+    let expected_files = 5u64;
+
+    // batch_size = 2 → expect ceil(5/2) = 3 item batches + 1 close.
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 2,
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    let stream = Arc::new(CapturingEventStream::default());
+    let result = backend
+        .execute(
+            &ctx,
+            noop_callback(),
+            Some(stream.clone()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::Success),
+        "expected Success, got {:?}",
+        result.outcome
+    );
+    assert_eq!(result.outputs["count"], serde_json::json!(expected_files));
+    assert_eq!(result.outputs["batches"], serde_json::json!(3));
+    assert_eq!(result.outputs["cancelled"], serde_json::json!(false));
+
+    // -- close: exactly one, count == file count --
+    let closes = stream.closes.lock().unwrap().clone();
+    assert_eq!(closes.len(), 1, "expected exactly one close call");
+    assert_eq!(closes[0].channel, "crawl");
+    assert_eq!(closes[0].count, expected_files);
+
+    // -- items: 3 batches, all sharing the close's episode_uid --
+    let items = stream.items.lock().unwrap().clone();
+    assert_eq!(items.len(), 3, "expected 3 item batches for 5 files @ batch=2");
+    let episode = &closes[0].episode_uid;
+    for (i, item) in items.iter().enumerate() {
+        assert_eq!(item.channel, "crawl");
+        assert_eq!(&item.episode_uid, episode, "all items share the episode uid");
+        assert_eq!(item.idx, i as u64, "item idx is 0-based and monotonic");
+    }
+
+    // -- emitted entries: count matches, sizes non-zero (proves per-entry stat),
+    //    paths are user-facing (prefix stripped), every seeded file present --
+    let mut total_entries = 0u64;
+    let mut seen_paths: Vec<String> = Vec::new();
+    for item in &items {
+        let arr = item.payload["items"].as_array().expect("items array");
+        for e in arr {
+            total_entries += 1;
+            let size = e["size"].as_u64().expect("size");
+            assert!(size > 0, "per-entry stat must yield non-zero size: {e}");
+            let path = e["path"].as_str().expect("path").to_string();
+            // mtime present (fs backend reports last_modified)
+            assert!(e.get("mtime").is_some(), "mtime key present");
+            seen_paths.push(path);
+        }
+    }
+    assert_eq!(total_entries, expected_files);
+    // Storage prefix is empty here, so paths carry the walked `config.prefix`
+    // ("nas/"); only the *storage* prefix is stripped (covered by with_prefix).
+    for f in [
+        "nas/a.txt",
+        "nas/b.txt",
+        "nas/sub/c.txt",
+        "nas/sub/deep/d.txt",
+        "nas/sub/deep/e.txt",
+    ] {
+        assert!(
+            seen_paths.iter().any(|p| p == f),
+            "expected crawled path {f}, got {seen_paths:?}"
+        );
+    }
+
+    // last_path is one of the crawled files (resume cursor).
+    let last = result.outputs["last_path"].as_str().unwrap();
+    assert!(seen_paths.iter().any(|p| p == last));
+}
+
+#[tokio::test]
+async fn backend_crawl_strips_storage_prefix() {
+    // With a storage prefix, crawl returns user-facing paths (prefix stripped),
+    // mirroring `list`'s behavior.
+    let env = TestEnv::with_prefix("tenant-a/");
+    let backend = FileOpsBackend::new();
+    env.operator
+        .write("tenant-a/nas/one.txt", "11")
+        .await
+        .unwrap();
+    env.operator
+        .write("tenant-a/nas/two.txt", "222")
+        .await
+        .unwrap();
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 10,
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    let stream = Arc::new(CapturingEventStream::default());
+    let result = backend
+        .execute(
+            &ctx,
+            noop_callback(),
+            Some(stream.clone()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(result.outcome, ExecutionOutcome::Success));
+    assert_eq!(result.outputs["count"], serde_json::json!(2));
+
+    let items = stream.items.lock().unwrap().clone();
+    let mut paths: Vec<String> = Vec::new();
+    for item in &items {
+        for e in item.payload["items"].as_array().unwrap() {
+            paths.push(e["path"].as_str().unwrap().to_string());
+        }
+    }
+    assert!(paths.contains(&"nas/one.txt".to_string()), "got {paths:?}");
+    assert!(paths.contains(&"nas/two.txt".to_string()), "got {paths:?}");
+    // The storage prefix must NOT leak into emitted paths.
+    assert!(
+        paths.iter().all(|p| !p.starts_with("tenant-a/")),
+        "storage prefix leaked: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn backend_crawl_no_event_stream_still_counts() {
+    // Without an EventStream the op still walks + reports count/last_path
+    // (the direct-call / small-crawl path).
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+    env.operator.write("nas/x.txt", "xx").await.unwrap();
+    env.operator.write("nas/y/z.txt", "zzz").await.unwrap();
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(matches!(result.outcome, ExecutionOutcome::Success));
+    assert_eq!(result.outputs["count"], serde_json::json!(2));
+    // default batch_size (5000) ⇒ a single trailing batch ⇒ batches == 1
+    assert_eq!(result.outputs["batches"], serde_json::json!(1));
 }
 
 #[tokio::test]

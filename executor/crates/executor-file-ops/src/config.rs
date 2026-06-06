@@ -6,6 +6,6 @@
 //! JSON shape that crosses the wire.
 
 pub use aithericon_executor_backend_configs::file_ops::{
-    AnnotateConfig, Compression, CopyConfig, DeleteConfig, FileOpsConfig, ListConfig, MoveConfig,
-    ProbeConfig, StatConfig,
+    AnnotateConfig, Compression, CopyConfig, CrawlConfig, DeleteConfig, FileOpsConfig, ListConfig,
+    MoveConfig, ProbeConfig, StatConfig,
 };

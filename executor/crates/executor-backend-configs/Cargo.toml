@@ -13,6 +13,11 @@ serde.workspace = true
 serde_json.workspace = true
 aithericon-executor-domain.workspace = true
 aithericon-executor-storage-types.workspace = true
+# Only `ChecksumAlgorithm` (a tiny enum) is needed here for `ProbeConfig`.
+# Direct path dep with default-features=false (NOT the workspace dep, which
+# pins the heavy format-extraction features) keeps parquet/hdf5/… out of this
+# lightweight config crate.
+aithericon-file-metadata = { path = "../../../shared/file-metadata", package = "fmeta", default-features = false }
 utoipa = { workspace = true, optional = true }
 
 [features]

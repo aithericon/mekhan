@@ -11,6 +11,14 @@ license-file = "../LICENSE-FSL"
 name = "mekhan"
 path = "src/bin/cli/main.rs"
 
+# Offline legacy ArangoDB dump importer (docs/32 Phase 2). Streams the dumped
+# `files` / `files_to_delete` collections (NDJSON, gz-aware) into the
+# legacy staging tables via Postgres COPY, then set-dedups into the
+# content-addressed catalogue. Reuses mekhan_service::db::create_pool.
+[[bin]]
+name = "mekhan-importer"
+path = "src/bin/importer/main.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["json", "query", "ws", "multipart"] }
@@ -76,6 +84,10 @@ nkeys = "0.4"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# gz decompression for the offline importer (real dump collections are
+# `*.data.json.gz`). Already a transitive dep; pin it directly for the bin.
+flate2 = "1"
 
 # Error handling
 thiserror = "2"
