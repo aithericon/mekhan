@@ -64,15 +64,35 @@
 	// `silent` refetches (driven by the live SSE stream below) update
 	// instance/processes in place without toggling `ctx.loading`, so the live
 	// status updates never flash the page-level loading spinner.
+	// Structural equality via JSON. The instance / process DTOs are plain JSON
+	// with stable key order across calls, so this is a cheap, sufficient change
+	// detector — and it lets us keep ctx object identity stable across no-op
+	// refetches (see reload()).
+	function jsonEqual(a: unknown, b: unknown): boolean {
+		return JSON.stringify(a) === JSON.stringify(b);
+	}
+
 	async function reload({ silent = false }: { silent?: boolean } = {}) {
 		if (!silent) ctx.loading = true;
 		ctx.error = null;
 		try {
-			ctx.instance = await getInstance(ctx.instanceId);
+			// Only REASSIGN when the payload actually changed. reload() fires on a
+			// debounced SSE trigger throughout a run and getInstance() returns a
+			// fresh object every call, so an unconditional assignment would flip
+			// ctx.instance's identity on every tick even when nothing the UI shows
+			// moved. Every tab takes `instance` as a prop, so that identity churn
+			// re-runs child $effects — closing the workflow drawer and tearing the
+			// live Channels player down before it can paint. A no-op refetch must
+			// be a no-op for reactivity.
+			const nextInstance = await getInstance(ctx.instanceId);
+			if (!ctx.instance || !jsonEqual(ctx.instance, nextInstance)) {
+				ctx.instance = nextInstance;
+			}
 			try {
-				ctx.processes = (await listProcessesByInstance(ctx.instanceId)).items;
+				const nextProcesses = (await listProcessesByInstance(ctx.instanceId)).items;
+				if (!jsonEqual(ctx.processes, nextProcesses)) ctx.processes = nextProcesses;
 			} catch {
-				ctx.processes = [];
+				if (ctx.processes.length) ctx.processes = [];
 			}
 		} catch (e) {
 			ctx.error = e instanceof Error ? e.message : 'Failed to load instance';
@@ -93,12 +113,21 @@
 	let sseConnection: SseConnection | null = null;
 	let refetchTimer: ReturnType<typeof setTimeout> | null = null;
 
+	// Per-token / per-effect value events fire hundreds of times a second during
+	// a run (a streaming workflow emits one TokenCreated + EffectCompleted per
+	// frame). They never change the header summary the layout owns
+	// (status / current_step / process), so they must NOT drive a header
+	// refetch — otherwise the running phase floods the API (~20 req/s) and
+	// churns every tab. Structural events (TransitionFired, NetInitialized, …)
+	// still trigger one coalesced refetch; `result` is handled separately.
+	const HEADER_NOISE_EVENTS = new Set(['TokenCreated', 'EffectCompleted']);
+
 	function scheduleRefetch() {
 		if (refetchTimer !== null) return;
 		refetchTimer = setTimeout(() => {
 			refetchTimer = null;
 			reload({ silent: true });
-		}, 250);
+		}, 1000);
 	}
 
 	let terminalPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -158,7 +187,7 @@
 					// Terminal: refetch until the row lands a terminal status
 					// (closing the lifecycle-consumer race), then close.
 					reloadUntilTerminal(10);
-				} else if (event !== 'connected') {
+				} else if (event !== 'connected' && !HEADER_NOISE_EVENTS.has(event)) {
 					scheduleRefetch();
 				}
 			}
