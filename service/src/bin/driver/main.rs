@@ -80,6 +80,58 @@ enum Command {
         #[arg(long)]
         file_server_id: String,
     },
+
+    /// Copy bytes from a source server to a target server (REAL copy op),
+    /// verify each copy by re-probing the destination (REAL probe op), and
+    /// record a `copied` inventory row per verified copy. NEVER deletes.
+    ///
+    /// Selector: `--hash <h>` migrates that one content hash; `--all-canonical`
+    /// migrates every `is_canonical` source row (add `--respect-target` to take
+    /// only rows whose `migration_target` is the target server).
+    Migrate {
+        /// Source file-server identifier.
+        #[arg(long)]
+        source_server: String,
+        /// Absolute root directory of the SOURCE synthetic NAS.
+        #[arg(long)]
+        source_root: String,
+        /// Target file-server identifier (recorded on the copied rows).
+        #[arg(long)]
+        target_server: String,
+        /// Absolute root directory of the TARGET synthetic NAS.
+        #[arg(long)]
+        target_root: String,
+        /// Migrate only this content hash.
+        #[arg(long, conflicts_with = "all_canonical")]
+        hash: Option<String>,
+        /// Migrate every `is_canonical` source row.
+        #[arg(long, conflicts_with = "hash")]
+        all_canonical: bool,
+        /// With `--all-canonical`, restrict to rows whose `migration_target`
+        /// equals `--target-server`.
+        #[arg(long, requires = "all_canonical")]
+        respect_target: bool,
+    },
+
+    /// Delete source copies on a server (REAL delete op) — but ONLY for rows
+    /// where a verified copy survives on a DIFFERENT server
+    /// (`status IN ('copied','verified')`, same `content_hash`). Rows without a
+    /// surviving verified copy are SKIPPED, never deleted.
+    Retire {
+        /// File-server identifier to retire copies from.
+        #[arg(long)]
+        server: String,
+        /// Absolute root directory of the synthetic NAS to delete from.
+        #[arg(long)]
+        root: String,
+        /// Restrict candidates to rows whose `content_hash` is in
+        /// `legacy_delete_queue` (the surviving-copy gate STILL applies).
+        #[arg(long)]
+        honor_delete_queue: bool,
+        /// List eligible rows but delete NOTHING on disk and change no status.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -144,6 +196,52 @@ async fn main() -> Result<()> {
                 nas.mismatch.path,
                 nas.orphan_disk.path,
                 nas.orphan_db_path
+            );
+        }
+        Command::Migrate {
+            source_server,
+            source_root,
+            target_server,
+            target_root,
+            hash,
+            all_canonical,
+            respect_target,
+        } => {
+            let selector = if let Some(h) = hash {
+                migration_driver::MigrateSelector::Hash(h)
+            } else if all_canonical {
+                migration_driver::MigrateSelector::AllCanonical { respect_target }
+            } else {
+                anyhow::bail!("migrate: pass either --hash <h> or --all-canonical");
+            };
+            let counts = migration_driver::migrate(
+                &pool,
+                &source_server,
+                &source_root,
+                &target_server,
+                &target_root,
+                selector,
+            )
+            .await
+            .context("migrate")?;
+            println!(
+                "migrate: copied={} verified={} failed={}",
+                counts.copied, counts.verified, counts.failed
+            );
+        }
+        Command::Retire {
+            server,
+            root,
+            honor_delete_queue,
+            dry_run,
+        } => {
+            let counts =
+                migration_driver::retire(&pool, &server, &root, honor_delete_queue, dry_run)
+                    .await
+                    .context("retire")?;
+            println!(
+                "retire: deleted={} skipped_no_verified_copy={} deleted_from_queue={} dry_run={}",
+                counts.deleted, counts.skipped_no_verified_copy, counts.deleted_from_queue, dry_run
             );
         }
     }

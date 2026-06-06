@@ -169,6 +169,65 @@ The e2e test `service/tests/driver_pipeline.rs` (gated on `MEKHAN__DATABASE_URL`
 `test-drv-<uuid>` server, RAII cleanup) builds a synthetic tree + baseline, runs both phases,
 and asserts the four reconcile classes end-to-end.
 
+### Phase 6 — MIGRATE + RETIRE (the destructive end)
+
+Phase 6 adds the campaign's two terminal stages to the SAME `legacy-migration-driver` bin
+(`service/src/migration_driver/migrate.rs`, two new clap subcommands), exercising the **REAL**
+`executor-file-ops` `copy` / `probe` / `delete` ops **in-process** against a synthetic
+**2-server NAS** (two local roots standing in for two NFS mounts):
+
+```text
+migrate(serverA → serverB)              retire(serverA)
+  copy bytes      (REAL copy op)          eligible IFF a sibling inventory row has the
+  probe dest      (REAL probe op)           SAME content_hash on a DIFFERENT server with
+  verify hash == content_hash               status IN ('copied','verified')
+  INSERT copied row on B                  delete src (REAL delete op) → status='deleted'
+```
+
+- **`migrate(source_server, source_root, target_server, target_root, selector)`** → `copied /
+  verified / failed`. The selector is a single `content_hash` **or** every `is_canonical`
+  source row (optionally filtered to `migration_target == target_server`). Per row: run the
+  REAL copy op (`source = destination = row.path`, same relative path; `source_storage =
+  Local(source_root)`, `destination_storage = Local(target_root)` — the streaming cross-root
+  path), then VERIFY by running the REAL probe op on the destination and comparing its bare-hex
+  SHA-256 `checksum_digest` to the row's `content_hash`. On match: UPSERT a new `file_inventory`
+  row (`file_server_id = target_server`, `status = 'copied'`, `copy_of = source id`,
+  `is_canonical = false`) on `(file_server_id, path)`. On mismatch / copy error: record the
+  reason in the source row's `provenance.migrate_error`, count it failed, create NO copied row.
+  **`migrate` NEVER deletes anything.**
+- **`retire(server, root, honor_delete_queue, dry_run)`** → `deleted /
+  skipped_no_verified_copy / deleted_from_queue`. The **hard safety gate**: a source row is
+  eligible for deletion **only if** a sibling `file_inventory` row exists with the SAME
+  `content_hash`, a DIFFERENT `file_server_id`, and `status IN ('copied','verified')` — i.e. a
+  verified copy survives elsewhere. This `EXISTS` predicate is computed in SQL
+  (`eligible_for_deletion`); there is **no code path that runs the delete op without it**. With
+  `honor_delete_queue`, the candidate set is restricted to rows whose `content_hash` is in
+  `legacy_delete_queue`, but the surviving-copy gate STILL applies (a queued deletion with no
+  surviving copy is skipped, never deleted). Eligible rows (non-`dry_run`) get the REAL delete
+  op (`ignore_missing = false`) and `status = 'deleted'`; rows without a surviving copy are
+  counted `skipped_no_verified_copy` and left untouched. `dry_run` lists eligible rows but
+  deletes nothing on disk and changes no status.
+
+Subcommands: `migrate --source-server <id> --source-root <dir> --target-server <id>
+--target-root <dir> [--hash <h> | --all-canonical [--respect-target]]` and `retire --server
+<id> --root <dir> [--honor-delete-queue] [--dry-run]`.
+
+> **Transport (deferred "real operations").** As with Phases 3–5, the copy/probe/delete ops run
+> **in-process** here as the dev/scaffold harness; in production these SAME ops run over NATS on
+> co-located runners (the deferred SSH-deployed-runner layer). Only the op-invocation seam
+> changes — the migrate/retire campaign logic (selector → copy → verify → gated delete) is
+> transport-agnostic. **This completes the build up to the point of real operations.**
+
+The e2e test `service/tests/driver_migrate.rs` (gated on `MEKHAN__DATABASE_URL`, unique
+`test-mig-<uuid>-{a,b}` servers, RAII cleanup of both tempdirs + all rows) builds two synthetic
+roots and asserts: after `migrate`, the bytes exist on server B's disk with a matching probe
+hash and a `copied` inventory row (`copy_of` = the A row id); after `retire` server A, the
+migrated file is removed from A's disk and its row is `deleted` (because the verified B copy
+exists); a second A-only file with no copy is **SKIPPED** (still on disk, status unchanged,
+counted `skipped_no_verified_copy`); a delete-queue member with a surviving copy is deleted with
+`--honor-delete-queue` while one without is skipped; and `--dry-run` lists an eligible row but
+deletes nothing on disk and changes no status.
+
 ## Build: worktree + Workflow
 
 **Setup (serial, once):** `just dev::worktree-add legacy-migration` (auto-slot, ports, .envrc) on

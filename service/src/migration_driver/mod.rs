@@ -42,7 +42,12 @@ use tracing::{debug, info, warn};
 
 use crate::inventory::reconcile::{reconcile_batch, ObservedItem, ReconcileCounts};
 
+pub mod migrate;
 pub mod synthetic;
+
+pub use migrate::{
+    migrate, retire, MigrateCounts, MigrateSelector, RetireCounts,
+};
 
 /// Errors surfaced by the driver pipeline.
 #[derive(Debug, thiserror::Error)]
@@ -77,7 +82,7 @@ pub fn local_storage(root: &str) -> StorageConfig {
 
 /// Build an OpenDAL [`Operator`] from a [`StorageConfig`] — the exact path the
 /// file-ops backend uses (`aithericon_executor_storage::build_operator`).
-fn operator_for(storage: &StorageConfig) -> Result<Operator, DriverError> {
+pub(crate) fn operator_for(storage: &StorageConfig) -> Result<Operator, DriverError> {
     build_operator(storage).map_err(|e| DriverError::Storage(e.to_string()))
 }
 
