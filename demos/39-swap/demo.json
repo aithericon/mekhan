@@ -1,6 +1,7 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000390",
-  "folder": "robotics",
+  "visibility": "private",
+  "ownerTemplateId": "00000000-0000-0000-0000-000000000400",
   "name": "39 · xArm Swap (compose pick + place)",
   "description": "Child SubWorkflow that swaps the occupant of an instrument port with a new sample from the rack, by composing the 37-pick and 38-place sub-templates. Four staged SubWorkflow calls: pick the occupant out of the port → place it in the temp rack slot → pick the new sample from the rack → place the new sample into the port. Pure composition: no ROS AutomatedStep of its own, it only wires Start.initial poses into the child pick/place templates and reports swapped=true at the End. Not directly runnable — consumed by 40-sample-handling."
 }
