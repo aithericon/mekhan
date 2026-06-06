@@ -651,12 +651,10 @@ async fn baseline_no_options_yields_consistent_event_stream_shape() {
                     normalise(item);
                 }
             }
-            Value::String(s) => {
-                // Bare-string UUIDs (e.g., inside tuple-arrays where token IDs
-                // appear without a key wrapping them).
-                if uuid::Uuid::parse_str(s).is_ok() {
-                    *s = "<uuid>".to_string();
-                }
+            // Bare-string UUIDs (e.g., inside tuple-arrays where token IDs
+            // appear without a key wrapping them).
+            Value::String(s) if uuid::Uuid::parse_str(s).is_ok() => {
+                *s = "<uuid>".to_string();
             }
             _ => {}
         }

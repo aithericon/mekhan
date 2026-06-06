@@ -700,6 +700,57 @@ where
         .await
     }
 
+    /// Force the finalizer drain on a teardown that is NOT a permanent failure
+    /// — i.e. cancellation. The normal failure path runs the same drain inside
+    /// `evaluate_until_quiescent`'s permanent-error arm; cancellation tears the
+    /// net down without ever reaching it, so a leased net cancelled mid-run
+    /// would strand its held lease (its `t_<id>_exit` is gated on body success,
+    /// which never arrives). Running the drain here fires each `t_<id>_finally`
+    /// once, journaling the release ahead of the impending `NetCancelled` so the
+    /// pool net frees the unit and a replay re-applies the release.
+    ///
+    /// No-op when nothing is held (the single held-token invariant means the
+    /// success path already consumed it). Returns the fired events for logging.
+    /// Unlike `evaluate_until_quiescent` this BLOCKS on the eval lock rather than
+    /// bailing if busy — the drain must run before teardown (the caller has
+    /// already stopped the net, so the loop is not advancing).
+    pub async fn drain_finalizers(&self) -> Vec<PersistedEvent> {
+        let _guard = self.eval_lock.lock().await;
+
+        let registry = self.schema_registry();
+        let config = self.execution_config();
+        let registry_ref = if config.validate_output_schemas {
+            registry.as_deref()
+        } else {
+            None
+        };
+        let secrets = self.secret_store();
+        let params = self.net_parameters();
+        let rt = self.pre_dispatch_runtime();
+        let dispatch_options = self.dispatch_options_snapshot();
+        // `drain_finalizers` takes the workflow id by value (the failure-path
+        // caller resolves it from the lock before invoking); mirror that here.
+        let wf_id = *self.workflow_id.read().unwrap();
+        evaluation::drain_finalizers(
+            self.events.as_ref(),
+            self.topology.as_ref(),
+            self.projection.as_ref(),
+            &self.executor,
+            &self.effect_handlers,
+            &self.execution_mode,
+            &self.replay_cursor,
+            wf_id,
+            &self.cached_state,
+            &self.binding_memo,
+            registry_ref,
+            secrets.as_deref(),
+            params.as_ref(),
+            rt.as_deref(),
+            &dispatch_options,
+        )
+        .await
+    }
+
     // ========================================================================
     // State queries
     // ========================================================================
