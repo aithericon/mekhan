@@ -134,8 +134,24 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // because that raw envelope had the executor's `outputs.<field>` at
     // depth-1; once publish.rs filters reply sources to End-derived terminals
     // only, the join MUST unwrap the `exit_code.value` envelope.
+    // A NON-terminal SubWorkflow inside a Map body must thread the Map
+    // correlation leaves (`__map_idx`/`__map_id`) from the child's reply onto its
+    // output, so they reach the body terminal (whose executor envelope the Map's
+    // gather reads) and the gather can correlate. They threaded INTO the child via
+    // the shape graft and ride back on the End's full-token reply. Without this,
+    // the join projects only declared fields → the terminal's result lands at the
+    // gather with `__map_id: ()` and the barrier never fires → the Map (and any
+    // enclosing lease) wedges. Guarded on presence, and only emitted in a Map body
+    // (the terminal SubWorkflow uses `join_logic_map`, which already grafts).
+    let map_corr_graft = if map_item_var.is_some() {
+        r#" if type_of(reply) == "map" { if "__map_idx" in reply { __o.__map_idx = reply.__map_idx; } if "__map_id" in reply { __o.__map_id = reply.__map_id; } }"#
+    } else {
+        ""
+    };
     let join_logic = if output.fields.is_empty() {
-        r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code { reply.exit_code.value } else { reply }; #{ output: __v }"#.to_string()
+        format!(
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = __v;{map_corr_graft} #{{ output: __o }}"#
+        )
     } else {
         let entries: Vec<String> = output
             .fields
@@ -146,7 +162,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
             })
             .collect();
         format!(
-            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; #{{ output: #{{ {} }} }}"#,
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = #{{ {} }};{map_corr_graft} #{{ output: __o }}"#,
             entries.join(", ")
         )
     };
@@ -228,32 +244,25 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     );
 
     // Shape: upstream token → spawn request { initial_token, target_place }.
-    // A Map body terminal grafts the correlation leaves onto `initial_token`
-    // so they thread INTO the child (and back out on the reply — see the gate
-    // comment); no side place, no second transition.
-    if is_map_body_terminal {
-        ctx.transition(
-            format!("t_{id}_shape"),
-            format!("{label} - Prepare Sub-workflow"),
-        )
-        .auto_input("input", &p_input)
-        .auto_output("spawn_request", &p_request)
-        .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }}{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
-        )))
-        .done();
-    } else {
-        ctx.transition(
-            format!("t_{id}_shape"),
-            format!("{label} - Prepare Sub-workflow"),
-        )
-        .auto_input("input", &p_input)
-        .auto_output("spawn_request", &p_request)
-        .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr});{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
-        )))
-        .done();
-    }
+    // Graft the Map correlation leaves (`__map_idx`/`__map_id`) onto
+    // `initial_token` so they thread INTO the child and echo back on the reply.
+    // This is required for ANY SubWorkflow inside a Map body — not only the
+    // terminal: a non-terminal body SubWorkflow (e.g. demo 40's `do_pick`,
+    // followed by a `mark_done` terminal) must carry the correlation through its
+    // spawn→reply cycle, or the downstream terminal's output reaches the gather
+    // with no `__map_id` and the gather barrier never correlates → the Map (and
+    // the enclosing lease) wedges. The graft is guarded by `"__map_idx" in input`,
+    // so it is a runtime no-op for a SubWorkflow that is not in a Map body.
+    ctx.transition(
+        format!("t_{id}_shape"),
+        format!("{label} - Prepare Sub-workflow"),
+    )
+    .auto_input("input", &p_input)
+    .auto_output("spawn_request", &p_request)
+    .logic_rhai(with_pluck_prelude(&format!(
+        r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }}{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+    )))
+    .done();
 
     // Spawn effect: embed the made-callable child AIR; the handler injects
     // `parent_net_id` and merges `reply_place`/`failure_place` into the child's
