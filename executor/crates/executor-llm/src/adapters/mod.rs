@@ -6,6 +6,12 @@ pub mod openai;
 #[cfg(feature = "vllm")]
 pub mod vllm;
 
+/// Unified model-pool control backend (vLLM admin OR Ollama runtime) — the
+/// Metal-native path for Apple Silicon. Gated behind the `vllm` (model-pool
+/// node agent) feature.
+#[cfg(feature = "vllm")]
+pub mod model_control;
+
 use std::sync::Arc;
 
 use crate::config::Provider;

@@ -40,7 +40,9 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use aithericon_executor_llm::{LoadTarget, LoadedModel, ModelCommand, VllmAdapter};
+use aithericon_executor_llm::{
+    LoadTarget, LoadedModel, ModelBackend, ModelCommand, OllamaControlAdapter, VllmAdapter,
+};
 use aithericon_executor_worker::{ExecutorConfig, LiveModelState, ModelAgentSettings};
 
 /// Spawn the model-pool node agent as fire-and-forget background work.
@@ -77,7 +79,20 @@ pub fn spawn_model_agent(
     };
 
     tokio::spawn(async move {
-        let adapter = VllmAdapter::new(ma.vllm_url.clone());
+        // Select the control backend: vLLM admin surface (default) or the
+        // Metal-native Ollama runtime. `vllm_url` is the endpoint for whichever.
+        let adapter = match ma.backend.as_deref().unwrap_or("vllm") {
+            "ollama" => {
+                info!(%runner_id, endpoint = %ma.vllm_url, "model agent backend: ollama (Metal runtime)");
+                ModelBackend::Ollama(OllamaControlAdapter::new(ma.vllm_url.clone()))
+            }
+            other => {
+                if other != "vllm" {
+                    warn!(%runner_id, backend = %other, "unknown model_agent backend; defaulting to vllm");
+                }
+                ModelBackend::Vllm(VllmAdapter::new(ma.vllm_url.clone()))
+            }
+        };
 
         // Read the rnr_ token once (mirrors ros_catalog's read-from-path).
         let token = match read_runner_token(&token_path) {
@@ -140,7 +155,7 @@ fn read_runner_token(token_path: &std::path::Path) -> Result<String, String> {
 
 /// Probe vLLM, build the catalog, publish it, and refresh the live state.
 async fn probe_and_publish(
-    adapter: &VllmAdapter,
+    adapter: &ModelBackend,
     ma: &ModelAgentSettings,
     runner_id: &str,
     mekhan_url: &str,
@@ -169,7 +184,7 @@ async fn probe_and_publish(
 #[allow(clippy::too_many_arguments)]
 async fn run_command_listener(
     client: async_nats::Client,
-    adapter: VllmAdapter,
+    adapter: ModelBackend,
     ma: ModelAgentSettings,
     runner_id: String,
     mekhan_url: String,
@@ -232,7 +247,7 @@ async fn run_command_listener(
 /// `load_lora_adapter`/`unload_lora_adapter`; Base load/unload → `wake_up`/
 /// `sleep` (base swap). All calls are 404-tolerant in the adapter; a real error
 /// is logged here (best-effort — never crashes the listener).
-async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
+async fn apply_command(adapter: &ModelBackend, cmd: &ModelCommand) {
     let result = match cmd {
         ModelCommand::Load {
             target:
@@ -242,7 +257,7 @@ async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
                     ..
                 },
         } => {
-            // A load with no source is a no-op we surface, not a vLLM call.
+            // A load with no source is a no-op we surface, not a backend call.
             match source_uri {
                 Some(src) => adapter.load_lora(adapter_id, src).await,
                 None => {
@@ -254,13 +269,14 @@ async fn apply_command(adapter: &VllmAdapter, cmd: &ModelCommand) {
         ModelCommand::Unload {
             target: LoadTarget::Lora { adapter_id, .. },
         } => adapter.unload_lora(adapter_id).await,
-        // Base swap: load wakes the resident engine, unload sleeps it.
+        // Base placement: load makes the base resident (vLLM wake / Ollama warm
+        // `model_id` into VRAM), unload evicts it (vLLM sleep / Ollama keep_alive 0).
         ModelCommand::Load {
-            target: LoadTarget::Base { .. },
-        } => adapter.wake_up().await,
+            target: LoadTarget::Base { model_id },
+        } => adapter.load_base(model_id).await,
         ModelCommand::Unload {
-            target: LoadTarget::Base { .. },
-        } => adapter.sleep().await,
+            target: LoadTarget::Base { model_id },
+        } => adapter.unload_base(model_id).await,
     };
     if let Err(e) = result {
         warn!(error = %e, "model agent: vLLM admin call failed (best-effort)");

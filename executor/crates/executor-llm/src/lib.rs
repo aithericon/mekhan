@@ -30,6 +30,8 @@ pub use inference_handler::InferenceState;
 #[cfg(feature = "vllm")]
 pub use adapters::vllm::{LoadedModel, VllmAdapter};
 #[cfg(feature = "vllm")]
+pub use adapters::model_control::{ModelBackend, OllamaControlAdapter};
+#[cfg(feature = "vllm")]
 pub use model_command::{LoadTarget, ModelCommand};
 pub use ollama_subprocess::{OllamaSubprocess, OllamaSubprocessConfig};
 pub use pool_boot::{register_as_pool, PoolBootConfig, PoolBootHandle};

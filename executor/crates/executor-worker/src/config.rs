@@ -415,9 +415,19 @@ pub struct RosSettings {
 /// Config file: `[model_agent]` section in `executor.toml`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelAgentSettings {
-    /// vLLM OpenAI server base URL (e.g. `http://localhost:8000`). The agent
-    /// drives this server's ADMIN surface only (LoRA load/unload, sleep/wake,
-    /// `/v1/models` probe) — never inference. Required for the agent to run.
+    /// Which control-plane backend this node agent drives: `"vllm"` (default) or
+    /// `"ollama"`. Selects how load/unload/probe map onto the server's API —
+    /// vLLM admin surface (LoRA + sleep/wake) vs Ollama runtime (base
+    /// warm/evict via `keep_alive`, the Metal-native path on Apple Silicon).
+    #[serde(default)]
+    pub backend: Option<String>,
+
+    /// The model server's base URL. For `backend = "vllm"` this is the vLLM
+    /// OpenAI server (e.g. `http://localhost:8000`); for `backend = "ollama"`
+    /// the Ollama server (e.g. `http://localhost:11434`). The agent drives this
+    /// server's ADMIN surface only (load/unload/probe) — never inference.
+    /// Required for the agent to run. (Name kept as `vllm_url` for config
+    /// stability; it is the endpoint for whichever backend is selected.)
     pub vllm_url: String,
 
     /// The served base model id, for labelling/override when the `/v1/models`
