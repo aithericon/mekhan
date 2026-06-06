@@ -324,8 +324,8 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "jobs_done", "expression": "handle_jobs[*].done" },
-          { "targetField": "seeded", "expression": "seed_inventory[*].seeded" }
+          { "targetField": "jobs_done", "expression": "(handle_jobs[*]).len()" },
+          { "targetField": "seeded", "expression": "(seed_inventory[*]).len()" }
         ]
       }
     }

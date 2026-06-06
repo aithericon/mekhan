@@ -24,7 +24,6 @@
   "ref_key": "run_job",
   "display_name": "Run Job",
   "records": [
-    { "sample_id": "S1", "from_slot": "A1", "to_port": "P1", "temp_slot": "A2", "op": "pick" },
-    { "sample_id": "S1", "from_slot": "A1", "to_port": "P1", "temp_slot": "A2", "op": "place" }
+    { "sample_id": "S1", "from_slot": "A1", "to_port": "P1", "temp_slot": "A2", "op": "pick" }
   ]
 }
