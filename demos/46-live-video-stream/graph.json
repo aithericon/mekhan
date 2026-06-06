@@ -1,0 +1,116 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 180 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Live Video Stream",
+        "initial": { "id": "in", "label": "Live Video Input", "fields": [] }
+      }
+    },
+    {
+      "id": "producer",
+      "type": "automated_step",
+      "slug": "producer",
+      "position": { "x": 320, "y": 180 },
+      "data": {
+        "type": "automated_step",
+        "label": "Produce fragmented MP4 video (PyAV)",
+        "description": "Synthesizes a 3 s 320×240 clip (scrolling gradient + bouncing box) and muxes it with PyAV/libx264 into a FRAGMENTED MP4 / H.264 byte stream — an `ftyp` + `moov`(mvex) init segment then `moof` + `mdat` media fragments (a keyframe ~every 0.5 s) — then paces the fragments out over the Data/Out channel `video` in ~real time. The element content_type is `video/mp4;codecs=\"avc1.42E01E\"` (Constrained Baseline 3.0), so the UI render-adapter registry (planLiveRender) returns mediaKind=video and the panel appends the stream into a `<video>` element via Media Source Extensions. The VIDEO leg of the streaming arc — same shape as demo 45 (audio), only the codec differs. PyAV bundles libav+libx264 (no system ffmpeg); the bytes ride the out-of-band JetStream datastream, the net only sees open + close.",
+        "channels": [
+          {
+            "name": "video",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "video/mp4;codecs=\"avc1.42E01E\"" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["av", "numpy"],
+            "virtualenv": true,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Produced",
+          "fields": [
+            { "name": "fragments_written", "label": "Fragments written", "kind": "number" },
+            { "name": "bytes_written", "label": "Bytes written", "kind": "number" },
+            { "name": "video_seconds", "label": "Video seconds", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "validator",
+      "type": "automated_step",
+      "slug": "validator",
+      "position": { "x": 620, "y": 180 },
+      "data": {
+        "type": "automated_step",
+        "label": "Validate fMP4 off the wire",
+        "description": "Drains the Data/In channel `video` with the ORDINARY `for chunk in stream('video')` API (transport-unaware) and parses the received bytes' top-level MP4 box structure to prove they are a genuine, MSE-appendable fragmented MP4: `ftyp` first, a `moov` carrying `mvex`, then matched `moof` + `mdat` media fragments. The wire-level half of the verification a browser can't automate. JetStream is durable + ordered, so `received_bytes` MUST equal the producer's `bytes_written`.",
+        "channels": [
+          {
+            "name": "video",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "video/mp4;codecs=\"avc1.42E01E\"" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Validated",
+          "fields": [
+            { "name": "received_bytes", "label": "Bytes received", "kind": "number" },
+            { "name": "moof_fragments", "label": "moof fragments", "kind": "number" },
+            { "name": "valid_fmp4", "label": "Valid fragmented MP4", "kind": "bool" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 920, "y": 180 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "fragments_written", "expression": "producer.fragments_written" },
+          { "targetField": "bytes_written", "expression": "producer.bytes_written" },
+          { "targetField": "received_bytes", "expression": "validator.received_bytes" },
+          { "targetField": "moof_fragments", "expression": "validator.moof_fragments" },
+          { "targetField": "valid_fmp4", "expression": "validator.valid_fmp4" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_video_validator", "source": "producer", "sourceHandle": "video", "target": "validator", "targetHandle": "video", "type": "sequence" },
+    { "id": "e_validator_end", "source": "validator", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

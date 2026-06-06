@@ -86,6 +86,12 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // routes this channel to the MSE player off the content_type), live-verified
     // in the browser, not in the AIR snapshot.
     "45-live-fmp4-stream",
+    // 46-live-video-stream: the VIDEO sibling of 45 — producer (PyAV/libx264
+    // H.264 fragmented MP4) → validator over a default-transport DATA channel
+    // whose element content_type is `video/mp4;codecs="avc1.42E01E"`. Same
+    // lowering as 45; the point is the PRESENTATION dispatch routing this to the
+    // `<video>` + MSE path, live-verified in the browser.
+    "46-live-video-stream",
 ];
 
 fn repo_root() -> PathBuf {
@@ -318,6 +324,11 @@ fn snapshot_44_durable_blob_stream() {
 #[test]
 fn snapshot_45_live_fmp4_stream() {
     run("45-live-fmp4-stream");
+}
+
+#[test]
+fn snapshot_46_live_video_stream() {
+    run("46-live-video-stream");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
