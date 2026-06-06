@@ -6,6 +6,24 @@ use crate::query::pagination::Paginated;
 
 use super::model::*;
 
+/// Explicit `CatalogueEntry` column projection.
+///
+/// Since the content-addressed reshape (docs/32) the legacy composite-key /
+/// display columns are nullable in the DB (legacy logical rows carry only a
+/// `content_hash`). The `CatalogueEntry` DTO keeps a non-Option `String` view
+/// for the job-net consumers, so we COALESCE those columns to `''` on read.
+/// `entry_id` / `content_hash` map straight through (both Option).
+const ENTRY_COLUMNS: &str = "entry_id, content_hash, \
+     COALESCE(id, '') AS id, \
+     COALESCE(execution_id, '') AS execution_id, \
+     job_id, \
+     COALESCE(name, '') AS name, \
+     COALESCE(category, '') AS category, \
+     COALESCE(filename, '') AS filename, \
+     mime_type, size_bytes, storage_path, source_net, source_place, \
+     signal_key, process_id, process_step, source_event_sequence, \
+     file_metadata, user_metadata, created_at, catalogued_at";
+
 /// Allowed filter fields for catalogue entries (whitelist).
 const ALLOWED_FILTER_FIELDS: &[&str] = &[
     "id",
@@ -24,6 +42,7 @@ const ALLOWED_FILTER_FIELDS: &[&str] = &[
     "created_at",
     "catalogued_at",
     "size_bytes",
+    "content_hash",
 ];
 
 /// Allowed sort fields for catalogue entries (whitelist).
@@ -36,6 +55,7 @@ const ALLOWED_SORT_FIELDS: &[&str] = &[
     "source_net",
     "process_id",
     "execution_id",
+    "content_hash",
 ];
 
 /// List catalogue entries with full filter/sort/pagination support.
@@ -54,7 +74,9 @@ pub async fn list_entries(
 
     // -- SELECT query --
     let entries = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM catalogue_entries");
+        let mut qb = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {ENTRY_COLUMNS} FROM catalogue_entries"
+        ));
         append_where(&mut qb, params, ALLOWED_FILTER_FIELDS)?;
 
         // ORDER BY
@@ -147,9 +169,9 @@ pub async fn get_entry(
     execution_id: &str,
     id: &str,
 ) -> Result<Option<CatalogueEntry>, sqlx::Error> {
-    sqlx::query_as::<_, CatalogueEntry>(
-        "SELECT * FROM catalogue_entries WHERE execution_id = $1 AND id = $2",
-    )
+    sqlx::query_as::<_, CatalogueEntry>(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM catalogue_entries WHERE execution_id = $1 AND id = $2"
+    ))
     .bind(execution_id)
     .bind(id)
     .fetch_optional(pool)
@@ -209,9 +231,9 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 ///    to this process (via `causality_process_tags`)
 pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
     let job_prefix = format!("{process_id}:%");
-    sqlx::query_as::<_, CatalogueEntry>(
+    sqlx::query_as::<_, CatalogueEntry>(&format!(
         r#"
-        SELECT * FROM catalogue_entries
+        SELECT {ENTRY_COLUMNS} FROM catalogue_entries
         WHERE process_id = $1
            OR job_id LIKE $2
            OR signal_key IN (
@@ -225,7 +247,7 @@ pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEnt
            )
         ORDER BY created_at ASC
         "#,
-    )
+    ))
     .bind(process_id)
     .bind(&job_prefix)
     .fetch_all(pool)
@@ -254,9 +276,9 @@ pub async fn lineage_filtered(
     } else {
         Some(render_hints.to_vec())
     };
-    sqlx::query_as::<_, CatalogueEntry>(
+    sqlx::query_as::<_, CatalogueEntry>(&format!(
         r#"
-        SELECT * FROM catalogue_entries
+        SELECT {ENTRY_COLUMNS} FROM catalogue_entries
         WHERE (
             process_id = $1
             OR job_id LIKE $2
@@ -277,7 +299,7 @@ pub async fn lineage_filtered(
         ORDER BY created_at ASC
         LIMIT $7
         "#,
-    )
+    ))
     .bind(process_id)
     .bind(&job_prefix)
     .bind(categories_opt)

@@ -311,6 +311,8 @@ mod tests {
 
     fn entry() -> CatalogueEntry {
         CatalogueEntry {
+            entry_id: None,
+            content_hash: None,
             id: "art-1".to_string(),
             execution_id: "exec-1".to_string(),
             job_id: None,

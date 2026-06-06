@@ -12,6 +12,7 @@ pub mod db;
 pub mod demos;
 pub mod fleet;
 pub mod handlers;
+pub mod inventory;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
@@ -326,6 +327,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(catalogue::handlers::distinct_jsonb_values))
         .routes(routes!(catalogue::handlers::download_artifact))
         .routes(routes!(catalogue::handlers::get_entry))
+        // Inventory (docs/32) — by-reference physical-copy registry. `register`
+        // + `stats` are literal segments registered before the list route so
+        // matchit prefers them (no `{id}` collision here, but keep the
+        // convention). Content-addressed to the catalogue via `content_hash`.
+        .routes(routes!(inventory::handlers::register))
+        .routes(routes!(inventory::handlers::stats))
+        .routes(routes!(inventory::handlers::list_entries))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

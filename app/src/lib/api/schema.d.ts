@@ -1166,6 +1166,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/inventory
+         * @description Paginated list with filter/sort over `content_hash`, `file_server_id`,
+         *     `path`, `status`, `is_canonical` (same query DSL as the catalogue list).
+         */
+        get: operations["list_entries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/inventory/register
+         * @description Batched by-reference upsert. For each item with content metadata + a
+         *     `content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on
+         *     `content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`
+         *     row on `(file_server_id, path)`. No bytes are transferred — this is the
+         *     online crawl/reconcile path. Returns insert/upsert counts.
+         */
+        post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inventory/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/inventory/stats — counts grouped by status and by file server. */
+        get: operations["stats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/job-templates": {
         parameters: {
             query?: never;
@@ -4017,8 +4079,18 @@ export interface components {
             /** Format: date-time */
             catalogued_at: string;
             category: string;
+            /**
+             * @description Logical content identity (bare-hex SHA-256). NULL for job-net
+             *     artifacts; populated for legacy / by-reference rows.
+             */
+            content_hash?: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Surrogate primary key (content-addressed reshape, docs/32).
+             */
+            entry_id?: string | null;
             execution_id: string;
             file_metadata: unknown;
             filename: string;
@@ -5536,6 +5608,86 @@ export interface components {
              */
             typedefs?: unknown;
         };
+        InventoryCount: {
+            /** Format: int64 */
+            count: number;
+            key: string;
+        };
+        /**
+         * @description A single physical-copy row (maps 1:1 to the `file_inventory` table).
+         *
+         *     One row per *physical* copy of a file on a file server. `content_hash` is a
+         *     logical link to `catalogue_entries.content_hash` (index only — no hard FK,
+         *     since a physical file can be observed by `crawl` before its catalogue row
+         *     exists). See docs/32 §4.
+         */
+        InventoryEntry: {
+            content_hash?: string | null;
+            /** Format: uuid */
+            copy_of?: string | null;
+            file_server_id: string;
+            /** Format: date-time */
+            first_seen: string;
+            /** Format: uuid */
+            id: string;
+            is_canonical: boolean;
+            /** Format: date-time */
+            last_seen?: string | null;
+            /** Format: date-time */
+            last_verified?: string | null;
+            migration_target?: string | null;
+            path: string;
+            provenance: unknown;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description One item in a batched by-reference register request.
+         *
+         *     Optional content metadata (`name`/`size_bytes`/`mime_type`) is used to
+         *     UPSERT a logical `catalogue_entries` row keyed on `content_hash`; the
+         *     `file_inventory` row is always upserted on `(file_server_id, path)`. No
+         *     bytes are transferred — this is the online crawl/reconcile path, not the 4M
+         *     offline load (that goes through the importer).
+         */
+        InventoryRegisterItem: {
+            /** @description Bare-hex SHA-256, if known. NULL until a `probe` populates it. */
+            content_hash?: string | null;
+            file_server_id: string;
+            mime_type?: string | null;
+            name?: string | null;
+            path: string;
+            provenance?: unknown;
+            /** Format: int64 */
+            size_bytes?: number | null;
+            status: string;
+        };
+        /** @description Batched register request body. */
+        InventoryRegisterRequest: {
+            entries: components["schemas"]["InventoryRegisterItem"][];
+        };
+        /** @description Result counts of a batched register call. */
+        InventoryRegisterResponse: {
+            /**
+             * Format: int64
+             * @description `catalogue_entries` logical rows newly inserted (ON CONFLICT skips
+             *     pre-existing hashes).
+             */
+            catalogue_inserted: number;
+            /**
+             * Format: int64
+             * @description `file_inventory` rows inserted or updated.
+             */
+            inventory_upserted: number;
+        };
+        /** @description Per-status / per-server inventory counts. */
+        InventoryStats: {
+            by_server: components["schemas"]["InventoryCount"][];
+            by_status: components["schemas"]["InventoryCount"][];
+            /** Format: int64 */
+            total: number;
+        };
         /**
          * @description Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus
          *     its full version history and current stagings.
@@ -6781,8 +6933,18 @@ export interface components {
                 /** Format: date-time */
                 catalogued_at: string;
                 category: string;
+                /**
+                 * @description Logical content identity (bare-hex SHA-256). NULL for job-net
+                 *     artifacts; populated for legacy / by-reference rows.
+                 */
+                content_hash?: string | null;
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Surrogate primary key (content-addressed reshape, docs/32).
+                 */
+                entry_id?: string | null;
                 execution_id: string;
                 file_metadata: unknown;
                 filename: string;
@@ -6855,6 +7017,40 @@ export interface components {
                 net_id?: string | null;
                 owner?: string | null;
                 process_id: string;
+                status: string;
+                /** Format: date-time */
+                updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
+        Paginated_InventoryEntry: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                content_hash?: string | null;
+                /** Format: uuid */
+                copy_of?: string | null;
+                file_server_id: string;
+                /** Format: date-time */
+                first_seen: string;
+                /** Format: uuid */
+                id: string;
+                is_canonical: boolean;
+                /** Format: date-time */
+                last_seen?: string | null;
+                /** Format: date-time */
+                last_verified?: string | null;
+                migration_target?: string | null;
+                path: string;
+                provenance: unknown;
                 status: string;
                 /** Format: date-time */
                 updated_at: string;
@@ -12090,6 +12286,97 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_entries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated inventory entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Paginated_InventoryEntry"];
+                };
+            };
+            /** @description Invalid query DSL */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    register: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Register counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryRegisterResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Inventory counts by status + server */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryStats"];
+                };
+            };
+            /** @description Bad request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

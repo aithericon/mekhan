@@ -551,6 +551,8 @@ pub(crate) fn filters_to_query_params(
 /// was just inserted.
 pub fn command_to_entry(cmd: &CatalogueRegisterCommand) -> CatalogueEntry {
     CatalogueEntry {
+        entry_id: None,
+        content_hash: cmd.content_hash.clone(),
         id: cmd.artifact_id.clone(),
         execution_id: cmd.execution_id.clone(),
         job_id: Some(cmd.job_id.clone()),

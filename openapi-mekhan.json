@@ -3343,6 +3343,111 @@
         }
       }
     },
+    "/api/v1/inventory": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/inventory",
+        "description": "Paginated list with filter/sort over `content_hash`, `file_server_id`,\n`path`, `status`, `is_canonical` (same query DSL as the catalogue list).",
+        "operationId": "list_entries",
+        "responses": {
+          "200": {
+            "description": "Paginated inventory entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_InventoryEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inventory/register": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/inventory/register",
+        "description": "Batched by-reference upsert. For each item with content metadata + a\n`content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on\n`content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`\nrow on `(file_server_id, path)`. No bytes are transferred — this is the\nonline crawl/reconcile path. Returns insert/upsert counts.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Register counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryRegisterResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inventory/stats": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/inventory/stats — counts grouped by status and by file server.",
+        "operationId": "stats",
+        "responses": {
+          "200": {
+            "description": "Inventory counts by status + server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/job-templates": {
       "get": {
         "tags": [
@@ -11215,9 +11320,24 @@
           "category": {
             "type": "string"
           },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logical content identity (bare-hex SHA-256). NULL for job-net\nartifacts; populated for legacy / by-reference rows."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Surrogate primary key (content-addressed reshape, docs/32)."
           },
           "execution_id": {
             "type": "string"
@@ -14833,6 +14953,205 @@
           }
         }
       },
+      "InventoryCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "InventoryEntry": {
+        "type": "object",
+        "description": "A single physical-copy row (maps 1:1 to the `file_inventory` table).\n\nOne row per *physical* copy of a file on a file server. `content_hash` is a\nlogical link to `catalogue_entries.content_hash` (index only — no hard FK,\nsince a physical file can be observed by `crawl` before its catalogue row\nexists). See docs/32 §4.",
+        "required": [
+          "id",
+          "file_server_id",
+          "path",
+          "status",
+          "is_canonical",
+          "provenance",
+          "first_seen",
+          "updated_at"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "copy_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "file_server_id": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_canonical": {
+            "type": "boolean"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_verified": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "migration_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InventoryRegisterItem": {
+        "type": "object",
+        "description": "One item in a batched by-reference register request.\n\nOptional content metadata (`name`/`size_bytes`/`mime_type`) is used to\nUPSERT a logical `catalogue_entries` row keyed on `content_hash`; the\n`file_inventory` row is always upserted on `(file_server_id, path)`. No\nbytes are transferred — this is the online crawl/reconcile path, not the 4M\noffline load (that goes through the importer).",
+        "required": [
+          "file_server_id",
+          "path",
+          "status"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bare-hex SHA-256, if known. NULL until a `probe` populates it."
+          },
+          "file_server_id": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "InventoryRegisterRequest": {
+        "type": "object",
+        "description": "Batched register request body.",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryRegisterItem"
+            }
+          }
+        }
+      },
+      "InventoryRegisterResponse": {
+        "type": "object",
+        "description": "Result counts of a batched register call.",
+        "required": [
+          "inventory_upserted",
+          "catalogue_inserted"
+        ],
+        "properties": {
+          "catalogue_inserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`catalogue_entries` logical rows newly inserted (ON CONFLICT skips\npre-existing hashes)."
+          },
+          "inventory_upserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`file_inventory` rows inserted or updated."
+          }
+        }
+      },
+      "InventoryStats": {
+        "type": "object",
+        "description": "Per-status / per-server inventory counts.",
+        "required": [
+          "total",
+          "by_status",
+          "by_server"
+        ],
+        "properties": {
+          "by_server": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryCount"
+            }
+          },
+          "by_status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryCount"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "JobTemplateDetail": {
         "type": "object",
         "description": "Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus\nits full version history and current stagings.",
@@ -17481,9 +17800,24 @@
                 "category": {
                   "type": "string"
                 },
+                "content_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Logical content identity (bare-hex SHA-256). NULL for job-net\nartifacts; populated for legacy / by-reference rows."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "entry_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Surrogate primary key (content-addressed reshape, docs/32)."
                 },
                 "execution_id": {
                   "type": "string"
@@ -17731,6 +18065,120 @@
                 "process_id": {
                   "type": "string"
                 },
+                "status": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_InventoryEntry": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A single physical-copy row (maps 1:1 to the `file_inventory` table).\n\nOne row per *physical* copy of a file on a file server. `content_hash` is a\nlogical link to `catalogue_entries.content_hash` (index only — no hard FK,\nsince a physical file can be observed by `crawl` before its catalogue row\nexists). See docs/32 §4.",
+              "required": [
+                "id",
+                "file_server_id",
+                "path",
+                "status",
+                "is_canonical",
+                "provenance",
+                "first_seen",
+                "updated_at"
+              ],
+              "properties": {
+                "content_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "copy_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "file_server_id": {
+                  "type": "string"
+                },
+                "first_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "is_canonical": {
+                  "type": "boolean"
+                },
+                "last_seen": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "last_verified": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "migration_target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "provenance": {},
                 "status": {
                   "type": "string"
                 },
@@ -23074,6 +23522,10 @@
     {
       "name": "catalogue",
       "description": "Artifact catalogue, lineage, distinct-value filters."
+    },
+    {
+      "name": "inventory",
+      "description": "Legacy file migration (docs/32) — by-reference physical-copy registry (`file_inventory`), content-addressed to the catalogue via `content_hash`. Batched register (no bytes) + list/stats."
     },
     {
       "name": "provenance",

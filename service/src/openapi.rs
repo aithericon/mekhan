@@ -263,6 +263,18 @@ use utoipa::OpenApi;
             crate::handlers::model_catalog::ModelCatalogResponse,
             // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
             crate::models::inference_metering::InferenceRequestLogRow,
+            // Legacy file migration (docs/32) — file_inventory DTOs. The list
+            // body wraps `InventoryEntry` in `Paginated<_>` and the register
+            // request nests `InventoryRegisterItem` inside `Vec<_>`, neither of
+            // which utoipa's auto-discovery fully walks; `InventoryCount`
+            // appears only inside `InventoryStats`. Register them explicitly
+            // for frontend codegen.
+            crate::inventory::model::InventoryEntry,
+            crate::inventory::model::InventoryRegisterItem,
+            crate::inventory::model::InventoryRegisterRequest,
+            crate::inventory::model::InventoryRegisterResponse,
+            crate::inventory::model::InventoryStats,
+            crate::inventory::model::InventoryCount,
         ),
     ),
     tags(
@@ -273,6 +285,7 @@ use utoipa::OpenApi;
         (name = "processes-live", description = "SSE backfill + live streams for process metrics, logs, and artifacts."),
         (name = "tasks", description = "Human task lifecycle — list, complete, cancel."),
         (name = "catalogue", description = "Artifact catalogue, lineage, distinct-value filters."),
+        (name = "inventory", description = "Legacy file migration (docs/32) — by-reference physical-copy registry (`file_inventory`), content-addressed to the catalogue via `content_hash`. Batched register (no bytes) + list/stats."),
         (name = "provenance", description = "Token ancestry walks and cross-net signal links."),
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),

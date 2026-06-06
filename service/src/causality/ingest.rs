@@ -1938,13 +1938,15 @@ async fn register_catalogue_entry(
             mime_type, size_bytes, storage_path,
             source_net, source_place, signal_key, process_id, process_step,
             source_event_sequence,
-            file_metadata, user_metadata, created_at, nats_msg_id
+            file_metadata, user_metadata, created_at, nats_msg_id,
+            content_hash
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9,
             $10, $11, $12, $13, $14,
             $15,
-            $16, $17, $18, $19
+            $16, $17, $18, $19,
+            NULL
         )
         ON CONFLICT (nats_msg_id) DO NOTHING
         "#,
@@ -2002,6 +2004,8 @@ async fn register_catalogue_entry(
 
                 // Evaluate subscriptions with full provenance
                 let entry = crate::catalogue::model::CatalogueEntry {
+                    entry_id: None,
+                    content_hash: None,
                     id: cmd.artifact_id.clone(),
                     execution_id: cmd.execution_id.clone(),
                     job_id: Some(cmd.job_id.clone()),
