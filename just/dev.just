@@ -358,10 +358,13 @@ _wait-infra:
 #
 #   brew install ollama
 #
-# The recipe defers to an already-running daemon (macOS app or external
-# `ollama serve`) and only spawns its own when nothing is listening on
-# OLLAMA_PORT. Model pulls are idempotent — first `up` downloads the default
-# model (~7.8 GB for llama3.2-vision:11b); subsequent runs are no-ops.
+# The dev stack OWNS this daemon (load-bearing for the model pool + router +
+# `provider:ollama` steps): the recipe runs a MANAGED, pidfiled `ollama serve`
+# and TAKES OVER OLLAMA_PORT, stopping any external daemon (a macOS Ollama.app,
+# a stray `ollama serve`) holding it — so `down`/`reset` control its lifecycle.
+# Model pulls are idempotent — first `up` downloads the default model;
+# subsequent runs are no-ops (the ~/.ollama blob store is shared, so a takeover
+# never re-downloads).
 #
 # Knobs (env-overridable on the recipe call):
 #   OLLAMA_MODEL                   — model tag (default qwen3.5:9b — direct Ollama-library equivalent
@@ -386,11 +389,18 @@ up-ollama:
     model="${OLLAMA_MODEL:-qwen3.5:9b}"
     ready_timeout="${OLLAMA_READY_TIMEOUT_SECS:-60}"
 
-    # Defer to an already-running daemon (macOS Ollama.app, system service,
-    # or a prior `ollama serve`). We only spawn — and pidfile — when nothing
-    # answers on the port.
-    if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
-      echo "  ollama already serving on :${port} (external — no pidfile)"
+    # The dev stack OWNS the Ollama daemon (it's load-bearing: the model-pool
+    # node, the inference router, AND `provider:ollama` LLM steps all dispatch
+    # against it). So we run a MANAGED, pidfiled `ollama serve` and TAKE OVER the
+    # port — rather than silently piggy-backing on whatever external daemon (a
+    # macOS Ollama.app, a stray `ollama serve`) happens to hold it, which `down`/
+    # `reset` could never control. If OUR managed daemon is already up, reuse it
+    # (idempotent); otherwise stop any external listener on the port and spawn
+    # ours. (Ollama is no longer the shared-across-worktrees exception — the dev
+    # stack that's up owns :${port}; the model BLOB store under ~/.ollama is still
+    # shared, so taking over never re-downloads.)
+    if [ -s "{{pid_dir}}/ollama.pid" ] && kill -0 "$(cat {{pid_dir}}/ollama.pid)" 2>/dev/null; then
+      echo "  ollama already managed by this stack (pid $(cat {{pid_dir}}/ollama.pid))"
     else
       if ! command -v ollama >/dev/null 2>&1; then
         echo "  · ollama not installed — skipping"
@@ -398,7 +408,31 @@ up-ollama:
         echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
         exit 0
       fi
-      echo "▶ starting ollama serve on :${port}…"
+      # Take over the port so OUR managed daemon is authoritative. The macOS
+      # Ollama.app SUPERVISES its serve and instantly respawns it on the port, so
+      # killing the serve alone loses the race — we must quit the app itself
+      # first (it stays quit; relaunch it by hand if you want it back). Then kill
+      # any remaining listener (a plain external `ollama serve`, or Linux).
+      if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+        echo "▶ stopping external ollama on :${port} (managed dev ollama takes over)…"
+        if command -v osascript >/dev/null 2>&1 && pgrep -f "Ollama.app/Contents" >/dev/null 2>&1; then
+          echo "  · quitting the macOS Ollama.app (it supervises + re-binds :${port})"
+          osascript -e 'tell application "Ollama" to quit' >/dev/null 2>&1 || true
+          sleep 1
+          pkill -if "Ollama.app/Contents" 2>/dev/null || true
+        fi
+        pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
+        [ -n "$pids" ] && kill $pids 2>/dev/null || true
+        for _ in $(seq 1 10); do
+          curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1 || break
+          sleep 0.5
+        done
+        if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+          echo "✗ :${port} still held after stop attempt — quit the macOS Ollama app manually (it re-binds the port) and re-run" >&2
+          exit 1
+        fi
+      fi
+      echo "▶ starting managed ollama serve on :${port}…"
       nohup env OLLAMA_HOST="127.0.0.1:${port}" ollama serve \
         > "{{log_dir}}/ollama.log" 2>&1 &
       echo $! > "{{pid_dir}}/ollama.pid"
