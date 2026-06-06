@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import {
 		getInstance,
 		cancelInstance,
 		listProcessesByInstance,
+		listStepExecutions,
 		instanceStreamUrl
 	} from '$lib/api/client';
 	import { authFetch } from '$lib/auth/fetch';
@@ -15,15 +17,47 @@
 		type InstanceContext
 	} from '$lib/components/instances/instance-context';
 	import SaveAsTestDialog from '$lib/components/instances/SaveAsTestDialog.svelte';
+	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 	import ListChecks from '@lucide/svelte/icons/list-checks';
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import Network from '@lucide/svelte/icons/network';
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
+	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import CornerLeftUp from '@lucide/svelte/icons/corner-left-up';
 
 	let saveAsTestOpen = $state(false);
+
+	// ── Rerun ────────────────────────────────────────────────────────────────
+	// Re-launch this instance's template, pre-filling the launch sheet with the
+	// start parameters this run was created with (read from the Start node's
+	// recorded output token). The user can tweak any field before launching.
+	let rerunOpen = $state(false);
+	let rerunLoading = $state(false);
+	let rerunInitial = $state<Record<string, Record<string, unknown>> | null>(null);
+
+	async function handleRerun() {
+		if (!ctx.instance) return;
+		rerunLoading = true;
+		try {
+			// The Start node's step execution emits a token = the start parameters,
+			// keyed by field name (plus `_`-prefixed metadata the dialog ignores).
+			const execs = await listStepExecutions(ctx.instance.id);
+			const seed: Record<string, Record<string, unknown>> = {};
+			for (const e of execs) {
+				if (e.node_kind === 'start' && e.outputs && typeof e.outputs === 'object') {
+					seed[e.node_id] = e.outputs as Record<string, unknown>;
+				}
+			}
+			rerunInitial = seed;
+			rerunOpen = true;
+		} catch (e) {
+			ctx.error = e instanceof Error ? e.message : 'Failed to load start parameters';
+		} finally {
+			rerunLoading = false;
+		}
+	}
 
 	let { children } = $props();
 
@@ -277,6 +311,19 @@
 						<FileText class="size-3.5" />
 						Template v{ctx.instance.template_version}
 					</Button>
+					{#if ctx.instance.mode !== 'test_run'}
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={handleRerun}
+							disabled={rerunLoading}
+							data-testid="rerun-instance"
+							title="Launch this template again, pre-filled with this run's start parameters"
+						>
+							<RotateCcw class="mr-1 size-3.5" />
+							{rerunLoading ? 'Loading…' : 'Rerun'}
+						</Button>
+					{/if}
 					{#if ctx.instance.status === 'running' || ctx.instance.status === 'created'}
 						<Button
 							variant="outline"
@@ -360,5 +407,16 @@
 		instanceId={ctx.instance.id}
 		templateId={ctx.instance.template_id}
 		onclose={() => (saveAsTestOpen = false)}
+	/>
+	<CreateInstanceDialog
+		bind:open={rerunOpen}
+		templateId={ctx.instance.template_id}
+		initialValues={rerunInitial}
+		title="Rerun instance"
+		description="Pre-filled with this run's start parameters — adjust and launch again."
+		oncreated={(id) => {
+			rerunOpen = false;
+			void goto(`/instances/${id}`);
+		}}
 	/>
 {/if}

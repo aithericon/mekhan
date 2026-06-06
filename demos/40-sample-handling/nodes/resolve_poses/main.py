@@ -1,28 +1,33 @@
-"""Map body — resolve the per-job grasp/insert poses from curated assets.
+"""Loop body head — resolve the CURRENT job's grasp/insert poses from assets.
 
-This step runs once per `run_job` element. Two asset collections are bound and
-staged as injected globals (mirroring demo 21's `materials`):
+The `run_job` array is staged ONCE by the upstream `load_jobs` step (parked
+producer); this body indexes it by the Loop's built-in counter
+`job_loop.iteration` (0-based). The Loop carries NO accumulators — the job list
+is immutable, so there's nothing to fold; the body just reads the current record
+directly. Running under a Loop (not a Map) means the jobs execute one-at-a-time,
+so two jobs never send competing FollowJointTrajectory goals to the single arm
+controller.
 
-  * `racks`  — the `sample_rack` records: list of {slot_id, grasp_pose,
-               approach_pose, occupied}
-  * `ports`  — the `instrument_ports` records: list of {port_id, instrument,
-               insert_pose, retract_pose}
+Two asset collections are bound and staged as injected globals (demo 21
+pattern):
 
-The job itself rides the token as the Map's itemVar `job` (no read-arc, no SDK
-init — same as demo 12's `cand`). We read `job.from_slot` / `job.to_port`,
-look up the matching rack slot + instrument port, and emit the four poses as
-geometry_msgs/Pose JSON objects so they splice straight into the child
-SubWorkflows' plan targets via the bare-placeholder whole-object path.
+  * `racks`  — the `sample_rack` records: {slot_id, grasp_pose, approach_pose, ...}
+  * `ports`  — the `instrument_ports` records: {port_id, insert_pose, retract_pose, ...}
 
-Outputs are implicit: the runner sweeps globals matching this step's declared
-output port at the end of execution (same mechanism demo 21 relies on). We
-assign plain dicts to `grasp_pose` / `grasp_approach` / `insert_pose` /
-`insert_approach`.
+COMPILER CONTRACT: this source is SCANNED (not executed) for `<slug>.<field>`
+references. The literal `load_jobs.items` (the parked `run_job` array) and
+`job_loop.iteration` (the Loop counter) reads below MUST stay verbatim so the
+compiler stages BOTH parked envelopes as Python globals. Outputs are implicit:
+the runner sweeps globals matching this step's declared output port (grasp_pose
+/ grasp_approach / insert_pose / insert_approach / op / sample_id).
 """
 
-# itemVar (token-resident): the current run_job row.
-from_slot = job.from_slot
-to_port = job.to_port
+# Current run_job row, indexed from the parked `load_jobs` array by the counter.
+_job = load_jobs.items[job_loop.iteration]
+from_slot = _job["from_slot"]
+to_port = _job["to_port"]
+op = _job["op"]
+sample_id = _job["sample_id"]
 
 # Injected asset-binding globals: whole record collections.
 racks = racks      # list[dict] of sample_rack rows
@@ -48,7 +53,9 @@ insert_approach = port["retract_pose"]
 
 log_info(
     "resolved job poses",
+    iteration=job_loop.iteration,
     from_slot=from_slot,
     to_port=to_port,
-    op=getattr(job, "op", None),
+    op=op,
+    sample_id=sample_id,
 )

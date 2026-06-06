@@ -34,9 +34,25 @@
 		open: boolean;
 		templateId: string | null;
 		oncreated: (instanceId: string) => void;
+		/** Pre-fill seed: `start_block_id → (field name → value)`. Used by the
+		 *  instance view's "Rerun" to launch with a prior run's start parameters.
+		 *  Only DECLARED field names are read, so any extra keys (e.g. the start
+		 *  token's `_`-prefixed metadata) are ignored. */
+		initialValues?: Record<string, Record<string, unknown>> | null;
+		/** Sheet heading override (e.g. "Rerun instance"). */
+		title?: string;
+		/** Sheet sub-heading override. */
+		description?: string;
 	};
 
-	let { open = $bindable(), templateId, oncreated }: Props = $props();
+	let {
+		open = $bindable(),
+		templateId,
+		oncreated,
+		initialValues = null,
+		title = 'Create instance',
+		description = 'Provide initial token values for each Start block.'
+	}: Props = $props();
 
 	function close() {
 		open = false;
@@ -81,8 +97,11 @@
 					initial
 				});
 				const fieldSeed: Record<string, unknown> = {};
+				const pre = initialValues?.[node.id];
 				for (const f of initial.fields ?? []) {
-					fieldSeed[f.name] = defaultForKind(f);
+					// Pre-fill from a prior run's start parameters when provided
+					// (Rerun); otherwise fall back to the field-kind default.
+					fieldSeed[f.name] = pre && f.name in pre ? pre[f.name] : defaultForKind(f);
 				}
 				seed[node.id] = fieldSeed;
 			}
@@ -215,9 +234,9 @@
 	<SheetContent class="w-[480px] sm:max-w-[480px]">
 		<div class="flex items-center justify-between border-b border-border px-5 py-4">
 			<div>
-				<SheetTitle class="text-lg font-semibold">Create instance</SheetTitle>
+				<SheetTitle class="text-lg font-semibold">{title}</SheetTitle>
 				<SheetDescription class="text-sm text-muted-foreground">
-					Provide initial token values for each Start block.
+					{description}
 				</SheetDescription>
 			</div>
 			<SheetClose>

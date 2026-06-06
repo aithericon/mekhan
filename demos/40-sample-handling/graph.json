@@ -111,30 +111,125 @@
       }
     },
     {
+      "id": "reset_scene",
+      "type": "automated_step",
+      "slug": "reset_scene",
+      "parentId": "lease",
+      "position": { "x": 40, "y": 380 },
+      "data": {
+        "type": "automated_step",
+        "label": "Reset Scene (clear move_group)",
+        "description": "Cell-reset head — makes the whole run idempotent. ROS `call_service` to `/clear_scene` (`aithericon_motion_bridge/srv/ClearScene`, confirm-guarded) — removes ALL world + attached collision objects from move_group's persistent planning scene, so a re-run starts from a clean slate and any sample still attached to the gripper from a prior run is detached back into the world. Plain `executor` (NO per-step capacity): rides the enclosing cell lease's held `runner.<id>` namespace by containment, so the clear hits the SAME held move_group the seed + jobs plan against. Runs ONCE, before seeding.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/clear_scene",
+            "interface_type": "aithericon_motion_bridge/srv/ClearScene",
+            "fields": { "confirm": true },
+            "interface_typedefs": [
+              { "type": "aithericon_motion_bridge/ClearScene_Request", "fieldnames": ["confirm"], "fieldtypes": ["boolean"], "fieldarraylen": [-1] },
+              { "type": "aithericon_motion_bridge/ClearScene_Response", "fieldnames": ["success", "removed_count", "error_message"], "fieldtypes": ["boolean", "int32", "string"], "fieldarraylen": [-1, -1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "removed_count", "label": "Removed count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "home_arm",
+      "type": "automated_step",
+      "slug": "home_arm",
+      "parentId": "lease",
+      "position": { "x": 320, "y": 380 },
+      "data": {
+        "type": "automated_step",
+        "label": "Home Arm (reference config)",
+        "description": "Cell-reset tail — brings the arm to a known reference joint configuration so every run's motion planning starts from the SAME deterministic state (and the arm visibly returns to neutral between runs). ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`, the shipped Path B execution primitive) with a single hand-authored waypoint to the xArm6 all-zeros home `[0,0,0,0,0,0]` (arm upright). This pose is deliberately COLLISION-FREE with the table-level rack samples seeded below (z≈0.28): a forward-leaning ready pose like `[0,-0.3,-0.3,0,0.6,0]` intersects a seeded sample box, so MoveIt rejects the pick plan with an in-collision START state (error 99999, planning_time 0) — verified live. Runs sequentially AFTER the scene clear and BEFORE seeding — nothing else drives the controller, so the goal reaches STATUS_SUCCEEDED with no preemption. Plain `executor`: rides the held lease by containment. The action RESULT rides `stdout_tail`, not outputs.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "time_from_start": { "sec": 3, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "load_jobs",
+      "type": "automated_step",
+      "slug": "load_jobs",
+      "parentId": "lease",
+      "position": { "x": 40, "y": 470 },
+      "data": {
+        "type": "automated_step",
+        "label": "Load Jobs → array",
+        "description": "Stages the bound `run_job` asset collection (alias `jobs`) as a token-resident JSON array + count so the sequential Loop can iterate it one record at a time — asset bindings are python-global stagings, not node outputs, so the Loop reads them via accumulators seeded from its `input` token (`input.items` / `input.count`, the `load_jobs` output flowing into the Loop's `in` port). Plain `executor`: rides the held cell lease by containment. Mirrors demo 41's `load_cells`.",
+        "deploymentModel": { "mode": "executor" },
+        "assetBindings": [
+          { "alias": "jobs", "refKey": "run_job" }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Jobs",
+          "fields": [
+            { "name": "items", "label": "Job records", "kind": "json", "required": true },
+            { "name": "count", "label": "Job count", "kind": "number", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
       "id": "handle_jobs",
-      "type": "map",
-      "slug": "handle_jobs",
+      "type": "loop",
+      "slug": "job_loop",
       "parentId": "lease",
       "position": { "x": 620, "y": 120 },
       "width": 820,
       "height": 380,
       "data": {
-        "type": "map",
-        "label": "Handle Jobs",
-        "description": "Maps over the bound `run_job` asset collection (alias `job`), one body token per job row. Each body token carries the job row as `job` (token-resident itemVar: `job.sample_id`, `job.from_slot`, `job.to_port`, `job.op`). The body resolves the job's poses from the rack/port assets, then a Decision dispatches on `job.op` into the pick / place / swap SubWorkflows. The gathered per-element value (resultVar `done`) is each branch's result envelope.",
-        "assetBindings": [
-          { "alias": "job", "refKey": "run_job" }
-        ],
-        "itemsRef": "job",
-        "itemVar": "job",
-        "resultVar": "done",
-        "output": {
-          "id": "out",
-          "label": "Done",
-          "fields": [
-            { "name": "done", "label": "Done", "kind": "json", "required": true }
-          ]
-        }
+        "type": "loop",
+        "label": "Handle Jobs (sequential)",
+        "description": "Iterates the staged `run_job` records ONE AT A TIME (sequential Loop, NOT a concurrent Map) so the single arm is never driven by two jobs at once — the previous Map fanned every job out in parallel, and two jobs racing the one `/xarm6_traj_controller` preempted each other (action STATUS_CANCELED). The job array is immutable, so the Loop needs NO accumulators: the body indexes the parked `load_jobs` output directly by the built-in counter (`load_jobs.items[job_loop.iteration]`, a body-Python parked-producer borrow), and the `loopCondition` borrows `load_jobs.count` (a guard borrow into the same parked producer — accumulator `init` is intentionally NOT borrow-scanned by the compiler, so a producer-seeded accumulator can't work; the direct borrow is the supported path). Each iteration's body resolves the current job's poses, a Decision dispatches on its `op` into the pick / place / swap SubWorkflows, then loops back. `loopCondition` runs the body exactly `count` times (the cap is checked AFTER body_out, so the bound is `iteration < count - 1`); `maxIterations` is a runaway backstop.",
+        "maxIterations": 20,
+        "loopCondition": "job_loop.iteration < load_jobs.count - 1",
+        "accumulators": []
       }
     },
     {
@@ -146,7 +241,7 @@
       "data": {
         "type": "automated_step",
         "label": "Resolve Job Poses",
-        "description": "Map body head. Python step: reads the bound `sample_rack` (alias `racks`) and `instrument_ports` (alias `ports`) asset collections plus the token-resident `job.from_slot` / `job.to_port`, looks up the matching rack slot + instrument port, and emits the four poses as geometry_msgs/Pose JSON (`grasp_pose`, `grasp_approach`, `insert_pose`, `insert_approach`) so they splice straight into the child SubWorkflows' plan targets via the bare-placeholder whole-object path. Outputs are implicit (the runner sweeps globals matching the declared output port).",
+        "description": "Loop body head. Python step: reads the CURRENT job from the Loop accumulators (`job_loop.items[job_loop.iteration]`) plus the bound `sample_rack` (alias `racks`) and `instrument_ports` (alias `ports`) asset collections, looks up the matching rack slot + instrument port, and emits the four poses as geometry_msgs/Pose JSON (`grasp_pose`, `grasp_approach`, `insert_pose`, `insert_approach`) so they splice straight into the child SubWorkflows' plan targets via the bare-placeholder whole-object path. Also echoes the current job's `op` (drives the Decision) and `sample_id` (wired into the SubWorkflows). Outputs are implicit (the runner sweeps globals matching the declared output port).",
         "assetBindings": [
           { "alias": "racks", "refKey": "sample_rack" },
           { "alias": "ports", "refKey": "instrument_ports" }
@@ -170,7 +265,9 @@
             { "name": "grasp_pose", "label": "Grasp Pose", "kind": "json", "required": true },
             { "name": "grasp_approach", "label": "Grasp Approach Pose", "kind": "json", "required": true },
             { "name": "insert_pose", "label": "Insert Pose", "kind": "json", "required": true },
-            { "name": "insert_approach", "label": "Insert Approach Pose", "kind": "json", "required": true }
+            { "name": "insert_approach", "label": "Insert Approach Pose", "kind": "json", "required": true },
+            { "name": "op", "label": "Operation", "kind": "text", "required": true },
+            { "name": "sample_id", "label": "Sample ID", "kind": "text", "required": true }
           ]
         }
       }
@@ -184,17 +281,17 @@
       "data": {
         "type": "decision",
         "label": "Dispatch on op",
-        "description": "Compiler-checked gate on the token-resident `job.op`. `pick` → the 37-pick SubWorkflow; `place` → the 38-place SubWorkflow; anything else (`swap`) falls through to the default 39-swap SubWorkflow. Each guard resolves `job.op` against the Map itemVar at compile time.",
+        "description": "Compiler-checked gate on the current job's `op`, echoed by `resolve_poses`. `pick` → the 37-pick SubWorkflow; `place` → the 38-place SubWorkflow; anything else (`swap`) falls through to the default 39-swap SubWorkflow. Each guard resolves `resolve_poses.op` against that step's declared output port at compile time.",
         "conditions": [
           {
             "edgeId": "is_pick",
             "label": "Pick",
-            "guard": "job.op == \"pick\""
+            "guard": "resolve_poses.op == \"pick\""
           },
           {
             "edgeId": "is_place",
             "label": "Place",
-            "guard": "job.op == \"place\""
+            "guard": "resolve_poses.op == \"place\""
           }
         ],
         "defaultBranch": "default"
@@ -215,7 +312,7 @@
         "inputMapping": [
           { "targetField": "grasp_pose", "expression": "resolve_poses.grasp_pose" },
           { "targetField": "approach_pose", "expression": "resolve_poses.grasp_approach" },
-          { "targetField": "object_id", "expression": "job.sample_id" }
+          { "targetField": "object_id", "expression": "resolve_poses.sample_id" }
         ],
         "output": {
           "id": "out",
@@ -242,7 +339,7 @@
         "inputMapping": [
           { "targetField": "insert_pose", "expression": "resolve_poses.insert_pose" },
           { "targetField": "approach_pose", "expression": "resolve_poses.insert_approach" },
-          { "targetField": "object_id", "expression": "job.sample_id" }
+          { "targetField": "object_id", "expression": "resolve_poses.sample_id" }
         ],
         "output": {
           "id": "out",
@@ -266,8 +363,8 @@
         "templateId": "00000000-0000-0000-0000-000000000390",
         "versionPin": { "mode": "latest" },
         "inputMapping": [
-          { "targetField": "occupant_id", "expression": "job.sample_id" },
-          { "targetField": "new_id", "expression": "job.sample_id" },
+          { "targetField": "occupant_id", "expression": "resolve_poses.sample_id" },
+          { "targetField": "new_id", "expression": "resolve_poses.sample_id" },
           { "targetField": "port_grasp_pose", "expression": "resolve_poses.insert_pose" },
           { "targetField": "port_approach_pose", "expression": "resolve_poses.insert_approach" },
           { "targetField": "temp_grasp_pose", "expression": "resolve_poses.grasp_pose" },
@@ -324,7 +421,7 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "jobs_done", "expression": "(handle_jobs[*]).len()" },
+          { "targetField": "jobs_done", "expression": "load_jobs.count" },
           { "targetField": "seeded", "expression": "(seed_inventory[*]).len()" }
         ]
       }
@@ -333,11 +430,14 @@
   "edges": [
     { "id": "e_start_lease", "source": "start", "target": "lease", "targetHandle": "in", "type": "sequence" },
 
-    { "id": "e_lease_seed", "source": "lease", "target": "seed_inv", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_lease_reset", "source": "lease", "target": "reset_scene", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_reset_home", "source": "reset_scene", "target": "home_arm", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_home_seed", "source": "home_arm", "target": "seed_inv", "targetHandle": "in", "type": "sequence" },
     { "id": "e_seed_add", "source": "seed_inv", "target": "add_sample", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
     { "id": "e_add_seed", "source": "add_sample", "target": "seed_inv", "targetHandle": "body_out", "type": "loop_back" },
 
-    { "id": "e_seed_handle", "source": "seed_inv", "target": "handle_jobs", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_seed_load", "source": "seed_inv", "target": "load_jobs", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_load_handle", "source": "load_jobs", "target": "handle_jobs", "targetHandle": "in", "type": "sequence" },
 
     { "id": "e_handle_resolve", "source": "handle_jobs", "target": "resolve_poses", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
     { "id": "e_resolve_gate", "source": "resolve_poses", "target": "op_gate", "targetHandle": "in", "type": "sequence" },
