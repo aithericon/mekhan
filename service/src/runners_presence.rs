@@ -194,6 +194,46 @@ impl RunnerPresence {
                 && e.backends.iter().any(|b| b == wire)
         })
     }
+
+    /// Map every currently-PRESENT runner's UUID → its pool alias (`resources.path`
+    /// of its `runner_group`). Runners with no pool (`pool_alias == None`) and
+    /// absent runners are omitted.
+    ///
+    /// The node-fleet scaler (docs/31 Phase 2, Loop 1) uses this to resolve pool
+    /// membership for the C-weighted observed-capacity aggregate
+    /// ([`crate::autoscaler::observe::pool_serving_capacity`]): the FLeetLiveness
+    /// snapshot carries each runner's concurrency `C` but NOT its pool tag, so the
+    /// two registries are joined on the runner UUID. They are mirrored on every
+    /// heartbeat, so a momentary drift just under/over-counts one node for one tick.
+    pub async fn pool_membership(&self) -> std::collections::HashMap<Uuid, String> {
+        let map = self.0.lock().await;
+        map.iter()
+            .filter_map(|(id, e)| {
+                if !e.present {
+                    return None;
+                }
+                e.pool_alias.as_ref().map(|alias| (*id, alias.clone()))
+            })
+            .collect()
+    }
+
+    /// Test-only: seed a runner's pool membership directly so `pool_membership`
+    /// can be exercised without the full acquire/heartbeat machinery.
+    #[cfg(test)]
+    pub async fn test_set_membership(&self, runner_id: Uuid, pool_alias: &str, present: bool) {
+        let mut map = self.0.lock().await;
+        map.insert(
+            runner_id,
+            PresenceEntry {
+                last_seen: Instant::now(),
+                concurrency: 0,
+                pool_net_id: String::new(),
+                pool_alias: Some(pool_alias.to_string()),
+                backends: Vec::new(),
+                present,
+            },
+        );
+    }
 }
 
 impl Default for RunnerPresence {

@@ -9,6 +9,7 @@ pub mod container_images;
 pub mod demos;
 pub mod executions;
 pub mod files;
+pub mod fleet_engines;
 pub mod folders;
 pub mod health;
 pub mod inference_metering;

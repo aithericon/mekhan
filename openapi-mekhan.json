@@ -2408,6 +2408,28 @@
         }
       }
     },
+    "/api/v1/fleet/engines": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/fleet/engines` — per-node Base/adapter inventory + per-engine\n`max_num_seqs` + headroom.",
+        "description": "Reads [`serving_runner_inventory`] (the `presence ∩ catalog` join, retaining\nthe runner→entries mapping), groups each node's entries by base, reads the\n`max_num_seqs` off Base entries, attaches LoRAs via the `base` back-pointer,\nand layers headroom from the router in-flight gauge (fail-soft to full\nbudget). Workspace-scoped, session/human authed.",
+        "operationId": "list_fleet_engines",
+        "responses": {
+          "200": {
+            "description": "Per-node engine inventory: base engines, per-engine C, loaded LoRA adapters, headroom",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetEnginesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/folders/{id}": {
       "delete": {
         "tags": [
@@ -13613,6 +13635,27 @@
           }
         }
       },
+      "FleetEnginesResponse": {
+        "type": "object",
+        "description": "`GET /api/v1/fleet/engines` response — the per-node engine inventory.",
+        "required": [
+          "headroom_from_router",
+          "nodes"
+        ],
+        "properties": {
+          "headroom_from_router": {
+            "type": "boolean",
+            "description": "Whether per-engine headroom was computed against the router in-flight\ngauge (`true`) or degraded to the full budget because the router poll is\nunconfigured/unreachable (`false`). Operator hint, not a hard error."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeInventory"
+            },
+            "description": "Live nodes with their base engines."
+          }
+        }
+      },
       "FleetMetrics": {
         "type": "object",
         "description": "`GET /api/v1/clusters/metrics` response — one [`ClusterMetrics`] per cluster\nthe caller's workspace touched in-window, plus a `fleet_total` rollup over\nthe same windowed, workspace-scoped row set.",
@@ -15145,6 +15188,26 @@
           }
         }
       },
+      "LoadedAdapter": {
+        "type": "object",
+        "description": "One LoRA adapter loaded on a base engine (the adapter half of the base↔LoRA\ngraph, attached via each adapter's `base` back-pointer).",
+        "required": [
+          "model_id"
+        ],
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "description": "The adapter's model id (the router routes on this)."
+          },
+          "source_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The adapter-weights URI the load command supplied (e.g. `hf://...`), when\nthe runner reported one."
+          }
+        }
+      },
       "LogRow": {
         "type": "object",
         "required": [
@@ -15817,6 +15880,67 @@
           "wireName": {
             "type": "string",
             "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
+      "NodeEngine": {
+        "type": "object",
+        "description": "One base engine live on a node — a base model + its per-engine concurrency\nbudget (`C`), the LoRA adapters it currently serves, and its computed\nheadroom.",
+        "required": [
+          "base",
+          "loaded_adapters"
+        ],
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "The base model id this engine serves."
+          },
+          "headroom": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Free slots = `max_num_seqs − Σ(base + adapters in-flight)`, floored at 0.\n`None` when `max_num_seqs` is unknown (no budget to subtract against).\nFail-soft: when the router in-flight poll is unconfigured/unreachable,\nthis is the FULL budget (`= max_num_seqs`).",
+            "minimum": 0
+          },
+          "loaded_adapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoadedAdapter"
+            },
+            "description": "LoRA adapters loaded on this base engine."
+          },
+          "max_num_seqs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-engine concurrency `C` (vLLM `--max-num-seqs`), SHARED across this\nbase's LoRA adapters. `None` when the runner advertised the base without a\nconfigured budget (older agents / partial catalogs).",
+            "minimum": 0
+          }
+        }
+      },
+      "NodeInventory": {
+        "type": "object",
+        "description": "One live node (runner) and the base engines it is serving.",
+        "required": [
+          "runner_id",
+          "engines"
+        ],
+        "properties": {
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeEngine"
+            },
+            "description": "The base engines live on this node."
+          },
+          "runner_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The runner (node) id."
           }
         }
       },

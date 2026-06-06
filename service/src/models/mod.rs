@@ -9,6 +9,7 @@ pub mod instance;
 pub mod job_template;
 pub mod model_pool;
 pub mod model_replicas;
+pub mod node_replicas;
 pub mod resource;
 pub mod responses;
 pub mod runner;

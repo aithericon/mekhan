@@ -480,6 +480,28 @@ impl MekhanNats {
         Ok(consumer)
     }
 
+    /// Durable consumer for the `node_replicas` projection (model-pool docs/31
+    /// Phase 2, Loop 1). Same `petri.events.>` firehose as staging; pre-filters to
+    /// `node-pool-*` nets in-process (see
+    /// `service/src/projections/node_replicas/`).
+    pub async fn node_replicas_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-node-replicas");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
     /// Create or get the durable consumer for the inference-metering audit
     /// ledger (model-pool P5, docs/29 §7'). The router publishes one complete
     /// `inference_core::InferenceRequestLog` per request on

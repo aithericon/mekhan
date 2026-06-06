@@ -148,6 +148,12 @@ than a per-model job factory.
 
 ## 8. Open questions (to resolve before any impl)
 
+> **Resolved.** All six questions below (plus two derived couplings,
+> DERIVED-A/B) are answered with bolded verdicts in
+> [`31-model-pool-reconciliation-impl-plan.md`](./31-model-pool-reconciliation-impl-plan.md)
+> §3 — the executable plan that schedules this gap's fix as the two-loop split.
+> They are kept here verbatim as the questions that plan resolves.
+
 1. **Policy granularity.** Does `model_policy` stay per-model (demand keys on
    model id, §8) while a *separate* node-pool capacity resource owns engine
    scaling? Or does one policy own both? (Leaning: per-model demand policy +

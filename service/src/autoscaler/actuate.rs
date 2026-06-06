@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use aithericon_resources::types::ModelAutoscalePolicy;
+use aithericon_resources::types::{ModelAutoscalePolicy, NodePoolPolicy};
 use aithericon_sdk::scenario::ScenarioDefinition;
 use aithericon_sdk::{effects, Context, DynamicToken};
 
@@ -106,21 +106,30 @@ pub fn build_model_replica_net(
     ctx.build()
 }
 
-/// Merge the policy's opaque `replica_spec` with the autoscaler-driven service
-/// fields into the StageSpec JSON the engine reads. `residency_zone` is omitted
-/// when empty (so the engine keeps the byte-stable no-residency render).
-pub fn build_replica_spec(policy: &ModelAutoscalePolicy, target: u32) -> Value {
-    // A non-object replica_spec is tolerated as "no extra resources".
-    let mut spec = if policy.replica_spec.is_object() {
-        policy.replica_spec.clone()
+/// Build the dedicated-fallback StageSpec for a single-model service job.
+///
+/// After the docs/31 OQ-1 reframe the model_policy no longer carries its own
+/// engine `replica_spec`; the dedicated fallback (placement leg `d`,
+/// `dedicated=true`) sources the engine spec from the REFERENCED `node_pool`'s
+/// model-agnostic `engine_spec` and STAMPS the model_id onto it — so a dedicated
+/// job runs the SAME image/gpus the pool's packed nodes run, but pinned to this
+/// one model. `residency_zone` (the model_policy's requirement) is omitted when
+/// empty (the engine keeps the byte-stable no-residency render).
+pub fn build_replica_spec(pool: &NodePoolPolicy, model_id: &str, residency_zone: &str, target: u32) -> Value {
+    // A non-object engine_spec is tolerated as "no extra resources".
+    let mut spec = if pool.engine_spec.is_object() {
+        pool.engine_spec.clone()
     } else {
         json!({})
     };
     let obj = spec.as_object_mut().expect("object by construction");
+    // Stamp the model_id — a dedicated job serves exactly this one model (the
+    // engine fleet spec is model-agnostic; this pins it).
+    obj.insert("model_id".to_string(), json!(model_id));
     obj.insert("job_type".to_string(), json!("service"));
     obj.insert("replicas".to_string(), json!(target as i64));
-    if !policy.residency_zone.trim().is_empty() {
-        obj.insert("residency_zone".to_string(), json!(policy.residency_zone));
+    if !residency_zone.trim().is_empty() {
+        obj.insert("residency_zone".to_string(), json!(residency_zone));
     }
     spec
 }
@@ -168,6 +177,7 @@ pub async fn actuate_replica(
     generation: i64,
     prev_generation: Option<i64>,
     policy: &ModelAutoscalePolicy,
+    pool: &NodePoolPolicy,
     datacenter_resource_id: Uuid,
     target: u32,
 ) -> Result<String, ActuateError> {
@@ -194,7 +204,7 @@ pub async fn actuate_replica(
     }
 
     let slug = replica_slug(&policy.model_id, replica_id);
-    let spec = build_replica_spec(policy, target);
+    let spec = build_replica_spec(pool, &policy.model_id, &policy.residency_zone, target);
     let air = serde_json::to_value(build_model_replica_net(
         replica_id, generation, &slug, &conn, spec,
     ))
@@ -237,36 +247,36 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn policy(zone: &str) -> ModelAutoscalePolicy {
-        ModelAutoscalePolicy {
-            model_id: "Qwen2.5-7B".to_string(),
+    fn pool() -> NodePoolPolicy {
+        NodePoolPolicy {
             datacenter_resource_id: "dev-nomad".to_string(),
-            residency_zone: zone.to_string(),
-            min_replicas: 0,
-            max_replicas: 4,
-            mode: "manual".to_string(),
-            desired_replicas: Some(1),
-            scale_up_threshold: None,
-            scale_down_threshold: None,
+            residency_zone: "eu-west".to_string(),
+            gpu_class: "a100-80gb".to_string(),
+            max_num_seqs: 8,
+            engine_spec: json!({ "image": "vllm/vllm-openai:latest", "gpus": 1 }),
+            min_nodes: 0,
+            max_nodes: 4,
             cooldown_secs: None,
-            replica_spec: json!({ "image": "vllm/vllm-openai:latest", "gpus": 1 }),
         }
     }
 
     #[test]
-    fn replica_spec_sets_service_count_and_residency() {
-        let spec = build_replica_spec(&policy("eu-west"), 2);
+    fn replica_spec_sources_engine_spec_and_stamps_model_id() {
+        // The dedicated fallback sources the pool's model-agnostic engine_spec and
+        // STAMPS the model_id (zone is the model_policy's requirement).
+        let spec = build_replica_spec(&pool(), "Qwen2.5-7B", "eu-west", 2);
+        assert_eq!(spec["model_id"], json!("Qwen2.5-7B"));
         assert_eq!(spec["job_type"], json!("service"));
         assert_eq!(spec["replicas"], json!(2));
         assert_eq!(spec["residency_zone"], json!("eu-west"));
-        // Opaque replica_spec carried through.
+        // Opaque engine_spec carried through from the pool.
         assert_eq!(spec["image"], json!("vllm/vllm-openai:latest"));
         assert_eq!(spec["gpus"], json!(1));
     }
 
     #[test]
     fn empty_residency_is_omitted_for_byte_stable_render() {
-        let spec = build_replica_spec(&policy("   "), 1);
+        let spec = build_replica_spec(&pool(), "Qwen2.5-7B", "   ", 1);
         assert!(spec.get("residency_zone").is_none());
         assert_eq!(spec["job_type"], json!("service"));
     }

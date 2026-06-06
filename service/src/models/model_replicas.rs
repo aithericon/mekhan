@@ -88,7 +88,14 @@ pub fn in_cooldown(
     }
 }
 
-/// The PURE desired-COUNT decision, clamped to `[min_replicas, max_replicas]`.
+/// The PURE desired-COUNT decision, clamped to `[0, desired_replicas]` (the
+/// demand-slot ceiling — `desired_replicas == None` ⇒ no upper clamp).
+///
+/// After the docs/31 OQ-1 reframe `model_policy` no longer owns `min_replicas` /
+/// `max_replicas` (engine provisioning moved onto the `node_pool`); the only
+/// per-model COUNT bound left is `desired_replicas`, reinterpreted as the
+/// demand-slot ceiling. This count drives the `dedicated=true` fallback (the
+/// single-model Nomad job) and the demand-bucket the placement controller raises.
 ///
 /// - `manual` ⇒ the `manual_override` (the row's `desired_count`) if present,
 ///   else the policy's `desired_replicas`. `None` only when neither is set (no
@@ -96,9 +103,9 @@ pub fn in_cooldown(
 /// - `scale_to_zero` ⇒ needs `demand`: `Some` demand `> 0` scales to ≥1 (clamped),
 ///   `== 0` scales to 0. `demand == None` (L1 — router not wired) ⇒ `None` (no
 ///   decision; this mode is HARD-BLOCKED on the router `/metrics`).
-/// - `keep_warm` ⇒ floors at `min_replicas`; with `demand` it lifts toward
-///   `ceil(demand)`. `demand == None` ⇒ `Some(min_replicas)` (keep the floor warm
-///   even without a demand signal).
+/// - `keep_warm` ⇒ floors at 0; with `demand` it lifts toward `ceil(demand)`.
+///   `demand == None` ⇒ `Some(0)` (no signal → no floor under the reframe; the
+///   `keep_warm` floor now belongs to the node pool's `min_nodes`).
 /// - unknown mode ⇒ `None` (no decision; the loop logs + skips).
 ///
 /// `demand` is `None` for all of L1. The thresholds on the policy are read only
@@ -117,78 +124,88 @@ pub fn compute_target(
         },
         "keep_warm" => match demand {
             Some(d) => d.ceil().max(0.0) as u32,
-            None => policy.min_replicas,
+            None => 0,
         },
         _ => return None,
     };
-    Some(raw.clamp(policy.min_replicas, policy.max_replicas))
+    // The demand-slot ceiling (when set) is the only per-model upper bound left.
+    Some(match policy.desired_replicas {
+        Some(ceiling) => raw.min(ceiling),
+        None => raw,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use serde_json::json;
 
     fn ts(secs: i64) -> DateTime<Utc> {
         Utc.timestamp_opt(secs, 0).single().expect("valid ts")
     }
 
-    fn policy(mode: &str, min: u32, max: u32, desired: Option<u32>) -> ModelAutoscalePolicy {
+    fn policy(mode: &str, ceiling: Option<u32>, desired: Option<u32>) -> ModelAutoscalePolicy {
+        // After the reframe `desired_replicas` is the ONE remaining per-model COUNT
+        // field — it serves as both the demand-slot ceiling and the manual seed.
+        // The helper takes `ceiling`/`desired` separately for test readability but
+        // collapses them onto the single field (one wins; tests never set both).
         ModelAutoscalePolicy {
             model_id: "qwen2.5-7b".to_string(),
-            datacenter_resource_id: "dev-nomad".to_string(),
             residency_zone: "eu-west".to_string(),
-            min_replicas: min,
-            max_replicas: max,
             mode: mode.to_string(),
-            desired_replicas: desired,
+            desired_replicas: ceiling.or(desired),
             scale_up_threshold: None,
             scale_down_threshold: None,
             cooldown_secs: None,
-            replica_spec: json!({ "image": "vllm/vllm-openai:latest", "gpus": 1 }),
+            node_pool: "dev-pool".to_string(),
+            base: None,
+            dedicated: None,
         }
     }
 
     #[test]
     fn manual_uses_override_then_policy_then_none() {
-        let p = policy("manual", 0, 4, Some(2));
-        // Row override wins over the policy seed.
-        assert_eq!(compute_target(&p, None, Some(3)), Some(3));
+        let p = policy("manual", None, Some(2));
+        // Row override wins over the policy seed (clamped to the ceiling=2).
+        assert_eq!(compute_target(&p, None, Some(3)), Some(2));
         // No override → policy desired.
         assert_eq!(compute_target(&p, None, None), Some(2));
         // Neither set → no decision.
-        let p0 = policy("manual", 0, 4, None);
+        let p0 = policy("manual", None, None);
         assert_eq!(compute_target(&p0, None, None), None);
     }
 
     #[test]
-    fn manual_clamps_to_min_max() {
-        let p = policy("manual", 1, 2, None);
+    fn manual_clamps_to_desired_ceiling() {
+        // desired_replicas is the demand-slot ceiling: an override above it clamps,
+        // below it passes through (the low bound is 0, no min_replicas anymore).
+        let p = policy("manual", None, Some(2));
         assert_eq!(compute_target(&p, None, Some(5)), Some(2)); // clamp high
-        assert_eq!(compute_target(&p, None, Some(0)), Some(1)); // clamp low
+        assert_eq!(compute_target(&p, None, Some(0)), Some(0)); // no low clamp
     }
 
     #[test]
     fn scale_to_zero_needs_demand() {
-        let p = policy("scale_to_zero", 0, 3, None);
-        assert_eq!(compute_target(&p, Some(5.0), None), Some(1)); // demand>0 → up (clamped ≥? min=0 → 1)
+        let p = policy("scale_to_zero", None, None);
+        assert_eq!(compute_target(&p, Some(5.0), None), Some(1)); // demand>0 → 1
         assert_eq!(compute_target(&p, Some(0.0), None), Some(0)); // demand==0 → 0
         assert_eq!(compute_target(&p, None, None), None); // L1: no demand → no decision
     }
 
     #[test]
-    fn keep_warm_floors_at_min() {
-        let p = policy("keep_warm", 2, 8, None);
-        assert_eq!(compute_target(&p, None, None), Some(2)); // no demand → floor
-        assert_eq!(compute_target(&p, Some(0.0), None), Some(2)); // demand 0 → still floor
+    fn keep_warm_no_floor_under_reframe() {
+        // The keep_warm floor moved to the node pool's `min_nodes`; with no demand
+        // signal the per-model target is 0 (no min_replicas left to floor at).
+        let p = policy("keep_warm", Some(8), None);
+        assert_eq!(compute_target(&p, None, None), Some(0)); // no demand → 0
+        assert_eq!(compute_target(&p, Some(0.0), None), Some(0)); // demand 0 → 0
         assert_eq!(compute_target(&p, Some(4.2), None), Some(5)); // ceil(4.2)=5
-        assert_eq!(compute_target(&p, Some(100.0), None), Some(8)); // clamp high
+        assert_eq!(compute_target(&p, Some(100.0), None), Some(8)); // clamp to ceiling
     }
 
     #[test]
     fn unknown_mode_is_no_decision() {
-        let p = policy("bananas", 0, 4, Some(1));
+        let p = policy("bananas", None, Some(1));
         assert_eq!(compute_target(&p, None, Some(2)), None);
     }
 
