@@ -72,6 +72,11 @@
 	const nodeReplicaFor = (poolId: string) => nodeReplicas.find((r) => r.pool_resource_id === poolId);
 	const shortId = (id: string) => id.slice(0, 8);
 
+	// Candidate provision targets for the browser — every live model-server node.
+	const runnerTargets = $derived(
+		engines.nodes.map((n) => ({ id: n.runner_id, label: `runner ${shortId(n.runner_id)}` }))
+	);
+
 	async function act(runnerId: string, verb: 'load' | 'unload' | 'pull', modelId: string) {
 		if (!modelId) return;
 		busy = `${runnerId}:${modelId}:${verb}`;
@@ -89,14 +94,15 @@
 		}
 	}
 
-	function openBrowser(runnerId: string) {
+	/** Open the browser. `runnerId` null ⇒ section-level (picker inside the modal). */
+	function openBrowser(runnerId: string | null) {
 		browserRunner = runnerId;
 		browserOpen = true;
 	}
 
-	/** Provision (pull) the browser-selected model onto the open browser's runner. */
-	function onProvision(provisionId: string) {
-		if (browserRunner) void act(browserRunner, 'pull', provisionId);
+	/** Provision (pull) the browser-selected model onto the chosen runner. */
+	function onProvision(provisionId: string, runnerId: string) {
+		void act(runnerId, 'pull', provisionId);
 	}
 
 	function statusTone(s: string): string {
@@ -118,6 +124,17 @@
 				>headroom = full budget (router poll unconfigured)</span
 			>
 		{/if}
+		<!-- Section-level browse — reachable even with no runner (discovery). -->
+		<Button
+			variant="outline"
+			size="sm"
+			class="ml-auto h-7 gap-1.5 self-center px-2.5 text-xs"
+			disabled={busy !== null}
+			onclick={() => openBrowser(null)}
+		>
+			<Search class="size-3.5" />
+			Browse catalog
+		</Button>
 	</div>
 
 	{#if error}
@@ -343,9 +360,10 @@
 	</div>
 </section>
 
-<!-- Model browser — opened against a runner; "Provision" pulls onto it. -->
+<!-- Model browser — section-level (runner picker) or pre-targeted from a card. -->
 <ModelBrowser
 	bind:open={browserOpen}
-	runnerLabel={browserRunner ? `runner ${shortId(browserRunner)}` : ''}
+	runners={runnerTargets}
+	preselect={browserRunner}
 	onprovision={onProvision}
 />

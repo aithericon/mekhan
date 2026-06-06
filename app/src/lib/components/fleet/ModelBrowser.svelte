@@ -33,14 +33,26 @@
 
 	let {
 		open = $bindable(false),
-		runnerLabel = '',
+		runners = [],
+		preselect = null,
 		onprovision
 	}: {
 		open?: boolean;
-		runnerLabel?: string;
-		/** Provision (pull) `provisionId` onto the target runner. */
-		onprovision: (provisionId: string) => void;
+		/** Candidate model-server runners to provision onto. */
+		runners?: { id: string; label: string }[];
+		/** Pre-selected runner id (e.g. opened from a specific engine card). */
+		preselect?: string | null;
+		/** Provision (pull) `provisionId` onto `runnerId`. */
+		onprovision: (provisionId: string, runnerId: string) => void;
 	} = $props();
+
+	// The chosen provision target. Defaults to the preselected runner, else the
+	// first available; re-syncs whenever the modal (re)opens.
+	let target = $state<string | null>(null);
+	$effect(() => {
+		if (open) target = preselect ?? runners[0]?.id ?? null;
+	});
+	const canProvision = $derived(target !== null);
 
 	let source = $state<CatalogSource>('ollama');
 	let query = $state('');
@@ -84,7 +96,8 @@
 	}
 
 	function provision(m: CatalogModel) {
-		onprovision(provisionId(m));
+		if (!target) return;
+		onprovision(provisionId(m), target);
 		open = false;
 	}
 
@@ -104,10 +117,33 @@
 		<DialogHeader>
 			<DialogTitle>Browse models</DialogTitle>
 			<DialogDescription>
-				Provision a model from an official catalog{runnerLabel ? ` onto ${runnerLabel}` : ''}.
-				Provisioning pulls the weights to the runner; load it once it's ready.
+				Discover models from an official catalog, then provision one onto a model-server
+				runner. Provisioning pulls the weights; load it once it's ready.
 			</DialogDescription>
 		</DialogHeader>
+
+		<!-- Provision target. With no model-server runner this is discovery-only —
+			 browse + copy ids, but Provision is disabled until a runner exists. -->
+		{#if runners.length === 0}
+			<p class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+				No model-server runner enrolled — browse + copy ids here, then enrol a runner with a
+				<code>[model_agent]</code> backend to provision.
+			</p>
+		{:else if runners.length > 1}
+			<label class="flex items-center gap-2 text-xs text-muted-foreground">
+				Provision onto
+				<select
+					class="h-7 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+					bind:value={target}
+				>
+					{#each runners as r (r.id)}
+						<option value={r.id}>{r.label}</option>
+					{/each}
+				</select>
+			</label>
+		{:else}
+			<p class="text-xs text-muted-foreground">Provision onto <span class="font-medium">{runners[0].label}</span>.</p>
+		{/if}
 
 		<Tabs bind:value={source}>
 			<TabsList class="grid w-full grid-cols-2">
@@ -199,6 +235,10 @@
 										variant="outline"
 										size="sm"
 										class="h-7 gap-1 px-2 text-xs"
+										disabled={!canProvision}
+										title={canProvision
+											? 'Pull onto the selected runner'
+											: 'Enrol a model-server runner to provision'}
 										onclick={() => provision(m)}
 									>
 										<Download class="size-3.5" />
