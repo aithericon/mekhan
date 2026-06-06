@@ -1,5 +1,5 @@
 """Detector — drain the `video` data channel, run streaming object detection
-(YOLO11n + ByteTrack), and EMIT each recognized object as a control-plane stream.
+(YOLO26 + ByteTrack), and EMIT each recognized object as a control-plane stream.
 
 This is the AI half of the demo and the first node in the whole streaming arc
 that CONSUMES a data stream and TRANSFORMS it into a control stream:
@@ -10,7 +10,8 @@ that CONSUMES a data stream and TRANSFORMS it into a control stream:
 byte stream (it starts EARLY — the moment the producer's `open` descriptor
 reaches this node). We buffer the fragments into a temp `.mp4` and hand it to
 Ultralytics, which decodes frame-by-frame (its bundled OpenCV/ffmpeg) and runs
-YOLO11n — the practical SOTA real-time detector — with ByteTrack for stable
+YOLO26 — Ultralytics' latest SOTA real-time detector (NMS-free / native
+end-to-end, faster on CPU/edge than YOLO11) — with ByteTrack for stable
 per-object IDs across frames. Inference runs on the Apple-Silicon GPU via the
 PyTorch MPS backend (falling back to CPU), comfortably real-time for this clip.
 
@@ -23,7 +24,7 @@ NOT fold; the consumer edge (`join: gather`) does, in the `summary` step.
 
 LIVE-ONLY (run via the API, not `mekhan test`): the first run pip-installs
 `ultralytics` (PyTorch + OpenCV, a few hundred MB) into the venv and downloads
-the `yolo11n.pt` weights (~5 MB) — slow + network-dependent, exceeds the 60 s
+the `yolo26n.pt` weights (~5 MB) — slow + network-dependent, exceeds the 60 s
 test cap on a cold run. Warm runs are fast (venv + weights cached).
 """
 
@@ -50,7 +51,7 @@ try:
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     log_info(f"buffered {tmp_bytes} bytes of video; loading YOLO11n on {device}", device=device, video_bytes=tmp_bytes)
-    model = YOLO("yolo11n.pt")  # auto-downloads the weights on first use
+    model = YOLO("yolo26n.pt")  # auto-downloads the weights on first use
 
     emitted = 0
     frames_processed = 0

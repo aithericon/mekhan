@@ -1362,7 +1362,7 @@
     },
     {
       "id": "group_16",
-      "name": "Detect objects (YOLO11n + ByteTrack)"
+      "name": "Detect objects (YOLO26 + ByteTrack)"
     },
     {
       "id": "group_17",
@@ -1468,7 +1468,7 @@
       "name": "Stream clip as fragmented MP4 (PyAV)"
     }
   ],
-  "name": "47 · Stream Object Detection (video data channel → YOLO11n → detections control stream)",
+  "name": "47 · Stream Object Detection (video data channel → YOLO26 → detections control stream)",
   "places": [
     {
       "group_id": "group_18",
@@ -1703,49 +1703,49 @@
     },
     {
       "id": "p_detector_control_in",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Control Emit Inbox",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Control Emit Inbox",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "id": "p_detector_ctrl",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Control Token",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Control Token",
       "token_schema": "#/definitions/Ctrl__detector",
       "type": "state"
     },
     {
       "id": "p_detector_data",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Parked Data (write-once)",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__detector",
       "type": "state"
     },
     {
       "id": "p_detector_detections",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' (raw)",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' (raw)",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "id": "p_detector_detections_count",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' Gather Coordinator",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' Gather Coordinator",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_detector_detections_gathered",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' Gathered",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' Gathered",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_detector_detections_results",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' Items",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' Items",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_detector_output",
-      "name": "Detect objects (YOLO11n + ByteTrack) - Output",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -2770,7 +2770,7 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Detect objects (YOLO11n + ByteTrack)' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Detect objects (YOLO26 + ByteTrack)' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
@@ -3298,10 +3298,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"detector\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Detector — drain the `video` data channel, run streaming object detection\\n(YOLO11n + ByteTrack), and EMIT each recognized object as a control-plane stream.\\n\\nThis is the AI half of the demo and the first node in the whole streaming arc\\nthat CONSUMES a data stream and TRANSFORMS it into a control stream:\\n\\n    video bytes (data plane, JetStream)  →  YOLO per frame  →  detections (control plane)\\n\\n`aithericon.stream(\\\"video\\\")` drains the stream step's out-of-band fragmented-MP4\\nbyte stream (it starts EARLY — the moment the producer's `open` descriptor\\nreaches this node). We buffer the fragments into a temp `.mp4` and hand it to\\nUltralytics, which decodes frame-by-frame (its bundled OpenCV/ffmpeg) and runs\\nYOLO11n — the practical SOTA real-time detector — with ByteTrack for stable\\nper-object IDs across frames. Inference runs on the Apple-Silicon GPU via the\\nPyTorch MPS backend (falling back to CPU), comfortably real-time for this clip.\\n\\nInstead of returning one blob of results, we re-emit each detected object the\\nmoment its frame is processed, as a control-plane item on the OUT channel\\n`detections`. `aithericon.out(\\\"detections\\\")` opens one bracketed episode —\\nopen → item* → close(count) — and each `.emit(...)` fires one small\\n`{frame, t, label, confidence, bbox, track_id}` control token. The producer does\\nNOT fold; the consumer edge (`join: gather`) does, in the `summary` step.\\n\\nLIVE-ONLY (run via the API, not `mekhan test`): the first run pip-installs\\n`ultralytics` (PyTorch + OpenCV, a few hundred MB) into the venv and downloads\\nthe `yolo11n.pt` weights (~5 MB) — slow + network-dependent, exceeds the 60 s\\ntest cap on a cold run. Warm runs are fast (venv + weights cached).\\n\\\"\\\"\\\"\\n\\nimport os\\nimport tempfile\\n\\nimport torch\\nfrom ultralytics import YOLO\\n\\nimport aithericon\\nfrom aithericon import log_info, set_output, stream\\n\\nFPS = 10  # the clip's frame rate, used to stamp each detection's timestamp\\n\\n# Buffer the out-of-band byte stream into a temp container the decoder can open.\\ntmp = tempfile.NamedTemporaryFile(suffix=\\\".mp4\\\", delete=False)\\ntry:\\n    tmp_bytes = 0\\n    for chunk in stream(\\\"video\\\"):\\n        if isinstance(chunk, (bytes, bytearray)):\\n            tmp_bytes += tmp.write(chunk)\\n    tmp.flush()\\n    tmp.close()\\n\\n    device = \\\"mps\\\" if torch.backends.mps.is_available() else \\\"cpu\\\"\\n    log_info(f\\\"buffered {tmp_bytes} bytes of video; loading YOLO11n on {device}\\\", device=device, video_bytes=tmp_bytes)\\n    model = YOLO(\\\"yolo11n.pt\\\")  # auto-downloads the weights on first use\\n\\n    emitted = 0\\n    frames_processed = 0\\n    # `stream=True` yields one Results object per frame (lazy); `persist=True`\\n    # keeps the tracker state so `box.id` is a stable track id across frames.\\n    # ByteTrack needs the `lap` solver, which is NOT a default ultralytics dep —\\n    # it is pinned in this node's `requirements` so it is pre-installed in the\\n    # venv (otherwise ultralytics tries to pip-install it at runtime and the\\n    # first run fails needing a restart).\\n    results = model.track(\\n        source=tmp.name,\\n        stream=True,\\n        persist=True,\\n        device=device,\\n        verbose=False,\\n    )\\n    with aithericon.out(\\\"detections\\\") as out_chan:\\n        for frame_idx, res in enumerate(results):\\n            frames_processed += 1\\n            boxes = res.boxes\\n            if boxes is None:\\n                continue\\n            ids = boxes.id.tolist() if boxes.id is not None else [None] * len(boxes)\\n            frame_labels = {}  # per-frame tally for a watchable live log line\\n            for xyxy, conf, cls, tid in zip(\\n                boxes.xyxy.tolist(),\\n                boxes.conf.tolist(),\\n                boxes.cls.tolist(),\\n                ids,\\n            ):\\n                label = model.names[int(cls)]\\n                out_chan.emit(\\n                    {\\n                        \\\"frame\\\": frame_idx,\\n                        \\\"t\\\": round(frame_idx / FPS, 2),\\n                        \\\"label\\\": label,\\n                        \\\"confidence\\\": round(float(conf), 3),\\n                        \\\"bbox\\\": [round(float(v), 1) for v in xyxy],  # x1,y1,x2,y2\\n                        \\\"track_id\\\": int(tid) if tid is not None else None,\\n                    }\\n                )\\n                emitted += 1\\n                frame_labels[label] = frame_labels.get(label, 0) + 1\\n            # One structured log line per frame, emitted AS the frame is detected,\\n            # so the live execution log shows the detection stream in real time.\\n            tally = \\\", \\\".join(f\\\"{k}×{v}\\\" for k, v in sorted(frame_labels.items()))\\n            log_info(\\n                f\\\"frame {frame_idx:>2} @ {frame_idx / FPS:4.1f}s — {len(boxes)} objects: {tally or '(none)'}\\\",\\n                frame=frame_idx,\\n                t=round(frame_idx / FPS, 2),\\n                objects=len(boxes),\\n                **{f\\\"n_{k}\\\": v for k, v in frame_labels.items()},\\n            )\\n    # close(count) fires on clean block exit — the gather barrier sizes on it.\\n    log_info(\\n        f\\\"detection complete — {emitted} objects across {frames_processed} frames\\\",\\n        detections_emitted=emitted,\\n        frames_processed=frames_processed,\\n        device=device,\\n    )\\n\\n    set_output(\\\"detections_emitted\\\", emitted)\\n    set_output(\\\"frames_processed\\\", frames_processed)\\n    set_output(\\\"device\\\", device)\\nfinally:\\n    try:\\n        os.unlink(tmp.name)\\n    except OSError:\\n        pass\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"detections_emitted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"frames_processed\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"device\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/detector/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"video\", \"plane\": \"data\", \"transport\": \"jetstream\"}, #{\"element_kind\": \"any\", \"name\": \"detections\", \"plane\": \"control\", \"transport\": \"jetstream\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"detector\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Detector — drain the `video` data channel, run streaming object detection\\n(YOLO26 + ByteTrack), and EMIT each recognized object as a control-plane stream.\\n\\nThis is the AI half of the demo and the first node in the whole streaming arc\\nthat CONSUMES a data stream and TRANSFORMS it into a control stream:\\n\\n    video bytes (data plane, JetStream)  →  YOLO per frame  →  detections (control plane)\\n\\n`aithericon.stream(\\\"video\\\")` drains the stream step's out-of-band fragmented-MP4\\nbyte stream (it starts EARLY — the moment the producer's `open` descriptor\\nreaches this node). We buffer the fragments into a temp `.mp4` and hand it to\\nUltralytics, which decodes frame-by-frame (its bundled OpenCV/ffmpeg) and runs\\nYOLO26 — Ultralytics' latest SOTA real-time detector (NMS-free / native\\nend-to-end, faster on CPU/edge than YOLO11) — with ByteTrack for stable\\nper-object IDs across frames. Inference runs on the Apple-Silicon GPU via the\\nPyTorch MPS backend (falling back to CPU), comfortably real-time for this clip.\\n\\nInstead of returning one blob of results, we re-emit each detected object the\\nmoment its frame is processed, as a control-plane item on the OUT channel\\n`detections`. `aithericon.out(\\\"detections\\\")` opens one bracketed episode —\\nopen → item* → close(count) — and each `.emit(...)` fires one small\\n`{frame, t, label, confidence, bbox, track_id}` control token. The producer does\\nNOT fold; the consumer edge (`join: gather`) does, in the `summary` step.\\n\\nLIVE-ONLY (run via the API, not `mekhan test`): the first run pip-installs\\n`ultralytics` (PyTorch + OpenCV, a few hundred MB) into the venv and downloads\\nthe `yolo26n.pt` weights (~5 MB) — slow + network-dependent, exceeds the 60 s\\ntest cap on a cold run. Warm runs are fast (venv + weights cached).\\n\\\"\\\"\\\"\\n\\nimport os\\nimport tempfile\\n\\nimport torch\\nfrom ultralytics import YOLO\\n\\nimport aithericon\\nfrom aithericon import log_info, set_output, stream\\n\\nFPS = 10  # the clip's frame rate, used to stamp each detection's timestamp\\n\\n# Buffer the out-of-band byte stream into a temp container the decoder can open.\\ntmp = tempfile.NamedTemporaryFile(suffix=\\\".mp4\\\", delete=False)\\ntry:\\n    tmp_bytes = 0\\n    for chunk in stream(\\\"video\\\"):\\n        if isinstance(chunk, (bytes, bytearray)):\\n            tmp_bytes += tmp.write(chunk)\\n    tmp.flush()\\n    tmp.close()\\n\\n    device = \\\"mps\\\" if torch.backends.mps.is_available() else \\\"cpu\\\"\\n    log_info(f\\\"buffered {tmp_bytes} bytes of video; loading YOLO11n on {device}\\\", device=device, video_bytes=tmp_bytes)\\n    model = YOLO(\\\"yolo26n.pt\\\")  # auto-downloads the weights on first use\\n\\n    emitted = 0\\n    frames_processed = 0\\n    # `stream=True` yields one Results object per frame (lazy); `persist=True`\\n    # keeps the tracker state so `box.id` is a stable track id across frames.\\n    # ByteTrack needs the `lap` solver, which is NOT a default ultralytics dep —\\n    # it is pinned in this node's `requirements` so it is pre-installed in the\\n    # venv (otherwise ultralytics tries to pip-install it at runtime and the\\n    # first run fails needing a restart).\\n    results = model.track(\\n        source=tmp.name,\\n        stream=True,\\n        persist=True,\\n        device=device,\\n        verbose=False,\\n    )\\n    with aithericon.out(\\\"detections\\\") as out_chan:\\n        for frame_idx, res in enumerate(results):\\n            frames_processed += 1\\n            boxes = res.boxes\\n            if boxes is None:\\n                continue\\n            ids = boxes.id.tolist() if boxes.id is not None else [None] * len(boxes)\\n            frame_labels = {}  # per-frame tally for a watchable live log line\\n            for xyxy, conf, cls, tid in zip(\\n                boxes.xyxy.tolist(),\\n                boxes.conf.tolist(),\\n                boxes.cls.tolist(),\\n                ids,\\n            ):\\n                label = model.names[int(cls)]\\n                out_chan.emit(\\n                    {\\n                        \\\"frame\\\": frame_idx,\\n                        \\\"t\\\": round(frame_idx / FPS, 2),\\n                        \\\"label\\\": label,\\n                        \\\"confidence\\\": round(float(conf), 3),\\n                        \\\"bbox\\\": [round(float(v), 1) for v in xyxy],  # x1,y1,x2,y2\\n                        \\\"track_id\\\": int(tid) if tid is not None else None,\\n                    }\\n                )\\n                emitted += 1\\n                frame_labels[label] = frame_labels.get(label, 0) + 1\\n            # One structured log line per frame, emitted AS the frame is detected,\\n            # so the live execution log shows the detection stream in real time.\\n            tally = \\\", \\\".join(f\\\"{k}×{v}\\\" for k, v in sorted(frame_labels.items()))\\n            log_info(\\n                f\\\"frame {frame_idx:>2} @ {frame_idx / FPS:4.1f}s — {len(boxes)} objects: {tally or '(none)'}\\\",\\n                frame=frame_idx,\\n                t=round(frame_idx / FPS, 2),\\n                objects=len(boxes),\\n                **{f\\\"n_{k}\\\": v for k, v in frame_labels.items()},\\n            )\\n    # close(count) fires on clean block exit — the gather barrier sizes on it.\\n    log_info(\\n        f\\\"detection complete — {emitted} objects across {frames_processed} frames\\\",\\n        detections_emitted=emitted,\\n        frames_processed=frames_processed,\\n        device=device,\\n    )\\n\\n    set_output(\\\"detections_emitted\\\", emitted)\\n    set_output(\\\"frames_processed\\\", frames_processed)\\n    set_output(\\\"device\\\", device)\\nfinally:\\n    try:\\n        os.unlink(tmp.name)\\n    except OSError:\\n        pass\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"detections_emitted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"frames_processed\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"device\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/detector/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"video\", \"plane\": \"data\", \"transport\": \"jetstream\"}, #{\"element_kind\": \"any\", \"name\": \"detections\", \"plane\": \"control\", \"transport\": \"jetstream\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Prepare",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8529,7 +8529,7 @@
         "handler_id": "control_emit",
         "type": "effect"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Control Emit",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Control Emit",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8585,7 +8585,7 @@
         "source": "#{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' Close",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' Close",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8650,7 +8650,7 @@
         "source": "let __r = results; __r.sort(|a, b| if a.__map_idx < b.__map_idx { -1 } else if a.__map_idx > b.__map_idx { 1 } else { 0 }); let __out = []; for __e in __r { __out.push(__e.value); } #{ gathered: #{ output: __out } }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Gather",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Gather",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8706,7 +8706,7 @@
         "source": "#{ result: #{ value: item.payload, \"__map_idx\": item.__map_idx, \"__map_id\": item.__map_id } }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Channel 'detections' Item",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Channel 'detections' Item",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8755,10 +8755,10 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Detect objects (YOLO11n + ByteTrack)' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Detect objects (YOLO26 + ByteTrack)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Dead-letter (no handler — crash net)"
+      "name": "Detect objects (YOLO26 + ByteTrack) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_detector_to_output",
@@ -8788,7 +8788,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - To Output",
+      "name": "Detect objects (YOLO26 + ByteTrack) - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -8840,7 +8840,7 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Detect objects (YOLO11n + ByteTrack) - Yield (park data, forward control)",
+      "name": "Detect objects (YOLO26 + ByteTrack) - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
