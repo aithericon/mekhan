@@ -7,17 +7,21 @@ lossy `nats-latest` transport (late frames already dropped — latest wins); we
 `cv2.imdecode` each and call `model.track(frame, persist=True)` so ByteTrack
 keeps stable ids ACROSS the per-frame calls (the live-tracking pattern).
 
-Two outputs at once:
+Three outputs at once:
   • `detections` (Control/Out) — one `{frame,label,confidence,bbox,track_id}`
     control token per recognized object, emitted the moment its frame is
     processed (open → item* → close). A consumer-edge `join: gather` folds these
     into the `summary` report. This is the durable, structured record.
-  • `annotated` (Data/Out, image/jpeg, durable JetStream) — the SAME frame with
-    YOLO's boxes + labels + track ids drawn on it (`res.plot()`), JPEG-encoded
-    and written as one self-contained chunk. No node consumes it; the instance
-    view taps it and plays it as a live MJPEG feed (the frontend `mjpeg` render
-    adapter splits the byte stream on JPEG EOI markers). So you WATCH the
-    processed video — frames + bounding boxes — in the same panel as the run.
+  • `annotated` (Data/Out, image/jpeg, transport `livekit`) — the SAME frame
+    with YOLO's boxes + labels + track ids drawn on it (`res.plot()`),
+    JPEG-encoded and published as a WebRTC VP8 track. This is a presentation-only
+    EGRESS sink: a browser viewer subscribes to the room directly, but no in-net
+    node can consume it. So you WATCH the live processed video as the run goes.
+  • `recording` (Data/Out, image/jpeg, transport `jetstream`) — the IDENTICAL
+    annotated frames mirrored onto a durable, lossless, ordered datastream. The
+    downstream `recorder` step drains this into an MP4 and registers it in the
+    file catalogue. WebRTC can't be read back in-net, so this mirror is how the
+    annotated video is persisted.
 
 Pure-cv2 (ultralytics' bundled OpenCV) for decode + annotate + encode — no PyAV,
 so no libav symbol clash with the encoder path. LIVE-ONLY: the first run
@@ -41,9 +45,18 @@ emitted = 0
 frames_processed = 0
 annotated_bytes = 0
 
-# Open both outputs together: the structured control stream and the viewable
-# annotated MJPEG feed. Each `model.track(...)` call advances ByteTrack state.
-with aithericon.out("detections") as det_chan, open_output("annotated") as viz_chan:
+# Open all outputs together: the structured control stream, the viewable
+# annotated WebRTC feed, AND a durable mirror of that same feed for the
+# recorder. `annotated` (transport `livekit`) is a presentation-only egress
+# sink — a browser viewer subscribes to it directly, but no in-net node can
+# consume it. So the IDENTICAL annotated JPEG frames are also written to
+# `recording` (transport `jetstream`: lossless, ordered, replayable), which the
+# downstream `recorder` step drains into an MP4 and registers in the file
+# catalogue. Encode once, write to both. Each `model.track(...)` call advances
+# ByteTrack state.
+with aithericon.out("detections") as det_chan, open_output(
+    "annotated"
+) as viz_chan, open_output("recording") as rec_chan:
     for frame_idx, chunk in enumerate(stream("frames")):
         if not isinstance(chunk, (bytes, bytearray)):
             continue
@@ -54,13 +67,15 @@ with aithericon.out("detections") as det_chan, open_output("annotated") as viz_c
 
         res = model.track(frame, persist=True, device=device, verbose=False)[0]
 
-        # Annotated frame (boxes + labels + track ids drawn) → viewable feed. We
-        # emit EVERY processed frame, even object-free ones, so the feed is a
-        # continuous video rather than only firing on detections.
+        # Annotated frame (boxes + labels + track ids drawn). We emit EVERY
+        # processed frame, even object-free ones, so the feed is a continuous
+        # video rather than only firing on detections. The single encoded JPEG
+        # goes to BOTH the live WebRTC view and the durable recording mirror.
         ok, buf = cv2.imencode(".jpg", res.plot(), [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             jpeg = buf.tobytes()
             viz_chan.write(jpeg, content_type="image/jpeg")
+            rec_chan.write(jpeg, content_type="image/jpeg")
             annotated_bytes += len(jpeg)
 
         boxes = res.boxes
