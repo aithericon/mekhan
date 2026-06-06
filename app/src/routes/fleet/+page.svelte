@@ -25,6 +25,7 @@
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
 	import InferenceAuditTable from '$lib/components/fleet/InferenceAuditTable.svelte';
+	import ModelsSection from '$lib/components/fleet/ModelsSection.svelte';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,11 @@
 			>
 				{#snippet emptyIcon()}<Boxes class="size-10 text-muted-foreground/40" />{/snippet}
 			</CapacitySection>
+
+			<!-- MODELS — the self-hosted model pool (docs/28-31): live engine
+				 inventory + load/unload, curated set, placement policies, node pools.
+				 Inference bypasses the engine net; this is the control surface. -->
+			<ModelsSection />
 
 			<!-- INFERENCE AUDIT — the durable metering / GDPR ledger. Inference
 				 bypasses the engine net (the HTTP router meters directly), so this

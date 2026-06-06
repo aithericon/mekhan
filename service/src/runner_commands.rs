@@ -39,7 +39,7 @@ use crate::nats::MekhanNats;
 /// WIRE-IDENTICAL mirror of `executor_llm::model_command::ModelCommand`. Serde
 /// tag = `kind`, snake_case (`"load"` / `"unload"`); the parity test below locks
 /// the exact JSON against the executor's documented envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ModelCommand {
     /// Make `target` resident: LoRA → load adapter; Base → wake.
@@ -54,7 +54,7 @@ pub enum ModelCommand {
 ///
 /// WIRE-IDENTICAL mirror of `executor_llm::model_command::LoadTarget` (externally
 /// tagged enum — `{"Base":{...}}` / `{"Lora":{...}}`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum LoadTarget {
     /// A base engine, addressed by its served model id.
     Base { model_id: String },

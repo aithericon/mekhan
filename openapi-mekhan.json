@@ -3973,6 +3973,30 @@
         }
       }
     },
+    "/api/v1/node-replicas": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/node-replicas` — list every node-pool replica row in the workspace.",
+        "operationId": "list_node_replicas",
+        "responses": {
+          "200": {
+            "description": "Per-pool node-replica reconciliation rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeReplicaRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-types": {
       "get": {
         "tags": [
@@ -6146,6 +6170,52 @@
           },
           "404": {
             "description": "Runner not found or no stored nats_public_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runners/{runner_id}/model-commands": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/runners/{runner_id}/model-commands` — publish a load/unload\ncommand to a runner's model agent. Body is the wire [`ModelCommand`]\n(`{kind, target:{Base|Lora}}`). `202`: accepted (fire-and-forget,\ndesired-state — the agent applies it and re-publishes its catalog).",
+        "operationId": "publish_runner_model_command",
+        "parameters": [
+          {
+            "name": "runner_id",
+            "in": "path",
+            "description": "target runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Command published to the runner's model agent"
+          },
+          "500": {
+            "description": "NATS publish failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -15216,6 +15286,63 @@
           }
         }
       },
+      "LoadTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A base engine, addressed by its served model id.",
+            "required": [
+              "Base"
+            ],
+            "properties": {
+              "Base": {
+                "type": "object",
+                "description": "A base engine, addressed by its served model id.",
+                "required": [
+                  "model_id"
+                ],
+                "properties": {
+                  "model_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A LoRA adapter attached to `base`. `source_uri` is where to fetch the\nadapter weights from (optional on unload).",
+            "required": [
+              "Lora"
+            ],
+            "properties": {
+              "Lora": {
+                "type": "object",
+                "description": "A LoRA adapter attached to `base`. `source_uri` is where to fetch the\nadapter weights from (optional on unload).",
+                "required": [
+                  "adapter_id",
+                  "base"
+                ],
+                "properties": {
+                  "adapter_id": {
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "source_uri": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "What a [`ModelCommand`] acts on. A LoRA MUST carry its `base` back-pointer —\n`C` (`max_num_seqs`) is per-engine (per base), shared across that base's\nadapters.\n\nWIRE-IDENTICAL mirror of `executor_llm::model_command::LoadTarget` (externally\ntagged enum — `{\"Base\":{...}}` / `{\"Lora\":{...}}`)."
+      },
       "LoadedAdapter": {
         "type": "object",
         "description": "One LoRA adapter loaded on a base engine (the adapter half of the base↔LoRA\ngraph, attached via each adapter's `base` back-pointer).",
@@ -15478,6 +15605,49 @@
             }
           }
         }
+      },
+      "ModelCommand": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Make `target` resident: LoRA → load adapter; Base → wake.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "load"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Make `target` absent: LoRA → unload adapter; Base → sleep.",
+            "required": [
+              "target",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unload"
+                ]
+              },
+              "target": {
+                "$ref": "#/components/schemas/LoadTarget"
+              }
+            }
+          }
+        ],
+        "description": "A load/unload command for the node agent. `kind` selects the verb; `target` is\nwhat to act on (a base engine or a LoRA adapter).\n\nWIRE-IDENTICAL mirror of `executor_llm::model_command::ModelCommand`. Serde\ntag = `kind`, snake_case (`\"load\"` / `\"unload\"`); the parity test below locks\nthe exact JSON against the executor's documented envelope."
       },
       "ModelEntry": {
         "type": "object",
@@ -15969,6 +16139,97 @@
             "type": "string",
             "format": "uuid",
             "description": "The runner (node) id."
+          }
+        }
+      },
+      "NodeReplicaRow": {
+        "type": "object",
+        "description": "One `node_replicas` row — Loop 1's durable reconciliation target + Control-Plane\nread. `desired_nodes`/`observed_nodes`/`observed_slots` are stored `INT`; the\nloop works in `u32` and converts at the edges.\n\n`observed_nodes` is the live head-count of present pool nodes; `observed_slots`\nis the C-weighted aggregate (`Σ present-node C`) from FleetLiveness — the\ncapacity Loop 1 scales against (DERIVED-B). Both are roster-driven; the outcome\nprojector NEVER writes them.",
+        "required": [
+          "id",
+          "workspace_id",
+          "pool_resource_id",
+          "datacenter_resource_id",
+          "desired_nodes",
+          "observed_nodes",
+          "observed_slots",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Resolved `datacenter` resource UUID (the pool carries an alias; the loop\nresolves it before the upsert)."
+          },
+          "desired_nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Last desired NODE count the loop drove."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_actuated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Anchors the durable cooldown gate (survives a mekhan restart)."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native job NAME registered on the cluster (Nomad service-job id for the\ngeneric engine fleet). `None` until first actuation."
+          },
+          "observed_nodes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live count of present pool nodes (head-count from FleetLiveness)."
+          },
+          "observed_slots": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Live C-weighted capacity (`Σ present-node C`) from FleetLiveness — the\naggregate Loop 1 scales against (DERIVED-B)."
+          },
+          "pool_resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `node_pool` resource this row reconciles (UNIQUE — one row/pool)."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone recorded for the Control-Plane read + audit (the SINGLE\nzone source — DERIVED-A)."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of `status::*`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

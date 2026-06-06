@@ -42,6 +42,19 @@ export type ModelState = components['schemas']['ModelState'];
 /** Request body for the operator state-machine step. */
 export type TransitionRequest = components['schemas']['TransitionRequest'];
 
+/** Per-node engine inventory (docs/31 Phase 0) — `GET /api/v1/fleet/engines`. */
+export type FleetEnginesResponse = components['schemas']['FleetEnginesResponse'];
+/** One node's engines in the inventory. */
+export type NodeInventory = components['schemas']['NodeInventory'];
+/** One base engine on a node: base id, C, headroom, loaded adapters. */
+export type NodeEngine = components['schemas']['NodeEngine'];
+/** Per-policy model-replica autoscaler row (docs/29 §6'). */
+export type ModelReplicaRow = components['schemas']['ModelReplicaRow'];
+/** Per-pool node-replica autoscaler row (docs/31 Loop 1). */
+export type NodeReplicaRow = components['schemas']['NodeReplicaRow'];
+/** The load/unload command wire envelope. */
+export type ModelCommand = components['schemas']['ModelCommand'];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
@@ -84,4 +97,42 @@ export async function transitionModel(
 			body: { target, note: note ?? null }
 		})
 	);
+}
+
+/** GET /api/v1/fleet/engines — the live per-node engine inventory (Phase 0). */
+export async function listFleetEngines(): Promise<FleetEnginesResponse> {
+	return unwrap(await client.GET('/api/v1/fleet/engines', {}));
+}
+
+/** GET /api/v1/models/replicas — per-policy model-replica autoscaler rows. */
+export async function listModelReplicas(): Promise<ModelReplicaRow[]> {
+	return unwrap(await client.GET('/api/v1/models/replicas', {}));
+}
+
+/** GET /api/v1/node-replicas — per-pool node-replica autoscaler rows. */
+export async function listNodeReplicas(): Promise<NodeReplicaRow[]> {
+	return unwrap(await client.GET('/api/v1/node-replicas', {}));
+}
+
+/**
+ * POST /api/v1/runners/{runner_id}/model-commands — place/evict a model on a
+ * runner's local engine. `202` accepted (fire-and-forget; the agent applies it
+ * and re-publishes its catalog, so the engine board reflects it on the next poll).
+ */
+export async function publishModelCommand(
+	runnerId: string,
+	cmd: ModelCommand
+): Promise<void> {
+	const r = await client.POST('/api/v1/runners/{runner_id}/model-commands', {
+		params: { path: { runner_id: runnerId } },
+		body: cmd
+	});
+	if (r.error !== undefined) {
+		throw new Error(`API error ${r.response.status}: ${JSON.stringify(r.error)}`);
+	}
+}
+
+/** Convenience: load/unload a BASE model on a runner. */
+export function baseCommand(verb: 'load' | 'unload', modelId: string): ModelCommand {
+	return { kind: verb, target: { Base: { model_id: modelId } } } as ModelCommand;
 }
