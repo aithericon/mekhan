@@ -2607,6 +2607,132 @@ mod tests {
         assert!(!rt.chain.entries[0].fail_open);
         assert!(rt.chain.entries[1].fail_open);
     }
+
+    /// CANCEL-RELEASES-LEASE (registry level): `NetRegistry::terminate` on a
+    /// leased net whose body never completed must release the held lease via the
+    /// forced finalizer drain — NOT strand it. This is the exact path the DELETE
+    /// handler runs for both a hot net (Case 1) and a hibernated active net
+    /// (Case 2, after `get_or_create` rehydrates it): `terminate` →
+    /// `drain_finalizers` (release the parked held token) → `NetCancelled`.
+    ///
+    /// What this proves: once the net is HOT in the registry (its marking in
+    /// memory, including the parked held token), `terminate` releases the lease.
+    /// The rehydration step the DELETE handler performs (`get_or_create` replaying
+    /// the NATS log to reconstruct exactly this marking) requires real NATS and is
+    /// not exercised here (the mock store factory returns empty stores) — that part
+    /// needs live verification. This test pins the terminate-side guarantee the
+    /// rehydration feeds into.
+    #[tokio::test]
+    async fn test_terminate_releases_held_lease_via_finalizer_drain() {
+        use aithericon_sdk::prelude::*;
+
+        // Build a minimal lease-shaped net via the SDK: a `held` token (the lease)
+        // parked across the interior, a `t_exit` that releases ONLY on body
+        // success (gated on `body_out`), and a `t_finally` FINALIZER that releases
+        // on teardown. Mirrors the test-harness `finalizer_drain` fixture.
+        let mut sdk = Context::new("registry-cancel-lease-test");
+        let held = sdk.state::<DynamicToken>("held", "Held Lease");
+        let body_out = sdk.state::<DynamicToken>("body_out", "Body Done");
+        let release = sdk.state::<DynamicToken>("release", "Release Out (pool inbox stand-in)");
+        let out = sdk.state::<DynamicToken>("out", "Scope Output");
+
+        sdk.transition("t_exit", "Exit (release on success)")
+            .auto_input("input", &body_out)
+            .auto_input("held", &held)
+            .auto_output("out", &out)
+            .auto_output("release", &release)
+            .logic_rhai(r#"#{ out: input, release: #{ grant_id: held.grant_id } }"#)
+            .done();
+
+        sdk.transition("t_finally", "Release on failure/cancel")
+            .auto_input("held", &held)
+            .auto_output("release", &release)
+            .finalizer()
+            .logic_rhai(r#"#{ release: #{ grant_id: held.grant_id } }"#)
+            .done();
+
+        let scenario =
+            petri_test_harness::fixtures::TestScenario::from_sdk(sdk.build());
+        let held_pid = scenario.places.get("held").expect("held place").clone();
+        let release_pid = scenario.places.get("release").expect("release place").clone();
+
+        // Bring the net up HOT in the registry and seed ONLY the held token —
+        // i.e. the lease was acquired but the body never ran (mid-run cancel).
+        let registry = new_registry();
+        let inst = registry.get_or_create("net-leased-cancel");
+        inst.service
+            .initialize(scenario.net.clone())
+            .await
+            .expect("initialize");
+        inst.service
+            .create_token(
+                held_pid.clone(),
+                petri_domain::TokenColor::Data(serde_json::json!({ "grant_id": "g-cancel" })),
+            )
+            .await
+            .expect("seed held token");
+
+        // Normal evaluation must NOT fire the finalizer even though its input
+        // (the held token) is continuously enabled — the lease stays held.
+        *inst.run_mode.write() = RunMode::Running;
+        inst.service
+            .evaluate_until_quiescent(50)
+            .await
+            .expect("evaluate");
+        assert_eq!(
+            inst.service.get_marking().await.token_count(&held_pid),
+            1,
+            "normal evaluation must not release the lease (finalizer is invisible)"
+        );
+
+        // The cancel path: terminate drains finalizers BEFORE NetCancelled.
+        registry
+            .terminate(
+                "net-leased-cancel",
+                Some("Deleted by user".into()),
+                Some("engine-api".into()),
+            )
+            .await
+            .expect("terminate should succeed");
+
+        // The lease was RELEASED by the drain (not stranded): the held token is
+        // gone and exactly one release carrying its grant_id landed on the sink.
+        let marking = inst.service.get_marking().await;
+        assert_eq!(
+            marking.token_count(&held_pid),
+            0,
+            "terminate must release the held lease via the finalizer drain (not strand it)"
+        );
+        let released: Vec<String> = marking
+            .tokens_at(&release_pid)
+            .iter()
+            .filter_map(|t| match &t.color {
+                petri_domain::TokenColor::Data(v) => {
+                    v.get("grant_id").and_then(|g| g.as_str()).map(String::from)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            released,
+            vec!["g-cancel".to_string()],
+            "exactly one release carrying the held grant_id must be emitted on cancel"
+        );
+
+        // ...and the net was torn down: removed from the registry with a
+        // NetCancelled journaled after the release.
+        assert!(
+            registry.get("net-leased-cancel").is_none(),
+            "terminate must hibernate (remove) the net"
+        );
+        let events = inst.service.get_events().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCancelled { .. })),
+            "terminate must journal NetCancelled"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
