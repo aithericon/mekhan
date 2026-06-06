@@ -115,21 +115,21 @@
 
 <div class="space-y-4" data-testid="models-catalog">
 	<div class="flex flex-wrap items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Catalog</h2>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Catalog</h2>
 		<span class="text-sm text-muted-foreground">browse official sources, provision onto a runner</span>
 	</div>
 
 	<!-- Provision target. No runner ⇒ discovery-only (browse + Copy id). -->
 	{#if runners.length === 0}
-		<p class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+		<p class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
 			No model-server runner enrolled — browse + copy ids here, then enrol a runner with a
 			<code>[model_agent]</code> backend to provision.
 		</p>
 	{:else}
-		<label class="flex items-center gap-2 text-xs text-muted-foreground">
+		<label class="flex items-center gap-2 text-sm text-muted-foreground">
 			Provision onto
 			<select
-				class="h-7 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
+				class="h-7 rounded-md border border-border/60 bg-background px-2 text-sm text-foreground"
 				bind:value={target}
 			>
 				{#each runners as r (r.id)}
@@ -167,7 +167,7 @@
 		</div>
 
 		{#if source === 'huggingface'}
-			<p class="mt-2 text-xs text-muted-foreground/80">
+			<p class="mt-2 text-sm text-muted-foreground/80">
 				vLLM fixes its base at engine launch, so on a vLLM node these are informational — use
 				<span class="font-medium">Copy id</span> for config. An Ollama node can pull a GGUF repo
 				(<code>hf.co/…</code>) directly.
@@ -209,7 +209,7 @@
 										</a>
 									{/if}
 								</div>
-								<div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+								<div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
 									{#if m.pulls}<span>↓ {m.pulls}</span>{/if}
 									{#each (m.sizes ?? []).slice(0, 6) as s}
 										<span class="rounded bg-muted px-1 py-px font-mono">{s}</span>
@@ -224,7 +224,7 @@
 									<Button
 										variant="ghost"
 										size="sm"
-										class="h-7 gap-1 px-2 text-xs"
+										class="h-7 gap-1 px-2 text-sm"
 										onclick={() => copyId(m)}
 									>
 										<Copy class="size-3.5" />
@@ -234,7 +234,7 @@
 								<Button
 									variant="outline"
 									size="sm"
-									class="h-7 gap-1 px-2 text-xs"
+									class="h-7 gap-1 px-2 text-sm"
 									disabled={!canProvision}
 									title={canProvision
 										? 'Pull onto the selected runner'

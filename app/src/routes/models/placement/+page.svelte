@@ -51,7 +51,7 @@
 
 <div class="space-y-6" data-testid="models-placement">
 	<div class="flex items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Placement</h2>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Placement</h2>
 		<span class="text-sm text-muted-foreground">autoscaler policies + node pools</span>
 	</div>
 
@@ -65,11 +65,11 @@
 
 	<!-- POLICIES — per-model demand/placement (model_policy + model_replicas) -->
 	<div class="space-y-2">
-		<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+		<h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
 			Placement policies
 		</h3>
 		{#if policies.length === 0}
-			<p class="text-xs text-muted-foreground/70">No model policies.</p>
+			<p class="text-sm text-muted-foreground/70">No model policies.</p>
 		{:else}
 			<div class="grid gap-2 sm:grid-cols-2">
 				{#each policies as p (p.id)}
@@ -77,9 +77,9 @@
 					<div class="rounded-lg border border-border/60 bg-card p-2.5 text-sm">
 						<div class="flex items-center justify-between">
 							<span class="font-medium text-foreground">{p.display_name || p.path}</span>
-							{#if r}<span class="text-xs {statusTone(r.status)}">{r.status}</span>{/if}
+							{#if r}<span class="text-sm {statusTone(r.status)}">{r.status}</span>{/if}
 						</div>
-						<div class="mt-0.5 text-xs text-muted-foreground">
+						<div class="mt-0.5 text-sm text-muted-foreground">
 							{#if r}
 								desired {r.desired_count} · observed {r.observed_count}
 								{#if r.residency_zone}· zone {r.residency_zone}{/if}
@@ -97,14 +97,14 @@
 
 	<!-- NODE POOLS — engine capacity (node_pool + node_replicas). -->
 	<div class="space-y-2">
-		<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+		<h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
 			Node pools
 			<span class="ml-1 font-normal normal-case text-muted-foreground/60">
 				(engine capacity — provisioning deferred)
 			</span>
 		</h3>
 		{#if pools.length === 0}
-			<p class="text-xs text-muted-foreground/70">No node pools.</p>
+			<p class="text-sm text-muted-foreground/70">No node pools.</p>
 		{:else}
 			<div class="grid gap-2 sm:grid-cols-2">
 				{#each pools as p (p.id)}
@@ -112,9 +112,9 @@
 					<div class="rounded-lg border border-border/60 bg-card p-2.5 text-sm">
 						<div class="flex items-center justify-between">
 							<span class="font-medium text-foreground">{p.display_name || p.path}</span>
-							{#if r}<span class="text-xs {statusTone(r.status)}">{r.status}</span>{/if}
+							{#if r}<span class="text-sm {statusTone(r.status)}">{r.status}</span>{/if}
 						</div>
-						<div class="mt-0.5 text-xs text-muted-foreground">
+						<div class="mt-0.5 text-sm text-muted-foreground">
 							{#if r}
 								desired {r.desired_nodes} nodes · observed {r.observed_nodes} · slots {r.observed_slots}
 								{#if r.residency_zone}· zone {r.residency_zone}{/if}

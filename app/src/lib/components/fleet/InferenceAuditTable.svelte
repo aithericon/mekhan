@@ -91,7 +91,7 @@
 							</td>
 							<td class="px-3 py-2 font-medium text-foreground">{row.model_id}</td>
 							<td
-								class="max-w-[10rem] truncate px-3 py-2 font-mono text-xs text-muted-foreground"
+								class="max-w-[10rem] truncate px-3 py-2 font-mono text-sm text-muted-foreground"
 								title={row.instance_id ?? undefined}
 							>
 								{shortId(row.instance_id)}
