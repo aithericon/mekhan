@@ -11,6 +11,7 @@
 	import { planLiveRender, planFileRender, type LiveRenderPlan } from '$lib/channels/renderers';
 	import { playMseStream } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
+	import { subscribe as subscribeLiveTap } from '$lib/channels/liveTapRegistry';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
 	import type { Channel } from '$lib/api/client';
 	import type { ChannelRuntime } from '$lib/stores/instance-marking.svelte';
@@ -136,6 +137,10 @@
 		bytes: number;
 		error: string | null;
 		handle: { stop(): void } | null;
+		// The shared-tap subscription's ref-count release (last release cancels the
+		// single underlying source read). Decoupled from `handle` (the player's
+		// stop) because both must run on teardown.
+		release: (() => void) | null;
 	};
 	let lives = $state<Record<string, Live>>({});
 	// MSE renders into a real media element; bound per channel below.
@@ -144,7 +149,7 @@
 	let imgEls = $state<Record<string, HTMLImageElement | null>>({});
 
 	function startLive(ch: Channel, status: LiveStatus = 'streaming') {
-		lives[ch.name] = { status, seconds: 0, bytes: 0, error: null, handle: null };
+		lives[ch.name] = { status, seconds: 0, bytes: 0, error: null, handle: null, release: null };
 	}
 
 	function onLiveStatus(ch: Channel) {
@@ -161,70 +166,70 @@
 		};
 	}
 
-	// Open the live tap (`?follow=1`) and return the streaming response.
-	async function openLiveTap(ch: Channel): Promise<Response> {
-		const r = await authFetch(
-			`/api/v1/executions/${executionId}/channels/${encodeURIComponent(ch.name)}/data?follow=1`
-		);
-		if (!r.ok || !r.body) throw new Error(`live tap failed: ${r.status}`);
-		return r;
+	// Open the shared live tap (`?follow=1`) via the ref-counting registry, which
+	// opens ONE source read per (execution, channel) and fans it out. Returns this
+	// subscriber's private stream + a `release()` (last release cancels the source).
+	// The registry now owns the tap Response, so the per-envelope content-type
+	// refinement is no longer read here; we use the static element content_type
+	// decl as the mime (same value `livePlan`/`plan.mime` already derive from), and
+	// PCM's `parseSampleRate` falls back correctly when the decl lacks a rate param.
+	function openLiveTap(ch: Channel, kind: LiveRenderPlan['kind']) {
+		return subscribeLiveTap(executionId!, ch.name, kind);
 	}
 
 	// PCM → schedule on a Web Audio timeline.
-	async function playLivePcmChannel(ch: Channel) {
+	function playLivePcmChannel(ch: Channel) {
 		if (!executionId) return;
 		stopLive(ch);
 		startLive(ch);
 		try {
-			const r = await openLiveTap(ch);
-			const ct = r.headers.get('content-type') ?? elementContentType(ch);
+			const sub = openLiveTap(ch, 'pcm');
 			const handle = playLivePcm({
-				stream: r.body!,
-				sampleRate: parseSampleRate(ct),
+				stream: sub.stream,
+				sampleRate: parseSampleRate(elementContentType(ch)),
 				onStatus: onLiveStatus(ch),
 				onProgress: onLiveProgress(ch)
 			});
 			const cur = lives[ch.name];
-			if (cur) lives[ch.name] = { ...cur, handle };
+			if (cur) lives[ch.name] = { ...cur, handle, release: sub.release };
 		} catch (e) {
 			lives[ch.name] = {
 				status: 'error',
 				seconds: 0,
 				bytes: 0,
 				error: e instanceof Error ? e.message : String(e),
-				handle: null
+				handle: null,
+				release: null
 			};
 		}
 	}
 
 	// Fragmented audio/video → append into a MediaSource on the bound element.
-	async function playLiveMse(ch: Channel, plan: LiveRenderPlan) {
+	function playLiveMse(ch: Channel, plan: LiveRenderPlan) {
 		if (!executionId) return;
 		const media = mediaEls[ch.name];
 		if (!media) return;
 		stopLive(ch);
 		startLive(ch);
 		try {
-			const r = await openLiveTap(ch);
-			// Prefer the per-envelope content-type (it may refine codecs); fall
-			// back to the registry's plan mime.
-			const mimeType = r.headers.get('content-type') ?? plan.mime;
+			const sub = openLiveTap(ch, 'mse');
 			const handle = playMseStream({
-				stream: r.body!,
-				mimeType,
+				stream: sub.stream,
+				mimeType: plan.mime,
 				media,
 				onStatus: onLiveStatus(ch),
 				onProgress: onLiveProgress(ch)
 			});
 			const cur = lives[ch.name];
-			if (cur) lives[ch.name] = { ...cur, handle };
+			if (cur) lives[ch.name] = { ...cur, handle, release: sub.release };
 		} catch (e) {
 			lives[ch.name] = {
 				status: 'error',
 				seconds: 0,
 				bytes: 0,
 				error: e instanceof Error ? e.message : String(e),
-				handle: null
+				handle: null,
+				release: null
 			};
 		}
 	}
@@ -232,44 +237,49 @@
 	// Motion-JPEG → swap each decoded frame into the bound <img>. `onProgress`
 	// reports (framesRendered, bytes); the shared `seconds` slot carries the frame
 	// count (labelled "frames" for mjpeg below).
-	async function playLiveMjpeg(ch: Channel, plan: LiveRenderPlan) {
+	function playLiveMjpeg(ch: Channel, plan: LiveRenderPlan) {
 		if (!executionId) return;
 		const img = imgEls[ch.name];
 		if (!img) return;
 		stopLive(ch);
 		startLive(ch);
 		try {
-			const r = await openLiveTap(ch);
-			const mime = r.headers.get('content-type') ?? plan.mime;
+			const sub = openLiveTap(ch, 'mjpeg');
 			const handle = playMjpegStream({
-				stream: r.body!,
+				stream: sub.stream,
 				img,
-				mime,
+				mime: plan.mime,
 				onStatus: onLiveStatus(ch),
 				onProgress: onLiveProgress(ch)
 			});
 			const cur = lives[ch.name];
-			if (cur) lives[ch.name] = { ...cur, handle };
+			if (cur) lives[ch.name] = { ...cur, handle, release: sub.release };
 		} catch (e) {
 			lives[ch.name] = {
 				status: 'error',
 				seconds: 0,
 				bytes: 0,
 				error: e instanceof Error ? e.message : String(e),
-				handle: null
+				handle: null,
+				release: null
 			};
 		}
 	}
 
 	function stopLive(ch: Channel) {
-		lives[ch.name]?.handle?.stop();
+		const cur = lives[ch.name];
+		cur?.handle?.stop();
+		cur?.release?.();
 	}
 
 	$effect(() => {
 		return () => {
 			for (const u of objectUrls) URL.revokeObjectURL(u);
 			objectUrls = [];
-			for (const l of Object.values(lives)) l.handle?.stop();
+			for (const l of Object.values(lives)) {
+				l.handle?.stop();
+				l.release?.();
+			}
 		};
 	});
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import {
 		getTemplate,
 		listStepExecutions,
@@ -16,6 +17,7 @@
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import StepDetailDrawer from './StepDetailDrawer.svelte';
 	import { provideNodeRuntime, provideAwaitingResource } from './runtime-context';
+	import { provideEdgeFeeds, deriveEdgeFeeds } from './edge-feed-context';
 	import {
 		createInstanceMarkingStore,
 		isAwaitingResource,
@@ -200,31 +202,48 @@
 		}
 	}
 
+	// Depend on the id VALUE, not the `instance` prop object. The parent re-fetches
+	// the instance every poll and passes a NEW object with the same id; a bare
+	// `instance.id` read makes this effect depend on the `instance` signal, so it
+	// re-ran every poll — re-running `loadTemplate()` (new `template` → new `graph`
+	// identity → WorkflowCanvas rebuilds its edge array → xyflow recreates every
+	// edge component) and firing the `marking.destroy()` cleanup. A value-compared
+	// `$derived` only propagates when the id actually changes (real navigation).
+	const instanceId = $derived(instance.id);
 	$effect(() => {
-		void instance.id;
-		loading = true;
-		error = null;
-		// Drilling parent→child is a param-only navigation within the same
-		// /instances/[id] route, so this component is reused (not remounted)
-		// and the drawer state survives. Reset it here so a leftover drawer
-		// from the parent run (pointing at its SubWorkflow step) doesn't linger
-		// over the child's graph.
-		drawerOpen = false;
-		drawerStep = null;
-		drawerNode = null;
-		drawerIterations = [];
-		(async () => {
-			// `marking.refresh()` does the one-time topology+log load on first
-			// call (when topology is still null), then incremental pulls.
-			await Promise.all([
-				loadTemplate(),
-				refreshExecutions(),
-				refreshMarking(),
-				refreshChildren(),
-				refreshAllocations()
-			]);
-			loading = false;
-		})();
+		void instanceId; // sole tracked dep (value-compared → fires only on real nav)
+		// `untrack` the body: the init functions below synchronously read
+		// `instance.template_id` / `.id` / `.net_id` (before their first await), which
+		// would otherwise make this effect depend on the whole `instance` prop object.
+		// The parent re-passes a new `instance` object every poll (status updates), so
+		// without untrack the effect re-ran each poll — reloading the template (new
+		// `graph` identity → xyflow rebuilds every edge → on-edge media flickered) and
+		// firing `marking.destroy()`. Untracked, it re-runs only when the id changes.
+		untrack(() => {
+			loading = true;
+			error = null;
+			// Drilling parent→child is a param-only navigation within the same
+			// /instances/[id] route, so this component is reused (not remounted)
+			// and the drawer state survives. Reset it here so a leftover drawer
+			// from the parent run (pointing at its SubWorkflow step) doesn't linger
+			// over the child's graph.
+			drawerOpen = false;
+			drawerStep = null;
+			drawerNode = null;
+			drawerIterations = [];
+			void (async () => {
+				// `marking.refresh()` does the one-time topology+log load on first
+				// call (when topology is still null), then incremental pulls.
+				await Promise.all([
+					loadTemplate(),
+					refreshExecutions(),
+					refreshMarking(),
+					refreshChildren(),
+					refreshAllocations()
+				]);
+				loading = false;
+			})();
+		});
 		return () => marking.destroy();
 	});
 
@@ -292,6 +311,23 @@
 		for (const ch of decl) out[ch.name] = channelRuntimeFor(marking, drawerNode!.id, ch.name);
 		return out;
 	});
+
+	// ── On-edge live media feeds (instance/run view only) ────────────────────
+	// Resolve each data-binary, live-renderable channel edge to an `EdgeFeed`
+	// (source channel + latest execution_id + render plan + per-poll runtime).
+	// Reading `markingTick` AND `executions` ties freshness to the existing 2 s
+	// poll, so widgets stay live WITHOUT mutating the `graph` prop (which would
+	// force xyflow to re-sync its edge set — see WorkflowCanvas). The context
+	// getter closes over this reactive map; DeletableEdge looks itself up by id.
+	const edgeFeeds = $derived.by(() => {
+		void markingTick;
+		void executions;
+		// `isTerminal` is stamped on each feed so the widget freezes its end-state
+		// (last frame held, tap + cap slot released) once the run finishes even if
+		// it never observed an explicit channel `close` token.
+		return deriveEdgeFeeds(graph, nodesById, executionsByNode, marking, isTerminal);
+	});
+	provideEdgeFeeds((edgeId: string) => edgeFeeds.get(edgeId) ?? null);
 
 	function openDrawerFor(nodeId: string) {
 		const list = executionsByNode.get(nodeId) ?? [];
