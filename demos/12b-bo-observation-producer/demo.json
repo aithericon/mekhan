@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000000c2",
+  "folder": "optimization",
   "name": "12b · BO Observation Producer",
   "description": "Phase 4 producer half of the Bayesian-optimization arc. A single AutomatedStep writes an observation file and calls `aithericon.log_artifact(category=metric, metadata={kind: bo_observation, ...})`. Running this live through the executor emits the EffectCompleted->catalogue_register event that the causality ingest projects into a catalogue entry, which fires the 12a `BO Catalog Trigger` and spawns a slim re-fit instance. This is the only piece that genuinely requires the executor; it closes the produce->catalogue->trigger->spawn cycle that 12a alone could never demonstrate (12a is the consumer/body only). category MUST be one of the 8 closed ArtifactCategory enum members (model/dataset/plot/log/checkpoint/config/metric/other); the BO semantics ride in a `user_metadata.kind` sentinel because the enum cannot carry a custom `bo_observation` value."
 }

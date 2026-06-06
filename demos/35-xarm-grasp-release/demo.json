@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000350",
+  "folder": "robotics",
   "name": "35 · xArm Grasp → Release (MoveIt scene attach, Path C Slice 3)",
   "description": "Path C Slice 3 on the SIMULATED xArm 6: the atomic grasp/release compound bridge ops (decision 4 — gripper actuation FUSED with MoveIt scene attach/detach into one server-side service call). start → add_object (call_service /add_object — spawn the `sample_box` collision object at a reachable grasp pose) → plan_pose (call_service /plan_to_pose to the grasp pose) → gate (Decision on the typed plan metrics) → execute (send_action_goal FollowJointTrajectory, the planned trajectory spliced verbatim as {{ plan_pose.trajectory }}) → grasp (call_service /grasp object_id=sample_box — close + AttachedCollisionObject ADD, atomic; returns {success, attached}) → plan_place (call_service /plan_to_pose to a retract/place pose) → gate2 (Decision on plan_place metrics) → execute2 (send_action_goal, {{ plan_place.trajectory }}) → release (call_service /release object_id=sample_box — open + detach; returns attached==false) → read_state (await_topic /joint_states) → End. Both Decision gates route their default branch to the SAME `end-rejected` node. The S3 contract is the attach booleans, so the test asserts on grasp.attached==true / release.attached==false. LIVE ONLY: requires `just dev xarm-up`."
 }

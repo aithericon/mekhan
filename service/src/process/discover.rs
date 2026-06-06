@@ -236,10 +236,11 @@ async fn discover_resource_globals(
     let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
 
     for node in &graph.nodes {
-        // A `LeaseScope` holds a datacenter lease for its whole child region
-        // (docs/17) — a declared binding on the node data.
+        // A `LeaseScope` holds a capacity lease (datacenter OR presence runner)
+        // for its whole child region (docs/17) — a declared binding on the node
+        // data. The alias must be a discovered resource head either way.
         if let WorkflowNodeData::LeaseScope { lease, .. } = &node.data {
-            let alias = lease.scheduler.trim();
+            let alias = lease.pool.trim();
             if !alias.is_empty() {
                 envelope_heads.insert(alias.to_string());
                 declared.push((node.id.clone(), alias.to_string()));

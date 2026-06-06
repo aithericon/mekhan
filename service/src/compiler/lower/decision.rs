@@ -24,14 +24,23 @@ pub(crate) fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let mut output_places = Vec::new();
 
-    // Normalize once: a blank guard means "always match".
+    // Normalize once: a blank guard means "always match". When this Decision is
+    // a Map body step, qualify bare `<itemVar>.<field>` references with the
+    // `input` port — the engine binds guards by port name, so a bare itemVar is
+    // otherwise an unbound variable (errors → dead-end). See
+    // `super::qualify_map_item_refs`.
+    let map_item_var = super::map_item_var(cx.graph, cx.node.parent_id.as_deref());
     let guards: Vec<String> = conditions
         .iter()
         .map(|c| {
-            if c.guard.trim().is_empty() {
+            let g = if c.guard.trim().is_empty() {
                 "true".to_string()
             } else {
                 c.guard.clone()
+            };
+            match &map_item_var {
+                Some(iv) => super::qualify_map_item_refs(&g, iv),
+                None => g,
             }
         })
         .collect();

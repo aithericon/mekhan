@@ -194,6 +194,14 @@ impl TestScenario {
                 }
             }
 
+            // Carry the finalizer flag (failure-drain-only transitions, e.g. a
+            // LeaseScope's `t_<id>_finally`). The real service load path threads
+            // this through scenario_loader; this SDK→domain shortcut must too,
+            // or finalizers become ordinary transitions and fire mid-run.
+            if st.finalizer {
+                transition = transition.with_finalizer(true);
+            }
+
             if let Some(ref gid) = st.group_id {
                 transition = transition.with_group_id(gid);
             }

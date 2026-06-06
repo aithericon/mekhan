@@ -1,0 +1,16 @@
+{
+  "name": "Stream object detection: a real clip flows over the `video` data channel; a YOLO11n + ByteTrack detector drains it, recognizes objects frame-by-frame, and emits each on the `detections` control channel; a consumer-edge gather folds them into a per-class report. LIVE-ONLY (the detector pip-installs ultralytics/torch + downloads yolo11n.pt — far past the 60 s test cap on a cold run); run via `mekhan run … --start-tokens sample-input.json` and read the instance outputs.",
+  "enabled": false,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": { "video": { "__file": "assets/clip.mp4" } }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.frames_processed", "op": "gte", "value": 1 },
+    { "path": "result.value.total_objects", "op": "gte", "value": 1 },
+    { "path": "result.value.distinct_tracked", "op": "gte", "value": 1 }
+  ]
+}

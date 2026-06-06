@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000020",
+  "folder": "agents-llm",
   "name": "LLM Smoke Test",
   "description": "Sends a fixed text prompt to the local Ollama daemon (http://localhost:11434, provider=\"ollama\") and surfaces the response. Verifies the executor's LLM backend → Ollama native /api/chat integration end-to-end. Requires `just dev ollama-up` (see just/dev.just::up-ollama for install + model defaults; the recipe idempotently pulls the default model on first run)."
 }

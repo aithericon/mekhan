@@ -765,8 +765,9 @@ async fn resolve_job_templates(
 /// The RESOLVED datacenter alias for a Scheduled step: the node's own stamped
 /// `scheduler` (set by `resolve_scheduler_defaults`), else — for a body running
 /// on an enclosing `LeaseScope`'s held allocation by containment — that
-/// LeaseScope's `lease.scheduler`. `None` only if neither is present (which the
-/// caller turns into a flavor-mismatch diagnostic).
+/// LeaseScope's `lease.pool`. Only reached from a `Scheduled` body, which implies
+/// a datacenter-backed LeaseScope (a presence LeaseScope's body is plain
+/// `Executor`). `None` only if neither is present (a flavor-mismatch diagnostic).
 fn resolved_cluster_alias(
     node: &crate::models::template::WorkflowNode,
     graph: &WorkflowGraph,
@@ -781,7 +782,7 @@ fn resolved_cluster_alias(
         let parent = graph.nodes.iter().find(|n| n.id == pid)?;
         match &parent.data {
             WorkflowNodeData::LeaseScope { lease, .. } => {
-                let a = lease.scheduler.trim();
+                let a = lease.pool.trim();
                 return if a.is_empty() {
                     None
                 } else {

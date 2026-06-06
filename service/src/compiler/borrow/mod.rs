@@ -276,6 +276,7 @@ mod tests {
             outputs: vec![],
             guard: None,
             priority: None,
+            finalizer: false,
             logic: TransitionLogic::Rhai {
                 source: format!("let job_inputs = []; {BORROW_MARKER} job_inputs"),
             },
@@ -429,6 +430,7 @@ mod tests {
             outputs: vec![],
             guard: None,
             priority: None,
+            finalizer: false,
             logic: TransitionLogic::Rhai {
                 source: format!("let job_inputs = []; {BORROW_MARKER} job_inputs"),
             },
@@ -699,6 +701,7 @@ mod tests {
             outputs: vec![],
             guard: None,
             priority: None,
+            finalizer: false,
             logic: TransitionLogic::Rhai {
                 source: lowered.to_string(),
             },

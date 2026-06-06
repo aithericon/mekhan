@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000052",
   "name": "DI Extraction Canary",
-  "project": "online-clinic",
+  "folder": "online-clinic",
   "description": "Single-vision-call canary: no OCR layer, no class branching, no provenance. The vision model reads the image directly and emits a flat `ExtractionResult` (document_type + fields[] + suggested_actions[]). Ports online-clinic's `di_extraction_v1` petri-net as a deliberate regression vs document-pipeline-v1 — its purpose is to nail the input/output wire shape, not to be production-quality DI. Useful as a baseline benchmark target for the full DAG."
 }

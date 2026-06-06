@@ -1,0 +1,173 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 180 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Stream Object Detection",
+        "initial": {
+          "id": "in",
+          "label": "Video Input",
+          "fields": [
+            {
+              "name": "video",
+              "label": "Video clip (MP4)",
+              "kind": "file",
+              "required": true,
+              "accept": "video/mp4,video/quicktime,video/*"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "stream",
+      "type": "automated_step",
+      "slug": "stream",
+      "position": { "x": 340, "y": 180 },
+      "data": {
+        "type": "automated_step",
+        "label": "Stream clip as fragmented MP4 (PyAV)",
+        "description": "Borrows the uploaded clip from Start via `start.video` (a FileRef), brokers the bytes from the object store to a local path through the sidecar (`aithericon.file(...).retrieve()`), decodes the frames with PyAV and re-muxes them into a FRAGMENTED MP4 / H.264 byte stream (`ftyp` + `moov`(mvex) init segment, then `moof` + `mdat` media fragments), pacing the fragments out over the Data/Out channel `video` in ~real time. Same shape as demo 46 — only the frames are real instead of synthesized. The element content_type is `video/mp4;codecs=\"avc1.42E01E\"`, so the UI render registry (planLiveRender) returns mediaKind=video and the panel can append the stream into a `<video>` element via Media Source Extensions WHILE the detector downstream pulls the same bytes off the data plane. The bulk video rides the out-of-band JetStream datastream transport — it NEVER enters the net marking; the net sees only the channel's open + close.",
+        "channels": [
+          {
+            "name": "video",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "video/mp4;codecs=\"avc1.42E01E\"" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["av"],
+            "virtualenv": true,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Streamed",
+          "fields": [
+            { "name": "fragments_written", "label": "Fragments written", "kind": "number" },
+            { "name": "bytes_written", "label": "Bytes written", "kind": "number" },
+            { "name": "frames", "label": "Frames", "kind": "number" },
+            { "name": "resolution", "label": "Resolution", "kind": "text" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "detector",
+      "type": "automated_step",
+      "slug": "detector",
+      "position": { "x": 660, "y": 180 },
+      "data": {
+        "type": "automated_step",
+        "label": "Detect objects (YOLO26 + ByteTrack)",
+        "description": "The AI half — the first node in the streaming arc that CONSUMES a data stream and TRANSFORMS it into a control stream. `aithericon.stream('video')` drains the stream step's out-of-band fragmented-MP4 byte stream (starting EARLY, while the producer is still emitting), buffers it into a temp `.mp4`, and runs YOLO26 — Ultralytics' latest SOTA real-time detector (NMS-free / native end-to-end, faster on CPU/edge than YOLO11) — with ByteTrack for stable per-object IDs. Inference runs on the Apple-Silicon GPU via the PyTorch MPS backend (falling back to CPU), comfortably real-time for this clip. Instead of returning one blob, it re-emits each detected object the moment its frame is processed, as a control-plane item on the Control/Out channel `detections` (`aithericon.out('detections')` → open → item* → close): one tiny `{frame,t,label,confidence,bbox,track_id}` token per object. The producer does NOT fold; the consumer edge (`join: gather`) does, in the `summary` step. LIVE-ONLY: the first run pip-installs `ultralytics` (PyTorch + OpenCV, a few hundred MB) and downloads `yolo26n.pt` (~5 MB), which exceeds the 60 s `mekhan test` cap on a cold run; warm runs are fast.",
+        "channels": [
+          {
+            "name": "video",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "video/mp4;codecs=\"avc1.42E01E\"" }
+          },
+          {
+            "name": "detections",
+            "direction": "out",
+            "plane": "control",
+            "element": { "type": "any" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["ultralytics", "lap"],
+            "virtualenv": true,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Detector stats",
+          "fields": [
+            { "name": "detections_emitted", "label": "Detections emitted", "kind": "number" },
+            { "name": "frames_processed", "label": "Frames processed", "kind": "number" },
+            { "name": "device", "label": "Inference device", "kind": "text" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "summary",
+      "type": "automated_step",
+      "slug": "summary",
+      "position": { "x": 980, "y": 180 },
+      "data": {
+        "type": "automated_step",
+        "label": "Summarize detections",
+        "description": "Consumes the detector step's Control channel `detections` with `join: gather`, so the compiler's gather barrier re-orders the emitted detection tokens by index and parks the whole collection as `{ output: [<detection>, ...] }` — fed in as this step's input token. Reads the list off `input.output` and tallies the total object count, a per-class histogram (person/car/truck/bus/…), the number of distinct tracked objects (ByteTrack ids), and the peak per-frame object count. This is the consumer-side fold: the producer just emitted a stream, the join discipline lives on the edge.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Detection summary",
+          "fields": [
+            { "name": "total_objects", "label": "Total objects", "kind": "number" },
+            { "name": "distinct_classes", "label": "Distinct classes", "kind": "number" },
+            { "name": "distinct_tracked", "label": "Distinct tracked objects", "kind": "number" },
+            { "name": "peak_per_frame", "label": "Peak objects in a frame", "kind": "number" },
+            { "name": "class_counts", "label": "Per-class counts (JSON)", "kind": "text" },
+            { "name": "labels", "label": "Labels", "kind": "text" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1300, "y": 180 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "total_objects", "expression": "summary.total_objects" },
+          { "targetField": "labels", "expression": "summary.labels" },
+          { "targetField": "distinct_tracked", "expression": "summary.distinct_tracked" },
+          { "targetField": "peak_per_frame", "expression": "summary.peak_per_frame" },
+          { "targetField": "frames_processed", "expression": "detector.frames_processed" },
+          { "targetField": "device", "expression": "detector.device" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_stream", "source": "start", "target": "stream", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_stream_video_detector", "source": "stream", "sourceHandle": "video", "target": "detector", "targetHandle": "video", "type": "sequence" },
+    { "id": "e_detector_detections_summary", "source": "detector", "sourceHandle": "detections", "target": "summary", "targetHandle": "in", "type": "sequence", "join": "gather" },
+    { "id": "e_summary_end", "source": "summary", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

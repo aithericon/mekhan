@@ -24,12 +24,15 @@ export type LiveRenderKind =
 	/** Headerless little-endian PCM → schedule on a Web Audio timeline. */
 	| 'pcm'
 	/** Fragmented audio/video the browser's MSE can append progressively. */
-	| 'mse';
+	| 'mse'
+	/** A stream of self-contained JPEG frames → swap each into an `<img>`. */
+	| 'mjpeg';
 
 export interface LiveRenderPlan {
 	kind: LiveRenderKind;
-	/** Which media element the bytes drive (MSE needs one; PCM uses AudioContext). */
-	mediaKind: 'audio' | 'video';
+	/** Which media element the bytes drive (MSE needs one; PCM uses AudioContext;
+	 *  MJPEG swaps frames into an `<img>`). */
+	mediaKind: 'audio' | 'video' | 'image';
 	/** The content_type to hand the renderer (the full MIME incl. any `codecs=`
 	 *  param — MSE's `addSourceBuffer`/`isTypeSupported` require codecs). */
 	mime: string;
@@ -89,6 +92,13 @@ export function planLiveRender(
 	const isVideo = base.startsWith('video/');
 	if ((isAudio || isVideo) && mseSupported(contentType)) {
 		return { kind: 'mse', mediaKind: isVideo ? 'video' : 'audio', mime: contentType };
+	}
+	// Motion-JPEG: a data channel of self-contained JPEG frames (e.g. a live
+	// camera / annotated-detection feed). No MSE probe — every UA decodes JPEG in
+	// an `<img>`; the player re-frames the byte stream on JPEG EOI markers. Only
+	// `image/jpeg` (the EOI split is JPEG-specific); other `image/*` fall through.
+	if (base === 'image/jpeg') {
+		return { kind: 'mjpeg', mediaKind: 'image', mime: contentType };
 	}
 	return null;
 }

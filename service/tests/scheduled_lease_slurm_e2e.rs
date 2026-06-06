@@ -160,9 +160,10 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     label: "Lease Scope".to_string(),
                     description: None,
                     lease: LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
+                        pool: DC_ALIAS.to_string(),
                         request: None,
                     },
+                    requirements: None,
                 },
                 parent_id: None,
                 width: None,

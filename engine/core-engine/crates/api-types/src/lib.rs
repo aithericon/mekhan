@@ -378,6 +378,14 @@ pub struct ScenarioTransition {
     /// silently mis-ordered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<TransitionPriority>,
+    /// Finalizer flag — see `petri_domain::Transition::finalizer`. A finalizer
+    /// fires ONLY during the engine's post-failure drain (never in normal
+    /// evaluation); it releases resources a net still holds when it fails
+    /// permanently (e.g. a LeaseScope's held lease). Must be plumbed end-to-end
+    /// (SDK builder → AIR → api-types → scenario_loader → domain.Transition) or
+    /// failure-path lease release is silently dropped.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub finalizer: bool,
     /// Polymorphic logic definition
     pub logic: TransitionLogic,
     /// Combined input schema (for Wasm validation)

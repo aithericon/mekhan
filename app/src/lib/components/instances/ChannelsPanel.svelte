@@ -10,6 +10,7 @@
 	import { playLivePcm, parseSampleRate } from '$lib/audio/livePcmPlayer';
 	import { planLiveRender, planFileRender, type LiveRenderPlan } from '$lib/channels/renderers';
 	import { playMseStream } from '$lib/channels/mseStreamPlayer';
+	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
 	import type { Channel } from '$lib/api/client';
 	import type { ChannelRuntime } from '$lib/stores/instance-marking.svelte';
@@ -139,6 +140,8 @@
 	let lives = $state<Record<string, Live>>({});
 	// MSE renders into a real media element; bound per channel below.
 	let mediaEls = $state<Record<string, HTMLMediaElement | null>>({});
+	// MJPEG swaps each decoded frame into an <img>; bound per channel below.
+	let imgEls = $state<Record<string, HTMLImageElement | null>>({});
 
 	function startLive(ch: Channel, status: LiveStatus = 'streaming') {
 		lives[ch.name] = { status, seconds: 0, bytes: 0, error: null, handle: null };
@@ -210,6 +213,38 @@
 				stream: r.body!,
 				mimeType,
 				media,
+				onStatus: onLiveStatus(ch),
+				onProgress: onLiveProgress(ch)
+			});
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, handle };
+		} catch (e) {
+			lives[ch.name] = {
+				status: 'error',
+				seconds: 0,
+				bytes: 0,
+				error: e instanceof Error ? e.message : String(e),
+				handle: null
+			};
+		}
+	}
+
+	// Motion-JPEG → swap each decoded frame into the bound <img>. `onProgress`
+	// reports (framesRendered, bytes); the shared `seconds` slot carries the frame
+	// count (labelled "frames" for mjpeg below).
+	async function playLiveMjpeg(ch: Channel, plan: LiveRenderPlan) {
+		if (!executionId) return;
+		const img = imgEls[ch.name];
+		if (!img) return;
+		stopLive(ch);
+		startLive(ch);
+		try {
+			const r = await openLiveTap(ch);
+			const mime = r.headers.get('content-type') ?? plan.mime;
+			const handle = playMjpegStream({
+				stream: r.body!,
+				img,
+				mime,
 				onStatus: onLiveStatus(ch),
 				onProgress: onLiveProgress(ch)
 			});
@@ -310,10 +345,18 @@
 								size="sm"
 								disabled={!executionId}
 								onclick={() =>
-									lplan.kind === 'pcm' ? playLivePcmChannel(ch) : playLiveMse(ch, lplan)}
+									lplan.kind === 'pcm'
+										? playLivePcmChannel(ch)
+										: lplan.kind === 'mjpeg'
+											? playLiveMjpeg(ch, lplan)
+											: playLiveMse(ch, lplan)}
 								title={executionId
 									? `Stream and play this channel live (${
-											lplan.kind === 'pcm' ? 'Web Audio' : 'Media Source'
+											lplan.kind === 'pcm'
+												? 'Web Audio'
+												: lplan.kind === 'mjpeg'
+													? 'MJPEG'
+													: 'Media Source'
 										}) while the step produces`
 									: 'Execution id unavailable — cannot tap this channel'}
 							>
@@ -332,7 +375,9 @@
 								class:text-foreground={live.status === 'streaming'}
 							>
 								{#if live.status === 'streaming'}<span class="text-red-500">●</span> live{:else}ended{/if}
-								· {live.seconds.toFixed(1)}s · {(live.bytes / 1024).toFixed(0)} KB
+								· {lplan.kind === 'mjpeg'
+									? `${live.seconds} frame${live.seconds === 1 ? '' : 's'}`
+									: `${live.seconds.toFixed(1)}s`} · {(live.bytes / 1024).toFixed(0)} KB
 							</span>
 						{:else if live && live.status === 'error'}
 							<span class="text-sm text-red-500">{live.error}</span>
@@ -353,6 +398,17 @@
 							{:else}
 								<audio bind:this={mediaEls[ch.name]} controls class="w-full"></audio>
 							{/if}
+						</div>
+					{:else if lplan.kind === 'mjpeg'}
+						<!-- MJPEG swaps each decoded JPEG frame into this <img>; kept
+						     mounted so the player can target it the moment Play live runs. -->
+						<div class="mt-2" class:hidden={!isLiveActive(live)}>
+							<!-- svelte-ignore a11y_img_redundant_alt -->
+							<img
+								bind:this={imgEls[ch.name]}
+								alt="live frame"
+								class="max-h-64 w-full rounded-md bg-black object-contain"
+							/>
 						</div>
 					{/if}
 				{/if}

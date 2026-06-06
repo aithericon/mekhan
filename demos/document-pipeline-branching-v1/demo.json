@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000054",
   "name": "Document Pipeline — Branching v1",
-  "project": "online-clinic",
+  "folder": "online-clinic",
   "description": "Branching document intake DAG: vision-LLM classify (on the raw file, BEFORE OCR) → decision route-by-class → two branches that fan into an XOR-join. Bloodwork branch (explicit lab classes only): Surya OCR (per-word boxes) → OCR-text extractor (fields + word_range) → Python resolve-bbox (unions word boxes into per-field visual_ref {page, bbox 0..1}, fuzzy value fallback). Generic-fallback branch (every other class, incl. befund): single vision extract. Branches merge (join, mode=any) → Python validate (shape-coerce + stamp document_type) → end. Phase 1 of the branching pipeline; classify→ocr ordering is unvalidated (needs-live-experimentation). Document classes are JSON-schema enum values, not engine vocabulary."
 }

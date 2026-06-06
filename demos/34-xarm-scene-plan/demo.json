@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000340",
+  "folder": "robotics",
   "name": "34 · xArm Scene Plan (MoveIt collision object, Path C Slice 2)",
   "description": "Path C Slice 2 on the SIMULATED xArm 6: make the MoveIt planning scene STATEFUL on the runner by adding a collision object, then plan a Cartesian pose that must route around it — proving the scene survives and influences planning. start → add_obstacle (call_service /add_object — pushes a box CollisionObject into move_group's persistent scene via the runner-side motion-bridge node) → plan_pose (call_service /plan_to_pose to a target on the far side of the obstacle) → gate (Decision: success && point_count>0 && total_duration<=30) → execute (send_action_goal /xarm6_traj_controller/follow_joint_trajectory, the planned trajectory spliced verbatim as {{ plan_pose.trajectory }}) → read_state (await_topic /joint_states) → End. The obstacle box sits between the arm home region and the plan target so a found plan (point_count>0) implies MoveIt routed around the live scene object. LIVE ONLY: requires `just dev xarm-up`."
 }

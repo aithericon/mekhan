@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000018",
+  "folder": "control-flow",
   "name": "08 · Failure Handling",
   "description": "Step 8 of the learning path. AutomatedStep has two output ports: the default success port on the right and the red `error` port on the bottom. A Python `raise` (or non-zero exit) routes the token to the error port once retries are exhausted. Wire that port to a Failure node + End to surface a structured error envelope; leave it dangling and the step dead-ends silently on failure."
 }

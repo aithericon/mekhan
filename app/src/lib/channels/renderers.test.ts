@@ -45,6 +45,24 @@ describe('planLiveRender — presentation-side content_type dispatch', () => {
 		expect(planLiveRender('video/mp4;codecs="hev1.1.6.L93.B0"', supportsNone)).toBeNull();
 	});
 
+	it('routes an image/jpeg data channel to the mjpeg renderer (no MSE probe needed)', () => {
+		// Even with MSE unsupported, a JPEG frame stream is renderable in an <img>.
+		expect(planLiveRender('image/jpeg', supportsNone)).toEqual<LiveRenderPlan>({
+			kind: 'mjpeg',
+			mediaKind: 'image',
+			mime: 'image/jpeg'
+		});
+	});
+
+	it('ignores params/casing when classifying image/jpeg as mjpeg', () => {
+		expect(planLiveRender('IMAGE/JPEG; foo=bar', supportsNone)?.kind).toBe('mjpeg');
+	});
+
+	it('does NOT treat other image/* as mjpeg (the EOI split is JPEG-specific)', () => {
+		// image/png has different framing; no live image-sequence path for it.
+		expect(planLiveRender('image/png', supportsAll)).toBeNull();
+	});
+
 	it('returns null for a non-media content_type', () => {
 		expect(planLiveRender('application/octet-stream', supportsAll)).toBeNull();
 		expect(planLiveRender('application/json', supportsAll)).toBeNull();

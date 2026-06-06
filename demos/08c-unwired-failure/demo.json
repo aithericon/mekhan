@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000008c0",
+  "folder": "control-flow",
   "name": "08c · Unwired Failure (panics)",
   "description": "Regression fixture for the panic-on-unconnected-failure feature. An AutomatedStep that always raises, with its `error` handle LEFT DANGLING (no failure-path edge). Pre-feature this dead-ended silently and the instance hung at 'running' forever; post-feature the unhandled failure crashes the net (NetFailed) once retries are exhausted, so the instance flips to 'failed'. Compare with 08-failure-handling, which wires the error handle and completes with a structured envelope."
 }

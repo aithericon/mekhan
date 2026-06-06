@@ -22,8 +22,13 @@
       "data": {
         "type": "lease_scope",
         "label": "xArm Cell Lease",
-        "description": "Acquires ONE `xarm_fleet` runner for the whole sample-handling run and releases it on exit. Everything inside — scene seeding and every job's plan/execute/grasp — runs on the same held runner by CONTAINMENT, so the persistent move_group planning scene seeded in (A) is the same scene the jobs in (B) plan against. The lease is parked write-once so the runner stays warm across both Maps.",
-        "lease": { "scheduler": "xarm_fleet" }
+        "description": "Acquires ONE `xarm_fleet` runner for the whole sample-handling run and releases it on exit. Everything inside — scene seeding and every job's plan/execute/grasp — runs on the same held runner by CONTAINMENT (the body steps + the pick/place/swap SubWorkflows inherit the held `runner.<id>` namespace), so the persistent move_group planning scene seeded in (A) is the same scene the jobs in (B) plan against. The `requirements` pick WHICH runner to hold (an xArm6); the held lease is parked write-once so the runner stays warm across both Maps. Body steps are plain `executor` — they do NOT claim their own unit (that would deadlock against the held one), they ride the lease.",
+        "lease": { "pool": "xarm_fleet" },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        }
       }
     },
     {
@@ -62,13 +67,8 @@
       "data": {
         "type": "automated_step",
         "label": "Add Sample to Scene",
-        "description": "Map body. ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) — pushes ONE inventory sample into move_group's persistent planning scene as a box CollisionObject. `object_id` is the sample id (`{{ item.sample_id }}`), `dimensions` is the inventory row's box dims spliced as the BARE whole-object placeholder (`{{ item.dimensions }}`), and `pose` is a geometry_msgs/PoseStamped whose inner `pose` is the inventory row's geometry_msgs/Pose spliced verbatim (`{{ item.pose }}`). The embedded interface_typedefs shape the request live for this non-bundled service.",
-        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
-        "requirements": {
-          "constraints": [
-            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
-          ]
-        },
+        "description": "Map body. ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) — pushes ONE inventory sample into move_group's persistent planning scene as a box CollisionObject. `object_id` is the sample id (`{{ item.sample_id }}`), `dimensions` is the inventory row's box dims spliced as the BARE whole-object placeholder (`{{ item.dimensions }}`), and `pose` is a geometry_msgs/PoseStamped whose inner `pose` is the inventory row's geometry_msgs/Pose spliced verbatim (`{{ item.pose }}`). Plain `executor` (NO per-step capacity): it inherits the enclosing cell lease's held `runner.<id>` namespace by containment, so every add_object hits the SAME held move_group scene. The embedded interface_typedefs shape the request live for this non-bundled service.",
+        "deploymentModel": { "mode": "executor" },
         "executionSpec": {
           "backendType": "ros",
           "config": {
@@ -285,6 +285,38 @@
       }
     },
     {
+      "id": "mark_done",
+      "type": "automated_step",
+      "slug": "mark_done",
+      "parentId": "handle_jobs",
+      "position": { "x": 1000, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Mark Job Done",
+        "description": "Map body terminal. The Decision dispatches each job into exactly one of the pick/place/swap SubWorkflows, each of which declares its OWN result shape (`picked`/`placed`/`swapped`). The Map gathers a single `resultVar` (`done`) per element, so the branches must converge on one uniform terminal field. This trivial Python step emits `done: true`, giving the gather a present, typed `done` for every job regardless of which op ran.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Done",
+          "fields": [
+            { "name": "done", "label": "Done", "kind": "bool", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
       "id": "end",
       "type": "end",
       "position": { "x": 1840, "y": 320 },
@@ -292,8 +324,8 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "jobs_done", "expression": "handle_jobs.done.len()" },
-          { "targetField": "seeded", "expression": "seed_inventory.seeded.len()" }
+          { "targetField": "jobs_done", "expression": "(handle_jobs[*]).len()" },
+          { "targetField": "seeded", "expression": "(seed_inventory[*]).len()" }
         ]
       }
     }
@@ -312,9 +344,10 @@
     { "id": "e_gate_pick", "source": "op_gate", "target": "do_pick", "sourceHandle": "is_pick", "targetHandle": "in", "label": "Pick", "type": "conditional" },
     { "id": "e_gate_place", "source": "op_gate", "target": "do_place", "sourceHandle": "is_place", "targetHandle": "in", "label": "Place", "type": "conditional" },
     { "id": "e_gate_swap", "source": "op_gate", "target": "do_swap", "sourceHandle": "default", "targetHandle": "in", "label": "Swap", "type": "conditional" },
-    { "id": "e_pick_handle", "source": "do_pick", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
-    { "id": "e_place_handle", "source": "do_place", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
-    { "id": "e_swap_handle", "source": "do_swap", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_pick_mark", "source": "do_pick", "target": "mark_done", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_place_mark", "source": "do_place", "target": "mark_done", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_swap_mark", "source": "do_swap", "target": "mark_done", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_mark_handle", "source": "mark_done", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
 
     { "id": "e_handle_lease", "source": "handle_jobs", "target": "lease", "targetHandle": "body_out", "type": "sequence" },
     { "id": "e_lease_end", "source": "lease", "target": "end", "targetHandle": "in", "type": "sequence" }

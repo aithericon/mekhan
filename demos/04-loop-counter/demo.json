@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000014",
+  "folder": "basics",
   "name": "04 · Loop Counter",
   "description": "Step 4 of the learning path. A Loop node iterates its body (a PhaseUpdate pass-through) until lp.iteration reaches the bound declared in loopCondition. Showcases the declared `<loop_id>.iteration` producer field (picker-visible, `.pyi`-typed), body_in/body_out wiring, and the rule that the stop condition belongs in loopCondition, not maxIterations or a post-loop Decision. Note: AutomatedStep bodies don't currently propagate the loop counter — that requires a deeper engine fix (parked-place iteration), tracked as follow-up."
 }

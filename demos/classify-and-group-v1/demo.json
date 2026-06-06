@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000051",
   "name": "Classify & Group v1",
-  "project": "online-clinic",
+  "folder": "online-clinic",
   "description": "Strict prefix of document-pipeline-v1. Takes a patient-uploaded PDF/image, runs kreuzberg OCR for text + tables, then a single vision-LLM call that both groups pages into logical documents and classifies each group. Stops after classification — no per-class extraction, no persistence, no review. Useful as a standalone splitter for multi-document scans, and as a building block fan-in for the full pipeline. Ports online-clinic's `classify_and_group_v1` onto mekhan primitives."
 }

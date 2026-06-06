@@ -312,7 +312,10 @@ export class YjsGraphBinding {
 					type: 'lease_scope',
 					lease:
 						(config?.lease as LeaseScopeDataT['lease'] | undefined) ??
-						({ scheduler: '' } as LeaseScopeDataT['lease'])
+						({ pool: '' } as LeaseScopeDataT['lease']),
+						// Optional presence-placement Requirements (the scope picks WHICH
+						// runner to hold). Carried through so editor round-trips don't drop it.
+						requirements: config?.requirements as LeaseScopeDataT['requirements']
 				};
 			}
 			case 'phase_update':

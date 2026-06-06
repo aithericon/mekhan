@@ -36,6 +36,44 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // `super::is_map_body_terminal` (the same one AutomatedStep/Agent use).
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+    // When this SubWorkflow is a Map body step, its `input_mapping` expressions
+    // may reference the Map itemVar (`<itemVar>.<field>`). Those run in the shape
+    // transition's port-name scope (`input`), so the bare itemVar must be
+    // qualified — see `super::qualify_map_item_refs`.
+    let map_item_var = super::map_item_var(cx.graph, cx.node.parent_id.as_deref());
+
+    // Lease propagation (runner-based lease): a SubWorkflow nested in a lease
+    // holder spawns a child net whose steps can't see the parent's LeaseScope
+    // (the child is an INDEPENDENT net — `enclosing_leased_scope_slug` walks the
+    // PARENT graph). So we thread the held unit's namespace INTO the child as a
+    // `_executor_namespace` leaf on the spawn `initial_token`: the `_`-prefix
+    // makes it survive the spawn → child Start fork → child body verbatim, and a
+    // child net's plain executor steps honor it over their group default (see
+    // `lower_automated_step`'s default ns-frag). The value is the holder's parked
+    // `<holder>.lease.executor_namespace` (a datacenter's warm drain executor OR a
+    // presence runner's `runner.<id>`), borrowed via the SAME read-arc the
+    // `guard_readarc_plan` SubWorkflow arm registers — `apply_guard_borrows`
+    // rewrites `<holder>.lease.executor_namespace` → `d_<holder>.lease.…` and
+    // wires a read-arc into the holder's parked data place. Empty when not nested
+    // in a lease (the byte-identical no-lease path). Guarded on `__ci` being a map
+    // (a SubWorkflow's initial_token always is).
+    // Two propagation cases (a child net can be nested arbitrarily deep —
+    // demo 40's swap spawns a child that itself spawns pick/place):
+    //   (1) DIRECTLY under a LeaseScope → read the held namespace from the
+    //       parked lease (`<holder>.lease.executor_namespace`), since the Map
+    //       scatter that produced this body token did NOT carry the `_`-leaf.
+    //   (2) NOT under a lease, but the inbound token already carries an inherited
+    //       `_executor_namespace` (this IS a child net spawned under a lease, one
+    //       or more levels up) → PASS IT THROUGH. This is what threads the held
+    //       namespace into a grandchild net.
+    let ns_inherit_frag =
+        match crate::compiler::lower::automated_step::enclosing_leased_scope_slug(cx.node, cx.graph)
+        {
+            Some(holder) => format!(
+                r#" if type_of(__ci) == "map" {{ __ci._executor_namespace = {holder}.lease.executor_namespace; }}"#
+            ),
+            None => r#" if type_of(__ci) == "map" && input._executor_namespace != () { __ci._executor_namespace = input._executor_namespace; }"#.to_string(),
+        };
 
     // Rust panic/Result model (see lower_automated_step): a WIRED error handle
     // routes child failure to a handler; an UNWIRED handle crashes the net
@@ -69,6 +107,13 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // input_mapping → the token bridged into the child's Start. Empty ⇒ the
     // inbound accumulating token passes through unchanged.
     let (im_lets, im_val) = result_mapping_rhai(input_mapping);
+    // Qualify bare `<itemVar>.<field>` refs in the mapping's `let __rvN = (...)`
+    // bindings with the `input` port (the borrow apply rewrites `<slug>.<field>`
+    // refs separately; the itemVar is token-resident and gets no read-arc).
+    let im_lets = match &map_item_var {
+        Some(iv) => super::qualify_map_item_refs(&im_lets, iv),
+        None => im_lets,
+    };
     let init_expr = if input_mapping.is_empty() {
         "input".to_string()
     } else {
@@ -89,8 +134,24 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // because that raw envelope had the executor's `outputs.<field>` at
     // depth-1; once publish.rs filters reply sources to End-derived terminals
     // only, the join MUST unwrap the `exit_code.value` envelope.
+    // A NON-terminal SubWorkflow inside a Map body must thread the Map
+    // correlation leaves (`__map_idx`/`__map_id`) from the child's reply onto its
+    // output, so they reach the body terminal (whose executor envelope the Map's
+    // gather reads) and the gather can correlate. They threaded INTO the child via
+    // the shape graft and ride back on the End's full-token reply. Without this,
+    // the join projects only declared fields → the terminal's result lands at the
+    // gather with `__map_id: ()` and the barrier never fires → the Map (and any
+    // enclosing lease) wedges. Guarded on presence, and only emitted in a Map body
+    // (the terminal SubWorkflow uses `join_logic_map`, which already grafts).
+    let map_corr_graft = if map_item_var.is_some() {
+        r#" if type_of(reply) == "map" { if "__map_idx" in reply { __o.__map_idx = reply.__map_idx; } if "__map_id" in reply { __o.__map_id = reply.__map_id; } }"#
+    } else {
+        ""
+    };
     let join_logic = if output.fields.is_empty() {
-        r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code { reply.exit_code.value } else { reply }; #{ output: __v }"#.to_string()
+        format!(
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = __v;{map_corr_graft} #{{ output: __o }}"#
+        )
     } else {
         let entries: Vec<String> = output
             .fields
@@ -101,7 +162,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
             })
             .collect();
         format!(
-            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; #{{ output: #{{ {} }} }}"#,
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = #{{ {} }};{map_corr_graft} #{{ output: __o }}"#,
             entries.join(", ")
         )
     };
@@ -183,32 +244,25 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     );
 
     // Shape: upstream token → spawn request { initial_token, target_place }.
-    // A Map body terminal grafts the correlation leaves onto `initial_token`
-    // so they thread INTO the child (and back out on the reply — see the gate
-    // comment); no side place, no second transition.
-    if is_map_body_terminal {
-        ctx.transition(
-            format!("t_{id}_shape"),
-            format!("{label} - Prepare Sub-workflow"),
-        )
-        .auto_input("input", &p_input)
-        .auto_output("spawn_request", &p_request)
-        .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
-        )))
-        .done();
-    } else {
-        ctx.transition(
-            format!("t_{id}_shape"),
-            format!("{label} - Prepare Sub-workflow"),
-        )
-        .auto_input("input", &p_input)
-        .auto_output("spawn_request", &p_request)
-        .logic_rhai(with_pluck_prelude(&format!(
-            r#"{im_lets}let __ci = ({init_expr}); #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
-        )))
-        .done();
-    }
+    // Graft the Map correlation leaves (`__map_idx`/`__map_id`) onto
+    // `initial_token` so they thread INTO the child and echo back on the reply.
+    // This is required for ANY SubWorkflow inside a Map body — not only the
+    // terminal: a non-terminal body SubWorkflow (e.g. demo 40's `do_pick`,
+    // followed by a `mark_done` terminal) must carry the correlation through its
+    // spawn→reply cycle, or the downstream terminal's output reaches the gather
+    // with no `__map_id` and the gather barrier never correlates → the Map (and
+    // the enclosing lease) wedges. The graft is guarded by `"__map_idx" in input`,
+    // so it is a runtime no-op for a SubWorkflow that is not in a Map body.
+    ctx.transition(
+        format!("t_{id}_shape"),
+        format!("{label} - Prepare Sub-workflow"),
+    )
+    .auto_input("input", &p_input)
+    .auto_output("spawn_request", &p_request)
+    .logic_rhai(with_pluck_prelude(&format!(
+        r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }}{ns_inherit_frag} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+    )))
+    .done();
 
     // Spawn effect: embed the made-callable child AIR; the handler injects
     // `parent_net_id` and merges `reply_place`/`failure_place` into the child's

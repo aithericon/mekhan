@@ -1,0 +1,14 @@
+{
+  "name": "Live camera detection: a live feed (webcam index, RTSP/HTTP URL, or file path) flows over the lossy `nats-latest` `frames` data channel; a YOLO26 + ByteTrack detector drains it per frame, emits each recognized object on the `detections` control channel, and streams a box-annotated MJPEG feed over `annotated`; a consumer-edge gather folds the detections into a per-class report. LIVE-ONLY (the detector cold-installs ultralytics/torch + downloads yolo26n.pt — past the 60 s test cap; and a webcam source needs camera permission). Run via `mekhan run … --start-tokens sample-input.json` and read the instance outputs / tap the `annotated` channel.",
+  "enabled": false,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": { "source": "0", "duration_s": 8, "fps": 6 }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.frames_processed", "op": "gte", "value": 1 }
+  ]
+}

@@ -37,8 +37,8 @@ use crate::auth::AuthUser;
 use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
     AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
-    GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery, ReplaceRecordsRequest,
-    ScopeKind, UpdateAssetTypeRequest,
+    CreateScopeQuery, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
+    ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{PaginatedResponse, Port, PortField};
@@ -127,6 +127,48 @@ fn create_scope(
         }
     };
     Ok((kind, id))
+}
+
+/// Resolve the owner scope for a CREATE request, accepting it from EITHER the
+/// request body (`scope_kind`/`scope_id`) OR the `?scope=` query param — the
+/// same grammar the list endpoints use. Previously only the body was honored,
+/// so an API caller who mirrored the list convention (`POST …?scope=folder:x`)
+/// silently created a workspace-scoped item. Now: if both are given they must
+/// agree (else 400); otherwise whichever is present wins, defaulting to the
+/// caller's workspace.
+fn resolve_create_scope(
+    user: &AuthUser,
+    query_scope: Option<&str>,
+    body_kind: Option<ScopeKind>,
+    body_id: Option<Uuid>,
+) -> Result<(ScopeKind, Uuid), ApiError> {
+    let body_set = body_kind.is_some() || body_id.is_some();
+    let query_set = query_scope.map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+    let body = if body_set {
+        Some(create_scope(user, body_kind, body_id)?)
+    } else {
+        None
+    };
+    let query = if query_set {
+        Some(parse_scope(user, query_scope)?)
+    } else {
+        None
+    };
+
+    match (body, query) {
+        (Some(b), Some(q)) if b != q => Err(ApiError::bad_request(format!(
+            "scope conflict: request body specifies {}:{} but ?scope= specifies \
+             {}:{} — provide only one, or make them agree",
+            b.0.as_db(),
+            b.1,
+            q.0.as_db(),
+            q.1
+        ))),
+        (Some(b), _) => Ok(b),
+        (None, Some(q)) => Ok(q),
+        (None, None) => Ok((ScopeKind::Workspace, caller_workspace(user))),
+    }
 }
 
 /// Map a [`scope::IncomparableClash`] to a 409 — the binding ref is ambiguous
@@ -332,6 +374,7 @@ pub async fn list_asset_types(
 #[utoipa::path(
     post,
     path = "/api/v1/asset-types",
+    params(CreateScopeQuery),
     request_body = CreateAssetTypeRequest,
     responses(
         (status = 201, description = "Asset type created", body = AssetTypeDetail),
@@ -344,9 +387,11 @@ pub async fn list_asset_types(
 pub async fn create_asset_type(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetTypeRequest>,
 ) -> Result<(StatusCode, Json<AssetTypeDetail>), ApiError> {
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) =
+        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
     require_editor(&state, &user, scope_kind, scope_id).await?;
     let principal = user.subject_as_uuid();
     let detail = create_asset_type_internal(&state, &req, scope_kind, scope_id, principal).await?;
@@ -619,6 +664,7 @@ pub async fn list_assets(
 #[utoipa::path(
     post,
     path = "/api/v1/assets",
+    params(CreateScopeQuery),
     request_body = CreateAssetRequest,
     responses(
         (status = 201, description = "Asset created", body = AssetSummary),
@@ -632,9 +678,11 @@ pub async fn list_assets(
 pub async fn create_asset(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<AssetSummary>), ApiError> {
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) =
+        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
     require_editor(&state, &user, scope_kind, scope_id).await?;
     let principal = user.subject_as_uuid();
     let summary = create_asset_internal(&state, &req, scope_kind, scope_id, principal).await?;
@@ -1651,5 +1699,75 @@ mod tests {
         assert!(!folder_matches(Some("scripts"), Some("materials")));
         assert!(!folder_matches(None, Some("materials")));
         assert!(folder_matches(None, None));
+    }
+
+    // ── resolve_create_scope: body / query reconciliation ────────────────────
+
+    fn test_user(ws: Uuid) -> AuthUser {
+        AuthUser {
+            subject: "dev".into(),
+            email: None,
+            display_name: None,
+            roles: vec![],
+            org_id: None,
+            workspace_id: Some(ws),
+        }
+    }
+
+    #[test]
+    fn create_scope_defaults_to_caller_workspace() {
+        let ws = Uuid::new_v4();
+        let u = test_user(ws);
+        assert_eq!(
+            resolve_create_scope(&u, None, None, None).unwrap(),
+            (ScopeKind::Workspace, ws)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_only() {
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        assert_eq!(
+            resolve_create_scope(&u, None, Some(ScopeKind::Folder), Some(folder)).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_query_only() {
+        // The previously-silent footgun: `?scope=folder:<id>` with no body
+        // scope now actually takes effect instead of defaulting to workspace.
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{folder}");
+        assert_eq!(
+            resolve_create_scope(&u, Some(&q), None, None).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_and_query_agree() {
+        let ws = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{folder}");
+        assert_eq!(
+            resolve_create_scope(&u, Some(&q), Some(ScopeKind::Folder), Some(folder)).unwrap(),
+            (ScopeKind::Folder, folder)
+        );
+    }
+
+    #[test]
+    fn create_scope_body_and_query_conflict_is_400() {
+        let ws = Uuid::new_v4();
+        let u = test_user(ws);
+        let q = format!("folder:{}", Uuid::new_v4());
+        let err = resolve_create_scope(&u, Some(&q), Some(ScopeKind::Folder), Some(Uuid::new_v4()))
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 }

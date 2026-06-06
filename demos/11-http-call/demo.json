@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000022",
+  "folder": "integrations",
   "name": "11 · HTTP Call",
   "description": "Tiny demo of the HTTP executor backend with borrowed references. A HumanTask collects {username, topic}; an AutomatedStep with backendType=http builds a POST whose URL path, query param, header, and JSON body all interpolate `{{ intake.* }}` through the shared Tera context (the same borrow machinery SMTP/LLM/Python use). `output_mapping` then pulls fields back out of the echoed response. Pair with `just dev httpbin-up` to run a local echo server at http://localhost:13110 — no internet needed; the call hits `/anything/{{ intake.username }}`, the echo returns 200, and the net completes. Needs no workspace resource."
 }

@@ -63,12 +63,20 @@ pub(super) struct LeaseBridge {
 /// `", iteration: 0<acc_enter>"`, a LeaseScope passes `""`. The `, lease: grant`
 /// seed is appended by the helper itself (always present — every holder parks
 /// the grant).
+///
+/// `requirements_rhai` is the placement-Requirements Rhai literal
+/// (`#{ constraints: [...] }`). It is folded into the claim payload ONLY for a
+/// `Presence`-backed lease, so the pool's `satisfies(claim.requirements,
+/// unit.caps)`-guarded `t_grant` admits only a matching runner. A `Scheduler`
+/// (datacenter) lease's claim stays byte-identical (no `requirements` key) — its
+/// allocator selection is driven by `request`, not cap-matching.
 pub(super) fn emit_lease_bridge(
     ctx: &mut Context,
     id: &str,
     label: &str,
     binding: &PoolBinding,
     data_enter_extra: &str,
+    requirements_rhai: &str,
 ) -> LeaseBridge {
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
@@ -179,7 +187,20 @@ pub(super) fn emit_lease_bridge(
     // instance), replay-deterministic (no RNG/clock) — the same argument
     // as `lower_pooled_body`.
     let grant_id_expr = format!(r#"(input._instance_id + ":{id}")"#);
-    let claim_payload = format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai);
+    // A presence-backed lease carries the scope's placement `requirements` so the
+    // pool's guarded `t_grant` (`satisfies(claim.requirements, unit.caps)`) admits
+    // only a runner whose advertised caps match. A scheduler (datacenter) lease's
+    // claim stays byte-identical — no `requirements` key — so its AIR is unchanged.
+    let is_presence =
+        binding.backend == aithericon_resources::pool::PoolBackend::Presence;
+    let claim_payload = if is_presence {
+        format!(
+            "#{{ grant_id: gid, request: {}, requirements: {} }}",
+            binding.request_rhai, requirements_rhai
+        )
+    } else {
+        format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai)
+    };
 
     // t_{id}_claim — mint grant_id, emit ClaimRequest, park {input, grant_id}.
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim Lease"))
@@ -209,20 +230,32 @@ pub(super) fn emit_lease_bridge(
         ))
         .done();
 
-    // ── Fail-fast on held-allocation death (docs/16 §7) ─────────────
-    // t_{id}_lease_failed_register — park the held-alloc-death notice
+    // ── Fail-fast on held-unit death (docs/16 §7) ───────────────────
+    // t_{id}_lease_failed_register — park the held-unit-death notice
     // write-once into `p_{id}_lease_failed_parked`. A register step
     // (rather than abort consuming the inbox directly) keeps the death
     // observation DURABLE: once parked, `t_lease_abort` can consume the
     // parked envelope to fail fast even if the body is still mid-flight
     // (no `body_out` yet) — the failure is not lost while waiting.
+    //
+    // The death notice shape differs by backend: a datacenter's `t_lease_died`
+    // routes `{ grant_id, error }`; a presence pool's `t_reap_held` routes
+    // `{ runner_id, unit_id }`. The parked flag normalizes both to a `failed`
+    // boolean the abort guard reads (only `failed == true` matters downstream).
+    // The scheduler arm is kept byte-identical so the datacenter LeaseScope AIR
+    // (demo 16) does not move.
+    let register_logic = if is_presence {
+        "#{ flag: #{ unit_id: fail.unit_id, failed: true } }".to_string()
+    } else {
+        "let e = if fail.error == () { \"\" } else { fail.error }; #{ flag: #{ grant_id: fail.grant_id, failed: true, error: e } }".to_string()
+    };
     ctx.transition(
         format!("t_{id}_lease_failed_register"),
         format!("{label} - Register Lease Failure"),
     )
     .auto_input("fail", &p_lease_failed_inbox)
     .auto_output("flag", &p_lease_failed)
-    .logic_rhai("let e = if fail.error == () { \"\" } else { fail.error }; #{ flag: #{ grant_id: fail.grant_id, failed: true, error: e } }")
+    .logic_rhai(register_logic)
     .done();
 
     // t_{id}_lease_abort — fail fast. CONSUME the parked envelope `p_{id}_data`
@@ -237,11 +270,19 @@ pub(super) fn emit_lease_bridge(
     // the envelope is gone.
     let d_fail = format!("df_{}", id.replace('-', "_"));
     let d_counter = format!("dc_{}", id.replace('-', "_"));
-    let abort_msg = format!(
-        "lease scope {}: held allocation died mid-run — failing fast (the salloc / drain \
-         executor is gone; enqueuing more work would hang in a dead namespace)",
-        label
-    );
+    let abort_msg = if is_presence {
+        format!(
+            "lease scope {}: the runner holding this lease went away mid-run — failing fast \
+             (its drain executor is gone; enqueued work would hang in a dead namespace)",
+            label
+        )
+    } else {
+        format!(
+            "lease scope {}: held allocation died mid-run — failing fast (the salloc / drain \
+             executor is gone; enqueuing more work would hang in a dead namespace)",
+            label
+        )
+    };
     ctx.transition(
         format!("t_{id}_lease_abort"),
         format!("{label} - Lease Died (abort)"),
@@ -280,6 +321,42 @@ pub(super) fn emit_lease_bridge(
         "throw \"{}\" + {d_fail_claim}.error",
         rhai_str_escape(&claim_abort_prefix)
     ))
+    .done();
+
+    // ── Failure-path lease release (engine FINALIZER) ───────────────────
+    // t_{id}_finally — release the held unit when the holder net FAILS
+    // permanently. The caller's normal release (`t_{id}_exit`) is gated on the
+    // body's completion token, so if any interior step fails permanently
+    // (throw → NetFailed) that exit can never fire and the single `p_held`
+    // token would strand the unit in the pool's `in_use` FOREVER — and because
+    // the hold is event-sourced, an engine restart replays it still-held, so a
+    // shared lab runner / datacenter alloc is lost until a manual reset.
+    //
+    // This transition consumes that SAME single `p_held` token and emits the
+    // release, so the lease is reclaimed exactly-once on the failure path too.
+    // It is marked `.finalizer()` so the engine NEVER selects it during normal
+    // evaluation (its only input — the held token — is present for the whole
+    // scope lifetime; a normal selection would release the lease before the
+    // body even runs). It fires ONLY during the engine's post-failure finalizer
+    // drain (`drain_finalizers`), as a journaled `TransitionFired` ahead of
+    // `NetFailed`, so the release survives restart.
+    //
+    // Release-exactly-once is preserved STRUCTURALLY: on success `t_{id}_exit`
+    // consumes `p_held` first, leaving the finalizer no token to bind; on
+    // failure `t_{id}_exit` never fired, so exactly one of the two consumes the
+    // single held token. (When the failure is a held-UNIT death — `t_reap_held`
+    // / `t_lease_died` already reclaimed the pool hold — this release simply
+    // finds no matching `in_use` hold and harmlessly orphans in the release
+    // inbox; the unit is not double-freed.) The release shape mirrors
+    // `t_{id}_exit` exactly so both pool backends correlate it on `grant_id`.
+    ctx.transition(
+        format!("t_{id}_finally"),
+        format!("{label} - Release on failure"),
+    )
+    .auto_input("held", &p_held)
+    .auto_output("release", &p_release_out)
+    .finalizer()
+    .logic_rhai("#{ release: #{ grant_id: held.grant_id } }")
     .done();
 
     LeaseBridge {

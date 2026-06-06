@@ -20,7 +20,7 @@
 
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
 
-use crate::compiler::borrow::apply::find_prepare_transition_mut;
+use crate::compiler::borrow::apply::prepare_transition_indices;
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution, BORROW_MARKER};
 use crate::compiler::compile::wire_read_arc;
 use crate::compiler::interface::InterfaceRegistry;
@@ -35,9 +35,13 @@ pub(crate) fn apply_envelope_borrows(
     consumer_id: &str,
     consumer_borrows: &[Borrow],
 ) {
-    let Some(t) = find_prepare_transition_mut(scenario, consumer_id) else {
-        return;
-    };
+    // A pooled lease body has TWO prepare transitions (claim `t_<id>_acquire` +
+    // inherit-bypass `t_<id>_inherit`); both carry the BORROW_MARKER and both must
+    // stage their envelope sidecars. Iterate over all of them (exactly one in the
+    // common non-lease case, so byte-identical there).
+    let prepare_idxs = prepare_transition_indices(scenario, consumer_id);
+    for t_idx in prepare_idxs {
+        let t = &mut scenario.transitions[t_idx];
     let mut pushes = String::new();
     // Per staged asset, the names of its `File`-kind fields — collected here so
     // a single `__asset_files.json` sidecar is staged after the per-asset
@@ -112,6 +116,7 @@ pub(crate) fn apply_envelope_borrows(
         ));
     }
     splice_at_marker(t, &pushes);
+    }
 }
 
 /// Hoist business fields up to the top level so user Python's

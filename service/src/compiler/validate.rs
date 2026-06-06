@@ -205,10 +205,11 @@ pub(crate) fn validate_loop(
     Ok(())
 }
 
-/// LeaseScope: must carry a non-empty `lease.scheduler` alias (a lease is held
-/// against a specific allocator; an empty alias is a config error). The empty-
-/// body check lives in `lower_lease_scope` (it needs the children slice, which
-/// the lowering ctx carries and this structural validator does not).
+/// LeaseScope: must carry a non-empty `lease.pool` alias (a lease is held
+/// against a specific capacity provider — a datacenter OR a presence runner pool;
+/// an empty alias is a config error). The empty-body check lives in
+/// `lower_lease_scope` (it needs the children slice, which the lowering ctx
+/// carries and this structural validator does not).
 pub(crate) fn validate_lease_scope(
     node: &WorkflowNode,
     _graph: &WorkflowGraph,
@@ -217,10 +218,10 @@ pub(crate) fn validate_lease_scope(
     let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
         unreachable!("validate_lease_scope on non-LeaseScope variant");
     };
-    if lease.scheduler.trim().is_empty() {
+    if lease.pool.trim().is_empty() {
         return Err(CompileError::Validation(format!(
-            "lease scope '{}' must name a datacenter resource in `lease.scheduler` \
-             (a lease is held against a specific allocator)",
+            "lease scope '{}' must name a capacity provider in `lease.pool` \
+             (a datacenter or a presence runner pool — a lease is held against one)",
             node.id
         )));
     }
@@ -412,13 +413,14 @@ fn lease_field_model() -> LeaseFieldModel {
 /// without checking field names — historically `<scope>.lease.gpu_uuid` resolved
 /// purely because the namespace was opaque, not because the field existed.
 ///
-/// This pass closes that hole. Because a LeaseScope's `lease.scheduler` alias
-/// resolves to a concrete datacenter resource at compile time, its
+/// This pass closes that hole. Because a LeaseScope's `lease.pool` alias
+/// resolves to a concrete resource at compile time, a `datacenter`'s
 /// `scheduler_flavor` is known here — so we can validate each borrowed lease
 /// field against the typed core ∪ the resolved flavor's `scheduler` variant, and
 /// reject anything else (`LeaseFieldUnknown`). Conservative: a scope whose alias
-/// doesn't resolve (flavor unknown) is skipped — a different error already fires
-/// for the unresolved resource.
+/// doesn't resolve to a datacenter flavor (incl. every PRESENCE lease, whose
+/// `Lease__presence` namespace stays opaque-permissive) is skipped — a different
+/// error already fires for a genuinely unresolved resource.
 pub(crate) fn validate_lease_field_refs(
     graph: &WorkflowGraph,
     known_resources: &crate::compiler::resource_refs::KnownResources,
@@ -432,7 +434,7 @@ pub(crate) fn validate_lease_field_refs(
         let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
             continue;
         };
-        let alias = lease.scheduler.trim();
+        let alias = lease.pool.trim();
         let Some(flavor) = known_resources
             .get(alias)
             .and_then(|r| r.public_config.get("scheduler_flavor"))

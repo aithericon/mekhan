@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000000c1",
+  "folder": "optimization",
   "name": "12a · BO Catalog Trigger",
   "description": "Phase 4 of the Bayesian-optimization arc: an event-driven re-fit. A catalog Trigger fires whenever a new `bo_observation` catalogue entry is published, projects the entry's payload into the Start token, and runs a slim single-pass `propose` retrain (no Loop/Map — that is the 12-bo-loop demo). Demonstrates the authorable shape of a `kind: catalog` TriggerSource (`filters` + `backfill`) and the `payloadMapping` that lands the catalogue entry on the seed token. AIR compilation skips the Trigger node (the dispatcher owns it pre-compile), so the offline test proves the body graph compiles and the trigger source round-trips through the WorkflowGraph types."
 }

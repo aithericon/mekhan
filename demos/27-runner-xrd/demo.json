@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000270",
+  "folder": "pools",
   "name": "27 · Runner XRD (capability match)",
   "description": "Lab-runner-fleet demo (docs/21) with TYPED capability matching. The 'Diffraction Scan' step is deployed to the `lab_fleet` presence pool AND declares a placement Requirement — `xrd.max_2theta >= 120` — over the `xrd` capability type (seeded from demos/capability-types/xrd.json). At claim time the compiler injects the Requirement into the claim payload as a Rhai literal; the presence pool's `t_grant` guard runs `satisfies(claim.requirements, unit.caps)` and admits ONLY a runner whose advertised caps satisfy every constraint. `just dev runner-up` enrolls a dev runner advertising `xrd.max_2theta = 180` (satisfies), so `mekhan test` is granted and completes; a runner advertising less than 120 (or none) would never be granted and the instance parks at the claim. Pair with demo 26 for the no-Requirements (any-runner) baseline."
 }

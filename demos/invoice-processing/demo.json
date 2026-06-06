@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000001",
+  "folder": "examples",
   "name": "Invoice Processing Demo",
   "description": "Showcase workflow demonstrating human tasks, automated steps, decisions, parallel split/join, scopes, and per-line array review via a HumanTask Repeater block."
 }

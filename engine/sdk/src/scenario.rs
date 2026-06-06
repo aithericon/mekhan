@@ -140,6 +140,12 @@ pub struct ScenarioTransition {
     /// Higher values = higher priority when selecting among enabled transitions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<TransitionPriority>,
+    /// Finalizer flag — fires only during the engine's post-failure drain
+    /// (never in normal evaluation). Releases resources a net still holds when
+    /// it fails permanently (e.g. a LeaseScope's held lease). See
+    /// `petri_domain::Transition::finalizer`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub finalizer: bool,
     /// Main logic (polymorphic - Rhai or Wasm)
     pub logic: TransitionLogic,
     /// Optional static configuration for the effect handler.

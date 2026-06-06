@@ -635,6 +635,7 @@ where
             &marking,
             registry.as_deref(),
             None,
+            evaluation::SelectPhase::Normal,
         )
     }
 

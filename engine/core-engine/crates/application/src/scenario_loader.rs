@@ -142,6 +142,9 @@ pub struct ScenarioTransitionInput {
     /// Optional Rhai priority expression — `Transition::with_priority` source.
     /// `None` defers to alphabetical-id tiebreak (see `select_next_transition`).
     pub priority: Option<String>,
+    /// Finalizer flag — fires only during the post-failure finalizer drain.
+    /// See `petri_domain::Transition::finalizer`.
+    pub finalizer: bool,
     pub simulation: Option<ScenarioSimulationInput>,
     pub group_id: Option<String>,
     pub inputs: Vec<ScenarioArcInput>,
@@ -274,6 +277,10 @@ impl ScenarioParser {
 
             if let Some(ref priority_src) = st.priority {
                 transition = transition.with_priority(priority_src.clone());
+            }
+
+            if st.finalizer {
+                transition = transition.with_finalizer(true);
             }
 
             if let Some(sim) = &st.simulation {

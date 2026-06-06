@@ -453,33 +453,49 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
-    /// Container that holds ONE datacenter allocation for the duration of its
-    /// body. Decouples "hold an allocation" from "loop": any AutomatedStep
-    /// (deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly
-    /// or through intervening containers like a plain Loop — runs ON the held
-    /// allocation by containment (no per-step `run_on_lease` flag). The lease is
-    /// acquired once on enter and released once on exit; the held lease (incl.
-    /// `executor_namespace` / `alloc_id`) is parked into the scope's
+    /// Container that holds ONE unit of capacity for the duration of its body —
+    /// EITHER a `datacenter` allocation (a leased salloc/Nomad alloc) OR a
+    /// `presence` capacity unit (a single lab runner, claimed exclusively for
+    /// the scope). Decouples "hold capacity" from "loop": any AutomatedStep
+    /// nested inside a LeaseScope — directly or through intervening containers
+    /// like a plain Loop — runs ON the held unit by containment (no per-step
+    /// flag). The unit is acquired once on enter and released once on exit; the
+    /// held lease (incl. `executor_namespace` — `lease-<grant>` for a datacenter,
+    /// `runner.<id>` for a presence runner) is parked into the scope's
     /// `p_<id>_data` envelope under a `lease` key, so body steps and downstream
     /// blocks borrow `<scope_slug>.lease.<field>` through the standard read-arc
-    /// pipeline. Children attach via the same `body_in`/`body_out` interior
-    /// handles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`
-    /// handles connect to the outer flow.
+    /// pipeline. A nested plain `Executor` body step inherits the held
+    /// `executor_namespace` by containment, so its job lands on the SAME held
+    /// runner / warm drain executor. Children attach via the same
+    /// `body_in`/`body_out` interior handles as Loop (`parent_id ==
+    /// lease_scope.id`); the perimeter `in`/`out` handles connect to the outer
+    /// flow.
     ///
-    /// To hold ONE cluster allocation across loop iterations, compose
-    /// `LeaseScope { Loop { … } }` — the scope acquires before the loop starts
-    /// and releases after it exits.
+    /// To hold ONE unit across loop iterations, compose `LeaseScope { Loop { … } }`
+    /// — the scope acquires before the loop starts and releases after it exits.
     #[serde(rename = "lease_scope")]
     LeaseScope {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// REQUIRED datacenter lease binding (a LeaseScope with no lease is a
-        /// pointless empty container). Reuses [`LeaseBinding`] verbatim — the
-        /// `scheduler` alias resolves via `resolve_binding(..., "datacenter",
-        /// ...)` exactly as the Loop-lease path does — and is NOT `Option`;
-        /// `validate_lease_scope` rejects an empty `scheduler` alias.
+        /// REQUIRED capacity lease binding (a LeaseScope with no lease is a
+        /// pointless empty container). Reuses [`LeaseBinding`] — the `pool` alias
+        /// resolves via `resolve_binding(..., LeaseHolder, ...)` to a `datacenter`
+        /// (Scheduler backend) OR a `presence` `capacity` (Presence backend) — and
+        /// is NOT `Option`; `validate_lease_scope` rejects an empty `pool` alias.
         lease: LeaseBinding,
+        /// Placement Requirements for a PRESENCE-backed lease (the scope picks
+        /// WHICH runner to hold). A set of typed [`Constraint`]s over the runner
+        /// unit's advertised `caps`; the compiler injects them into the claim and
+        /// the presence pool's `t_grant` guard
+        /// (`satisfies(claim.requirements, unit.caps)`) admits only a runner whose
+        /// caps satisfy every constraint. `None` (the default) ⇒ no constraint
+        /// (matches any unit). Ignored for a `datacenter` lease (the `request`
+        /// shapes the alloc there). Body steps do NOT re-match — they inherit the
+        /// held runner by containment. `#[serde(default, skip_serializing_if)]` ⇒
+        /// existing templates round-trip unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requirements: Option<Requirements>,
     },
     /// Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`
     /// into N item tokens (one per element), runs a BODY sub-graph of child
@@ -1442,28 +1458,30 @@ pub struct CapacityBinding {
     pub request: Option<serde_json::Value>,
 }
 
-/// A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives
-/// under [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`
-/// hoist the claim/grant/register/release handshake to loop scope — ONE
-/// allocation held across all iterations, released exactly once on exit.
+/// A binding to a capacity provider held across a [`WorkflowNodeData::LeaseScope`]:
+/// EITHER a `datacenter` resource (a leased cluster allocation) OR a `presence`
+/// `capacity` resource (a single lab runner held exclusively). Its presence makes
+/// `lower_lease_scope` hoist the claim/grant/register/release handshake to scope
+/// scope — ONE unit held across the whole interior, released exactly once on exit.
 ///
-/// Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
-/// `request: Option<Value>` and [`CapacityBinding`] so the existing
-/// `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
-/// applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
-/// with the `Scheduled` lease path the loop body would otherwise inherit
-/// per-step.
+/// The `pool` alias resolves through the single dispatch authority
+/// (`resolve_binding(.., LeaseHolder, ..)` → `axes_for_resource().backend()`): a
+/// `datacenter` → `Scheduler` backend (`Lease__scheduler`); a presence `capacity`
+/// → `Presence` backend (`Lease__presence`). The same claim/register/release
+/// machinery applies to both — only the lease schema + the presence-only
+/// `requirements` (cap-matching) differ.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LeaseBinding {
-    /// `datacenter` resource alias (workspace alias) the loop holds a lease
-    /// against. Resolved at publish to `pool-<resource_id>` + the
-    /// `Lease__scheduler` schema, the same path as `Scheduled.scheduler`
-    /// (`resolve_binding(.., SchedulerLease, ..)`).
-    pub scheduler: String,
-    /// Claim-schema-shaped request params (`gpu_count`/`gpu_type`/
-    /// `max_duration_secs`); validated against the datacenter kind's
-    /// `claim_schema`. `None` ⇒ the allocator's default placement.
+    /// Capacity provider alias (workspace alias) the scope holds a unit against —
+    /// a `datacenter` OR a `presence` `capacity`. Resolved at publish to
+    /// `pool-<resource_id>` + the backend's `Lease__<backend>` schema via
+    /// `resolve_binding(.., LeaseHolder, ..)`.
+    pub pool: String,
+    /// Claim-schema-shaped request params. For a `datacenter`:
+    /// `gpu_count`/`gpu_type`/`max_duration_secs` (validated against the
+    /// datacenter kind's `claim_schema`). `None` ⇒ the provider's default
+    /// placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<serde_json::Value>,
 }

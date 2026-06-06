@@ -1,5 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000330",
+  "folder": "robotics",
   "name": "33 · xArm Pose Plan → Execute (MoveIt, Path C Slice 1)",
   "description": "Path C Slice 1 on the SIMULATED xArm 6: a MoveIt motion-plan to a Cartesian pose, GATED on the typed metrics sidecar, then EXECUTED via the shipped Path B FollowJointTrajectory. start → plan_pose (call_service /plan_to_pose — the runner-side motion-bridge node calling MoveIt's own /compute_ik + /plan_kinematic_path and RETURNING the planned trajectory the stock xarm_pose_plan does not) → gate (Decision: success && point_count>0 && total_duration<=30) → execute (send_action_goal /xarm6_traj_controller/follow_joint_trajectory, the planned trajectory spliced verbatim as {{ plan_pose.trajectory }}) → read_state (await_topic /joint_states) → End. LIVE ONLY: requires `just dev xarm-up`."
 }
