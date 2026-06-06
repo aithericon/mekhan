@@ -1,15 +1,11 @@
 """Recorder — drain the detector's annotated feed and persist it as a single MP4
 registered in the platform's file catalogue.
 
-Why a separate `recording` channel rather than reading `annotated` directly?
-`annotated` is a `transport: "livekit"` channel — a WebRTC EGRESS sink for the
-live browser view. By design it cannot be consumed by another node (the
-executor's LiveKit transport hard-errors on `subscribe`: a livekit channel is
-presentation-only). So the detector mirrors the SAME annotated JPEG frames onto
-a second, durable `recording` channel (transport `jetstream`: lossless, ordered,
-replayable — exactly the contract a recorder needs, unlike the lossy live
-`livekit`/`nats-latest` paths). The browser watches the WebRTC feed; this node
-drains the durable mirror and produces a persisted artifact.
+The detector's `annotated` Data/Out channel is a durable `jetstream` datastream
+(lossless, ordered, replayable). It has two independent consumers off the one
+stream: the instance view taps it for the live MJPEG feed, and THIS node drains
+it for the recording. JetStream's Limits retention (messages kept by age/size,
+not deleted on ack) is what lets both read it without stepping on each other.
 
 Each chunk is one JPEG (`image/jpeg`). We decode it, lazily open a
 `cv2.VideoWriter` (mp4v) sized to the first frame, append every frame, finalize
@@ -36,9 +32,9 @@ frames_recorded = 0
 bytes_recorded = 0
 width = height = 0
 
-# `recording` is a Data/In channel: this node fires on its `open`, then
+# `annotated` is a Data/In channel: this node fires on its `open`, then
 # `stream(...)` yields one JPEG (bytes) per frame in order until `close`.
-for chunk in stream("recording"):
+for chunk in stream("annotated"):
     if not isinstance(chunk, (bytes, bytearray)):
         continue
     frame = cv2.imdecode(np.frombuffer(chunk, dtype=np.uint8), cv2.IMREAD_COLOR)
