@@ -54,6 +54,9 @@ router_url   := env_var_or_default("MEKHAN_ROUTER_URL", "http://localhost:13200"
 router_port  := env_var_or_default("MEKHAN_ROUTER_PORT", "13200")
 ollama_port  := env_var_or_default("OLLAMA_PORT", "11434")
 ollama_model := env_var_or_default("OLLAMA_MODEL", "qwen3.5:9b")
+# The small/fast model the internal-pool demos test against (fits the 60s
+# template-test wall clock where a reasoning 9B does not); pulled by up-ollama.
+ollama_small_model := env_var_or_default("DEMO36_MODEL", "llama3.2:1b")
 service_port := env_var_or_default("MEKHAN_SERVICE_PORT", "13100")
 engine_port  := env_var_or_default("MEKHAN_ENGINE_PORT", "13030")
 cancel_port  := env_var_or_default("MEKHAN_CANCEL_PORT", "13105")
@@ -921,11 +924,12 @@ up-router:
     echo "▶ building inference-router…"
     # Umbrella workspace member → output lands in ./target/, like mekhan-service.
     cargo build -p inference-router
-    # One static upstream: the shared Ollama (OpenAI-compat) serving the default
-    # model. `inventory.rs`'s live mekhan poll is a deferred upgrade; the static
-    # ROUTER_REPLICAS table is the MVP source of truth.
-    replicas='[{"base_url":"http://localhost:{{ollama_port}}","model_ids":["{{ollama_model}}"],"concurrency_c":4}]'
-    echo "▶ starting inference-router on :{{router_port}} (upstream: ollama {{ollama_model}})…"
+    # One static upstream: the shared Ollama (OpenAI-compat) serving BOTH the
+    # default model and the small internal-pool demo model. `inventory.rs`'s live
+    # mekhan poll is a deferred upgrade; the static ROUTER_REPLICAS table is the
+    # MVP source of truth.
+    replicas='[{"base_url":"http://localhost:{{ollama_port}}","model_ids":["{{ollama_model}}","{{ollama_small_model}}"],"concurrency_c":4}]'
+    echo "▶ starting inference-router on :{{router_port}} (upstream: ollama {{ollama_model}} + {{ollama_small_model}})…"
     pid=$(just/scripts/spawn-daemon.sh router "{{pid_dir}}/router.pid" "{{log_dir}}/router.log" \
       -- env \
         RUST_LOG="info,inference_router=debug" \
@@ -1047,6 +1051,34 @@ up-model-runner:
         bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
     echo "  ✓ model-pool runner (pid $pid)  log: {{log_dir}}/model-runner.log"
     echo "  /models Engines now shows this node; '{{ollama_model}}' is ready to load."
+
+    # Warm the curated served model so the live-runner AND-gate flips
+    # available=true (GET /api/v1/models) — the editor's internal-pool picker +
+    # the internal-pool demos (36/37) need an *advertised* (resident) model, not
+    # just pulled. The agent applies it async (the POST is fire-and-forget over
+    # NATS, 202); it goes resident in the background and the next /models poll
+    # shows it available. Best-effort — never blocks `up`.
+    rid="$(jq -r '.runner_id // empty' "$runner_base/runner/identity.json" 2>/dev/null || true)"
+    if [ -n "$rid" ]; then
+      # Wait for the agent to publish its catalog (⇒ its command listener is up)
+      # so the ephemeral load commands aren't sent before they can be received.
+      for _ in $(seq 1 30); do
+        curl -fsS "{{service_url}}/api/v1/runners/$rid/interfaces" >/dev/null 2>&1 && break
+        sleep 1
+      done
+      # Load BOTH curated models so each is advertised → available=true: the
+      # default {{ollama_model}} AND the small {{ollama_small_model}} the
+      # internal-pool demos test against (fits the 60s budget).
+      for m in "{{ollama_model}}" "{{ollama_small_model}}"; do
+        if curl -fsS -X POST "{{service_url}}/api/v1/runners/$rid/model-commands" \
+            -H 'content-type: application/json' \
+            -d "{\"kind\":\"load\",\"target\":{\"Base\":{\"model_id\":\"$m\"}}}" >/dev/null 2>&1; then
+          echo "  ▶ loading '$m' (warming async → available on next /models poll)"
+        else
+          echo "  · couldn't issue load for '$m' — load it from /models when ready"
+        fi
+      done
+    fi
 
 down-model-runner:
     @just dev::_kill model-runner
@@ -2044,6 +2076,7 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__LIVEKIT__API_KEY="devkey" \
         MEKHAN__LIVEKIT__API_SECRET="secret" \
         AUTOSCALER_DEMAND_URL="{{router_url}}" \
+        MEKHAN_ROUTER_URL="{{router_url}}" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
         ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
