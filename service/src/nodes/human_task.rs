@@ -87,6 +87,8 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         instructions_mdsvex,
         steps,
         steps_ref,
+        capacity,
+        requirements,
         ..
     } = data
     else {
@@ -101,4 +103,19 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     }
     let steps_val = serde_json::to_value(steps).unwrap_or(serde_json::Value::Array(vec![]));
     config.insert(txn, "steps", json_value_to_any(&steps_val));
+    // `capacity` / `requirements` (P3, docs/34) are `Option`s with
+    // `#[serde(default, skip_serializing_if = Option::is_none)]`. Like
+    // AutomatedStep's `deploymentModel`/`requirements`, they MUST survive
+    // graph→Y.Doc→graph or publish (which reconstructs via `doc_to_graph`)
+    // silently drops the capacity binding and lowers the task UNPOOLED. Write
+    // each ONLY when present so `None` round-trips as absent (no stray config
+    // key resurrecting a binding the author never set).
+    if let Some(cap) = capacity {
+        let cap_val = serde_json::to_value(cap).unwrap_or_default();
+        config.insert(txn, "capacity", json_value_to_any(&cap_val));
+    }
+    if let Some(req) = requirements {
+        let req_val = serde_json::to_value(req).unwrap_or_default();
+        config.insert(txn, "requirements", json_value_to_any(&req_val));
+    }
 }

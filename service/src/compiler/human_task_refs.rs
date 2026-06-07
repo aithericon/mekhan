@@ -215,6 +215,8 @@ mod tests {
                 instructions_mdsvex: instructions_mdsvex.map(str::to_string),
                 steps,
                 steps_ref: None,
+                capacity: None,
+                requirements: None,
             },
             parent_id: None,
             width: None,

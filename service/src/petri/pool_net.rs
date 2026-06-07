@@ -403,11 +403,13 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                 let offers: aithericon_sdk::PlaceHandle<DynamicToken> =
                     ctx.state("offers", "Parked Offers");
 
-                // UNIT-INITIATED claim inbox — a live unit publishes a claim
-                // token `{ grant_id, unit_id, runner_id, executor_namespace,
-                // caps }` here (cross-net bridge subject
-                // `petri.bridge.pool-<rid>.presence_claim`). First claim to bind
-                // an offer wins; the others find the offer gone and queue / are
+                // UNIT-INITIATED claim inbox — a claim token `{ grant_id,
+                // runner_id }` is published here (cross-net bridge subject
+                // `petri.bridge.pool-<rid>.presence_claim`). The claim names only
+                // the MEMBER (`runner_id`), not a specific `unit_id`: `t_claim`
+                // correlates the unit by `runner_id` and binds ANY FREE SLOT of
+                // that member (docs/34 §3; docs/33 §3). First claim to bind an
+                // offer wins; the others find the offer gone and queue / are
                 // implicitly rescinded.
                 let presence_claim: aithericon_sdk::PlaceHandle<DynamicToken> =
                     ctx.bridge_in(well_known::POOL_PRESENCE_CLAIM_INBOX, "Presence Claim");
@@ -440,7 +442,12 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     // t_claim — UNIT-INITIATED bind. Inputs: a parked `offer`, a
                     // unit-published `claim` on presence_claim, and a FREE `unit`
                     // from the pool. Correlate offer↔claim on `grant_id` and the
-                    // unit by `unit_id`. The SAME `satisfies(...)` matcher the
+                    // unit by `runner_id` — i.e. bind ANY FREE SLOT of the
+                    // claiming MEMBER, not an exact `unit_id` (docs/34 §3; docs/33
+                    // §3 P1→P2 generalization). The `presence_claim` token carries
+                    // `{ grant_id, runner_id }` (the member id); whichever of that
+                    // member's C free slots is currently in the pool binds. The
+                    // SAME `satisfies(...)` matcher the
                     // grant discipline uses re-confirms the offer's requirements
                     // against the claiming unit's caps. Consuming the offer token
                     // IS the implicit rescind of every other would-be claimant.
@@ -463,14 +470,32 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                         .auto_input("offer", &offers)
                         .auto_input("claim", &presence_claim)
                         .auto_input("unit", &pool)
-                        .correlate("claim", "offer", "grant_id")
-                        .correlate("claim", "unit", "unit_id")
-                        // SAME placement matcher as the grant discipline's
-                        // t_grant (docs/33: reuses satisfies() verbatim). The
-                        // parked offer carries `requirements`; the claiming unit
-                        // carries `caps`. `guard_rhai` (NOT `guard`) so the SDK
-                        // build-time validator doesn't reject the registered fn.
-                        .guard_rhai("satisfies(offer.requirements, unit.caps)")
+                        // The whole bind predicate is ONE `guard_rhai` expression:
+                        // both correlations AND the placement matcher AND-joined.
+                        // We CANNOT use `.correlate(..)` here — `.correlate(..)`
+                        // lowers to `.guard(..)`, and a later `.guard_rhai(..)`
+                        // would OVERWRITE it (both set `self.guard`), silently
+                        // dropping the correlation clauses. So we fold them by
+                        // hand:
+                        //   - `claim.grant_id == offer.grant_id` — correlate the
+                        //     unit-published claim to the parked offer (docs/14
+                        //     taint: consuming the offer is the implicit rescind).
+                        //   - `claim.runner_id == unit.runner_id` — bind ANY FREE
+                        //     SLOT of the member: correlate the unit by `runner_id`
+                        //     (= member id), NOT `unit_id` (docs/34 §3; docs/33 §3).
+                        //     The presence_claim carries `{ grant_id, runner_id }`;
+                        //     the first of the member's C free slots matching binds.
+                        //   - `satisfies(offer.requirements, unit.caps)` — the SAME
+                        //     placement matcher as the grant discipline's t_grant
+                        //     (docs/33: reuses satisfies() verbatim).
+                        // `guard_rhai` (NOT `guard`) so the SDK's build-time
+                        // `validate_script_inline` doesn't reject the registered
+                        // `satisfies` fn it doesn't know about.
+                        .guard_rhai(
+                            "claim.grant_id == offer.grant_id && \
+                             claim.runner_id == unit.runner_id && \
+                             satisfies(offer.requirements, unit.caps)",
+                        )
                         .auto_output("grant", &grant_outbox)
                         .logic(
                             // Grant mirrors t_grant's payload exactly — `runner_id`

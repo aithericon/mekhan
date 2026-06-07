@@ -2628,6 +2628,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/{id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/tasks/{id}/claim — claim an offered human task (docs/34 §6).
+         * @description A pooled `HumanTask` is *offered* (not assigned) to eligible available
+         *     members: the offer parks in the capacity `pool-<id>` net and a member binds
+         *     it by claiming. This endpoint publishes that claim and returns **202
+         *     Accepted immediately** (docs/33 §11) — it is a pure, projection-confirmed
+         *     fire-and-forget: the authoritative `claimed` status (and `assignee`) arrives
+         *     asynchronously via the causality projection of the pool net's `in_use`
+         *     token, NOT from this handler. We deliberately take no optimistic local lock
+         *     and do NOT write `status` here; the engine `t_claim` guard is authoritative
+         *     (an ineligible member's claim simply fails to bind and the row stays
+         *     `offered`).
+         *
+         *     The caller IS the claiming member: their id is `subject_as_uuid()`, carried
+         *     as the offer net's `runner_id` correlation (docs/34 §3 — bind ANY free slot
+         *     of the member, not an exact unit).
+         *
+         *     Pool-net resolution contract: the offered row's `id` IS the `grant_id`, and
+         *     the backing pool net is `pool-<capacity_id>`. We read the net id from the
+         *     offered projection's `detail` — `detail->>'pool_net_id'` is the canonical
+         *     field the offered projection (`causality/ingest.rs` §4.1) writes; we fall
+         *     back to deriving `pool-<capacity_id>` from `detail->>'capacity_id'` if only
+         *     the bare capacity id was projected. If neither is present the offer cannot
+         *     be routed → 422.
+         */
+        post: operations["claim_task"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{id}/complete": {
         parameters: {
             query?: never;
@@ -5894,6 +5935,11 @@ export interface components {
         };
         HpiTask: {
             assignee?: string | null;
+            /**
+             * Format: date-time
+             * @description When a member claimed an offered task (offer discipline only).
+             */
+            claimed_at?: string | null;
             /** Format: date-time */
             completed_at?: string | null;
             /** Format: date-time */
@@ -5903,6 +5949,11 @@ export interface components {
             process_id: string;
             status: string;
             title: string;
+            /**
+             * Format: uuid
+             * @description Workspace scope (docs/33 §4); NULL for legacy rows pre-migration.
+             */
+            workspace_id?: string | null;
         };
         /** @description Configuration for the HTTP request backend. */
         HttpConfig: {
@@ -10147,9 +10198,11 @@ export interface components {
             /** @enum {string} */
             type: "end";
         } | {
+            capacity?: null | components["schemas"]["CapacityBinding"];
             description?: string | null;
             instructionsMdsvex?: string | null;
             label: string;
+            requirements?: null | components["schemas"]["Requirements"];
             steps: components["schemas"]["TaskStepConfig"][];
             /**
              * @description Opt-in: source the form block list at RUNTIME from a producer-namespaced
@@ -15969,6 +16022,63 @@ export interface operations {
             };
             /** @description Task is not pending */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    claim_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task id (= offer grant_id) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Claim published; `claimed` status follows via projection */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Task not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task is not offered (already claimed or wrong state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Offered row carries no resolvable pool net id */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -350,6 +350,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(process::handlers::get_task))
         .routes(routes!(process::handlers::complete_task))
         .routes(routes!(process::handlers::cancel_task))
+        .routes(routes!(process::handlers::claim_task))
         // Catalogue
         .routes(routes!(catalogue::handlers::list_entries))
         .routes(routes!(catalogue::handlers::stats))

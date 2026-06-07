@@ -568,6 +568,8 @@ flow:
                             ],
                         }],
                         steps_ref: None,
+                        capacity: None,
+                        requirements: None,
                     },
                     parent_id: None,
                     width: None,

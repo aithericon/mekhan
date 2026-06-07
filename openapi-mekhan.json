@@ -7387,6 +7387,70 @@
         }
       }
     },
+    "/api/v1/tasks/{id}/claim": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "POST /api/v1/tasks/{id}/claim — claim an offered human task (docs/34 §6).",
+        "description": "A pooled `HumanTask` is *offered* (not assigned) to eligible available\nmembers: the offer parks in the capacity `pool-<id>` net and a member binds\nit by claiming. This endpoint publishes that claim and returns **202\nAccepted immediately** (docs/33 §11) — it is a pure, projection-confirmed\nfire-and-forget: the authoritative `claimed` status (and `assignee`) arrives\nasynchronously via the causality projection of the pool net's `in_use`\ntoken, NOT from this handler. We deliberately take no optimistic local lock\nand do NOT write `status` here; the engine `t_claim` guard is authoritative\n(an ineligible member's claim simply fails to bind and the row stays\n`offered`).\n\nThe caller IS the claiming member: their id is `subject_as_uuid()`, carried\nas the offer net's `runner_id` correlation (docs/34 §3 — bind ANY free slot\nof the member, not an exact unit).\n\nPool-net resolution contract: the offered row's `id` IS the `grant_id`, and\nthe backing pool net is `pool-<capacity_id>`. We read the net id from the\noffered projection's `detail` — `detail->>'pool_net_id'` is the canonical\nfield the offered projection (`causality/ingest.rs` §4.1) writes; we fall\nback to deriving `pool-<capacity_id>` from `detail->>'capacity_id'` if only\nthe bare capacity id was projected. If neither is present the offer cannot\nbe routed → 422.",
+        "operationId": "claim_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id (= offer grant_id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Claim published; `claimed` status follows via projection",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task is not offered (already claimed or wrong state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Offered row carries no resolvable pool net id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tasks/{id}/complete": {
       "post": {
         "tags": [
@@ -15519,6 +15583,14 @@
               "null"
             ]
           },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a member claimed an offered task (offer discipline only)."
+          },
           "completed_at": {
             "type": [
               "string",
@@ -15542,6 +15614,14 @@
           },
           "title": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace scope (docs/33 §4); NULL for legacy rows pre-migration."
           }
         }
       },
@@ -24346,6 +24426,17 @@
               "type"
             ],
             "properties": {
+              "capacity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CapacityBinding",
+                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (the offer discipline).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
+                  }
+                ]
+              },
               "description": {
                 "type": [
                   "string",
@@ -24360,6 +24451,17 @@
               },
               "label": {
                 "type": "string"
+              },
+              "requirements": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Requirements",
+                    "description": "Placement Requirements on a capacity-bound human task — typed\n[`Constraint`]s over the offered member's advertised `caps`. Mirrors\n[`WorkflowNodeData::AutomatedStep`]'s `requirements`: injected into the\noffer's claim payload as a Rhai literal, with the offer pool's\n`t_claim` guard (`satisfies(offer.requirements, unit.caps)`) admitting\nONLY a member whose caps satisfy every constraint. `None` (the\ndefault) ⇒ no placement constraint (any available member may claim).\nIgnored when `capacity` is `None`."
+                  }
+                ]
               },
               "steps": {
                 "type": "array",

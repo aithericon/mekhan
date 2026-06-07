@@ -609,6 +609,13 @@ mod tests {
     /// grant; the hold is created by `t_register` (where the "fail" routing
     /// `t_reap_held` needs is established). A hold minted here would inherit stale
     /// "grant" routing and lack the "fail" route — wedging recycle/reap.
+    ///
+    /// It correlates offer↔claim on `grant_id` and the unit by **`runner_id`** (=
+    /// member id), binding ANY FREE SLOT of the claiming member — NOT an exact
+    /// `unit_id` (docs/34 §3; docs/33 §3 P1→P2 generalization). The
+    /// `correlate(..)` builder lowers each pair to a `port1.field == port2.field`
+    /// clause AND-joined into the guard, so the member-bind clause shows up in
+    /// `guard_src`.
     #[test]
     fn offer_t_claim_binds_on_unit_claim() {
         let a = offer_air(Uuid::nil());
@@ -618,6 +625,27 @@ mod tests {
         assert!(
             guard_src(t).contains("satisfies(offer.requirements, unit.caps)"),
             "t_claim must reuse satisfies(offer.requirements, unit.caps): {}",
+            guard_src(t)
+        );
+
+        // Bind ANY FREE SLOT of the member: the unit is correlated by `runner_id`
+        // (member id), NOT `unit_id` (docs/34 §3). offer↔claim stay correlated on
+        // `grant_id`.
+        assert!(
+            guard_src(t).contains("claim.runner_id == unit.runner_id"),
+            "t_claim must correlate the unit by runner_id (bind any free slot of \
+             the member), not unit_id: {}",
+            guard_src(t)
+        );
+        assert!(
+            !guard_src(t).contains("claim.unit_id == unit.unit_id"),
+            "t_claim must NOT pin the exact unit_id (it binds any free member \
+             slot): {}",
+            guard_src(t)
+        );
+        assert!(
+            guard_src(t).contains("claim.grant_id == offer.grant_id"),
+            "t_claim must still correlate offer↔claim on grant_id: {}",
             guard_src(t)
         );
 

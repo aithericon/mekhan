@@ -30,6 +30,10 @@ pub struct HpiTask {
     pub detail: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Workspace scope (docs/33 §4); NULL for legacy rows pre-migration.
+    pub workspace_id: Option<Uuid>,
+    /// When a member claimed an offered task (offer discipline only).
+    pub claimed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]

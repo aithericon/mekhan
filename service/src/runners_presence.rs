@@ -364,22 +364,29 @@ async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, runner_id: Uuid) {
     publish_jetstream(nats, &subject, &envelope, "presence expire").await;
 }
 
-/// Inject a UNIT-INITIATED `presence_claim { grant_id, unit_id }` token into the
+/// Inject a UNIT-INITIATED `presence_claim { grant_id, runner_id }` token into the
 /// pool net's `presence_claim` bridge_in place via
 /// `petri.bridge.<pool_net_id>.presence_claim` (the `Dispatch::Offer` claim path,
 /// docs/33).
 ///
-/// A claim binds a parked offer to the claiming unit; `t_claim` is first-claim-wins,
-/// so the offer token is consumed by the first claim and any subsequent claims for
-/// the same offer are implicitly rescinded. Wire shape mirrors [`inject_acquire`]'s
-/// [`CrossNetTokenTransfer`] envelope EXACTLY: `token_color` carries the `{ grant_id,
-/// unit_id }` claim, `source_*` tag the claim to the presence controller for
-/// causality/tracing, and `dedup_id` keys on the `grant_id` alone
-/// (`presence-claim:{grant_id}`) so a redelivered claim for the same offer is
-/// suppressed at the engine (a claim is per-offer, not per-unit-per-offer).
-// wired by the human claim handler in P3 (docs/33)
-#[allow(dead_code)]
-async fn inject_claim(nats: &MekhanNats, pool_net_id: &str, grant_id: &str, unit_id: &str) {
+/// A claim binds a parked offer to the claiming MEMBER (docs/34 §3): the offer
+/// net's `t_claim` correlates the unit on `runner_id` (= the member id), so the
+/// claim binds ANY free slot of that member rather than an exact `unit_id`.
+/// `t_claim` is first-claim-wins, so the offer token is consumed by the first
+/// claim and any subsequent claims for the same offer are implicitly rescinded.
+/// Wire shape mirrors [`inject_acquire`]'s [`CrossNetTokenTransfer`] envelope
+/// EXACTLY: `token_color` carries the `{ grant_id, runner_id }` claim, `source_*`
+/// tag the claim to the presence controller for causality/tracing, and `dedup_id`
+/// keys on the `grant_id` alone (`presence-claim:{grant_id}`) so a redelivered
+/// claim for the same offer is suppressed at the engine (a claim is per-offer, not
+/// per-unit-per-offer).
+// wired by the human claim handler in P3 (docs/34 §3)
+pub(crate) async fn inject_claim(
+    nats: &MekhanNats,
+    pool_net_id: &str,
+    grant_id: &str,
+    runner_id: &str,
+) {
     let subject = format!(
         "petri.bridge.{pool_net_id}.{}",
         well_known::POOL_PRESENCE_CLAIM_INBOX
@@ -389,9 +396,9 @@ async fn inject_claim(nats: &MekhanNats, pool_net_id: &str, grant_id: &str, unit
         "source_place_name": "presence_claim",
         "token_color": {
             "grant_id": grant_id,
-            "unit_id": unit_id,
+            "runner_id": runner_id,
         },
-        "signal_key": format!("presence-claim-{grant_id}-{unit_id}"),
+        "signal_key": format!("presence-claim-{grant_id}-{runner_id}"),
         "timestamp": Utc::now().to_rfc3339(),
         "dedup_id": format!("presence-claim:{grant_id}"),
     });
