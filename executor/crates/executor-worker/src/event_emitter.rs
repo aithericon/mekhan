@@ -7,10 +7,15 @@ use chrono::Utc;
 use tracing::{debug, error};
 
 use aithericon_executor_domain::{
-    ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel, StatusDetail,
+    ChannelManifestEntry, ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel,
+    StatusDetail,
 };
+use aithericon_executor_ipc::proto::ChunkMessage;
+use serde_json::json;
 
 use aithericon_executor_backend::traits::EventStream;
+
+use crate::chunks::{datastream_subject, TransportRegistry};
 
 /// Resolve a JetStream subject, applying the optional isolation prefix.
 ///
@@ -160,6 +165,14 @@ pub struct StreamContext {
     pub source: String,
     /// Job metadata echoed in every event.
     pub metadata: HashMap<String, String>,
+    /// Data-plane transport registry, cloned from the worker. Selected per
+    /// channel by the manifest entry's `transport` tag so an in-process backend
+    /// (ROS action feedback) can publish binary envelopes onto a `data` channel's
+    /// subject. `None` on a worker with no streaming transports configured.
+    pub transports: Option<TransportRegistry>,
+    /// The job's declared streaming-channel manifest, used to resolve a `data`
+    /// emit's transport tag (and to ignore an emit naming an undeclared channel).
+    pub channels: Vec<ChannelManifestEntry>,
 }
 
 impl StreamContext {
@@ -294,6 +307,103 @@ impl EventStream for StreamContext {
             item_idx: 0,
             count,
             episode_uid,
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
+    }
+
+    async fn data_open(&self, channel: String, content_type: String) {
+        // Resolve the declared channel; a `data_open` naming an undeclared
+        // channel is a no-op (nothing to open).
+        let Some(entry) = self.channels.iter().find(|c| c.name == channel) else {
+            return;
+        };
+        // The data `open` control bracket carries the transport DESCRIPTOR so the
+        // consumer can dispatch the matching subscribe adapter and start draining
+        // the byte stream early. The EMPTY `episode_uid` is required — it mints
+        // the data-bracket dedup id (`{exec}-data-{channel}-open`).
+        let subject = datastream_subject(&self.execution_id, &channel);
+        let descriptor = json!({
+            "transport": entry.transport,
+            "subject": subject,
+            "content_type": content_type,
+        });
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::Open,
+            payload_json: descriptor.to_string(),
+            item_idx: 0,
+            count: 0,
+            episode_uid: String::new(),
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
+    }
+
+    async fn data_chunk(&self, channel: String, seq: u64, content_type: String, bytes: Vec<u8>) {
+        let Some(entry) = self.channels.iter().find(|c| c.name == channel) else {
+            return;
+        };
+        let Some(registry) = self.transports.as_ref() else {
+            return;
+        };
+        let Some(transport) = registry.get(&entry.transport) else {
+            error!(
+                execution_id = %self.execution_id,
+                %channel,
+                transport = %entry.transport,
+                "data_chunk: no transport adapter for declared tag — dropping bytes"
+            );
+            return;
+        };
+        let subject = datastream_subject(&self.execution_id, &channel);
+        let env = ChunkMessage {
+            seq,
+            content_type,
+            payload: bytes,
+            is_eof: false,
+        };
+        if let Err(e) = transport.write(&subject, &env).await {
+            error!(
+                execution_id = %self.execution_id,
+                %channel,
+                error = %e,
+                "data_chunk: transport write failed"
+            );
+        }
+    }
+
+    async fn data_close(&self, channel: String, final_seq: u64, count: u64) {
+        // Publish the in-band EOF sentinel on the transport (the consumer's read
+        // loop ends on it) BEFORE the `close` control bracket. Resolve-or-skip
+        // each dependency, same as `data_chunk`.
+        if let Some(entry) = self.channels.iter().find(|c| c.name == channel) {
+            if let Some(registry) = self.transports.as_ref() {
+                if let Some(transport) = registry.get(&entry.transport) {
+                    let subject = datastream_subject(&self.execution_id, &channel);
+                    if let Err(e) = transport.close(&subject, final_seq).await {
+                        error!(
+                            execution_id = %self.execution_id,
+                            %channel,
+                            error = %e,
+                            "data_close: transport EOF sentinel failed"
+                        );
+                    }
+                }
+            }
+        }
+        // The data `close` control bracket carries `{count, status}`; the EMPTY
+        // `episode_uid` mints the data-bracket dedup id
+        // (`{exec}-data-{channel}-close`).
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::Close,
+            payload_json: json!({ "count": count, "status": "ok" }).to_string(),
+            item_idx: 0,
+            count,
+            episode_uid: String::new(),
             metadata: self.metadata.clone(),
         };
         self.emitter.emit_control(&event).await;

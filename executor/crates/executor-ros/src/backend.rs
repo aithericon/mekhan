@@ -53,6 +53,12 @@ use crate::client::RosbridgeClient;
 /// Backend name surfaced to `ExecutionSpec.backend` matching.
 pub const BACKEND_NAME: &str = "ros";
 
+/// Content-type stamped on a DATA-plane joint-state feedback stream. Each
+/// envelope is one NDJSON line `{joint_names, positions}`, so a downstream
+/// consumer (a live digital twin) decodes the byte stream line-by-line off-band
+/// of the net's firing rate.
+const JOINT_STATE_CONTENT_TYPE: &str = "application/vnd.aithericon.joint-state+x-ndjson";
+
 /// Fully-resolved ROS request parked in `backend_state` after `prepare()`.
 ///
 /// `execute()` rebuilds the rosbridge op from this without re-resolving
@@ -74,6 +80,14 @@ struct ResolvedRosConfig {
     /// fire-the-goal-and-await-result action).
     #[serde(default)]
     feedback_channel: Option<String>,
+    /// The name of the node's DATA-plane `out` channel (docs/25 §6), if it
+    /// declares one. When set, `send_action_goal` streams each DISTINCT action
+    /// feedback as a binary NDJSON envelope onto this channel's transport (a
+    /// live byte stream a digital twin drains), instead of as control-plane
+    /// `item` tokens. A data channel WINS over a control channel
+    /// (`feedback_channel` is left `None` whenever this is `Some`).
+    #[serde(default)]
+    feedback_data_channel: Option<String>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -135,11 +149,25 @@ impl ExecutionBackend for RosBackend {
         // that is a consumer-edge `join` now), but an action node declares
         // exactly one control channel, so the first control entry is the
         // feedback channel. `None` ⇒ no feedback streaming.
-        let feedback_channel = job
+        //
+        // A DATA-plane channel WINS: if the node declares one, the feedback
+        // streams as binary NDJSON envelopes onto the data channel's transport
+        // (a live byte stream), and `feedback_channel` is suppressed so the two
+        // paths never fire together. Otherwise the first control entry (if any)
+        // is the control-plane feedback channel.
+        let feedback_data_channel = job
             .channels
             .iter()
-            .find(|c| c.plane == "control")
+            .find(|c| c.plane == "data")
             .map(|c| c.name.clone());
+        let feedback_channel = if feedback_data_channel.is_some() {
+            None
+        } else {
+            job.channels
+                .iter()
+                .find(|c| c.plane == "control")
+                .map(|c| c.name.clone())
+        };
 
         let resolved = ResolvedRosConfig {
             operation: config.operation,
@@ -148,6 +176,7 @@ impl ExecutionBackend for RosBackend {
             fields,
             timeout_ms,
             feedback_channel,
+            feedback_data_channel,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -339,6 +368,19 @@ impl RosBackend {
         // per-channel constant uid can't collide with a concurrent episode.
         let feedback_channel = resolved.feedback_channel.clone();
         let episode_uid = feedback_channel.clone().unwrap_or_default();
+        // DATA-plane variant (docs/25 §6): when a data channel is declared, each
+        // DISTINCT feedback frame is written as a binary NDJSON envelope onto the
+        // channel's transport instead of as a control `item` token. `data_seq` is
+        // the envelope index; open the channel up front so the consumer can start
+        // draining while the goal still runs.
+        let feedback_data_channel = resolved.feedback_data_channel.clone();
+        let mut data_seq: u64 = 0;
+        if let (Some(es), Some(channel)) =
+            (event_stream.as_ref(), feedback_data_channel.as_ref())
+        {
+            es.data_open(channel.clone(), JOINT_STATE_CONTENT_TYPE.to_string())
+                .await;
+        }
         let outputs: HashMap<String, Value> = HashMap::new();
         let mut feedback_index: usize = 0;
         // The most recent feedback `values`, used to dedup consecutive-identical
@@ -381,6 +423,25 @@ impl RosBackend {
                             }
                             last_feedback = Some(values.clone());
                             if let (Some(es), Some(channel)) =
+                                (event_stream.as_ref(), feedback_data_channel.as_ref())
+                            {
+                                // DATA plane: frame the joint state as one NDJSON
+                                // envelope onto the channel's transport.
+                                let frame = json!({
+                                    "joint_names": values.get("joint_names").cloned().unwrap_or(Value::Null),
+                                    "positions": values.pointer("/actual/positions").cloned().unwrap_or(Value::Null),
+                                });
+                                let mut line = serde_json::to_vec(&frame).unwrap_or_default();
+                                line.push(b'\n');
+                                es.data_chunk(
+                                    channel.clone(),
+                                    data_seq,
+                                    JOINT_STATE_CONTENT_TYPE.to_string(),
+                                    line,
+                                )
+                                .await;
+                                data_seq += 1;
+                            } else if let (Some(es), Some(channel)) =
                                 (event_stream.as_ref(), feedback_channel.as_ref())
                             {
                                 es.item(
@@ -418,6 +479,23 @@ impl RosBackend {
                                 }
                                 last_feedback = Some(values.clone());
                                 if let (Some(es), Some(channel)) =
+                                    (event_stream.as_ref(), feedback_data_channel.as_ref())
+                                {
+                                    let frame = json!({
+                                        "joint_names": values.get("joint_names").cloned().unwrap_or(Value::Null),
+                                        "positions": values.pointer("/actual/positions").cloned().unwrap_or(Value::Null),
+                                    });
+                                    let mut line = serde_json::to_vec(&frame).unwrap_or_default();
+                                    line.push(b'\n');
+                                    es.data_chunk(
+                                        channel.clone(),
+                                        data_seq,
+                                        JOINT_STATE_CONTENT_TYPE.to_string(),
+                                        line,
+                                    )
+                                    .await;
+                                    data_seq += 1;
+                                } else if let (Some(es), Some(channel)) =
                                     (event_stream.as_ref(), feedback_channel.as_ref())
                                 {
                                     es.item(
@@ -434,6 +512,12 @@ impl RosBackend {
                             // engine's gather barrier knows the feedback stream is
                             // complete. MUST follow every `item`.
                             if let (Some(es), Some(channel)) =
+                                (event_stream.as_ref(), feedback_data_channel.as_ref())
+                            {
+                                // DATA plane: EOF the byte stream + emit the data
+                                // `close` bracket (count = envelopes written).
+                                es.data_close(channel.clone(), data_seq, data_seq).await;
+                            } else if let (Some(es), Some(channel)) =
                                 (event_stream.as_ref(), feedback_channel.as_ref())
                             {
                                 es.close(
