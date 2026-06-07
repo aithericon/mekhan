@@ -69,6 +69,11 @@ pub enum StatusDetail {
     ArtifactLogged {
         artifact_id: String,
         name: String,
+        /// The artifact's real on-disk basename (e.g. `annotated-detection.mp4`).
+        /// Carried explicitly so the catalogue keeps the true filename instead of
+        /// guessing `{name}.json`. Defaulted for back-compat with older events.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        filename: String,
         category: ArtifactCategory,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_bytes: Option<u64>,
@@ -393,6 +398,7 @@ mod tests {
             StatusDetail::ArtifactLogged {
                 artifact_id: "art-1".into(),
                 name: "model.pt".into(),
+                filename: "model.pt".into(),
                 category: ArtifactCategory::Model,
                 size_bytes: Some(1024),
                 mime_type: None,
@@ -467,6 +473,7 @@ mod tests {
             detail: StatusDetail::ArtifactLogged {
                 artifact_id: "art-1".into(),
                 name: "model.pt".into(),
+                filename: "model.pt".into(),
                 category: ArtifactCategory::Model,
                 size_bytes: None,
                 mime_type: None,
@@ -494,6 +501,7 @@ mod tests {
             detail: StatusDetail::ArtifactLogged {
                 artifact_id: "observation.json".into(),
                 name: "observation.json".into(),
+                filename: "observation.json".into(),
                 category: ArtifactCategory::Dataset,
                 size_bytes: Some(100),
                 mime_type: None,

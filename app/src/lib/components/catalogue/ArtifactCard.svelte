@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { catalogueDownloadUrl, type CatalogueEntry } from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
+	import { CopyButton } from '$lib/components/ui/copy-button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Download from '@lucide/svelte/icons/download';
+	import Hash from '@lucide/svelte/icons/hash';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -32,6 +34,7 @@
 		checkpoint: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
 		config: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
 		metric: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
+		legacy: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
 		other: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
 	};
 
@@ -59,10 +62,12 @@
 	const checksum = $derived(fm?.checksum as { algorithm: string; digest: string } | undefined);
 	const columns = $derived(fm?.columns as { name: string; data_type: unknown }[] | undefined);
 	const lineageTarget = $derived(entry.process_id ?? entry.job_id?.split(':')[0] ?? null);
+	const contentHash = $derived(entry.content_hash ?? null);
+	const shortHash = $derived(contentHash ? contentHash.slice(0, 12) : null);
 	const hasDetails = $derived(
 		(columns && columns.length > 0) ||
 		Object.keys(um).length > 0 ||
-		schema || checksum
+		!!schema || !!checksum || !!contentHash || !!entry.entry_id
 	);
 </script>
 
@@ -83,6 +88,21 @@
 				{/if}
 				{#if entry.job_id}
 					<span class="text-sm font-mono text-muted-foreground">{entry.job_id}</span>
+				{/if}
+				{#if shortHash}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Badge
+								variant="outline"
+								class="gap-1 font-mono text-sm text-muted-foreground"
+							>
+								<Hash class="size-3" />{shortHash}
+							</Badge>
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<span class="font-mono text-sm">Content hash (SHA-256): {contentHash}</span>
+						</Tooltip.Content>
+					</Tooltip.Root>
 				{/if}
 			</div>
 
@@ -169,6 +189,25 @@
 	<!-- Expanded details -->
 	{#if expanded && hasDetails}
 		<div class="border-t border-border px-4 pb-4 pt-3 space-y-3">
+			<!-- Content identity (content-addressed catalogue, docs/32) -->
+			{#if contentHash || entry.entry_id}
+				<div class="space-y-1">
+					{#if contentHash}
+						<div class="flex items-center gap-1.5 text-sm text-muted-foreground">
+							<span class="font-semibold uppercase tracking-wider">Content hash</span>
+							<span class="font-mono break-all text-foreground">{contentHash}</span>
+							<CopyButton text={contentHash} title="Copy content hash" />
+						</div>
+					{/if}
+					{#if entry.entry_id}
+						<div class="flex items-center gap-1.5 text-sm text-muted-foreground">
+							<span class="font-semibold uppercase tracking-wider">Entry id</span>
+							<span class="font-mono break-all">{entry.entry_id}</span>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
 			<!-- Identifiers & provenance -->
 			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
 				{#if schema?.digest}

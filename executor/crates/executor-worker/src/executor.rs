@@ -613,6 +613,7 @@ impl JobExecutor {
                             detail: StatusDetail::ArtifactLogged {
                                 artifact_id: artifact.id.clone(),
                                 name: artifact.name.clone(),
+                                filename: artifact.filename.clone(),
                                 category: artifact.category,
                                 size_bytes: artifact.size_bytes,
                                 mime_type: artifact.mime_type.clone(),

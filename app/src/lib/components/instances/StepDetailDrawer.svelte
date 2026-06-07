@@ -8,11 +8,14 @@
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
-	import type { AllocationResponse, Channel, InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { AllocationResponse, Channel, CatalogueEntry, InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
+	import { listCatalogueEntries } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
 	import type { ChannelRuntime, LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
+	import ArtifactMediaPreview from '$lib/components/catalogue/ArtifactMediaPreview.svelte';
+	import FileBox from '@lucide/svelte/icons/file-box';
 	import ChannelsPanel from './ChannelsPanel.svelte';
 	import StepLogs from './StepLogs.svelte';
 	import Server from '@lucide/svelte/icons/server';
@@ -167,6 +170,29 @@
 				? (stepOutputs.execution_id as string)
 				: null)
 	);
+	// Files this step registered via the SDK `log_artifact(...)`. They don't ride
+	// in `step.outputs` (that carries only the business outputs), so we pull them
+	// from the durable file catalogue keyed by the step's execution_id — which is
+	// also where the correct `storage_path` / `mime_type` live for download +
+	// inline preview.
+	let stepArtifacts = $state<CatalogueEntry[]>([]);
+	$effect(() => {
+		const eid = stepExecutionId;
+		stepArtifacts = [];
+		if (!eid) return;
+		let cancelled = false;
+		listCatalogueEntries({ execution_id: eid, page_size: 50 })
+			.then((res) => {
+				if (!cancelled) stepArtifacts = res.items ?? [];
+			})
+			.catch(() => {
+				/* best-effort: no artifacts section if the lookup fails */
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	const stepLogsSummary = $derived.by<{ total: number | null; byLevel: Record<string, number> | null }>(() => {
 		const d = stepOutputs?.detail;
 		const logs =
@@ -583,6 +609,35 @@
 						/>
 					{/if}
 				</section>
+
+				{#if stepArtifacts.length > 0}
+					<section>
+						<h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+							<FileBox class="size-4 text-muted-foreground" />
+							Artifacts
+							<Badge variant="secondary" class="font-mono text-sm">{stepArtifacts.length}</Badge>
+						</h3>
+						<div class="space-y-2">
+							{#each stepArtifacts as a (a.entry_id ?? a.id ?? a.storage_path)}
+								<div class="rounded-md border border-border bg-muted/20 p-3">
+									<div class="mb-1.5 flex flex-wrap items-center gap-2 text-sm">
+										<span class="truncate font-medium text-foreground">{a.name}</span>
+										{#if a.category}
+											<Badge variant="outline" class="font-mono text-sm">{a.category}</Badge>
+										{/if}
+									</div>
+									<ArtifactMediaPreview
+										storagePath={a.storage_path ?? null}
+										mimeType={a.mime_type ?? null}
+										filename={a.filename}
+										name={a.name}
+										sizeBytes={a.size_bytes ?? null}
+									/>
+								</div>
+							{/each}
+						</div>
+					</section>
+				{/if}
 
 				{#if channels.length > 0}
 					<!-- Declared streaming channels (docs/25). Static list of

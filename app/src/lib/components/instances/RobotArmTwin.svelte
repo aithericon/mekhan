@@ -164,7 +164,19 @@
 	});
 </script>
 
-<div class="twin" class:frozen>
+<!-- Capture pointer/wheel so OrbitControls drives the camera without the events
+     bubbling to the xyflow pane (which would pan/zoom the whole graph). The
+     canvas (OrbitControls' listener target) still receives them in the target
+     phase before we stop propagation on the way up. -->
+<div
+	class="twin"
+	class:frozen
+	role="presentation"
+	onpointerdown={(e) => e.stopPropagation()}
+	onwheel={(e) => e.stopPropagation()}
+	ondblclick={(e) => e.stopPropagation()}
+	oncontextmenu={(e) => e.stopPropagation()}
+>
 	<Canvas renderMode="always">
 		<T.PerspectiveCamera makeDefault position={camPos} fov={FOV}>
 			<OrbitControls enableDamping enablePan={false} target={camTarget} />
@@ -189,12 +201,26 @@
 		height: 100%;
 		min-width: 160px;
 		min-height: 120px;
-		background: radial-gradient(circle at 50% 35%, #1b2027 0%, #0e1116 100%);
+		/* Brighter than the dark xyflow canvas so the stage reads as a distinct
+		   frame instead of blending into the page background. */
+		background: radial-gradient(circle at 50% 32%, #36404d 0%, #1c232c 100%);
 		border-radius: 4px;
 		overflow: hidden;
 	}
+	/* Threlte sizes the canvas from getBoundingClientRect (the zoom-SCALED size) and
+	   doesn't re-measure on xyflow zoom — ResizeObserver ignores CSS transforms — so
+	   the canvas otherwise keeps its mount-time pixel size and leaves a gap when the
+	   edge preview scales. Pin it to fill .twin so it always tracks the container. */
+	.twin :global(canvas) {
+		display: block;
+		width: 100% !important;
+		height: 100% !important;
+	}
 	.twin.frozen {
-		filter: saturate(0.6) brightness(0.85);
+		/* Frozen (passive) keeps the SAME slate stage colour as the live state —
+		   the ended state is signalled by the "ended" badge + frame border, not by
+		   muting the background. Only a hair dimmer. */
+		filter: brightness(0.96);
 	}
 	.err {
 		position: absolute;

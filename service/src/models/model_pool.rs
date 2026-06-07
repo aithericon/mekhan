@@ -209,6 +209,9 @@ pub struct AutoscaleView {
     pub cooldown_secs: Option<i64>,
     /// When `true`, the model gets its own single-model dedicated job.
     pub dedicated: bool,
+    /// When `true`, the placement controller may idle-EVICT (vLLM `/sleep`) the
+    /// resident base once demand drops to zero past the cooldown.
+    pub idle_evict: bool,
     /// The reconciliation row's last desired COUNT (falls back to the policy's
     /// `desired_replicas` when no row exists yet).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -249,6 +252,10 @@ pub struct AutoscalePolicyInput {
     /// Dedicated single-model fallback flag.
     #[serde(default)]
     pub dedicated: Option<bool>,
+    /// Idle-eviction opt-in: allow the placement controller to sleep this model's
+    /// resident base on zero demand past the cooldown. Defaults to `false`.
+    #[serde(default)]
+    pub idle_evict: Option<bool>,
 }
 
 /// A `model_states` DB row (column order mirrors the migration). Mapped to
@@ -272,6 +279,7 @@ pub struct ModelStateRow {
     pub node_pool: Option<String>,
     pub residency_zone: Option<String>,
     pub dedicated: bool,
+    pub idle_evict: bool,
 }
 
 impl ModelStateRow {
@@ -296,6 +304,7 @@ impl ModelStateRow {
             scale_down_threshold: self.scale_down_threshold,
             cooldown_secs: self.cooldown_secs,
             dedicated: self.dedicated,
+            idle_evict: self.idle_evict,
             // The reconciliation row (when present) owns the live count + status;
             // with no row yet, fall back to the policy's `desired_replicas`.
             desired_count: replica
@@ -397,6 +406,7 @@ mod tests {
             node_pool: None,
             residency_zone: None,
             dedicated: false,
+            idle_evict: false,
         };
         let view = row.clone().into_view(1, None);
         assert!(view.available);

@@ -173,6 +173,39 @@ pub fn plan_placement(
     }
 }
 
+/// The PURE idle-eviction decision (GAP B). Returns `Some((runner_id, base))` to
+/// SLEEP a resident base model — exactly when ALL hold:
+///
+/// - the policy OPTED IN (`idle_evict == Some(true)`),
+/// - demand has dropped to zero (`demand_zero`),
+/// - the actuation cooldown is NOT active (`!in_cooldown` — the flap guard),
+/// - the wanted base IS resident on an in-zone slot (nothing to sleep otherwise).
+///
+/// Mirrors the demand>0 [`plan_placement`] wake leg in reverse: a base IS its own
+/// base, so the runner carrying the wanted base is the sleep target. LoRA policies
+/// never idle-evict here (the base engine owns the GPU residency — sleeping a base
+/// out from under loaded adapters is a deferred vLLM-contract gap), so a policy
+/// with a `base` back-pointer returns `None`.
+pub fn plan_idle_eviction(
+    policy: &ModelAutoscalePolicy,
+    in_zone_slots: &[EngineSlot],
+    demand_zero: bool,
+    in_cooldown: bool,
+) -> Option<(Uuid, String)> {
+    if policy.idle_evict != Some(true) || !demand_zero || in_cooldown {
+        return None;
+    }
+    // Only a base model (no LoRA back-pointer) is eligible to sleep.
+    if policy.base.is_some() {
+        return None;
+    }
+    let wanted_base = policy.model_id.clone();
+    in_zone_slots
+        .iter()
+        .find(|s| s.base == wanted_base)
+        .map(|s| (s.runner_id, wanted_base))
+}
+
 /// One reconcile pass over every `model_policy` with demand (docs/31 Loop 2). Runs
 /// AFTER the node pass. Per-policy failures fail-soft (recorded on the row + carry
 /// on); a setup `sqlx::Error` (the policy-list fetch) kills the tick.
@@ -200,7 +233,7 @@ pub async fn reconcile_placement(
     let policies: Vec<PolicyScanRow> = sqlx::query_as(
         "SELECT workspace_id, model_id, base, autoscale_mode, desired_replicas, \
                 scale_up_threshold, scale_down_threshold, cooldown_secs, node_pool, \
-                residency_zone, dedicated \
+                residency_zone, dedicated, idle_evict \
          FROM model_states \
          WHERE autoscale_mode IS NOT NULL AND node_pool IS NOT NULL",
     )
@@ -217,13 +250,16 @@ pub async fn reconcile_placement(
         let policy: ModelAutoscalePolicy = scan.policy.into_policy();
         let model_id = policy.model_id.clone();
 
-        // Demand gate: only models with demand > 0 are placed (L1 demand=None ⇒
-        // skip — nothing to place; Loop 1 floors capacity at min_nodes).
+        // Demand gate: only models with demand > 0 are PLACED (L1 demand=None ⇒
+        // demand 0 — nothing to place; Loop 1 floors capacity at min_nodes). A
+        // zero-demand model still gets the idle-EVICTION pass below WHEN it opted
+        // into `idle_evict`; without the opt-in, skip it entirely.
         let model_demand = match demand {
             Some(src) => src.demand_for(&policy.model_id).await.unwrap_or(0.0),
             None => 0.0,
         };
-        if model_demand <= 0.0 {
+        let demand_zero = model_demand <= 0.0;
+        if demand_zero && policy.idle_evict != Some(true) {
             continue;
         }
 
@@ -260,6 +296,20 @@ pub async fn reconcile_placement(
         // from the router in-flight gauge (fail-soft: unknown → available).
         let slots = build_in_zone_slots(inventory, membership, pools, &policy, demand).await;
 
+        if demand_zero {
+            // GAP B — idle eviction (vLLM sleep). Demand has dropped to zero and the
+            // policy opted in: sleep the resident base, gated on the durable
+            // cooldown anchored on `model_replicas.last_actuated_at` (the flap
+            // guard — the SAME anchor the placement / node passes use).
+            if let Err(e) = apply_idle_eviction(db, nats, workspace_id, &model_id, &policy, &slots)
+                .await
+            {
+                tracing::warn!(%workspace_id, %model_id, "idle-eviction failed: {e}");
+                mark_placement_failed(db, workspace_id, &model_id, &e).await;
+            }
+            continue;
+        }
+
         let outcome = plan_placement(&policy, &pool, &slots);
 
         if let Err(e) = apply_outcome(
@@ -278,6 +328,68 @@ pub async fn reconcile_placement(
             mark_placement_failed(db, workspace_id, &model_id, &e).await;
         }
     }
+    Ok(())
+}
+
+/// Carry out the GAP B idle-eviction decision (vLLM sleep) for one zero-demand,
+/// opted-in model. Loads the `model_replicas.last_actuated_at` cooldown anchor,
+/// computes `in_cooldown`, runs the pure [`plan_idle_eviction`], and on `Some`
+/// publishes an `Unload{Base}` (→ vLLM `/sleep`) + stamps the row `sleeping` with a
+/// fresh `last_actuated_at` (the flap guard). On `None` it is a no-op (still hot,
+/// in cooldown, not opted in, or the base isn't resident). Returns `Err` only on a
+/// hard publish failure the caller records.
+async fn apply_idle_eviction(
+    db: &PgPool,
+    nats: &MekhanNats,
+    workspace_id: Uuid,
+    model_id: &str,
+    policy: &ModelAutoscalePolicy,
+    slots: &[EngineSlot],
+) -> Result<(), String> {
+    use chrono::Utc;
+
+    // The durable reconciliation row carries the cooldown anchor (survives a
+    // restart). No row yet ⇒ never actuated ⇒ never in cooldown.
+    let last_actuated: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT last_actuated_at FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(model_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("load model_replicas last_actuated_at: {e}"))?
+    .flatten();
+
+    let now = Utc::now();
+    let cooled = in_cooldown(last_actuated, policy.cooldown_secs, now);
+
+    let Some((runner_id, base)) = plan_idle_eviction(policy, slots, true, cooled) else {
+        // Not eligible this tick (still hot, in cooldown, not opted in, or the base
+        // isn't resident in-zone) — no-op.
+        return Ok(());
+    };
+
+    let cmd = ModelCommand::Unload {
+        target: LoadTarget::Base { model_id: base },
+    };
+    publish_model_command(nats, runner_id, &cmd)
+        .await
+        .map_err(|e| format!("publish idle-eviction sleep: {e}"))?;
+
+    // Mark `sleeping` + stamp `last_actuated_at` (the flap guard — gates a re-sleep
+    // / immediate-wake oscillation through the cooldown window).
+    let _ = sqlx::query(
+        "UPDATE model_replicas \
+         SET status = $3, last_actuated_at = $4, last_error = NULL, updated_at = NOW() \
+         WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(model_id)
+    .bind(status::SLEEPING)
+    .bind(now)
+    .execute(db)
+    .await;
+
     Ok(())
 }
 
@@ -658,6 +770,7 @@ mod tests {
             node_pool: "p".into(),
             base: Some(base.into()),
             dedicated: Some(dedicated),
+            idle_evict: None,
         }
     }
 
@@ -673,6 +786,7 @@ mod tests {
             node_pool: "p".into(),
             base: None,
             dedicated: None,
+            idle_evict: None,
         }
     }
 
@@ -777,5 +891,82 @@ mod tests {
         let slots = vec![slot(r, "llama", None, &[])];
         let out = plan_placement(&lora_policy("eu", "llama", false), &pool("eu"), &slots);
         assert!(matches!(out, PlacementOutcome::AdapterLoad { .. }));
+    }
+
+    // ── GAP B: idle-eviction (vLLM sleep) decision ────────────────────────────
+
+    /// A base policy with `idle_evict` toggled on (the `base_policy` helper serves
+    /// `"llama"` as a base model).
+    fn evictable_base_policy(zone: &str, idle_evict: bool) -> ModelAutoscalePolicy {
+        ModelAutoscalePolicy {
+            idle_evict: Some(idle_evict),
+            ..base_policy(zone)
+        }
+    }
+
+    #[test]
+    fn idle_evict_sleeps_resident_base_at_zero_demand() {
+        let r = Uuid::new_v4();
+        // The base `"llama"` is resident in-zone, opted in, demand zero, not cooled.
+        let slots = vec![slot(r, "llama", Some(8), &[])];
+        let out = plan_idle_eviction(&evictable_base_policy("eu", true), &slots, true, false);
+        assert_eq!(out, Some((r, "llama".to_string())));
+    }
+
+    #[test]
+    fn idle_evict_noop_when_not_opted_in() {
+        let r = Uuid::new_v4();
+        let slots = vec![slot(r, "llama", Some(8), &[])];
+        // Opt-out (the default) → never sleep, even with zero demand + resident base.
+        assert_eq!(
+            plan_idle_eviction(&evictable_base_policy("eu", false), &slots, true, false),
+            None
+        );
+        // `None` (unset) is also opt-out.
+        assert_eq!(
+            plan_idle_eviction(&base_policy("eu"), &slots, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn idle_evict_noop_within_cooldown() {
+        let r = Uuid::new_v4();
+        let slots = vec![slot(r, "llama", Some(8), &[])];
+        // Opted in + zero demand + resident, but inside the cooldown window → defer.
+        assert_eq!(
+            plan_idle_eviction(&evictable_base_policy("eu", true), &slots, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn idle_evict_noop_when_base_not_resident() {
+        // Opted in + zero demand + not cooled, but nothing resident in-zone →
+        // nothing to sleep.
+        assert_eq!(
+            plan_idle_eviction(&evictable_base_policy("eu", true), &[], true, false),
+            None
+        );
+        // A different base resident (not the wanted one) is also a no-op.
+        let r = Uuid::new_v4();
+        let slots = vec![slot(r, "other-model", Some(8), &[])];
+        assert_eq!(
+            plan_idle_eviction(&evictable_base_policy("eu", true), &slots, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn idle_evict_noop_when_demand_nonzero() {
+        // Even opted in + resident + not cooled, a non-zero demand never sleeps
+        // (the reconcile loop only calls this on the zero-demand branch, but the
+        // pure fn defends the gate too).
+        let r = Uuid::new_v4();
+        let slots = vec![slot(r, "llama", Some(8), &[])];
+        assert_eq!(
+            plan_idle_eviction(&evictable_base_policy("eu", true), &slots, false, false),
+            None
+        );
     }
 }

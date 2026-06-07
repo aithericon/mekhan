@@ -216,6 +216,14 @@ pub struct ModelAutoscalePolicy {
     /// the OQ-5 cold-start / pack-failure escape hatch. Defaults to `false`.
     #[serde(default)]
     pub dedicated: Option<bool>,
+    /// When `true`, the placement controller may idle-EVICT a resident base model
+    /// to vLLM `/sleep` once demand drops to zero past the cooldown window — freeing
+    /// the per-node concurrency budget `C` without tearing the replica down; the
+    /// next routed request WAKES it. Orthogonal to the count `mode` (a
+    /// `scale_to_zero`/`keep_warm` model can also opt into sleeping). Defaults to
+    /// `false` (the model stays pinned hot).
+    #[serde(default)]
+    pub idle_evict: Option<bool>,
 }
 
 /// A generic vLLM-engine NODE pool — the CAPACITY half of the docs/31 OQ-1 split.

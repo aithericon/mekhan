@@ -66,6 +66,81 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 
 const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["resource_alias"]];
 
+/// The graph-level `provider` value the editor persists for an in-cluster
+/// inference-router binding. Kept verbatim in the stored graph so the editor
+/// round-trips (`LlmCommonFields.svelte` keys `isInternal` off
+/// `provider === "internal"`), but it is NEVER emitted to the executor wire —
+/// the executor's `Provider` enum only knows `openai`/`anthropic`/`ollama`.
+pub const INTERNAL_PROVIDER: &str = "internal";
+
+/// Remap the editor-only `internal` provider value to the OpenAI-compatible
+/// wire provider. An internal binding IS the OpenAI adapter pointed at the
+/// router `base_url` supplied by the bound `internal_llm` resource overlay
+/// (`executor/crates/executor-llm/src/backend.rs::overlay_resource`), so the
+/// wire provider is `openai`. Every other provider passes through unchanged.
+///
+/// Single source of truth for the two emission seams (the plain-LLM
+/// AutomatedStep validator in this module and `agent_to_llm_config`) so they
+/// cannot drift.
+pub fn remap_internal_provider(provider: &str) -> &str {
+    if provider == INTERNAL_PROVIDER {
+        "openai"
+    } else {
+        provider
+    }
+}
+
+/// Enforce the internal-binding contract on a raw provider + its binding
+/// fields. Shared between the plain-LLM AutomatedStep validator and the agent
+/// lowering paths so the rule cannot drift.
+///
+/// No-op when `provider` is not `internal`. When it is, `resource_alias` MUST
+/// be present + non-empty — the in-cluster router endpoint lives only in the
+/// bound `internal_llm` resource overlay — else [`CompileError::Validation`].
+///
+/// The GDPR off-router lock (no per-step `base_url`/`api_key` reaching the wire)
+/// is NOT enforced here by rejection: a per-step `base_url`/`api_key` on an
+/// internal binding is almost always vestigial (the editor hides those inputs
+/// for `internal`, so any value is leftover from a prior provider) and erroring
+/// on an *invisible* field is a dead-end for the author. Instead every emission
+/// seam STRIPS `base_url`/`api_key` for an internal binding (see
+/// [`strip_internal_overrides`]) so they never reach the executor wire — which
+/// also satisfies the lock, because the executor overlay only fills `base_url`
+/// from the resource when the config's own `base_url` is absent.
+pub fn check_internal_binding(
+    provider: &str,
+    resource_alias: Option<&str>,
+    _base_url: Option<&str>,
+    _api_key: Option<&str>,
+) -> Result<(), CompileError> {
+    if provider != INTERNAL_PROVIDER {
+        return Ok(());
+    }
+    let present = |v: Option<&str>| v.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if !present(resource_alias) {
+        return Err(CompileError::Validation(
+            "llm config: provider \"internal\" requires a non-empty resource_alias \
+             bound to an internal_llm resource (the in-cluster router endpoint is \
+             supplied by that resource's base_url overlay)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Drop any per-step `base_url`/`api_key` from an internal binding's config
+/// object. For `provider: "internal"` the endpoint + credentials come solely
+/// from the bound `internal_llm` resource overlay, so a per-step value is both
+/// vestigial AND unsafe (it would win over the overlay and could escape the
+/// in-cluster router). Stripping it here is the off-router lock. No-op for any
+/// other provider, where `base_url`/`api_key` are legitimate authoring fields.
+pub fn strip_internal_overrides(config: &mut serde_json::Map<String, Value>) {
+    if config.get("provider").and_then(|v| v.as_str()) == Some(INTERNAL_PROVIDER) {
+        config.remove("base_url");
+        config.remove("api_key");
+    }
+}
+
 pub static LLM_DECL: BackendDecl = BackendDecl {
     meta: &LLM_META,
     backend_type: ExecutionBackendType::Llm,
@@ -104,6 +179,46 @@ fn validate(
     config: &Value,
     ctx: &ValidationCtx<'_>,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+    // Internal-binding normalization (GAP F keystone). The editor persists
+    // `provider: "internal"` so it round-trips as an in-cluster router
+    // binding, but the executor's `Provider` enum rejects that string. An
+    // internal binding IS the OpenAI adapter pointed at the `internal_llm`
+    // resource's router `base_url` (overlaid at fire time). So before serde
+    // parses into `LlmConfig`, detect `internal`, enforce the off-router lock,
+    // and rewrite the wire `provider` to `openai`.
+    let provider = config
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let config = if provider == INTERNAL_PROVIDER {
+        let str_field = |k: &str| config.get(k).and_then(|v| v.as_str());
+        // (a) alias required (the router endpoint lives only in the bound
+        //     internal_llm resource overlay).
+        check_internal_binding(
+            provider,
+            str_field("resource_alias"),
+            str_field("base_url"),
+            str_field("api_key"),
+        )?;
+        let mut normalized = config.clone();
+        if let Some(obj) = normalized.as_object_mut() {
+            // (b) off-router lock: strip any vestigial per-step base_url/api_key
+            //     BEFORE the provider rewrite (strip keys off `internal`), so they
+            //     never reach the wire and the overlay's router base_url is used.
+            strip_internal_overrides(obj);
+            // (c) rewrite the wire provider to `openai` and validate THAT
+            //     normalized config, so the emitted wire carries `openai`.
+            obj.insert(
+                "provider".to_string(),
+                Value::String(remap_internal_provider(INTERNAL_PROVIDER).to_string()),
+            );
+        }
+        normalized
+    } else {
+        config.clone()
+    };
+    let config = &config;
+
     let parsed: LlmConfig = serde_json::from_value(config.clone())
         .map_err(|e| CompileError::Validation(format!("invalid llm config: {e}")))?;
     if parsed.model.trim().is_empty() {
@@ -512,5 +627,88 @@ mod tests {
         let response = port.fields.iter().find(|f| f.name == "response").unwrap();
         assert_eq!(response.kind, FieldKind::Json);
         assert_eq!(response.label, "Tags");
+    }
+
+    // --- GAP F: internal-provider remap (keystone) -------------------------
+
+    fn validate_cfg(config: &Value) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+        let node_files = std::collections::HashMap::new();
+        let ctx = ValidationCtx {
+            node_id: "n1",
+            node_files: &node_files,
+        };
+        validate(config, &ctx)
+    }
+
+    #[test]
+    fn internal_remaps_to_openai() {
+        // The editor persists `provider: "internal"`; the emitted WIRE config
+        // must carry `openai` so the executor's `Provider` enum accepts it.
+        let cfg = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+            "resource_alias": "internal_pool_router",
+        });
+        let (wire, _inputs) = validate_cfg(&cfg).expect("internal should normalize");
+        assert_eq!(
+            wire.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal must remap to openai on the wire"
+        );
+        // Round-trips through serde into the executor's LlmConfig.
+        let parsed: LlmConfig = serde_json::from_value(wire).unwrap();
+        assert_eq!(parsed.model, "llama3.2:1b");
+    }
+
+    #[test]
+    fn internal_requires_resource_alias() {
+        let cfg = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+        });
+        let err = validate_cfg(&cfg).expect_err("missing alias must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("resource_alias") && msg.contains("internal_llm"),
+            "error should name resource_alias + internal_llm, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn internal_strips_per_step_base_url_and_api_key() {
+        // Off-router lock: a per-step base_url/api_key on an internal binding is
+        // vestigial (the editor hides those inputs for `internal`). Validation
+        // must SUCCEED and STRIP them from the wire — never let them reach the
+        // executor (where a per-step base_url would win over the resource overlay
+        // and could escape the in-cluster router).
+        let cfg = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+            "resource_alias": "internal_pool_router",
+            "base_url": "https://evil.example.com/v1",
+            "api_key": "sk-leak",
+        });
+        let (wire, _inputs) = validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
+        assert_eq!(
+            wire.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal must remap to openai"
+        );
+        assert!(
+            wire.get("base_url").is_none(),
+            "per-step base_url must be stripped from the internal wire config"
+        );
+        assert!(
+            wire.get("api_key").is_none(),
+            "per-step api_key must be stripped from the internal wire config"
+        );
+        assert_eq!(
+            wire.get("resource_alias").and_then(|v| v.as_str()),
+            Some("internal_pool_router"),
+            "the internal_llm binding must be preserved"
+        );
     }
 }

@@ -202,6 +202,16 @@
 		}
 	}
 
+	// One poll cycle — executions (drives the per-node status badges), marking
+	// (channel/lease runtime + on-edge feeds), children, allocations. Shared by
+	// the live 2 s interval and the terminal catch-up below.
+	function refreshAll() {
+		void refreshExecutions();
+		void refreshMarking();
+		void refreshChildren();
+		void refreshAllocations();
+	}
+
 	// Depend on the id VALUE, not the `instance` prop object. The parent re-fetches
 	// the instance every poll and passes a NEW object with the same id; a bare
 	// `instance.id` read makes this effect depend on the `instance` signal, so it
@@ -248,13 +258,21 @@
 	});
 
 	$effect(() => {
-		if (isTerminal) return;
-		const t = setInterval(() => {
-			void refreshExecutions();
-			void refreshMarking();
-			void refreshChildren();
-			void refreshAllocations();
-		}, 2000);
+		if (isTerminal) {
+			// The instance just reached a terminal status, so the live interval
+			// stops here. But the LAST interval tick ran up to 2 s BEFORE the
+			// terminal transition landed, so any node that flipped to
+			// completed/failed in that closing window would keep rendering its
+			// stale "running" badge until a manual page refresh. Streaming steps
+			// are the usual victims — they close their channel, and complete, last.
+			// Catch up once immediately, then once more after a short delay because
+			// the instance row can go terminal a beat before the step-execution
+			// projection finishes folding the final node completions.
+			refreshAll();
+			const settle = setTimeout(refreshAll, 1500);
+			return () => clearTimeout(settle);
+		}
+		const t = setInterval(refreshAll, 2000);
 		return () => clearInterval(t);
 	});
 

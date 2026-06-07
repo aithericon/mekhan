@@ -54,6 +54,7 @@ pub async fn register(
 #[utoipa::path(
     get,
     path = "/api/v1/inventory",
+    operation_id = "inventory_list",
     responses(
         (status = 200, description = "Paginated inventory entries", body = Paginated<InventoryEntry>),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -77,6 +78,7 @@ pub async fn list_entries(
 #[utoipa::path(
     get,
     path = "/api/v1/inventory/stats",
+    operation_id = "inventory_stats",
     responses(
         (status = 200, description = "Inventory counts by status + server", body = InventoryStats),
         (status = 400, description = "Bad request", body = ErrorResponse),
