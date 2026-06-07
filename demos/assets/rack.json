@@ -24,6 +24,12 @@
       "grasp_pose": { "position": { "x": 0.30, "y": 0.00, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
       "approach_pose": { "position": { "x": 0.30, "y": 0.00, "z": 0.42 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
       "occupied": false
+    },
+    {
+      "slot_id": "A3",
+      "grasp_pose": { "position": { "x": 0.30, "y": 0.075, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "approach_pose": { "position": { "x": 0.30, "y": 0.075, "z": 0.42 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } },
+      "occupied": true
     }
   ]
 }
