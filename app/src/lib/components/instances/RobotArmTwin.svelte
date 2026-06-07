@@ -189,7 +189,9 @@
 		height: 100%;
 		min-width: 160px;
 		min-height: 120px;
-		background: radial-gradient(circle at 50% 35%, #1b2027 0%, #0e1116 100%);
+		/* Brighter than the dark xyflow canvas so the stage reads as a distinct
+		   frame instead of blending into the page background. */
+		background: radial-gradient(circle at 50% 32%, #36404d 0%, #1c232c 100%);
 		border-radius: 4px;
 		overflow: hidden;
 	}
@@ -203,7 +205,9 @@
 		height: 100% !important;
 	}
 	.twin.frozen {
-		filter: saturate(0.6) brightness(0.85);
+		/* Frozen (passive) reads slightly muted but stays brighter than the page so
+		   it keeps the same contrast as the live stage. */
+		filter: saturate(0.78) brightness(0.96);
 	}
 	.err {
 		position: absolute;
