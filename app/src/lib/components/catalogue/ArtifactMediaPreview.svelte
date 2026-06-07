@@ -35,16 +35,32 @@
 	);
 
 	const downloadUrl = $derived(storagePath ? catalogueDownloadUrl(storagePath) : null);
-	const label = $derived(filename ?? name ?? storagePath?.split('/').pop() ?? 'artifact');
+	// Prefer `name` over `filename`: the catalogue's `filename` can carry a
+	// spurious trailing `.json` (artifact-pipeline naming quirk), so as a last
+	// line of defence strip a `.json` suffix that doesn't match the real MIME.
+	const label = $derived.by(() => {
+		let l = name ?? filename ?? storagePath?.split('/').pop() ?? 'artifact';
+		if (l.endsWith('.json') && (mimeType ?? '') !== 'application/json') {
+			l = l.slice(0, -'.json'.length);
+		}
+		return l;
+	});
 
 	let src = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	// Set when the browser can decode the bytes but not the codec (e.g. an mp4
+	// recorded with the mp4v / MPEG-4 Part 2 codec, which no browser plays in
+	// <video>). The bytes are fine — only in-browser playback fails — so we keep
+	// the download link and explain rather than showing the browser's default
+	// "no supported source" frame.
+	let playbackError = $state(false);
 
 	$effect(() => {
 		// Re-run whenever the underlying file changes.
 		void storagePath;
 		src = null;
 		error = null;
+		playbackError = false;
 		if (!kind || !storagePath) return;
 		const controller = new AbortController();
 		let objectUrl: string | null = null;
@@ -89,13 +105,37 @@
 					loading="lazy"
 				/>
 			{:else if kind === 'video'}
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video controls {src} class="max-h-[60vh] w-full max-w-2xl rounded-lg border border-border bg-black">
-					Your browser does not support the video element.
-				</video>
+				{#if playbackError}
+					<div
+						class="flex max-w-2xl flex-col gap-1 rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground"
+					>
+						<span class="font-medium text-foreground">Not playable in the browser</span>
+						This video's codec isn't supported for in-browser playback (e.g. an mp4
+						written with the <code>mp4v</code> codec). The file itself is intact — use the
+						download link below to view it.
+					</div>
+				{:else}
+					<!-- svelte-ignore a11y_media_has_caption -->
+					<video
+						controls
+						{src}
+						onerror={() => (playbackError = true)}
+						class="max-h-[60vh] w-full max-w-2xl rounded-lg border border-border bg-black"
+					>
+						Your browser does not support the video element.
+					</video>
+				{/if}
+			{:else if playbackError}
+				<div
+					class="flex max-w-2xl flex-col gap-1 rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground"
+				>
+					<span class="font-medium text-foreground">Not playable in the browser</span>
+					This audio's codec isn't supported for in-browser playback. Use the download link
+					below to listen.
+				</div>
 			{:else}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<audio controls {src} class="w-full max-w-2xl">
+				<audio controls {src} onerror={() => (playbackError = true)} class="w-full max-w-2xl">
 					Your browser does not support the audio element.
 				</audio>
 			{/if}

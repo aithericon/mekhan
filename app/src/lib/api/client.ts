@@ -959,6 +959,7 @@ export async function listCatalogueEntries(params?: {
 	category?: string;
 	source_net?: string;
 	process_id?: string;
+	execution_id?: string;
 	search?: string;
 	sort?: string;
 	page?: number;
@@ -970,6 +971,7 @@ export async function listCatalogueEntries(params?: {
 	if (params?.category) qs.set('filter[category][eq]', params.category);
 	if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
 	if (params?.process_id) qs.set('filter[process_id][eq]', params.process_id);
+	if (params?.execution_id) qs.set('filter[execution_id][eq]', params.execution_id);
 	if (params?.search) qs.set('search', params.search);
 	if (params?.sort) qs.set('sort', params.sort);
 	if (params?.page !== undefined) qs.set('page', String(params.page));
