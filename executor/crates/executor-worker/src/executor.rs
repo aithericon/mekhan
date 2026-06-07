@@ -188,6 +188,8 @@ impl JobExecutor {
                 execution_id: execution_id.clone(),
                 source: self.reporter.source().to_string(),
                 metadata: job.metadata.clone(),
+                transports: self.transports.clone(),
+                channels: job.channels.clone(),
             }))
         } else {
             None

@@ -7,9 +7,8 @@
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
 	import CodeEditor from '$lib/components/editor/panels/shared/CodeEditor.svelte';
-	import JsonSchemaBuilder, {
-		detectShape
-	} from '$lib/components/editor/panels/property-sections/automated/JsonSchemaBuilder.svelte';
+	import SchemaBuilder from '$lib/schema/SchemaBuilder.svelte';
+	import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 	import InsertRefButton from '$lib/components/editor/panels/property-sections/InsertRefButton.svelte';
 	import ModelPicker from '$lib/components/editor/panels/property-sections/shared/ModelPicker.svelte';
 	import { untrack } from 'svelte';
@@ -41,16 +40,8 @@
 	const schemaObj = $derived(
 		((config.response_format as Record<string, unknown>)?.schema as Record<string, unknown>) ?? {}
 	);
-	const schemaShape = $derived(detectShape(schemaObj));
-	const builderCompatible = $derived(schemaShape.kind !== 'raw_only');
 
 	let schemaEditor = $state<'builder' | 'raw'>('builder');
-	$effect(() => {
-		const compatible = builderCompatible;
-		untrack(() => {
-			if (!compatible && schemaEditor === 'builder') schemaEditor = 'raw';
-		});
-	});
 
 	let schemaDraft = $state('');
 	let schemaParseError = $state<string | null>(null);
@@ -102,8 +93,11 @@
 		}
 	}
 
-	function handleBuilderChange(schema: Record<string, unknown>) {
-		setField('response_format', { type: 'json_schema', schema });
+	function handleBuilderChange(schema: unknown) {
+		setField('response_format', {
+			type: 'json_schema',
+			schema: schema as Record<string, unknown>
+		});
 	}
 
 	const providerLabels: Record<string, string> = {
@@ -248,10 +242,8 @@
 									class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor === 'builder'
 										? 'border-primary bg-primary/5 text-foreground'
 										: 'border-border text-muted-foreground hover:bg-accent/30'}"
-									disabled={readonly || !builderCompatible}
-									title={builderCompatible
-										? 'Visual property editor'
-										: 'Schema uses constructs the builder can’t represent — raw only.'}
+									disabled={readonly}
+									title="Visual property editor"
 									onclick={() => (schemaEditor = 'builder')}
 								>
 									Builder
@@ -269,8 +261,14 @@
 							</div>
 						</div>
 
-						{#if schemaEditor === 'builder' && builderCompatible}
-							<JsonSchemaBuilder schema={schemaObj} {readonly} onchange={handleBuilderChange} />
+						{#if schemaEditor === 'builder'}
+							<SchemaBuilder
+								schema={schemaObj}
+								{readonly}
+								allowRootScalar
+								definitions={getWorkflowDefinitions()}
+								onchange={handleBuilderChange}
+							/>
 						{:else}
 							<CodeEditor
 								value={schemaDraft}

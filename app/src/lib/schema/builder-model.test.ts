@@ -324,8 +324,8 @@ describe('builderNodeToSchema', () => {
 		const node: BuilderObjectNode = {
 			kind: 'object',
 			fields: [
-				{ name: 'name', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
-				{ name: 'age', node: { kind: 'scalar', type: 'integer', nullable: false, enumValues: [] } }
+				{ id: 'x', name: 'name', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
+				{ id: 'y', name: 'age', node: { kind: 'scalar', type: 'integer', nullable: false, enumValues: [] } }
 			],
 			required: new Set(['name']),
 			sealed: true,
@@ -472,8 +472,8 @@ describe('builderNodeToSchema', () => {
 		const node: BuilderObjectNode = {
 			kind: 'object',
 			fields: [
-				{ name: 'z', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
-				{ name: 'a', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } }
+				{ id: 'x', name: 'z', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
+				{ id: 'y', name: 'a', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } }
 			],
 			required: new Set(['z', 'a']),
 			sealed: false,
@@ -532,8 +532,8 @@ describe('builderNodeToSchema', () => {
 		const node: BuilderObjectNode = {
 			kind: 'object',
 			fields: [
-				{ name: '', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
-				{ name: 'valid', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } }
+				{ id: 'x', name: '', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } },
+				{ id: 'y', name: 'valid', node: { kind: 'scalar', type: 'string', nullable: false, enumValues: [] } }
 			],
 			required: new Set(),
 			sealed: false,

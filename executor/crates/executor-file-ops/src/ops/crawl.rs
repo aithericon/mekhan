@@ -43,9 +43,10 @@ const CRAWL_CHANNEL: &str = "crawl";
 ///
 /// When `event_stream` is `Some`, one `item(CRAWL_CHANNEL, episode_uid, idx,
 /// {"items":[{path,size,mtime}, …]})` is emitted per batch of `config.batch_size`
-/// files, followed by a single `close(CRAWL_CHANNEL, episode_uid, total)` at the
-/// end. All items + the close share one `episode_uid` so a downstream `gather`
-/// barrier can size itself on `total`. When `event_stream` is `None` (the job
+/// files, followed by a single `close(CRAWL_CHANNEL, episode_uid, batch_idx)` at
+/// the end (the close count is the number of items/batches emitted, which is
+/// what a `gather` barrier sizes itself on — NOT the file `total`). All items +
+/// the close share one `episode_uid`. When `event_stream` is `None` (the job
 /// didn't opt into streaming), batches are not emitted — the operation still
 /// runs to completion and reports `count`/`last_path` in its outputs, which is
 /// what the direct-call test path and small crawls rely on.
@@ -143,8 +144,12 @@ pub async fn execute(
     }
 
     // Close the episode so a downstream gather barrier knows the final count.
+    // The count MUST be the number of `item()` calls emitted (one per batch =
+    // `batch_idx`), NOT the file `total` — a `join: gather` consumer sizes its
+    // barrier on the number of items, so passing the file count would make it
+    // wait for files-many items and hang (it only ever receives `batch_idx`).
     if let Some(ref es) = event_stream {
-        es.close(CRAWL_CHANNEL.to_string(), episode_uid.clone(), total)
+        es.close(CRAWL_CHANNEL.to_string(), episode_uid.clone(), batch_idx)
             .await;
     }
 

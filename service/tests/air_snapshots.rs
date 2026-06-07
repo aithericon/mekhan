@@ -107,6 +107,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // Pins per-frame data-in + dual data/control-out (one with no consumer, UI
     // tapped) + gather lowering together; inference + camera are live-only.
     "48-live-camera-detection",
+    // 50-legacy-crawl-register: file-ops `crawl` (streaming `{path,size,mtime}`
+    // batches over a CONTROL channel) → consumer-edge `join: gather` fold →
+    // Python register step. Pins that a file_ops node emits a control channel a
+    // gather consumer folds, plus the compiler's source-scan of the register
+    // step's `start.*` / `fold.files` borrows. Self-contained (no external
+    // resource/asset), so bare `compile_to_air` resolves it; RUNNING it is
+    // live-only (seeds a temp NAS, POSTs to the inventory API).
+    "50-legacy-crawl-register",
 ];
 
 fn repo_root() -> PathBuf {
@@ -356,6 +364,11 @@ fn snapshot_48_live_camera_detection() {
     run("48-live-camera-detection");
 }
 
+#[test]
+fn snapshot_50_legacy_crawl_register() {
+    run("50-legacy-crawl-register");
+}
+
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
 /// a snapshot test, fail loudly. Comparison against the curated list above
 /// rather than the disk so we can intentionally exclude (e.g. subworkflow
@@ -509,6 +522,12 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // a live model-pool + inference backend, not a deterministic AIR snapshot.
         // Live-only.
         "37-internal-pool-agent",
+        // 49-xarm-twin (robot-twin, live 3D URDF on an edge) — references a
+        // `robot_description` asset by ref-key (`;model=xarm6`), a named-global
+        // only the publish handler's resolver can supply (same class as the
+        // asset-ref demos 21-24); bare `compile_to_air` has an empty KnownGlobals.
+        // Live-only (Threlte/urdf-loader render + playback source).
+        "49-xarm-twin",
     ]
     .into_iter()
     .collect();
