@@ -156,8 +156,14 @@
 								title={channelTitle(channel)}
 							>
 								<span class="shrink-0 text-muted-foreground/70">{channel.direction === 'out' ? '→' : '←'}</span>
-								<span class="min-w-0 flex-1 truncate font-mono">{channel.name}</span>
-								<span class="shrink-0 text-muted-foreground/60">{elementLabel(channel.element)}</span>
+								<!-- Name is the priority: it gets the available width and truncates
+								     last. The element type / content_type (e.g. a long
+								     `video/mp4;codecs="…"`) is capped and truncates first so it
+								     never overflows the fixed-width card; full value on hover. -->
+								<span class="min-w-0 flex-1 truncate font-mono" title={channel.name}>{channel.name}</span>
+								<span
+									class="min-w-0 max-w-[45%] shrink-0 truncate text-muted-foreground/60"
+									title={elementLabel(channel.element)}>{elementLabel(channel.element)}</span>
 							</span>
 						</li>
 					{/each}
