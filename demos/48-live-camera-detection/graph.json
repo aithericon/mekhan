@@ -175,7 +175,7 @@
       "data": {
         "type": "automated_step",
         "label": "Record annotated feed → file catalogue",
-        "description": "Drains the detector's durable `annotated` Data/In channel (transport `jetstream`: lossless, ordered, replayable — the right contract for a recorder) and assembles the annotated JPEG frames into a single MP4 with `cv2.VideoWriter` (mp4v), sized lazily to the first frame. When the stream closes it finalizes the file and registers it in the platform's file catalogue via the SDK `log_artifact(..., blocking=True)` — blocking so the upload + catalogue registration complete before this node (and therefore the run) finishes. The same `annotated` datastream also feeds the live MJPEG view in the instance panel; JetStream's Limits retention lets the browser tap and this in-net consumer read it independently. LIVE-ONLY: rides the same heavy detector run.",
+        "description": "Drains the detector's durable `annotated` Data/In channel (transport `jetstream`: lossless, ordered, replayable — the right contract for a recorder) and assembles the annotated JPEG frames (decoded via Pillow) into a single browser-playable H.264 MP4 with PyAV (libx264, faststart), sized lazily to the first frame. When the stream closes it finalizes the file and registers it in the platform's file catalogue via the SDK `log_artifact(..., blocking=True)` — blocking so the upload + catalogue registration complete before this node (and therefore the run) finishes. The same `annotated` datastream also feeds the live MJPEG view in the instance panel; JetStream's Limits retention lets the browser tap and this in-net consumer read it independently. LIVE-ONLY: rides the same heavy detector run.",
         "channels": [
           {
             "name": "annotated",
@@ -190,7 +190,7 @@
           "entrypoint": "main.py",
           "config": {
             "python": "python3",
-            "requirements": ["opencv-python-headless"],
+            "requirements": ["av", "pillow", "numpy"],
             "virtualenv": true,
             "sdk": true,
             "inherit_env": true,

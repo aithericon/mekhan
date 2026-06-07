@@ -205,7 +205,15 @@ fn build_command_from_event(
         artifact_id: artifact_id.to_string(),
         name: name.to_string(),
         category: category.to_string(),
-        filename: format!("{name}.json"), // best guess from name
+        // Prefer the real on-disk basename carried by the executor; only fall
+        // back to `name` (NOT `{name}.json`) for older events that predate the
+        // `filename` field.
+        filename: detail
+            .get("filename")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name)
+            .to_string(),
         mime_type: detail
             .get("mime_type")
             .and_then(|v| v.as_str())
