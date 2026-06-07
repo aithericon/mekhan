@@ -314,10 +314,13 @@ ensure-buildx:
     set -euo pipefail
     echo "▶ registering QEMU (binfmt) + docker-container buildx builder"
     docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null
-    docker buildx rm xbuild >/dev/null 2>&1 || true
-    docker rm -f buildx_buildkit_xbuild0 >/dev/null 2>&1 || true
-    docker buildx create --name xbuild --driver docker-container --use --bootstrap >/dev/null
-    echo "✓ buildx ready (docker-container driver + qemu)"
+
+    docker buildx use xbuild 2>/dev/null \
+      || docker buildx create --name xbuild --driver docker-container --use 2>/dev/null \
+      || { docker buildx rm xbuild >/dev/null 2>&1 || true; \
+           docker rm -f buildx_buildkit_xbuild0 >/dev/null 2>&1 || true; \
+           docker buildx create --name xbuild --driver docker-container --use --bootstrap >/dev/null; }
+    echo "✓ buildx ready (docker-container driver + qemu, persistent cache)"
 
 # ── Package + push (Docker image) ───────────────────────────────────────────
 
