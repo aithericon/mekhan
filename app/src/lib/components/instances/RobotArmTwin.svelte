@@ -193,6 +193,15 @@
 		border-radius: 4px;
 		overflow: hidden;
 	}
+	/* Threlte sizes the canvas from getBoundingClientRect (the zoom-SCALED size) and
+	   doesn't re-measure on xyflow zoom — ResizeObserver ignores CSS transforms — so
+	   the canvas otherwise keeps its mount-time pixel size and leaves a gap when the
+	   edge preview scales. Pin it to fill .twin so it always tracks the container. */
+	.twin :global(canvas) {
+		display: block;
+		width: 100% !important;
+		height: 100% !important;
+	}
 	.twin.frozen {
 		filter: saturate(0.6) brightness(0.85);
 	}
