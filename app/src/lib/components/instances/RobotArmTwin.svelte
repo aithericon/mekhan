@@ -164,7 +164,19 @@
 	});
 </script>
 
-<div class="twin" class:frozen>
+<!-- Capture pointer/wheel so OrbitControls drives the camera without the events
+     bubbling to the xyflow pane (which would pan/zoom the whole graph). The
+     canvas (OrbitControls' listener target) still receives them in the target
+     phase before we stop propagation on the way up. -->
+<div
+	class="twin"
+	class:frozen
+	role="presentation"
+	onpointerdown={(e) => e.stopPropagation()}
+	onwheel={(e) => e.stopPropagation()}
+	ondblclick={(e) => e.stopPropagation()}
+	oncontextmenu={(e) => e.stopPropagation()}
+>
 	<Canvas renderMode="always">
 		<T.PerspectiveCamera makeDefault position={camPos} fov={FOV}>
 			<OrbitControls enableDamping enablePan={false} target={camTarget} />
@@ -205,9 +217,10 @@
 		height: 100% !important;
 	}
 	.twin.frozen {
-		/* Frozen (passive) reads slightly muted but stays brighter than the page so
-		   it keeps the same contrast as the live stage. */
-		filter: saturate(0.78) brightness(0.96);
+		/* Frozen (passive) keeps the SAME slate stage colour as the live state —
+		   the ended state is signalled by the "ended" badge + frame border, not by
+		   muting the background. Only a hair dimmer. */
+		filter: brightness(0.96);
 	}
 	.err {
 		position: absolute;
