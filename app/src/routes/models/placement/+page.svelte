@@ -160,7 +160,9 @@
 <div class="space-y-6" data-testid="models-pools">
 	<div class="flex items-baseline gap-3">
 		<h2 class="text-base font-semibold tracking-tight text-foreground">Pools</h2>
-		<span class="text-sm text-muted-foreground">engine capacity — generic vLLM node fleets</span>
+		<span class="text-sm text-muted-foreground"
+			>optional — autoscaler-provisioned GPU node fleets</span
+		>
 		<Button
 			variant="outline"
 			size="sm"
@@ -182,8 +184,14 @@
 	{/if}
 
 	{#if pools.length === 0}
-		<p class="text-sm text-muted-foreground/70">
-			No node pools. Use <b>New pool</b> to declare engine capacity for the autoscaler to fill.
+		<p class="max-w-2xl text-sm text-muted-foreground/70">
+			No node pools — and you don't need one. Pools let the <b>autoscaler provision new GPU nodes</b>
+			(via Nomad) on demand. To serve models without a pool, just enrol a runner with a
+			<code class="rounded bg-muted px-1 py-px font-mono">[model_agent]</code> backend — it shows up under
+			<a
+				href="/models/engines"
+				class="font-medium text-foreground underline underline-offset-2 hover:text-primary">Engines</a
+			>. Use <b>New pool</b> only to add autoscaler-managed capacity.
 		</p>
 	{:else}
 		<div class="grid gap-2 sm:grid-cols-2">

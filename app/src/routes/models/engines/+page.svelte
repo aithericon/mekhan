@@ -140,14 +140,6 @@
 	<div class="flex items-baseline gap-3">
 		<h2 class="text-base font-semibold tracking-tight text-foreground">Engines</h2>
 		<span class="text-sm text-muted-foreground">live per-node inventory</span>
-		{#if !engines.headroom_from_router}
-			<span
-				class="cursor-help text-sm text-muted-foreground/50"
-				title="The router /metrics poll is unconfigured, so per-engine headroom shows the full concurrency budget rather than live in-flight load."
-			>
-				headroom: full budget
-			</span>
-		{/if}
 		<Button
 			variant="outline"
 			size="sm"
@@ -220,9 +212,12 @@
 										{#if e.max_num_seqs != null}
 											<span
 												class="shrink-0 cursor-help text-sm text-muted-foreground"
-												title="C = max concurrent sequences this engine serves (vLLM --max-num-seqs). Headroom = free slots not currently in flight."
+												title={engines.headroom_from_router
+													? 'Max concurrent sequences this engine serves (vLLM --max-num-seqs); free = slots not currently in flight (live from the router).'
+													: 'Max concurrent sequences this engine serves (vLLM --max-num-seqs). Live in-flight load is unknown (the router /metrics poll is not configured), so only the slot count is shown.'}
 											>
-												{e.max_num_seqs} slots · {e.headroom ?? '–'} free
+												{e.max_num_seqs} slots{#if engines.headroom_from_router} · {e.headroom ??
+														'–'} free{/if}
 											</span>
 										{/if}
 									</span>
