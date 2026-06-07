@@ -303,13 +303,9 @@ apply-workflows dir="workflows":
 
 # ── buildx setup: QEMU + docker-container driver (build arm64 images on x86) ─
 #
-# The CI worker is x86 but the runtime images are linux/arm64, and every
-# runtime Dockerfile has `RUN` steps (apk/apt). The DEFAULT buildx "docker"
-# driver CANNOT execute emulated arm64 RUN steps — even with binfmt registered
-# it dies with `exec /bin/sh: exec format error`. The `docker-container`
-# (BuildKit) driver can. So we register QEMU for all arches AND switch to a
-# docker-container builder. Mirrors web-platform's `setup-buildx`.
-#
+# The CI worker is x86 but the runtime images are linux/arm64
+
+
 # Every publish recipe calls this first. Each CI step is a fresh container
 # (buildx config is ephemeral) sharing the host docker daemon (the buildkit
 # container may persist), so we recreate idempotently under a stable name.
