@@ -7,6 +7,7 @@
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import KeyValueList from './KeyValueList.svelte';
 	import SmartValue from './SmartValue.svelte';
+	import ArtifactManifest from './ArtifactManifest.svelte';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import StepLogs from '../StepLogs.svelte';
 	import type { RendererProps } from './types';
@@ -72,6 +73,13 @@
 
 	const metrics = $derived(detail.metrics?.latest_values ?? null);
 	const hasMetrics = $derived(!!metrics && Object.keys(metrics).length > 0);
+
+	const hasArtifacts = $derived(
+		!!detail.artifact_manifest &&
+			typeof detail.artifact_manifest === 'object' &&
+			Array.isArray((detail.artifact_manifest as { artifacts?: unknown }).artifacts) &&
+			((detail.artifact_manifest as { artifacts: unknown[] }).artifacts.length > 0)
+	);
 
 	const phases = $derived<Phase[]>(detail.progress?.phases ?? []);
 	const hasPhases = $derived(phases.length > 0);
@@ -157,6 +165,10 @@
 			<div class="mb-1.5 text-sm font-semibold text-foreground">Metrics</div>
 			<KeyValueList value={metrics} {ctx} />
 		</div>
+	{/if}
+
+	{#if hasArtifacts}
+		<ArtifactManifest manifest={detail.artifact_manifest} />
 	{/if}
 
 	{#if hasPhases}
