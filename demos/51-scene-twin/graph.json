@@ -1,0 +1,978 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": {
+        "x": 0,
+        "y": 262
+      },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Scene Twin",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "lease",
+      "type": "lease_scope",
+      "slug": "cell",
+      "position": {
+        "x": 190,
+        "y": 0
+      },
+      "width": 3300,
+      "height": 560,
+      "data": {
+        "type": "lease_scope",
+        "label": "xArm Scene Cell",
+        "description": "Acquires ONE `xarm_fleet` runner for the whole scene-twin run and releases it on exit. Everything inside \u2014 scene clear, sample seeding, plan/execute/grasp, the lift that streams the twin, and the release \u2014 runs on the same held runner by CONTAINMENT (the body steps inherit the held `runner.<id>` namespace), so the persistent move_group planning scene seeded by `add_sample_a/b` is the SAME scene `plan_reach`/`grasp`/`exec_lift` plan against and the same scene `exec_lift` streams to the twin. The `requirements` pick WHICH runner to hold (an xArm6); body steps are plain `executor` \u2014 they do NOT claim their own unit (that would deadlock against the held one), they ride the lease.",
+        "lease": {
+          "pool": "xarm_fleet"
+        },
+        "requirements": {
+          "constraints": [
+            {
+              "capability": "ros",
+              "field": "robot_model",
+              "op": "eq",
+              "value": "xarm6"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "reset_scene",
+      "type": "automated_step",
+      "slug": "reset_scene",
+      "parentId": "lease",
+      "position": {
+        "x": 16,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Reset Scene (clear move_group)",
+        "description": "Cell-reset head \u2014 makes the whole run idempotent. ROS `call_service` to `/clear_scene` (`aithericon_motion_bridge/srv/ClearScene`, confirm-guarded) \u2014 removes ALL world + attached collision objects from move_group's persistent planning scene, so a re-run starts from a clean slate and any sample still attached to the gripper from a prior run is detached back into the world. Plain `executor` (NO per-step capacity): rides the enclosing cell lease's held `runner.<id>` namespace by containment, so the clear hits the SAME held move_group the seed + plan steps plan against. Runs ONCE, before seeding.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/clear_scene",
+            "interface_type": "aithericon_motion_bridge/srv/ClearScene",
+            "fields": {
+              "confirm": true
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/ClearScene_Request",
+                "fieldnames": [
+                  "confirm"
+                ],
+                "fieldtypes": [
+                  "boolean"
+                ],
+                "fieldarraylen": [
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/ClearScene_Response",
+                "fieldnames": [
+                  "success",
+                  "removed_count",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "int32",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "success",
+              "label": "Success",
+              "kind": "bool"
+            },
+            {
+              "name": "removed_count",
+              "label": "Removed count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "add_sample_a",
+      "type": "automated_step",
+      "slug": "add_sample_a",
+      "parentId": "lease",
+      "position": {
+        "x": 326,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Sample A to Scene",
+        "description": "ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) \u2014 pushes the box CollisionObject `sample_a` into move_group's persistent planning scene at a reachable table pose in frame `link_base`. Unlike demo 40 (which Maps over an asset and splices `{{ item.* }}`), this DRAFT inlines the pose + dimensions literally \u2014 there is no Map here. The pose (position x\u22480.35, y\u22480.10, z\u22480.05; identity orientation) and dimensions [0.04, 0.04, 0.08] are starting GUESSES to tune live against the running cell. Plain `executor`: inherits the enclosing cell lease's held `runner.<id>` namespace by containment, so the add hits the SAME held move_group scene `grasp` will attach from. interface_typedefs copied verbatim from demo 40's `add_sample`.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "sample_a",
+              "primitive": "box",
+              "dimensions": [
+                0.04,
+                0.04,
+                0.08
+              ],
+              "pose": {
+                "header": {
+                  "frame_id": "link_base"
+                },
+                "pose": {
+                  "position": {
+                    "x": 0.35,
+                    "y": 0.1,
+                    "z": 0.05
+                  },
+                  "orientation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0,
+                    "w": 1.0
+                  }
+                }
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": [
+                  "object_id",
+                  "primitive",
+                  "dimensions",
+                  "pose"
+                ],
+                "fieldtypes": [
+                  "string",
+                  "string",
+                  "float64",
+                  "geometry_msgs/PoseStamped"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  0,
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": [
+                  "success",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "success",
+              "label": "Success",
+              "kind": "bool"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "add_sample_b",
+      "type": "automated_step",
+      "slug": "add_sample_b",
+      "parentId": "lease",
+      "position": {
+        "x": 636,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Sample B to Scene",
+        "description": "ROS `call_service` to `/add_object` (`aithericon_motion_bridge/srv/AddObject`) \u2014 pushes a SECOND box CollisionObject `sample_b` into the SAME held move_group scene at a different reachable pose (position x\u22480.35, y\u2248-0.10, z\u22480.05; identity orientation; dimensions [0.04, 0.04, 0.08]) so the twin shows more than one world object and `sample_a` is grasped out of a populated scene. Poses are starting GUESSES to tune live. Plain `executor`: rides the held lease by containment. interface_typedefs copied verbatim from demo 40's `add_sample`.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "sample_b",
+              "primitive": "box",
+              "dimensions": [
+                0.04,
+                0.04,
+                0.08
+              ],
+              "pose": {
+                "header": {
+                  "frame_id": "link_base"
+                },
+                "pose": {
+                  "position": {
+                    "x": 0.35,
+                    "y": -0.1,
+                    "z": 0.05
+                  },
+                  "orientation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0,
+                    "w": 1.0
+                  }
+                }
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": [
+                  "object_id",
+                  "primitive",
+                  "dimensions",
+                  "pose"
+                ],
+                "fieldtypes": [
+                  "string",
+                  "string",
+                  "float64",
+                  "geometry_msgs/PoseStamped"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  0,
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": [
+                  "success",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "success",
+              "label": "Success",
+              "kind": "bool"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "exec_reach",
+      "type": "automated_step",
+      "slug": "exec_reach",
+      "parentId": "lease",
+      "position": {
+        "x": 1256,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Reach over sample_a (fixed joints \u00b7 deterministic)",
+        "description": "Drives the arm to a known reach pose above sample_a (gripper-down) via a FIXED joint trajectory \u2014 no MoveIt IK/planning, so it is deterministic and idempotent. FollowJointTrajectory bypasses collision checking; the held cell lease keeps it on the xarm6 runner.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [
+                      0,
+                      0,
+                      0,
+                      0,
+                      0,
+                      0
+                    ],
+                    "time_from_start": {
+                      "sec": 0,
+                      "nanosec": 0
+                    }
+                  },
+                  {
+                    "positions": [
+                      0.279,
+                      -0.351,
+                      -0.698,
+                      0.001,
+                      1.049,
+                      0.279
+                    ],
+                    "time_from_start": {
+                      "sec": 4,
+                      "nanosec": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": [
+                  "error_code",
+                  "error_string"
+                ],
+                "fieldtypes": [
+                  "int32",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ],
+            "timeout_ms": 15000
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "feedback_count",
+              "label": "Feedback count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "grasp",
+      "type": "automated_step",
+      "slug": "grasp",
+      "parentId": "lease",
+      "position": {
+        "x": 1566,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Grasp Sample A (atomic close + attach)",
+        "description": "ROS `call_service` to `/grasp` (`aithericon_motion_bridge/srv/Grasp`) \u2014 the atomic compound op: actuate the `xarm_gripper` group closed THEN `AttachedCollisionObject` ADD of `sample_a` on `/apply_planning_scene`, both in one call, returning only after both complete. `object_id` is inlined as the literal `sample_a` (the box seeded by `add_sample_a`). `attached == true` proves `sample_a` is now part of the robot's collision body and will ride the gripper through the lift \u2014 which is exactly what the twin then streams. Plain `executor`: rides the held lease. interface_typedefs copied verbatim from demo 37-pick's `grasp`.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/grasp",
+            "interface_type": "aithericon_motion_bridge/srv/Grasp",
+            "fields": {
+              "object_id": "sample_a",
+              "width": 0.0,
+              "effort": 50.0
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/Grasp_Request",
+                "fieldnames": [
+                  "object_id",
+                  "width",
+                  "effort"
+                ],
+                "fieldtypes": [
+                  "string",
+                  "double",
+                  "double"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/Grasp_Response",
+                "fieldnames": [
+                  "success",
+                  "attached",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "boolean",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "success",
+              "label": "Success",
+              "kind": "bool"
+            },
+            {
+              "name": "attached",
+              "label": "Attached",
+              "kind": "bool"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "exec_lift",
+      "type": "automated_step",
+      "slug": "exec_lift",
+      "parentId": "lease",
+      "position": {
+        "x": 2186,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Lift (carry grasped sample \u00b7 live scene twin)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`) \u2014 executes the lift planned by `plan_lift`, spliced verbatim as the BARE whole-object placeholder `{{ plan_lift.trajectory }}`. This is the TWIN PRODUCER: it ALSO declares a Data/Out channel `scene` and sets `scene_stream_ms: 200`, so as the controller follows the lift the ROS backend samples move_group's ACTUAL planning scene every ~200ms and streams each as one NDJSON frame (arm joint states + the two world boxes + `sample_a` riding the gripper) onto the channel. content_type `application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6` routes the UI render registry to the planning-scene twin renderer, drawing the LIVE move_group scene on the `exec_lift` \u2192 `twin_view` edge \u2014 the REAL scene, NOT a re-computed one. The bulk scene stream rides the out-of-band JetStream datastream transport \u2014 the net sees only open + close; the action RESULT rides `stdout_tail`. Plain `executor`: rides the held lease. interface_typedefs copied verbatim from demo 37-pick's `execute`; channel shape mirrors demo 49's `move`.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "channels": [
+          {
+            "name": "scene",
+            "direction": "out",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "scene_stream_ms": 200,
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [
+                      0.279,
+                      -0.351,
+                      -0.698,
+                      0.001,
+                      1.049,
+                      0.279
+                    ],
+                    "time_from_start": {
+                      "sec": 0,
+                      "nanosec": 0
+                    }
+                  },
+                  {
+                    "positions": [
+                      0.279,
+                      -0.8,
+                      -0.4,
+                      0.0,
+                      1.0,
+                      0.279
+                    ],
+                    "time_from_start": {
+                      "sec": 4,
+                      "nanosec": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": [
+                  "error_code",
+                  "error_string"
+                ],
+                "fieldtypes": [
+                  "int32",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ],
+            "timeout_ms": 15000
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "feedback_count",
+              "label": "Feedback count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "twin_view",
+      "type": "automated_step",
+      "slug": "twin_view",
+      "parentId": "lease",
+      "position": {
+        "x": 2496,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Twin view (drain planning-scene stream)",
+        "description": "Consumer of the `scene` data channel \u2014 the net-side anchor the live planning-scene twin renders ON (the UI taps the SAME channel out-of-band via `?follow=1`, while this node drains it on the data plane). Reads the NDJSON planning-scene frames with the ordinary transport-unaware `for chunk in stream('scene')` API, reframes on newlines, validates each frame parses, and counts complete frames. The robot model is carried in the channel content_type as `;model=xarm6` so the twin renderer knows which URDF (`robot_description` asset, ref_key xarm6) to load. The frames carry the REAL move_group scene streamed live from `exec_lift`. The bulk stream rides the out-of-band JetStream datastream transport \u2014 the net sees only open + close. Drain node copied from demo 49's `twin_view`, channel renamed `joints` \u2192 `scene`. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "channels": [
+          {
+            "name": "scene",
+            "direction": "in",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Twin view",
+          "fields": [
+            {
+              "name": "received_frames",
+              "label": "Frames received",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "release",
+      "type": "automated_step",
+      "slug": "release",
+      "parentId": "lease",
+      "position": {
+        "x": 2806,
+        "y": 216
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Release Sample A (detach to world)",
+        "description": "ROS `call_service` to `/release` (`aithericon_motion_bridge/srv/Release`) \u2014 the atomic compound op: actuate the gripper open FUSED with a scene detach (`AttachedCollisionObject` REMOVE \u2192 `sample_a` falls back into the world). `object_id` is inlined as the literal `sample_a`. Runs after the twin has streamed the lift, leaving the held scene with both boxes back in the world so a re-run's `reset_scene` starts clean. Plain `executor`: rides the held lease. interface_typedefs copied verbatim from demo 38-place's `release`.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/release",
+            "interface_type": "aithericon_motion_bridge/srv/Release",
+            "fields": {
+              "object_id": "sample_a"
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/Release_Request",
+                "fieldnames": [
+                  "object_id"
+                ],
+                "fieldtypes": [
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/Release_Response",
+                "fieldnames": [
+                  "success",
+                  "attached",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "boolean",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "success",
+              "label": "Success",
+              "kind": "bool"
+            },
+            {
+              "name": "attached",
+              "label": "Attached",
+              "kind": "bool"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": {
+        "x": 3560,
+        "y": 222
+      },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          {
+            "targetField": "frames",
+            "expression": "twin_view.received_frames"
+          }
+        ]
+      }
+    },
+    {
+      "id": "home_arm",
+      "type": "automated_step",
+      "slug": "home_arm",
+      "parentId": "lease",
+      "position": {
+        "x": 1216,
+        "y": 396
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Home arm (all-zeros, clean start)",
+        "description": "Idempotency head: drives the arm to the all-zeros home (straight up, clear of the table samples) so every run plans the reach from the SAME known clean state. FollowJointTrajectory, rides the cell lease. No scene stream.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "time_from_start": {
+                      "sec": 3,
+                      "nanosec": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": [
+                  "error_code",
+                  "error_string"
+                ],
+                "fieldtypes": [
+                  "int32",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ],
+            "timeout_ms": 15000
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "feedback_count",
+              "label": "Feedback count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_lease",
+      "source": "start",
+      "target": "lease",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_lease_reset",
+      "source": "lease",
+      "target": "reset_scene",
+      "sourceHandle": "body_in",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_reset_adda",
+      "source": "reset_scene",
+      "target": "home_arm",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_adda_addb",
+      "source": "add_sample_a",
+      "target": "add_sample_b",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_execreach_grasp",
+      "source": "exec_reach",
+      "target": "grasp",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_execlift_twin",
+      "source": "exec_lift",
+      "sourceHandle": "scene",
+      "target": "twin_view",
+      "targetHandle": "scene",
+      "type": "sequence"
+    },
+    {
+      "id": "e_twin_release",
+      "source": "twin_view",
+      "target": "release",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_release_lease",
+      "source": "release",
+      "target": "lease",
+      "targetHandle": "body_out",
+      "type": "sequence"
+    },
+    {
+      "id": "e_lease_end",
+      "source": "lease",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_grasp_lift",
+      "source": "grasp",
+      "target": "exec_lift",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_home_add",
+      "source": "home_arm",
+      "target": "add_sample_a",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_addb_reach",
+      "source": "add_sample_b",
+      "target": "exec_reach",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

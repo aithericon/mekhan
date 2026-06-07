@@ -8432,6 +8432,16 @@ export interface components {
             operation?: components["schemas"]["RosOperation"];
             /**
              * Format: int64
+             * @description When set on a `send_action_goal` node that declares a DATA `out` channel,
+             *     the action ALSO polls move_group's `/get_planning_scene` every this-many
+             *     milliseconds during the motion and streams each scene snapshot (slim
+             *     NDJSON: joints + collision objects + attached objects) onto the data
+             *     channel — driving a live planning-scene digital twin. `None`/absent ⇒ the
+             *     data channel carries the default per-feedback joint-state stream instead.
+             */
+            scene_stream_ms?: number | null;
+            /**
+             * Format: int64
              * @description Per-request timeout in milliseconds. Defaults to 30000.
              */
             timeout_ms?: number;

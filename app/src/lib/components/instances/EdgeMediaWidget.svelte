@@ -41,7 +41,13 @@
 		type UrdfJointFrame,
 		type UrdfStreamHandle
 	} from '$lib/channels/urdfStreamPlayer';
+	import {
+		playSceneStream,
+		type SceneFrame,
+		type SceneStreamHandle
+	} from '$lib/channels/sceneStreamPlayer';
 	import RobotArmTwin from './RobotArmTwin.svelte';
+	import SceneTwin from './SceneTwin.svelte';
 	import { subscribe as subscribeLiveTapForPcm } from '$lib/channels/liveTapRegistry';
 	import { playLivePcm, parseSampleRate, type LivePcmHandle } from '$lib/audio/livePcmPlayer';
 	import { startWaveform, type WaveformHandle } from '$lib/channels/audioWaveform';
@@ -82,10 +88,13 @@
 	let imgEl = $state<HTMLImageElement | null>(null);
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let urdfEl = $state<HTMLDivElement | null>(null);
+	let sceneEl = $state<HTMLDivElement | null>(null);
 	let rootEl = $state<HTMLDivElement | null>(null);
 
 	// Latest joint-state frame from the URDF stream; fed into the 3D twin.
 	let urdfFrame = $state<UrdfJointFrame | null>(null);
+	// Latest planning-scene snapshot from the scene stream; fed into the 3D twin.
+	let sceneFrame = $state<SceneFrame | null>(null);
 
 	let muted = $state(true);
 
@@ -105,6 +114,7 @@
 	let forced = $state(false);
 	let player: LiveMediaHandle | null = null;
 	let urdfPlayer: UrdfStreamHandle | null = null;
+	let scenePlayer: SceneStreamHandle | null = null;
 	let release: (() => void) | null = null;
 	// Guards the mount-triggered start (so we open the stream exactly once per
 	// slot grant, when both the slot is held and the target element is bound).
@@ -121,8 +131,10 @@
 	const isAudio = $derived(isPcmAudio || isMseAudio);
 	// A robot joint-state stream → a live 3D URDF twin (rendered in a Threlte canvas).
 	const isUrdf = $derived(feed.plan?.kind === 'urdf');
-	// Anything with a live render path renders here now (video, mjpeg, audio, urdf).
-	const renderable = $derived(isVideo || isMjpeg || isAudio || isUrdf);
+	// A planning-scene stream → a live 3D twin of the arm + collision objects.
+	const isScene = $derived(feed.plan?.kind === 'scene');
+	// Anything with a live render path renders here now (video, mjpeg, audio, urdf, scene).
+	const renderable = $derived(isVideo || isMjpeg || isAudio || isUrdf || isScene);
 	// A data-plane binary channel with NO live renderer → show a minimal liveness
 	// dot only (no decode, no media element, no cap slot). Distinct from the
 	// media widget and from a non-feed edge (which renders nothing at all).
@@ -156,6 +168,8 @@
 		player = null;
 		urdfPlayer?.stop();
 		urdfPlayer = null;
+		scenePlayer?.stop();
+		scenePlayer = null;
 		release?.();
 		release = null;
 		if (holdsSlot) {
@@ -185,6 +199,10 @@
 		// its last pose (the component stays mounted, holding the final joint angles).
 		urdfPlayer?.stop();
 		urdfPlayer = null;
+		// Scene twin: same — stop the pump but keep `sceneFrame` so the arm + objects
+		// freeze at the last planning-scene snapshot.
+		scenePlayer?.stop();
+		scenePlayer = null;
 		// Video: pause but keep the frame (do not clear src).
 		if (videoEl) {
 			try {
@@ -228,6 +246,7 @@
 		if (isMjpeg && !imgEl) return;
 		if (isAudio && !canvasEl) return;
 		if (isUrdf && !urdfEl) return;
+		if (isScene && !sceneEl) return;
 		try {
 			if (isAudio && canvasEl) {
 				// Audio plans render a PASSIVE waveform; the tap subscription is owned
@@ -263,6 +282,14 @@
 				urdfPlayer = playUrdfStream({
 					stream: sub.stream,
 					onFrame: (f) => (urdfFrame = f),
+					onStatus: (s) => (status = (s.startsWith('error') ? 'error' : s) as typeof status)
+				});
+			} else if (isScene) {
+				// Planning-scene NDJSON → latest snapshot into the 3D twin (arm + objects).
+				// Loss-tolerant like the joint-state path: only the freshest frame matters.
+				scenePlayer = playSceneStream({
+					stream: sub.stream,
+					onFrame: (f) => (sceneFrame = f),
 					onStatus: (s) => (status = (s.startsWith('error') ? 'error' : s) as typeof status)
 				});
 			}
@@ -341,7 +368,17 @@
 	// reactive read of the element ref fires after it binds, so we never call a
 	// player with a null element (which the old synchronous start risked).
 	$effect(() => {
-		const el = isAudio ? canvasEl : isVideo ? videoEl : isMjpeg ? imgEl : isUrdf ? urdfEl : null;
+		const el = isAudio
+			? canvasEl
+			: isVideo
+				? videoEl
+				: isMjpeg
+					? imgEl
+					: isUrdf
+						? urdfEl
+						: isScene
+							? sceneEl
+							: null;
 		if (holdsSlot && renderable && el && !streamStarted) {
 			streamStarted = true;
 			startStream();
@@ -423,6 +460,10 @@
 			{:else if isUrdf}
 				<div bind:this={urdfEl} class="media urdf">
 					<RobotArmTwin robotModel={feed.robotModel} frame={urdfFrame} {frozen} />
+				</div>
+			{:else if isScene}
+				<div bind:this={sceneEl} class="media urdf">
+					<SceneTwin robotModel={feed.robotModel} frame={sceneFrame} {frozen} />
 				</div>
 			{:else if isAudio}
 				<canvas
