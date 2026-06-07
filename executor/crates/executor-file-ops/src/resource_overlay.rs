@@ -50,6 +50,7 @@ pub(crate) fn overlay_file_ops_resources(
         FileOpsConfig::Annotate(c) => overlay_storage(&mut c.storage, run_context)?,
         FileOpsConfig::List(c) => overlay_storage(&mut c.storage, run_context)?,
         FileOpsConfig::Stat(c) => overlay_storage(&mut c.storage, run_context)?,
+        FileOpsConfig::Crawl(c) => overlay_storage(&mut c.storage, run_context)?,
     }
     Ok(())
 }

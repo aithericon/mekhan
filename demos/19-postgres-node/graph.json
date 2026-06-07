@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 120 },
+      "position": { "x": 0, "y": 24 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -32,7 +32,7 @@
       "id": "read_widgets",
       "type": "automated_step",
       "slug": "read_widgets",
-      "position": { "x": 300, "y": 120 },
+      "position": { "x": 290, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Read Widgets",
@@ -69,7 +69,7 @@
       "id": "add_widget",
       "type": "automated_step",
       "slug": "add_widget",
-      "position": { "x": 560, "y": 120 },
+      "position": { "x": 600, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Add Widget",
@@ -105,7 +105,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 820, "y": 120 },
+      "position": { "x": 910, "y": 4 },
       "data": {
         "type": "end",
         "label": "Done",

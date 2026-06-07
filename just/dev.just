@@ -921,6 +921,9 @@ up-router:
       echo "  inference-router already running (pid $(cat {{pid_dir}}/router.pid))"
       exit 0
     fi
+    # An orphaned router (lost pidfile, still bound) wedges this on "address
+    # already in use" — the pidfile check above proved it isn't ours, so reclaim.
+    just dev::_reclaim-port router {{router_port}}
     echo "▶ building inference-router…"
     # Umbrella workspace member → output lands in ./target/, like mekhan-service.
     cargo build -p inference-router
@@ -1437,6 +1440,9 @@ up-engine scheduler="off":
       echo "  engine already running (pid $(cat {{pid_dir}}/engine.pid))"
       exit 0
     fi
+    # An orphaned engine (lost pidfile, still bound) wedges this on "address
+    # already in use" — the pidfile check above proved it isn't ours, so reclaim.
+    just dev::_reclaim-port engine {{engine_port}}
     echo "▶ building engine…"
     (cd engine && cargo build -p core-engine)
 
@@ -2030,6 +2036,10 @@ up-mekhan auth_mode="dev_noop":
       echo "  mekhan-service already running (pid $(cat {{pid_dir}}/mekhan.pid))"
       exit 0
     fi
+    # An orphaned mekhan (lost pidfile, still bound) keeps answering /healthz with
+    # STALE code/seeds while masking a crashed fresh boot — the pidfile check above
+    # proved it isn't ours, so reclaim :{{service_port}} before (re)building.
+    just dev::_reclaim-port mekhan {{service_port}}
     echo "▶ building mekhan-service…"
     # mekhan-service is a member of the platform-root workspace, so its build
     # output lands in ./target/, not service/target/. Build from repo root.
@@ -2176,6 +2186,28 @@ _kill name:
     fi
     rm -f "$pf"
     echo "  ✓ {{name}} stopped"
+
+# Reclaim a host port from an ORPHANED daemon before (re)spawning it. `_kill`
+# (and therefore `down`/`reset`) is purely pidfile-driven, so a daemon whose
+# pidfile was lost while it kept running (a clobbered .dev/pid, a crash mid-
+# write, a process that out-lived its pidfile) stays bound to its port: `_kill`
+# prints "no pidfile" and skips it, and every later `up-*` then dies on
+# "address already in use". Callers invoke this AFTER the pidfile idempotency
+# check has proven OUR managed daemon isn't the listener — so anything still on
+# the port is stale and gets taken over (SIGTERM, then SIGKILL). Mirrors the
+# up-ollama takeover, generalised.
+_reclaim-port name port:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stale="$(lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t 2>/dev/null || true)"
+    [ -z "$stale" ] && exit 0
+    echo "▶ reclaiming :{{port}} from orphaned {{name}} (pid $stale)…"
+    kill $stale 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t >/dev/null 2>&1 && kill -9 $stale 2>/dev/null || true
 
 _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""

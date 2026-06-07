@@ -3,10 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 52,
-        "y": 280
-      },
+      "position": { "x": 0, "y": 34 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -40,10 +37,7 @@
     {
       "id": "critic",
       "type": "agent",
-      "position": {
-        "x": 416,
-        "y": 280
-      },
+      "position": { "x": 290, "y": 0 },
       "data": {
         "type": "agent",
         "label": "Safety critic (LLM)",
@@ -69,10 +63,7 @@
     {
       "id": "verify",
       "type": "automated_step",
-      "position": {
-        "x": 780,
-        "y": 280
-      },
+      "position": { "x": 620, "y": 10 },
       "data": {
         "type": "automated_step",
         "label": "Verify flag provenance",
@@ -124,10 +115,7 @@
     {
       "id": "decide",
       "type": "automated_step",
-      "position": {
-        "x": 1144,
-        "y": 280
-      },
+      "position": { "x": 930, "y": 10 },
       "data": {
         "type": "automated_step",
         "label": "Safety decision",
@@ -179,10 +167,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": {
-        "x": 1508,
-        "y": 280
-      },
+      "position": { "x": 1240, "y": 24 },
       "data": {
         "type": "end",
         "label": "Done",

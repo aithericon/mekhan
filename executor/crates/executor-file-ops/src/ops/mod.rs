@@ -6,6 +6,7 @@
 
 pub mod annotate;
 pub mod copy;
+pub mod crawl;
 pub mod delete;
 pub mod list;
 pub mod move_op;
@@ -15,10 +16,13 @@ pub mod streaming;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use opendal::Operator;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
+use aithericon_executor_backend::traits::EventStream;
 use aithericon_executor_storage::StorageConfig;
 
 use crate::config::FileOpsConfig;
@@ -81,6 +85,8 @@ pub async fn dispatch(
     config: &FileOpsConfig,
     run_dir: &Path,
     default_storage: Option<&StorageConfig>,
+    event_stream: Option<Arc<dyn EventStream>>,
+    cancel: &CancellationToken,
 ) -> FileOpsResult {
     match config {
         FileOpsConfig::Probe(c) => {
@@ -124,6 +130,10 @@ pub async fn dispatch(
         FileOpsConfig::Stat(c) => {
             let (op, pfx) = build_op(&c.storage)?;
             stat::execute(c, &op, &pfx).await
+        }
+        FileOpsConfig::Crawl(c) => {
+            let (op, pfx) = build_op(&c.storage)?;
+            crawl::execute(c, &op, &pfx, event_stream, cancel).await
         }
     }
 }
@@ -191,6 +201,15 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
                 return Err("stat: path must not be empty".into());
             }
             validate_storage(&c.storage, "stat.storage")?;
+        }
+        FileOpsConfig::Crawl(c) => {
+            if c.prefix.is_empty() {
+                return Err("crawl: prefix must not be empty".into());
+            }
+            if c.batch_size == 0 {
+                return Err("crawl: batch_size must be greater than 0".into());
+            }
+            validate_storage(&c.storage, "crawl.storage")?;
         }
     }
     Ok(())
@@ -625,6 +644,7 @@ mod tests {
             path: "data/people.csv".into(),
             include_statistics: false,
             storage: Some(dummy_storage()),
+            checksum_algo: None,
         };
         let result = probe::execute(&config, &op, "", &tmp_dir).await.unwrap();
 
@@ -633,6 +653,47 @@ mod tests {
         assert!(result.contains_key("format"));
 
         // Cleanup
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    }
+
+    /// The reconcile linchpin: probe's emitted `checksum_digest` must be a bare
+    /// lowercase 64-hex-char SHA-256 string so it can be compared directly
+    /// against the catalogue's `content_hash` (legacy `"SHA256:<hex>"` stripped).
+    #[tokio::test]
+    async fn probe_sha256_digest_is_bare_lowercase_hex() {
+        let op = memory_operator();
+        // Known content → known SHA-256 (the legacy dump's own example file:
+        // contents "test" hashes to 9f86d0…).
+        op.write("data/initializer.txt", "test").await.unwrap();
+
+        let tmp_dir =
+            std::env::temp_dir().join(format!("file_ops_probe_sha_{}", std::process::id()));
+        tokio::fs::create_dir_all(&tmp_dir).await.unwrap();
+
+        let config = ProbeConfig {
+            path: "data/initializer.txt".into(),
+            include_statistics: false,
+            storage: Some(dummy_storage()),
+            checksum_algo: Some(aithericon_file_metadata::ChecksumAlgorithm::Sha256),
+        };
+        let result = probe::execute(&config, &op, "", &tmp_dir).await.unwrap();
+
+        let digest = result["checksum_digest"].as_str().expect("checksum_digest");
+        assert_eq!(digest.len(), 64, "sha256 hex digest must be 64 chars");
+        assert!(
+            digest
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "digest must be bare lowercase hex, got: {digest}"
+        );
+        assert_eq!(
+            digest,
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "sha256(\"test\") must match the legacy fixture hash"
+        );
+        // Algorithm tag is reported too.
+        assert_eq!(result["checksum_algorithm"], serde_json::json!("sha256"));
+
         let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
     }
 
@@ -647,6 +708,7 @@ mod tests {
             path: "nonexistent.csv".into(),
             include_statistics: false,
             storage: Some(dummy_storage()),
+            checksum_algo: None,
         };
         let result = probe::execute(&config, &op, "", &tmp_dir).await;
         assert!(matches!(result, Err(FileOpsError::NotFound(_))));

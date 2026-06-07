@@ -111,6 +111,51 @@ pub struct FileMetadata {
 }
 
 impl FileMetadata {
+    /// Build a minimal, format-agnostic [`FileMetadata`] for a path whose
+    /// content cannot (or need not) be format-parsed — only its identity
+    /// (size + checksum) matters.
+    ///
+    /// The format is recorded as [`FileFormat::Unknown`] (`extension`, lowercase)
+    /// and only the filesystem fields are populated; no extractor runs. This is
+    /// the integrity-check fallback the legacy-migration probe path uses when
+    /// `extract_metadata` returns [`crate::MetadataError::UnsupportedFormat`]
+    /// but a checksum was still requested — a 4M-file NAS corpus is mostly
+    /// arbitrary binaries the metadata extractors don't model, yet every one
+    /// still needs its content hash for reconcile.
+    pub fn checksum_only(path: &std::path::Path) -> Self {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin")
+            .to_ascii_lowercase();
+        let format = FileFormat::Unknown(extension);
+        let mut meta = FileMetadata {
+            mime_type: Some(format.mime_type().to_string()),
+            format,
+            num_rows: None,
+            num_columns: None,
+            file_size_bytes: None,
+            file_name: None,
+            modified_at: None,
+            created_at: None,
+            readonly: false,
+            unix_mode: None,
+            column_names: vec![],
+            dimensions: vec![],
+            columns: vec![],
+            attributes: HashMap::new(),
+            format_specific: None,
+            preview: None,
+            encrypted: None,
+            checksum: None,
+            schema_fingerprint: None,
+            data_quality: None,
+            extracted_at: Utc::now(),
+        };
+        meta.populate_fs_metadata(path);
+        meta
+    }
+
     /// Populate filesystem metadata fields from the given path.
     ///
     /// Sets `file_name`, `file_size_bytes`, `modified_at`, `created_at`,
@@ -359,5 +404,22 @@ mod tests {
 
         #[cfg(unix)]
         assert!(meta.unix_mode.is_some());
+    }
+
+    #[test]
+    fn checksum_only_records_unknown_format_and_fs_fields() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".dat").unwrap();
+        std::fs::write(tmp.path(), b"arbitrary binary the extractors don't model").unwrap();
+
+        let meta = FileMetadata::checksum_only(tmp.path());
+
+        // Format is Unknown(lowercase-extension); no extractor ran.
+        assert_eq!(meta.format, FileFormat::Unknown("dat".into()));
+        assert_eq!(meta.mime_type.as_deref(), Some("application/octet-stream"));
+        // Filesystem fields are populated so probe can still emit size.
+        assert!(meta.file_size_bytes.is_some());
+        assert!(meta.file_name.is_some());
+        // No checksum computed yet — the caller sets it.
+        assert!(meta.checksum.is_none());
     }
 }

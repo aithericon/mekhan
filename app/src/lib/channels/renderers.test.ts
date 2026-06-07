@@ -58,6 +58,23 @@ describe('planLiveRender — presentation-side content_type dispatch', () => {
 		expect(planLiveRender('IMAGE/JPEG; foo=bar', supportsNone)?.kind).toBe('mjpeg');
 	});
 
+	it('routes a joint-state NDJSON data channel to the urdf renderer (no MSE probe needed)', () => {
+		// A robot joint-angle stream is rendered as a live 3D URDF twin.
+		expect(
+			planLiveRender('application/vnd.aithericon.joint-state+x-ndjson', supportsNone)
+		).toEqual<LiveRenderPlan>({
+			kind: 'urdf',
+			mediaKind: '3d',
+			mime: 'application/vnd.aithericon.joint-state+x-ndjson'
+		});
+	});
+
+	it('ignores params/casing when classifying joint-state NDJSON as urdf', () => {
+		expect(
+			planLiveRender('APPLICATION/VND.AITHERICON.JOINT-STATE+X-NDJSON; rate=50', supportsAll)?.kind
+		).toBe('urdf');
+	});
+
 	it('does NOT treat other image/* as mjpeg (the EOI split is JPEG-specific)', () => {
 		// image/png has different framing; no live image-sequence path for it.
 		expect(planLiveRender('image/png', supportsAll)).toBeNull();

@@ -4,10 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": {
-        "x": 40,
-        "y": 200
-      },
+      "position": { "x": 0, "y": 48 },
       "data": {
         "type": "start",
         "label": "Seed BO Campaign",
@@ -42,12 +39,9 @@
       "id": "lp",
       "type": "loop",
       "slug": "bo",
-      "position": {
-        "x": 280,
-        "y": 80
-      },
-      "width": 1100,
-      "height": 420,
+      "position": { "x": 290, "y": 0 },
+      "width": 924,
+      "height": 232,
       "data": {
         "type": "loop",
         "label": "BO Iterations",
@@ -88,10 +82,7 @@
       "type": "automated_step",
       "slug": "propose",
       "parentId": "lp",
-      "position": {
-        "x": 40,
-        "y": 80
-      },
+      "position": { "x": 16, "y": 62 },
       "data": {
         "type": "automated_step",
         "label": "Fit GP + propose K candidates",
@@ -131,12 +122,9 @@
       "type": "map",
       "slug": "evals",
       "parentId": "lp",
-      "position": {
-        "x": 380,
-        "y": 120
-      },
-      "width": 520,
-      "height": 200,
+      "position": { "x": 326, "y": 38 },
+      "width": 272,
+      "height": 172,
       "data": {
         "type": "map",
         "label": "Evaluate K candidates",
@@ -175,10 +163,7 @@
       "type": "automated_step",
       "slug": "branin",
       "parentId": "mp",
-      "position": {
-        "x": 40,
-        "y": 60
-      },
+      "position": { "x": 16, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Branin objective",
@@ -214,10 +199,7 @@
       "type": "automated_step",
       "slug": "gather",
       "parentId": "lp",
-      "position": {
-        "x": 920,
-        "y": 80
-      },
+      "position": { "x": 668, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Fold evals into observations",
@@ -269,10 +251,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 1440,
-        "y": 200
-      },
+      "position": { "x": 1284, "y": 38 },
       "data": {
         "type": "end",
         "label": "Report best",

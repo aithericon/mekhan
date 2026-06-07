@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 160 },
+      "position": { "x": 0, "y": 71 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -18,7 +18,7 @@
     {
       "id": "producer",
       "type": "automated_step",
-      "position": { "x": 320, "y": 160 },
+      "position": { "x": 190, "y": 24 },
       "data": {
         "type": "automated_step",
         "label": "Producer",
@@ -53,7 +53,7 @@
     {
       "id": "consumer",
       "type": "automated_step",
-      "position": { "x": 620, "y": 160 },
+      "position": { "x": 756, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Consumer",
@@ -90,7 +90,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 900, "y": 160 },
+      "position": { "x": 1066, "y": 41 },
       "data": {
         "type": "end",
         "label": "Done",

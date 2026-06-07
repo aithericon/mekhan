@@ -3,10 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 40,
-        "y": 200
-      },
+      "position": { "x": 0, "y": 54 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -29,12 +26,7 @@
     {
       "id": "agent",
       "type": "agent",
-      "position": {
-        "x": 360,
-        "y": 120
-      },
-      "width": 440,
-      "height": 320,
+      "position": { "x": 290, "y": 0 },
       "data": {
         "type": "agent",
         "label": "Internal Pool Agent",
@@ -54,10 +46,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 880,
-        "y": 200
-      },
+      "position": { "x": 620, "y": 54 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -5,6 +5,18 @@ use utoipa::ToSchema;
 /// A single catalogue entry (maps 1:1 to the `catalogue_entries` table).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct CatalogueEntry {
+    /// Surrogate primary key (content-addressed reshape, docs/32).
+    #[serde(default)]
+    pub entry_id: Option<uuid::Uuid>,
+    /// Logical content identity (bare-hex SHA-256). NULL for job-net
+    /// artifacts; populated for legacy / by-reference rows.
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    // NOTE: since the content-addressed reshape (docs/32) the columns below are
+    // nullable in the DB (legacy logical rows carry only a content_hash). The
+    // catalogue read path projects them with COALESCE(...,'') in `queries.rs`
+    // so the existing job-net consumers keep a non-Option `String` view; the
+    // legacy/inventory surface reads through `file_inventory` instead.
     pub id: String,
     pub execution_id: String,
     pub job_id: Option<String>,
@@ -97,5 +109,9 @@ pub struct CatalogueRegisterCommand {
     pub process_id: Option<String>,
     #[serde(default)]
     pub process_step: Option<String>,
+    /// Logical content identity (bare-hex SHA-256). The job path leaves this
+    /// `None`; legacy / by-reference registration sets it.
+    #[serde(default)]
+    pub content_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }

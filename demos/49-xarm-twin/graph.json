@@ -1,0 +1,285 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 153 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Digital Twin",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "split",
+      "type": "parallel_split",
+      "position": { "x": 190, "y": 151 },
+      "data": {
+        "type": "parallel_split",
+        "label": "Fork"
+      }
+    },
+    {
+      "id": "move",
+      "type": "automated_step",
+      "slug": "move",
+      "position": { "x": 996, "y": 214 },
+      "data": {
+        "type": "automated_step",
+        "label": "Move (trajectory action)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30/32) on the xArm 6 driven through ros2_control fake hardware. Reuses demo 32's exact `config.fields`, `interface_typedefs` and deployment (capacity `xarm_fleet`, requirement `ros.robot_model == xarm6`) VERBATIM \u2014 but WITHOUT the feedback channel: here the real-hardware motion runs in parallel with the `twin_stream` branch, which synthesizes the SAME interpolated joint trajectory and streams it as a data channel so the UI can animate a live digital twin on the graph edge. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY \u2014 success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
+        "deploymentModel": {
+          "mode": "executor",
+          "capacity": {
+            "alias": "xarm_fleet"
+          }
+        },
+        "requirements": {
+          "constraints": [
+            {
+              "capability": "ros",
+              "field": "robot_model",
+              "op": "eq",
+              "value": "xarm6"
+            }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [
+                      0.0,
+                      -0.3,
+                      -0.3,
+                      0.0,
+                      0.6,
+                      0.0
+                    ],
+                    "time_from_start": {
+                      "sec": 3,
+                      "nanosec": 0
+                    }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": [
+                  "error_code",
+                  "error_string"
+                ],
+                "fieldtypes": [
+                  "int32",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": []
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "twin_stream",
+      "type": "automated_step",
+      "slug": "twin_stream",
+      "position": { "x": 430, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Twin joint stream (live UI animation)",
+        "description": "A plain Python AutomatedStep (NO ros requirement) that synthesizes the SAME single-waypoint trajectory the `move` branch commands and streams it as a Data/Out channel `joints` so the UI render registry can animate a live digital twin of the xArm 6 on the graph edge WHILE the real (fake-hardware) arm follows the identical path in the `move` branch. The node linearly interpolates each of the 6 joints from the all-zeros home pose to [0, -0.3, -0.3, 0, 0.6, 0] over ~2.5 s at 30 Hz (~75 frames), and for every frame writes one NDJSON line `{\"joint_names\":[joint1..joint6],\"positions\":[6 floats]}` onto the channel via `with open_output('joints') as ch: ch.write(line.encode(), content_type=...)`, pacing at 1/30 s so the tap is perceptibly live. The element content_type is `application/vnd.aithericon.joint-state+x-ndjson` so the presentation dispatch (planLiveRender) routes the stream to the robot-arm twin renderer. The bulk joint stream rides the out-of-band JetStream datastream transport \u2014 it NEVER enters the net marking; the net sees only the channel's open + close (2 firings for the whole stream). At the end the node sets `frames` to the number of joint-state frames emitted.",
+        "channels": [
+          {
+            "name": "joints",
+            "direction": "out",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.joint-state+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Twin stats",
+          "fields": [
+            {
+              "name": "frames",
+              "label": "Frames streamed",
+              "kind": "number"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "twin_view",
+      "type": "automated_step",
+      "slug": "twin_view",
+      "position": { "x": 996, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Twin view (drain joint stream)",
+        "description": "Consumer of the `joints` data channel \u2014 the net-side anchor the live 3D URDF twin renders ON (the UI taps the SAME channel out-of-band via `?follow=1`, while this node drains it on the data plane). Reads the NDJSON joint-state frames with the ordinary transport-unaware `for chunk in stream('joints')` API, reframes on newlines and counts complete frames. The robot model is carried in the channel content_type as `;model=xarm6` so the twin renderer knows which URDF (`robot_description` asset, ref_key xarm6) to load even though the PRODUCER is a plain Python node with no ROS requirement. The bulk stream rides the out-of-band JetStream datastream transport \u2014 the net sees only open + close.",
+        "channels": [
+          {
+            "name": "joints",
+            "direction": "in",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.joint-state+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Twin view",
+          "fields": [
+            {
+              "name": "received_frames",
+              "label": "Frames received",
+              "kind": "number"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "position": { "x": 1306, "y": 133 },
+      "data": {
+        "type": "join",
+        "label": "Join",
+        "mode": "all",
+        "mergeStrategy": "shallow_last_wins"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1546, "y": 123 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          {
+            "targetField": "frames",
+            "expression": "twin_stream.frames"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_split",
+      "source": "start",
+      "target": "split",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_split_move",
+      "source": "split",
+      "target": "move",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_split_twin",
+      "source": "split",
+      "target": "twin_stream",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_move_join",
+      "source": "move",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_twin_view",
+      "source": "twin_stream",
+      "sourceHandle": "joints",
+      "target": "twin_view",
+      "targetHandle": "joints",
+      "type": "sequence"
+    },
+    {
+      "id": "e_view_join",
+      "source": "twin_view",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_join_end",
+      "source": "join",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

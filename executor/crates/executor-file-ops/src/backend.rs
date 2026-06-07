@@ -95,7 +95,7 @@ impl ExecutionBackend for FileOpsBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
-        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config: FileOpsConfig = serde_json::from_value(run_context.backend_state.clone())
@@ -114,6 +114,7 @@ impl ExecutionBackend for FileOpsBackend {
             FileOpsConfig::Annotate(_) => "annotate",
             FileOpsConfig::List(_) => "list",
             FileOpsConfig::Stat(_) => "stat",
+            FileOpsConfig::Crawl(_) => "crawl",
         };
 
         status_cb(
@@ -142,7 +143,7 @@ impl ExecutionBackend for FileOpsBackend {
                     None,
                 ))
             },
-            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref()) => {
+            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref(), event_stream.clone(), &cancel) => {
                 let duration = start.elapsed();
                 match result {
                     Ok(outputs) => {

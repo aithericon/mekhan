@@ -24,6 +24,7 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 async-compression = { workspace = true }
 futures = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

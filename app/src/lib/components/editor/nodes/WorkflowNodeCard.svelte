@@ -149,6 +149,7 @@
 		label,
 		selected = false,
 		body,
+		width,
 		class: className,
 		'data-testid': dataTestid,
 		nodeId,
@@ -158,6 +159,12 @@
 		label: string;
 		selected?: boolean;
 		body?: Snippet;
+		/// Fixed render width (px) from `node-dimensions.ts`. Applied inline so
+		/// the card's width is a function of its TYPE, not its content — long
+		/// titles / port names truncate inside this box instead of widening the
+		/// node (which broke auto-layout dimension reservation). Omit to keep the
+		/// card intrinsic (field-less Start/End pills).
+		width?: number;
 		class?: string;
 		'data-testid'?: string;
 		/// xyflow-provided node id. When set, the card subscribes to the
@@ -178,19 +185,20 @@
 		className,
 		compileError && 'ring-2 ring-destructive ring-offset-2 ring-offset-background'
 	)}
+	style={width != null ? `width: ${width}px` : undefined}
 	title={compileError?.message}
 	data-testid={dataTestid}
 >
 	<div
 		class={cn(
-			'flex items-center gap-2 px-3 py-2',
+			'flex min-w-0 items-center gap-2 px-3 py-2',
 			body ? `border-b ${HEADER_BORDER[kind]}` : '',
 		)}
 	>
-		<div class={cn('flex size-6 items-center justify-center rounded-md', ICON_BG[kind])}>
+		<div class={cn('flex size-6 shrink-0 items-center justify-center rounded-md', ICON_BG[kind])}>
 			<Icon class="size-3.5 text-white" />
 		</div>
-		<span class="text-sm font-medium text-foreground">{label}</span>
+		<span class="truncate text-sm font-medium text-foreground">{label}</span>
 		{#if nodeId}
 			<div class="ml-auto">
 				<NodeRuntimeBadge {nodeId} />

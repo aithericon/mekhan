@@ -10,6 +10,22 @@ use serde::{Deserialize, Serialize};
 
 use aithericon_executor_domain::{ExecutionSpec, ExecutorError};
 use aithericon_executor_storage_types::StorageConfig;
+use aithericon_file_metadata::ChecksumAlgorithm;
+
+/// Default crawl batch size — number of `{path,size,mtime}` entries accumulated
+/// before a streaming `item` event is emitted. Sized to keep per-batch JSON
+/// payloads well under the NATS max-payload while still amortizing emit overhead
+/// across the ~4M-file corpus the crawler targets.
+fn default_crawl_batch_size() -> usize {
+    5000
+}
+
+/// Default for `CrawlConfig.stat` — crawl `stat()`s each entry by default
+/// because the OpenDAL `fs` lister returns entries without
+/// `content_length`/`last_modified`, so size+mtime require a per-entry stat.
+fn default_crawl_stat() -> bool {
+    true
+}
 
 /// Compression algorithm for streaming copy/move transfers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +50,7 @@ pub enum FileOpsConfig {
     Annotate(AnnotateConfig),
     List(ListConfig),
     Stat(StatConfig),
+    Crawl(CrawlConfig),
 }
 
 impl FileOpsConfig {
@@ -55,6 +72,16 @@ pub struct ProbeConfig {
     /// `InputSource::StoragePath { storage: Option<_> }`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageConfig>,
+    /// Optional checksum algorithm override. When set, probe forces this
+    /// algorithm for the emitted `checksum`/`checksum_digest` instead of the
+    /// `extract_metadata_async` default (SHA-256). Set to `sha256` for the
+    /// legacy-migration reconcile path, whose join key is the bare-lowercase-hex
+    /// SHA-256 digest (`legacy_file_index.hash`, `"SHA256:"` stripped). The
+    /// emitted `checksum_digest` is always bare lowercase hex so it can be
+    /// compared directly against catalogue content hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schema(value_type = Option<String>))]
+    pub checksum_algo: Option<ChecksumAlgorithm>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +149,37 @@ pub struct StatConfig {
     pub storage: StorageConfig,
 }
 
+/// Recursive, streaming directory walk — `list`'s checkpointable sibling.
+///
+/// Drives an OpenDAL recursive lister as a stream (never buffering the whole
+/// listing), `stat()`ing each file for `{path, size, mtime}` and emitting
+/// fixed-size batches over the job's [`EventStream`](aithericon_executor_backend)
+/// `item()`/`close()` channel. Mandatory at the ~4M-file scale of the legacy
+/// migration: `list` buffers the entire `Vec` and the `fs` lister returns no
+/// size/mtime, so crawl streams + per-entry stats instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct CrawlConfig {
+    /// Prefix (relative to the storage root) to walk recursively.
+    pub prefix: String,
+    /// Storage the walk targets — typically an `fs://` mount co-located with a
+    /// file server.
+    pub storage: StorageConfig,
+    /// Number of `{path,size,mtime}` entries per emitted `item` batch.
+    #[serde(default = "default_crawl_batch_size")]
+    pub batch_size: usize,
+    /// Optional resume cursor: the walk resumes *after* this path
+    /// (`lister_with(...).start_after(resume_from)`). Best-effort; true
+    /// idempotency comes from the inventory `UNIQUE(file_server_id, path)`
+    /// upsert downstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<String>,
+    /// Whether to `stat()` each entry for size+mtime. Defaults to `true` because
+    /// the OpenDAL `fs` lister omits `content_length`/`last_modified`.
+    #[serde(default = "default_crawl_stat")]
+    pub stat: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +214,75 @@ mod tests {
         });
         let config: FileOpsConfig = serde_json::from_value(json).unwrap();
         assert!(matches!(config, FileOpsConfig::Stat(ref c) if c.path == "data/train.parquet"));
+    }
+
+    #[test]
+    fn probe_config_checksum_algo() {
+        let json = serde_json::json!({
+            "operation": "probe",
+            "path": "data/file.bin",
+            "checksum_algo": "sha256",
+            "storage": local_storage_json()
+        });
+        let config: FileOpsConfig = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            config,
+            FileOpsConfig::Probe(ref c) if c.checksum_algo == Some(ChecksumAlgorithm::Sha256)
+        ));
+    }
+
+    #[test]
+    fn probe_config_checksum_algo_defaults_none() {
+        let json = serde_json::json!({
+            "operation": "probe",
+            "path": "data/file.bin",
+            "storage": local_storage_json()
+        });
+        let config: FileOpsConfig = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            config,
+            FileOpsConfig::Probe(ref c) if c.checksum_algo.is_none()
+        ));
+    }
+
+    #[test]
+    fn crawl_config_roundtrip_defaults() {
+        let json = serde_json::json!({
+            "operation": "crawl",
+            "prefix": "Data/",
+            "storage": local_storage_json()
+        });
+        let config: FileOpsConfig = serde_json::from_value(json).unwrap();
+        match config {
+            FileOpsConfig::Crawl(c) => {
+                assert_eq!(c.prefix, "Data/");
+                assert_eq!(c.batch_size, 5000);
+                assert!(c.stat);
+                assert!(c.resume_from.is_none());
+            }
+            other => panic!("expected Crawl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crawl_config_roundtrip_explicit() {
+        let json = serde_json::json!({
+            "operation": "crawl",
+            "prefix": "Data/",
+            "batch_size": 100,
+            "resume_from": "Data/x/last.txt",
+            "stat": false,
+            "storage": local_storage_json()
+        });
+        let config: FileOpsConfig = serde_json::from_value(json).unwrap();
+        match config {
+            FileOpsConfig::Crawl(c) => {
+                assert_eq!(c.batch_size, 100);
+                assert_eq!(c.resume_from.as_deref(), Some("Data/x/last.txt"));
+                assert!(!c.stat);
+            }
+            other => panic!("expected Crawl, got {other:?}"),
+        }
     }
 
     #[test]

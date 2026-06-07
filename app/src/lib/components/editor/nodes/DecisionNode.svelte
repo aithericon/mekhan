@@ -3,6 +3,7 @@
 	import type { DecisionNodeData } from '$lib/types/editor';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: DecisionNodeData; selected?: boolean } = $props();
 
@@ -27,7 +28,7 @@
 	icon={GitBranch}
 	label={data.label}
 	{selected}
-	class="min-w-[200px]"
+	width={NODE_WIDTH.decision}
 	data-testid="node-decision"
 	body={branchBody}
 />

@@ -12,7 +12,16 @@ pub mod db;
 pub mod demos;
 pub mod fleet;
 pub mod handlers;
+pub mod inventory;
 pub mod lifecycle;
+/// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic
+/// crawl → reconcile → targeted-hash → register logic, invoking the REAL
+/// executor-file-ops crawl/probe ops IN-PROCESS against a Local
+/// `StorageConfig`. Feature-gated so the default service build pulls in none of
+/// the file-ops / OpenDAL deps. The `legacy-migration-driver` bin is a thin
+/// clap wrapper over this module; the integration test calls it directly.
+#[cfg(feature = "migration-driver")]
+pub mod migration_driver;
 pub mod models;
 pub mod nats;
 pub mod nodes;
@@ -343,6 +352,20 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(catalogue::handlers::distinct_jsonb_values))
         .routes(routes!(catalogue::handlers::download_artifact))
         .routes(routes!(catalogue::handlers::get_entry))
+        // Inventory (docs/32) — by-reference physical-copy registry. `register`
+        // + `stats` are literal segments registered before the list route so
+        // matchit prefers them (no `{id}` collision here, but keep the
+        // convention). Content-addressed to the catalogue via `content_hash`.
+        .routes(routes!(inventory::handlers::register))
+        .routes(routes!(inventory::handlers::stats))
+        .routes(routes!(inventory::handlers::list_entries))
+        // Reconcile (docs/32 §4/§5) — classify crawl-observed copies against the
+        // legacy baseline; canonical-pick; orphan/duplicate reports.
+        .routes(routes!(inventory::handlers::reconcile_batch))
+        .routes(routes!(inventory::handlers::mark_canonical))
+        .routes(routes!(inventory::handlers::reconcile_summary))
+        .routes(routes!(inventory::handlers::reconcile_orphans))
+        .routes(routes!(inventory::handlers::reconcile_duplicates))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

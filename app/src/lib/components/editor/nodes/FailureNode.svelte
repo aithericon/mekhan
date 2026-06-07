@@ -3,6 +3,7 @@
 	import type { FailureNodeData } from '$lib/types/editor';
 	import OctagonX from '@lucide/svelte/icons/octagon-x';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: FailureNodeData; selected?: boolean } =
 		$props();
@@ -15,7 +16,7 @@
 	icon={OctagonX}
 	label={data.label}
 	{selected}
-	class="min-w-[170px]"
+	width={NODE_WIDTH.failure}
 	data-testid="node-failure"
 	body={failureBody}
 />

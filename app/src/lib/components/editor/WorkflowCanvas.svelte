@@ -4,6 +4,7 @@
 		Controls,
 		Background,
 		MiniMap,
+		Panel,
 		BackgroundVariant,
 		type Node,
 		type Edge,
@@ -11,6 +12,7 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import { mode } from 'mode-watcher';
+	import LayoutGrid from '@lucide/svelte/icons/layout-grid';
 
 	import { setContext } from 'svelte';
 	import { nodeTypes } from './nodes';
@@ -18,6 +20,7 @@
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
 	import { RESIZE_REPORT_CONTEXT_KEY, type ResizeReport } from './nodes/resize-context';
+	import { layoutWorkflowGraph } from '$lib/editor/workflow-layout';
 	import {
 		createDefaultNodeData,
 		type WorkflowNodeData,
@@ -485,6 +488,82 @@
 		}
 	}
 
+	/**
+	 * Auto-arrange: recompute every node's position with the dimension-aware
+	 * dagre layout (`workflow-layout.ts`), reserving each card at its real
+	 * footprint so nodes never overlap. Container nodes are also resized to fit
+	 * their children. Persists through the same granular sinks (`onMoveNodes` /
+	 * `onResizeNodes`) the drag/resize gestures use, or the bulk serializer.
+	 */
+	function autoArrange() {
+		if (readonly || nodes.length === 0) return;
+
+		const layoutNodes = nodes.map((n) => ({
+			id: n.id,
+			type: n.type as string,
+			data: n.data as WorkflowNodeData,
+			parentId: n.parentId,
+			width: n.width,
+			height: n.height
+		}));
+		const layoutEdges = edges.map((e) => ({
+			source: e.source,
+			target: e.target,
+			sourceHandle: e.sourceHandle as string | undefined,
+			targetHandle: e.targetHandle as string | undefined,
+			animated: e.animated
+		}));
+
+		const { positions, containerSizes } = layoutWorkflowGraph(layoutNodes, layoutEdges);
+
+		nodes = nodes.map((n) => {
+			const pos = positions.get(n.id);
+			const size = containerSizes.get(n.id);
+			const next: Node = { ...n };
+			if (pos) next.position = pos;
+			if (size) {
+				next.width = size.width;
+				next.height = size.height;
+			}
+			return next;
+		});
+
+		if (useGranular) {
+			const moves: Array<{ id: string; position: { x: number; y: number } }> = [];
+			const resizes: Array<{
+				id: string;
+				width: number;
+				height: number;
+				position?: { x: number; y: number };
+			}> = [];
+			for (const n of nodes) {
+				const pos = positions.get(n.id);
+				const size = containerSizes.get(n.id);
+				if (size) {
+					resizes.push({ id: n.id, width: size.width, height: size.height, position: pos });
+				} else if (pos) {
+					moves.push({ id: n.id, position: pos });
+				}
+			}
+			let handled = false;
+			if (moves.length && onMoveNodes) {
+				onMoveNodes(moves);
+				handled = true;
+			}
+			if (resizes.length && onResizeNodes) {
+				onResizeNodes(resizes);
+				handled = true;
+			}
+			// If any change couldn't be routed through a granular sink, fall back
+			// to the bulk serializer so the layout still persists.
+			if (!handled || (moves.length && !onMoveNodes) || (resizes.length && !onResizeNodes)) {
+				serializeAndEmit();
+			}
+		} else {
+			serializeAndEmit();
+		}
+	}
+
 	// Flow helpers provided by DropHandler child (inside SvelteFlow context)
 	let screenToFlowPos: ((pos: { x: number; y: number }) => XYPosition) | null = null;
 
@@ -595,6 +674,20 @@
 			proOptions={{ hideAttribution: true }}
 		>
 			<DropHandler oninit={handleFlowInit} />
+			{#if !readonly}
+				<Panel position="top-right">
+					<button
+						type="button"
+						onclick={autoArrange}
+						title="Auto-arrange — lay the graph out left-to-right, sized to each node"
+						data-testid="canvas-auto-arrange"
+						class="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+					>
+						<LayoutGrid class="size-3.5" />
+						Auto-arrange
+					</button>
+				</Panel>
+			{/if}
 			<Controls position="bottom-right" />
 			<Background variant={BackgroundVariant.Dots} gap={36} size={2.5} />
 			<MiniMap position="bottom-left" data-testid="canvas-minimap" />

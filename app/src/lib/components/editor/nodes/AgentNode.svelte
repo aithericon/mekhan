@@ -4,6 +4,7 @@
 	import Bot from '@lucide/svelte/icons/bot';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: AgentNodeData; selected?: boolean } = $props();
 
@@ -57,7 +58,7 @@
 	icon={Bot}
 	label={data.label}
 	{selected}
-	class="min-w-[220px]"
+	width={NODE_WIDTH.agent}
 	data-testid="node-agent"
 	body={agentBody}
 />

@@ -3343,6 +3343,153 @@
         }
       }
     },
+    "/api/v1/inventory": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/inventory",
+        "description": "Paginated list with filter/sort over `content_hash`, `file_server_id`,\n`path`, `status`, `is_canonical` (same query DSL as the catalogue list).",
+        "operationId": "list_entries",
+        "responses": {
+          "200": {
+            "description": "Paginated inventory entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_InventoryEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inventory/reconcile-batch": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/inventory/reconcile-batch",
+        "description": "Classify a crawl batch against the legacy baseline (inherit hash by\n`(file_server_id, path)`, compare sizes) and upsert `file_inventory` rows.\nReturns per-class counts.",
+        "operationId": "reconcile_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-class reconcile counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileCounts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inventory/register": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/inventory/register",
+        "description": "Batched by-reference upsert. For each item with content metadata + a\n`content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on\n`content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`\nrow on `(file_server_id, path)`. No bytes are transferred — this is the\nonline crawl/reconcile path. Returns insert/upsert counts.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Register counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryRegisterResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inventory/stats": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/inventory/stats — counts grouped by status and by file server.",
+        "operationId": "stats",
+        "responses": {
+          "200": {
+            "description": "Inventory counts by status + server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/job-templates": {
       "get": {
         "tags": [
@@ -5594,6 +5741,132 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reconcile/duplicates": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/reconcile/duplicates — paginated duplicate content groups.",
+        "operationId": "reconcile_duplicates",
+        "responses": {
+          "200": {
+            "description": "Paginated duplicate groups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_DuplicateGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reconcile/mark-canonical": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/reconcile/mark-canonical",
+        "description": "For every content hash with >1 copy, pick exactly one canonical copy\ndeterministically and clear the rest. Returns rows changed.",
+        "operationId": "mark_canonical",
+        "responses": {
+          "200": {
+            "description": "Rows whose canonical flag changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkCanonicalResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reconcile/orphans": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/reconcile/orphans — paginated legacy rows never observed on disk.",
+        "operationId": "reconcile_orphans",
+        "responses": {
+          "200": {
+            "description": "Paginated orphan_db rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paginated_OrphanDbRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/reconcile/summary": {
+      "get": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "GET /api/v1/reconcile/summary",
+        "description": "Inventory counts by status PLUS the staging-side `orphan_db` count and the\nnumber of duplicate content groups.",
+        "operationId": "reconcile_summary",
+        "responses": {
+          "200": {
+            "description": "Reconcile summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
             "content": {
               "application/json": {
                 "schema": {
@@ -11700,9 +11973,24 @@
           "category": {
             "type": "string"
           },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logical content identity (bare-hex SHA-256). NULL for job-net\nartifacts; populated for legacy / by-reference rows."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Surrogate primary key (content-addressed reshape, docs/32)."
           },
           "execution_id": {
             "type": "string"
@@ -12464,6 +12752,40 @@
           },
           "source_storage": {
             "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
+      "CrawlConfig": {
+        "type": "object",
+        "description": "Recursive, streaming directory walk — `list`'s checkpointable sibling.\n\nDrives an OpenDAL recursive lister as a stream (never buffering the whole\nlisting), `stat()`ing each file for `{path, size, mtime}` and emitting\nfixed-size batches over the job's [`EventStream`](aithericon_executor_backend)\n`item()`/`close()` channel. Mandatory at the ~4M-file scale of the legacy\nmigration: `list` buffers the entire `Vec` and the `fs` lister returns no\nsize/mtime, so crawl streams + per-entry stats instead.",
+        "required": [
+          "prefix",
+          "storage"
+        ],
+        "properties": {
+          "batch_size": {
+            "type": "integer",
+            "description": "Number of `{path,size,mtime}` entries per emitted `item` batch.",
+            "minimum": 0
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Prefix (relative to the storage root) to walk recursively."
+          },
+          "resume_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional resume cursor: the walk resumes *after* this path\n(`lister_with(...).start_after(resume_from)`). Best-effort; true\nidempotency comes from the inventory `UNIQUE(file_server_id, path)`\nupsert downstream."
+          },
+          "stat": {
+            "type": "boolean",
+            "description": "Whether to `stat()` each entry for size+mtime. Defaults to `true` because\nthe OpenDAL `fs` lister omits `content_length`/`last_modified`."
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig",
+            "description": "Storage the walk targets — typically an `fs://` mount co-located with a\nfile server."
           }
         }
       },
@@ -13544,6 +13866,36 @@
           }
         }
       },
+      "DuplicateGroup": {
+        "type": "object",
+        "description": "One row of [`reconcile_duplicates`] — a content hash with >1 physical copy.",
+        "required": [
+          "content_hash",
+          "copies",
+          "locations",
+          "has_canonical"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "copies": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "has_canonical": {
+            "type": "boolean",
+            "description": "Whether any copy in the group is already flagged canonical."
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`file_server_id:path` for each copy, deterministically ordered."
+          }
+        }
+      },
       "ElementType": {
         "oneOf": [
           {
@@ -14172,6 +14524,27 @@
                     "type": "string",
                     "enum": [
                       "stat"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CrawlConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "crawl"
                     ]
                   }
                 }
@@ -15353,6 +15726,205 @@
           }
         }
       },
+      "InventoryCount": {
+        "type": "object",
+        "required": [
+          "key",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "InventoryEntry": {
+        "type": "object",
+        "description": "A single physical-copy row (maps 1:1 to the `file_inventory` table).\n\nOne row per *physical* copy of a file on a file server. `content_hash` is a\nlogical link to `catalogue_entries.content_hash` (index only — no hard FK,\nsince a physical file can be observed by `crawl` before its catalogue row\nexists). See docs/32 §4.",
+        "required": [
+          "id",
+          "file_server_id",
+          "path",
+          "status",
+          "is_canonical",
+          "provenance",
+          "first_seen",
+          "updated_at"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "copy_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "file_server_id": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_canonical": {
+            "type": "boolean"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_verified": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "migration_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InventoryRegisterItem": {
+        "type": "object",
+        "description": "One item in a batched by-reference register request.\n\nOptional content metadata (`name`/`size_bytes`/`mime_type`) is used to\nUPSERT a logical `catalogue_entries` row keyed on `content_hash`; the\n`file_inventory` row is always upserted on `(file_server_id, path)`. No\nbytes are transferred — this is the online crawl/reconcile path, not the 4M\noffline load (that goes through the importer).",
+        "required": [
+          "file_server_id",
+          "path",
+          "status"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bare-hex SHA-256, if known. NULL until a `probe` populates it."
+          },
+          "file_server_id": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "InventoryRegisterRequest": {
+        "type": "object",
+        "description": "Batched register request body.",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryRegisterItem"
+            }
+          }
+        }
+      },
+      "InventoryRegisterResponse": {
+        "type": "object",
+        "description": "Result counts of a batched register call.",
+        "required": [
+          "inventory_upserted",
+          "catalogue_inserted"
+        ],
+        "properties": {
+          "catalogue_inserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`catalogue_entries` logical rows newly inserted (ON CONFLICT skips\npre-existing hashes)."
+          },
+          "inventory_upserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`file_inventory` rows inserted or updated."
+          }
+        }
+      },
+      "InventoryStats": {
+        "type": "object",
+        "description": "Per-status / per-server inventory counts.",
+        "required": [
+          "total",
+          "by_status",
+          "by_server"
+        ],
+        "properties": {
+          "by_server": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryCount"
+            }
+          },
+          "by_status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryCount"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "JobTemplateDetail": {
         "type": "object",
         "description": "Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus\nits full version history and current stagings.",
@@ -16263,6 +16835,19 @@
           }
         }
       },
+      "MarkCanonicalResponse": {
+        "type": "object",
+        "description": "`{ updated }` — rows whose `is_canonical` flag actually changed.",
+        "required": [
+          "updated"
+        ],
+        "properties": {
+          "updated": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "MaterializeRequest": {
         "type": "object",
         "description": "Body for `POST /api/v1/container-images/{id}/materialize`.\n\nExplicit targets only — unlike job-template staging there is no auto-enumerate\nof every workspace datacenter. An empty list is a 400.",
@@ -17063,6 +17648,32 @@
           }
         }
       },
+      "ObservedItem": {
+        "type": "object",
+        "description": "A single crawl-observed item: metadata only, no hash.",
+        "required": [
+          "path",
+          "size"
+        ],
+        "properties": {
+          "mtime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Observed modification time (RFC 3339). Carried through to provenance;\nnot used for classification."
+          },
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Observed physical size in bytes."
+          }
+        }
+      },
       "OcrSettings": {
         "type": "object",
         "properties": {
@@ -17077,6 +17688,50 @@
           "language": {
             "type": "string",
             "description": "Language code (ISO 639-3). Default: \"eng\"."
+          }
+        }
+      },
+      "OrphanDbRow": {
+        "type": "object",
+        "description": "A legacy-baseline row never observed on disk.",
+        "required": [
+          "legacy_key"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "legacy_key": {
+            "type": "string"
+          },
+          "modified": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         }
       },
@@ -18061,9 +18716,24 @@
                 "category": {
                   "type": "string"
                 },
+                "content_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Logical content identity (bare-hex SHA-256). NULL for job-net\nartifacts; populated for legacy / by-reference rows."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "entry_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Surrogate primary key (content-addressed reshape, docs/32)."
                 },
                 "execution_id": {
                   "type": "string"
@@ -18141,6 +18811,76 @@
                   ]
                 },
                 "user_metadata": {}
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_DuplicateGroup": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of [`reconcile_duplicates`] — a content hash with >1 physical copy.",
+              "required": [
+                "content_hash",
+                "copies",
+                "locations",
+                "has_canonical"
+              ],
+              "properties": {
+                "content_hash": {
+                  "type": "string"
+                },
+                "copies": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "has_canonical": {
+                  "type": "boolean",
+                  "description": "Whether any copy in the group is already flagged canonical."
+                },
+                "locations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "`file_server_id:path` for each copy, deterministically ordered."
+                }
               }
             }
           },
@@ -18317,6 +19057,204 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_InventoryEntry": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A single physical-copy row (maps 1:1 to the `file_inventory` table).\n\nOne row per *physical* copy of a file on a file server. `content_hash` is a\nlogical link to `catalogue_entries.content_hash` (index only — no hard FK,\nsince a physical file can be observed by `crawl` before its catalogue row\nexists). See docs/32 §4.",
+              "required": [
+                "id",
+                "file_server_id",
+                "path",
+                "status",
+                "is_canonical",
+                "provenance",
+                "first_seen",
+                "updated_at"
+              ],
+              "properties": {
+                "content_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "copy_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "file_server_id": {
+                  "type": "string"
+                },
+                "first_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "is_canonical": {
+                  "type": "boolean"
+                },
+                "last_seen": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "last_verified": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "migration_target": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "provenance": {},
+                "status": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_OrphanDbRow": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A legacy-baseline row never observed on disk.",
+              "required": [
+                "legacy_key"
+              ],
+              "properties": {
+                "file_server_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "legacy_key": {
+                  "type": "string"
+                },
+                "modified": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
                 }
               }
             }
@@ -18763,6 +19701,13 @@
           "path"
         ],
         "properties": {
+          "checksum_algo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional checksum algorithm override. When set, probe forces this\nalgorithm for the emitted `checksum`/`checksum_digest` instead of the\n`extract_metadata_async` default (SHA-256). Set to `sha256` for the\nlegacy-migration reconcile path, whose join key is the bare-lowercase-hex\nSHA-256 digest (`legacy_file_index.hash`, `\"SHA256:\"` stripped). The\nemitted `checksum_digest` is always bare lowercase hex so it can be\ncompared directly against catalogue content hashes."
+          },
           "include_statistics": {
             "type": "boolean"
           },
@@ -19157,6 +20102,75 @@
               "null"
             ],
             "description": "Working directory (defaults to run_dir root)."
+          }
+        }
+      },
+      "ReconcileBatchRequest": {
+        "type": "object",
+        "description": "Body of `POST /api/v1/inventory/reconcile-batch`.\n\nThe FOLD TARGET a crawl driver calls with one server's observed batch\n(`{path,size,mtime}` — no hash). The live crawl→driver transport is Phase 6.",
+        "required": [
+          "file_server_id",
+          "items"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedItem"
+            }
+          }
+        }
+      },
+      "ReconcileCounts": {
+        "type": "object",
+        "description": "Counts returned by [`reconcile_batch`], one bucket per classification.",
+        "required": [
+          "verified",
+          "mismatch",
+          "orphan_disk"
+        ],
+        "properties": {
+          "mismatch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "orphan_disk": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "verified": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ReconcileSummary": {
+        "type": "object",
+        "description": "Full reconcile summary: inventory counts by status PLUS the staging-side\n`orphan_db` count and the number of duplicate content groups.",
+        "required": [
+          "by_status",
+          "orphan_db",
+          "duplicate_groups"
+        ],
+        "properties": {
+          "by_status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusCount"
+            }
+          },
+          "duplicate_groups": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Content hashes observed on more than one copy (`reconcile_duplicates`)."
+          },
+          "orphan_db": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Legacy rows with no observed physical copy (`reconcile_orphan_db`)."
           }
         }
       },
@@ -20387,6 +21401,23 @@
           },
           "storage": {
             "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
+      "StatusCount": {
+        "type": "object",
+        "description": "One bucket of [`reconcile_summary`] — an inventory status and its count.",
+        "required": [
+          "status",
+          "n"
+        ],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
@@ -23668,6 +24699,10 @@
     {
       "name": "catalogue",
       "description": "Artifact catalogue, lineage, distinct-value filters."
+    },
+    {
+      "name": "inventory",
+      "description": "Legacy file migration (docs/32) — by-reference physical-copy registry (`file_inventory`), content-addressed to the catalogue via `content_hash`. Batched register (no bytes) + list/stats."
     },
     {
       "name": "provenance",
