@@ -156,7 +156,9 @@ pub async fn chat_completions(
         biased;
         _ = token.cancelled() => {
             Metrics::inc(&ctx.metrics.cancelled_total);
-            metering::publish_meter(&ctx.nats, &meter.finish(None, MeterStatus::Cancelled)).await;
+            let rec = meter.finish(None, MeterStatus::Cancelled);
+            ctx.metrics.observe_record(&rec);
+            metering::publish_meter(&ctx.nats, &rec).await;
             if let Some(c) = &ctx.nats {
                 cancel::publish_cancelled(c, &request_id).await;
             }
@@ -168,7 +170,9 @@ pub async fn chat_completions(
             Ok(u) => u,
             Err(e) => {
                 Metrics::inc(&ctx.metrics.upstream_error_total);
-                metering::publish_meter(&ctx.nats, &meter.finish(None, MeterStatus::UpstreamError)).await;
+                let rec = meter.finish(None, MeterStatus::UpstreamError);
+                ctx.metrics.observe_record(&rec);
+                metering::publish_meter(&ctx.nats, &rec).await;
                 drop(permit);
                 drop(guard);
                 return error_json(StatusCode::BAD_GATEWAY, &format!("upstream unreachable: {e}"));
@@ -225,7 +229,9 @@ async fn buffered_response(
         _ = token.cancelled() => {
             // Dropping `upstream` closes the connection → upstream aborts.
             Metrics::inc(&ctx.metrics.cancelled_total);
-            metering::publish_meter(&ctx.nats, &meter.finish(None, MeterStatus::Cancelled)).await;
+            let rec = meter.finish(None, MeterStatus::Cancelled);
+            ctx.metrics.observe_record(&rec);
+            metering::publish_meter(&ctx.nats, &rec).await;
             if let Some(c) = &ctx.nats {
                 cancel::publish_cancelled(c, &request_id).await;
             }
@@ -237,7 +243,9 @@ async fn buffered_response(
             Ok(b) => b,
             Err(e) => {
                 Metrics::inc(&ctx.metrics.upstream_error_total);
-                metering::publish_meter(&ctx.nats, &meter.finish(None, MeterStatus::UpstreamError)).await;
+                let rec = meter.finish(None, MeterStatus::UpstreamError);
+                ctx.metrics.observe_record(&rec);
+                metering::publish_meter(&ctx.nats, &rec).await;
                 drop(permit);
                 drop(guard);
                 return error_json(StatusCode::BAD_GATEWAY, &format!("upstream body error: {e}"));
@@ -247,7 +255,9 @@ async fn buffered_response(
 
     let usage = Usage::from_response_bytes(&bytes);
     Metrics::inc(&ctx.metrics.completed_total);
-    metering::publish_meter(&ctx.nats, &meter.finish(usage, MeterStatus::Completed)).await;
+    let rec = meter.finish(usage, MeterStatus::Completed);
+    ctx.metrics.observe_record(&rec);
+    metering::publish_meter(&ctx.nats, &rec).await;
     drop(permit);
     drop(guard);
 
@@ -305,13 +315,17 @@ fn streaming_response(
         // the connection so a cancelled upstream aborts server-side.
         if cancelled {
             Metrics::inc(&metrics.cancelled_total);
-            metering::publish_meter(&nats, &meter.finish(last_usage, MeterStatus::Cancelled)).await;
+            let rec = meter.finish(last_usage, MeterStatus::Cancelled);
+            metrics.observe_record(&rec);
+            metering::publish_meter(&nats, &rec).await;
             if let Some(c) = &nats {
                 cancel::publish_cancelled(c, &request_id).await;
             }
         } else {
             Metrics::inc(&metrics.completed_total);
-            metering::publish_meter(&nats, &meter.finish(last_usage, MeterStatus::Completed)).await;
+            let rec = meter.finish(last_usage, MeterStatus::Completed);
+            metrics.observe_record(&rec);
+            metering::publish_meter(&nats, &rec).await;
         }
     };
 

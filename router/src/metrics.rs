@@ -10,7 +10,37 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use inference_core::InferenceRequestLog;
+
 use crate::routing::ReplicaStat;
+
+/// Upper bounds (seconds) for the per-model request-duration histogram. Coarse
+/// by design — operators want "p50 ≈ 2s, tail < 30s", not microsecond fidelity.
+/// Each observation lands in the first bucket whose bound it does not exceed;
+/// anything slower than the last bound counts only in `+Inf` (= `_count`).
+const LATENCY_BUCKETS_SECS: [f64; 10] = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0];
+
+/// Per-model rollup of terminal requests — the durable demand/throughput signal
+/// Prometheus scrapes (Grafana owns the over-time view; the router only EMITS).
+/// Token + request counters are monotonic; the latency histogram is `le`-bucketed
+/// counts plus a sum for the average.
+#[derive(Debug, Default, Clone)]
+struct ModelMeter {
+    // Requests by terminal disposition (mirrors `MeterContext::finish`'s status).
+    completed: u64,
+    unmetered: u64,
+    cancelled: u64,
+    upstream_error: u64,
+    // Token throughput (input vs output) — the "tokens in/out per model" series.
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    // Request-duration histogram: per-bucket (non-cumulative) counts aligned to
+    // `LATENCY_BUCKETS_SECS`, rendered cumulatively. `latency_sum`/`latency_count`
+    // back the `_sum`/`_count` series (and the implicit `+Inf` bucket).
+    bucket_counts: [u64; LATENCY_BUCKETS_SECS.len()],
+    latency_sum: f64,
+    latency_count: u64,
+}
 
 #[derive(Debug, Default)]
 pub struct Metrics {
@@ -25,6 +55,11 @@ pub struct Metrics {
     /// alone is 0 when a `scale_to_zero` policy has scaled down, so the autoscaler
     /// reads the *delta* of this counter between scrapes to detect fresh demand.
     model_starved: Mutex<HashMap<String, u64>>,
+    /// Per-model terminal rollup — tokens in/out, requests by status, and a
+    /// request-duration histogram. Recorded from every metering record (the same
+    /// terminal that publishes to NATS), so the Prometheus view and the durable
+    /// audit ledger are fed from one point.
+    models: Mutex<HashMap<String, ModelMeter>>,
 }
 
 impl Metrics {
@@ -39,6 +74,56 @@ impl Metrics {
         if let Ok(mut m) = self.model_starved.lock() {
             *m.entry(model.to_string()).or_insert(0) += 1;
         }
+    }
+
+    /// Fold one terminal metering record into the per-model Prometheus rollup.
+    /// Called at every terminal alongside `publish_meter`, so the scrape-able
+    /// series and the durable ledger never diverge. Latency is the wall-clock
+    /// `finished_at − started_at` (floored at 0 — clock skew never produces a
+    /// negative duration).
+    pub fn observe_record(&self, rec: &InferenceRequestLog) {
+        let latency_secs =
+            (rec.finished_at - rec.started_at).num_milliseconds().max(0) as f64 / 1000.0;
+        self.observe(
+            &rec.model,
+            &rec.status,
+            rec.prompt_tokens,
+            rec.completion_tokens,
+            latency_secs,
+        );
+    }
+
+    /// The primitive behind [`observe_record`] (split out so it is testable
+    /// without constructing a full record). `status` is the metering status
+    /// string (`completed` / `unmetered` / `cancelled` / `upstream_error`); an
+    /// unknown status still counts toward tokens + latency but no request bucket.
+    pub fn observe(
+        &self,
+        model: &str,
+        status: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        latency_secs: f64,
+    ) {
+        let Ok(mut models) = self.models.lock() else {
+            return;
+        };
+        let m = models.entry(model.to_string()).or_default();
+        match status {
+            "completed" => m.completed += 1,
+            "unmetered" => m.unmetered += 1,
+            "cancelled" => m.cancelled += 1,
+            "upstream_error" => m.upstream_error += 1,
+            _ => {}
+        }
+        m.prompt_tokens += prompt_tokens;
+        m.completion_tokens += completion_tokens;
+        // Histogram: first bucket whose bound the latency does not exceed.
+        if let Some(i) = LATENCY_BUCKETS_SECS.iter().position(|&b| latency_secs <= b) {
+            m.bucket_counts[i] += 1;
+        }
+        m.latency_sum += latency_secs;
+        m.latency_count += 1;
     }
 
     /// Render Prometheus text exposition for the counters + per-replica
@@ -152,6 +237,98 @@ impl Metrics {
             );
         }
 
+        // Per-model throughput + latency (the durable over-time series; Grafana
+        // dashboards these, the autoscaler ignores them). Sorted for a stable,
+        // diffable exposition.
+        let models = self.models.lock().map(|m| m.clone()).unwrap_or_default();
+        let mut ordered: Vec<(&String, &ModelMeter)> = models.iter().collect();
+        ordered.sort_by(|a, b| a.0.cmp(b.0));
+
+        let _ = writeln!(
+            out,
+            "# HELP inference_router_model_requests_total Terminal requests per model by status."
+        );
+        let _ = writeln!(out, "# TYPE inference_router_model_requests_total counter");
+        for (model, m) in &ordered {
+            for (status, n) in [
+                ("completed", m.completed),
+                ("unmetered", m.unmetered),
+                ("cancelled", m.cancelled),
+                ("upstream_error", m.upstream_error),
+            ] {
+                let _ = writeln!(
+                    out,
+                    "inference_router_model_requests_total{{model=\"{model}\",status=\"{status}\"}} {n}"
+                );
+            }
+        }
+
+        let _ = writeln!(
+            out,
+            "# HELP inference_router_model_prompt_tokens_total Prompt (input) tokens per model."
+        );
+        let _ = writeln!(
+            out,
+            "# TYPE inference_router_model_prompt_tokens_total counter"
+        );
+        for (model, m) in &ordered {
+            let _ = writeln!(
+                out,
+                "inference_router_model_prompt_tokens_total{{model=\"{model}\"}} {}",
+                m.prompt_tokens
+            );
+        }
+
+        let _ = writeln!(
+            out,
+            "# HELP inference_router_model_completion_tokens_total Completion (output) tokens per model."
+        );
+        let _ = writeln!(
+            out,
+            "# TYPE inference_router_model_completion_tokens_total counter"
+        );
+        for (model, m) in &ordered {
+            let _ = writeln!(
+                out,
+                "inference_router_model_completion_tokens_total{{model=\"{model}\"}} {}",
+                m.completion_tokens
+            );
+        }
+
+        let _ = writeln!(
+            out,
+            "# HELP inference_router_request_duration_seconds Request wall-clock duration per model (all terminals)."
+        );
+        let _ = writeln!(
+            out,
+            "# TYPE inference_router_request_duration_seconds histogram"
+        );
+        for (model, m) in &ordered {
+            let mut cumulative = 0u64;
+            for (i, bound) in LATENCY_BUCKETS_SECS.iter().enumerate() {
+                cumulative += m.bucket_counts[i];
+                let _ = writeln!(
+                    out,
+                    "inference_router_request_duration_seconds_bucket{{model=\"{model}\",le=\"{bound}\"}} {cumulative}"
+                );
+            }
+            let _ = writeln!(
+                out,
+                "inference_router_request_duration_seconds_bucket{{model=\"{model}\",le=\"+Inf\"}} {}",
+                m.latency_count
+            );
+            let _ = writeln!(
+                out,
+                "inference_router_request_duration_seconds_sum{{model=\"{model}\"}} {}",
+                m.latency_sum
+            );
+            let _ = writeln!(
+                out,
+                "inference_router_request_duration_seconds_count{{model=\"{model}\"}} {}",
+                m.latency_count
+            );
+        }
+
         out
     }
 }
@@ -202,5 +379,68 @@ mod tests {
         // The starved (scaled-to-zero) model surfaces an inflight=0 series too.
         assert!(text.contains("inference_router_model_inflight{model=\"cold-model\"} 0"));
         assert!(text.contains("inference_router_model_starved_total{model=\"cold-model\"} 2"));
+    }
+
+    #[test]
+    fn renders_per_model_throughput_and_latency() {
+        let m = Metrics::default();
+        // Two completed requests for `chat`: tokens accumulate; latencies land in
+        // distinct histogram buckets (0.2s ≤ 0.25 bucket, 3.0s ≤ 5.0 bucket).
+        m.observe("chat", "completed", 10, 20, 0.2);
+        m.observe("chat", "completed", 5, 15, 3.0);
+        // One upstream error (no tokens) and one unmetered completion.
+        m.observe("chat", "upstream_error", 0, 0, 0.01);
+        m.observe("chat", "unmetered", 7, 0, 0.3);
+
+        let text = m.render(&[]);
+
+        // Requests by status.
+        assert!(text.contains(
+            "inference_router_model_requests_total{model=\"chat\",status=\"completed\"} 2"
+        ));
+        assert!(text.contains(
+            "inference_router_model_requests_total{model=\"chat\",status=\"upstream_error\"} 1"
+        ));
+        assert!(text.contains(
+            "inference_router_model_requests_total{model=\"chat\",status=\"unmetered\"} 1"
+        ));
+        assert!(text.contains(
+            "inference_router_model_requests_total{model=\"chat\",status=\"cancelled\"} 0"
+        ));
+
+        // Tokens in/out.
+        assert!(text.contains("inference_router_model_prompt_tokens_total{model=\"chat\"} 22"));
+        assert!(text.contains("inference_router_model_completion_tokens_total{model=\"chat\"} 35"));
+
+        // Histogram is CUMULATIVE: the 0.01s + 0.2s observations are ≤ 0.25,
+        // the 0.3s adds at 0.5, the 3.0s adds at 5.0; +Inf == total count (4).
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"chat\",le=\"0.25\"} 2"
+        ));
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"chat\",le=\"0.5\"} 3"
+        ));
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"chat\",le=\"5\"} 4"
+        ));
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"chat\",le=\"+Inf\"} 4"
+        ));
+        assert!(text.contains("inference_router_request_duration_seconds_count{model=\"chat\"} 4"));
+    }
+
+    #[test]
+    fn latency_above_last_bucket_only_counts_in_inf() {
+        let m = Metrics::default();
+        // 120s exceeds the 60s top bound → no finite bucket, only +Inf/count.
+        m.observe("slow", "completed", 1, 1, 120.0);
+        let text = m.render(&[]);
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"slow\",le=\"60\"} 0"
+        ));
+        assert!(text.contains(
+            "inference_router_request_duration_seconds_bucket{model=\"slow\",le=\"+Inf\"} 1"
+        ));
+        assert!(text.contains("inference_router_request_duration_seconds_count{model=\"slow\"} 1"));
     }
 }
