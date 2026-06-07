@@ -102,12 +102,23 @@ pub enum CapacitySource {
     /// C slots — each consumes one expire token + one matching unit. `t_grant` is
     /// GUARDED by `satisfies(claim.requirements, unit.caps)`; grant/hold/release
     /// carry `{ ..., runner_id, executor_namespace, caps }`.
-    Presence,
+    ///
+    /// `offer` selects the dispatch discipline (docs/33):
+    /// - `offer: false` — the historical **grant** discipline: an auto-firing
+    ///   `t_grant` binds a claim to a free unit as soon as both exist (mekhan
+    ///   pushes the grant to the claimant).
+    /// - `offer: true` — the **offer** discipline: NO auto-`t_grant`. A claim is
+    ///   match-once PARKED as an offer (`t_post_offer` → `offers`) and binds only
+    ///   when a UNIT itself publishes a claim on the `presence_claim` inbox
+    ///   (`t_claim`). First claim wins; consuming the offer token IS the implicit
+    ///   rescind of all other would-be claimants. Reuses the SAME
+    ///   `satisfies(requirements, caps)` matcher verbatim.
+    Presence { offer: bool },
 }
 
 impl CapacitySource {
     fn is_presence(self) -> bool {
-        matches!(self, CapacitySource::Presence)
+        matches!(self, CapacitySource::Presence { .. })
     }
 }
 
@@ -142,7 +153,7 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
              release/reap on the event-sourced Petri substrate; grant reply is the typed \
              Lease__token_pool {{ unit_id }} R2's compiled steps consume."
         ),
-        CapacitySource::Presence => format!(
+        CapacitySource::Presence { .. } => format!(
             "Presence pool for resource {resource_id} (capacity-less; presence-driven). \
              Runners are admitted as pool units via the presence_acquire bridge and reaped \
              on presence-lease expiry via the presence_expired signal. Claim/grant/register/\
@@ -270,7 +281,7 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
         // PRESENCE (runner_group): capacity-less; presence-driven admission,
         // GUARDED grant, presence_expired → reap_free/reap_held(+fail).
         // --------------------------------------------------------------------
-        CapacitySource::Presence => {
+        CapacitySource::Presence { offer } => {
             // NEW presence-admit inbox — mekhan's presence controller deposits a
             // `{ unit_id, runner_id, executor_namespace, caps }` here when a
             // runner checks in (cross-net subject
@@ -329,47 +340,153 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     );
             });
 
-            // t_grant — admission. Fires only when a claim AND a free unit both
-            // exist; an empty pool (no live runners) leaves it disabled so claims
-            // queue (backpressure). Emits ONLY the grant reply — the typed lease
-            // `{ unit_id, executor_namespace, caps }` plus `grant_id` for
-            // correlation.
-            //
-            // v1: one unit per claim. `claim.request` is intentionally NOT read
-            // here.
-            ctx.scope("Grant", |ctx| {
-                ctx.transition("t_grant", "Grant Capacity")
-                    .auto_input("claim", &claim_inbox)
-                    .auto_input("unit", &pool)
-                    // Phase 4 — placement matching. `satisfies(requirements,
-                    // caps)` is a custom fn registered in the engine's guard Rhai
-                    // engine (`petri-application` `register_satisfies`): it AND-s
-                    // every constraint in `claim.requirements.constraints`
-                    // against the unit's advertised `unit.caps`, short-circuiting
-                    // to `true` on empty/absent constraints (so an unconstrained
-                    // step matches any runner). A claim whose requirements no
-                    // unit satisfies leaves `t_grant` disabled against that unit
-                    // and the claim queues (backpressure) until a satisfying
-                    // runner checks in. `guard_rhai` (NOT `guard`) is used so the
-                    // SDK's build-time `validate_script_inline` — which only
-                    // knows input PORT names, not registered fns — doesn't reject
-                    // `satisfies` at net-build time. token_pool's `t_grant` stays
-                    // UNGUARDED.
-                    .guard_rhai("satisfies(claim.requirements, unit.caps)")
-                    .auto_output("grant", &grant_outbox)
-                    .logic(
-                        // `runner_id` rides the grant so the hold (`t_register`)
-                        // can carry it and `t_reap_held` can correlate the
-                        // reap-all-by-runner_id signal against a held slot.
-                        r#"#{ grant: #{
-                            grant_id: claim.grant_id,
-                            unit_id: unit.unit_id,
-                            runner_id: unit.runner_id,
-                            executor_namespace: unit.executor_namespace,
-                            caps: unit.caps
-                        } }"#,
-                    );
-            });
+            if !offer {
+                // ===========================================================
+                // GRANT discipline (offer == false) — UNCHANGED historical
+                // topology. An auto-firing t_grant binds a claim to a free unit
+                // as soon as both exist (mekhan pushes the grant).
+                // ===========================================================
+                //
+                // t_grant — admission. Fires only when a claim AND a free unit
+                // both exist; an empty pool (no live runners) leaves it disabled
+                // so claims queue (backpressure). Emits ONLY the grant reply —
+                // the typed lease `{ unit_id, executor_namespace, caps }` plus
+                // `grant_id` for correlation.
+                //
+                // v1: one unit per claim. `claim.request` is intentionally NOT
+                // read here.
+                ctx.scope("Grant", |ctx| {
+                    ctx.transition("t_grant", "Grant Capacity")
+                        .auto_input("claim", &claim_inbox)
+                        .auto_input("unit", &pool)
+                        // Phase 4 — placement matching. `satisfies(requirements,
+                        // caps)` is a custom fn registered in the engine's guard
+                        // Rhai engine (`petri-application` `register_satisfies`):
+                        // it AND-s every constraint in
+                        // `claim.requirements.constraints` against the unit's
+                        // advertised `unit.caps`, short-circuiting to `true` on
+                        // empty/absent constraints (so an unconstrained step
+                        // matches any runner). A claim whose requirements no unit
+                        // satisfies leaves `t_grant` disabled against that unit
+                        // and the claim queues (backpressure) until a satisfying
+                        // runner checks in. `guard_rhai` (NOT `guard`) is used so
+                        // the SDK's build-time `validate_script_inline` — which
+                        // only knows input PORT names, not registered fns —
+                        // doesn't reject `satisfies` at net-build time.
+                        // token_pool's `t_grant` stays UNGUARDED.
+                        .guard_rhai("satisfies(claim.requirements, unit.caps)")
+                        .auto_output("grant", &grant_outbox)
+                        .logic(
+                            // `runner_id` rides the grant so the hold
+                            // (`t_register`) can carry it and `t_reap_held` can
+                            // correlate the reap-all-by-runner_id signal against
+                            // a held slot.
+                            r#"#{ grant: #{
+                                grant_id: claim.grant_id,
+                                unit_id: unit.unit_id,
+                                runner_id: unit.runner_id,
+                                executor_namespace: unit.executor_namespace,
+                                caps: unit.caps
+                            } }"#,
+                        );
+                });
+            } else {
+                // ===========================================================
+                // OFFER discipline (offer == true) — match-once PARK + bind on
+                // a UNIT-INITIATED claim (docs/33). NO auto-firing t_grant.
+                // ===========================================================
+
+                // Parked-offer pool. Each token is a routed ClaimRequest
+                // `{ grant_id, requirements, request }` whose carried "grant"
+                // reply routing is PRESERVED (so t_claim's grant reply still
+                // flows to the ORIGINAL claimer that posted the offer).
+                let offers: aithericon_sdk::PlaceHandle<DynamicToken> =
+                    ctx.state("offers", "Parked Offers");
+
+                // UNIT-INITIATED claim inbox — a live unit publishes a claim
+                // token `{ grant_id, unit_id, runner_id, executor_namespace,
+                // caps }` here (cross-net bridge subject
+                // `petri.bridge.pool-<rid>.presence_claim`). First claim to bind
+                // an offer wins; the others find the offer gone and queue / are
+                // implicitly rescinded.
+                let presence_claim: aithericon_sdk::PlaceHandle<DynamicToken> =
+                    ctx.bridge_in(well_known::POOL_PRESENCE_CLAIM_INBOX, "Presence Claim");
+
+                ctx.scope("Offer", |ctx| {
+                    // t_post_offer — auto-fire: take a routed claim off the
+                    // claim_inbox and PARK it unchanged in `offers`. The whole
+                    // claim color (incl. `grant_id`, `requirements`, `request`)
+                    // moves through by value, and — crucially — its "grant"
+                    // reply routing is PRESERVED (NO reset_reply_routing): the
+                    // grant reply that t_claim later emits must still flow back
+                    // to the instance that posted the offer. This mirrors how
+                    // the grant-discipline t_grant consumes the routed claim and
+                    // emits the grant on the SAME carried routing.
+                    ctx.transition("t_post_offer", "Park Offer")
+                        .auto_input("claim", &claim_inbox)
+                        .auto_output("offer", &offers)
+                        .logic(
+                            // Carry the claim through verbatim — grant_id for
+                            // correlation, requirements for the t_claim
+                            // satisfies() re-check, request for forward-compat
+                            // (weighted grants). Reply routing rides the token.
+                            r#"#{ offer: #{
+                                grant_id: claim.grant_id,
+                                requirements: claim.requirements,
+                                request: claim.request
+                            } }"#,
+                        );
+
+                    // t_claim — UNIT-INITIATED bind. Inputs: a parked `offer`, a
+                    // unit-published `claim` on presence_claim, and a FREE `unit`
+                    // from the pool. Correlate offer↔claim on `grant_id` and the
+                    // unit by `unit_id`. The SAME `satisfies(...)` matcher the
+                    // grant discipline uses re-confirms the offer's requirements
+                    // against the claiming unit's caps. Consuming the offer token
+                    // IS the implicit rescind of every other would-be claimant.
+                    //
+                    // Emits ONLY the grant — EXACTLY like the grant discipline's
+                    // `t_grant`, and for the same load-bearing reason (the docs/14
+                    // reply-routing taint rule). t_claim consumes the parked offer,
+                    // which carries the instance's "grant" reply routing; that
+                    // routing must reach ONLY the grant (→ grant_outbox), never the
+                    // hold. The hold is created downstream by `t_register` when the
+                    // instance registers over its "fail"-only bridge — that is the
+                    // sole place the hold acquires the "fail" routing `t_reap_held`
+                    // needs to notify the holder. Minting the hold here would both
+                    // taint `in_use` with stale "grant" routing (wedging recycle)
+                    // AND leave it with no "fail" route (reap can't notify). So the
+                    // offer protocol round-trips through the instance's register
+                    // exactly as the grant protocol does; only the auto-`t_grant`
+                    // is replaced by this unit-initiated bind.
+                    ctx.transition("t_claim", "Claim Offer (unit-initiated)")
+                        .auto_input("offer", &offers)
+                        .auto_input("claim", &presence_claim)
+                        .auto_input("unit", &pool)
+                        .correlate("claim", "offer", "grant_id")
+                        .correlate("claim", "unit", "unit_id")
+                        // SAME placement matcher as the grant discipline's
+                        // t_grant (docs/33: reuses satisfies() verbatim). The
+                        // parked offer carries `requirements`; the claiming unit
+                        // carries `caps`. `guard_rhai` (NOT `guard`) so the SDK
+                        // build-time validator doesn't reject the registered fn.
+                        .guard_rhai("satisfies(offer.requirements, unit.caps)")
+                        .auto_output("grant", &grant_outbox)
+                        .logic(
+                            // Grant mirrors t_grant's payload exactly — `runner_id`
+                            // rides it so the hold (`t_register`) can carry it and
+                            // `t_reap_held` can correlate the reap-all-by-runner_id
+                            // signal against a held slot.
+                            r#"#{ grant: #{
+                                grant_id: offer.grant_id,
+                                unit_id: unit.unit_id,
+                                runner_id: unit.runner_id,
+                                executor_namespace: unit.executor_namespace,
+                                caps: unit.caps
+                            } }"#,
+                        );
+                });
+            }
 
             // t_register — record the hold over the register bridge. R2 registers
             // the hold over a bridge whose reply channels are limited to "fail",
@@ -1221,8 +1338,11 @@ mod tests {
         );
 
         // ---- Presence ----
-        let presence = serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Presence))
-            .expect("presence pool serializes");
+        let presence = serde_json::to_value(build_pool_net(
+            Uuid::nil(),
+            CapacitySource::Presence { offer: false },
+        ))
+        .expect("presence pool serializes");
 
         // Presence-only transitions present; seeded-only `t_reap` absent.
         for t in ["t_presence_acquire", "t_reap_free", "t_reap_held"] {
@@ -1280,8 +1400,11 @@ mod tests {
     /// what makes "C signals ⇒ ≤C slots reaped" hold.
     #[test]
     fn presence_reap_correlates_on_runner_id_via_consuming_signal() {
-        let presence = serde_json::to_value(build_pool_net(Uuid::nil(), CapacitySource::Presence))
-            .expect("presence pool serializes");
+        let presence = serde_json::to_value(build_pool_net(
+            Uuid::nil(),
+            CapacitySource::Presence { offer: false },
+        ))
+        .expect("presence pool serializes");
 
         for (t_id, held_or_unit) in [
             ("t_reap_free", "unit.runner_id"),

@@ -13703,7 +13703,8 @@
         "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
         "enum": [
           "pull",
-          "push"
+          "push",
+          "offer"
         ]
       },
       "DispatchMode": {

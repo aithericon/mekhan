@@ -5184,7 +5184,7 @@ export interface components {
          * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
          * @enum {string}
          */
-        Dispatch: "pull" | "push";
+        Dispatch: "pull" | "push" | "offer";
         /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
          *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
