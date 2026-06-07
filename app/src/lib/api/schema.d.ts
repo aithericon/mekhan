@@ -1359,45 +1359,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/models/replicas/{policy_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** `GET /api/v1/models/replicas/{policy_id}` — one policy's replica state. */
-        get: operations["get_model_replica"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/models/replicas/{policy_id}/scale": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * `POST /api/v1/models/replicas/{policy_id}/scale` — the L1 manual desired
-         *     override. Writes `desired_count`; the loop reconciles next tick. Upserts the
-         *     row off the `model_policy` resource so a scale before the first reconcile
-         *     still takes (404 if the policy resource itself doesn't exist).
-         */
-        post: operations["scale_model_replica"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/models/{model_id}": {
         parameters: {
             query?: never;
@@ -1440,6 +1401,76 @@ export interface paths {
          *     workspace-scoped. Returns the projected view.
          */
         post: operations["load_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * `PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a
+         *     curated model. The policy used to be its own `model_policy` resource; it now
+         *     lives as nullable columns on the model's `model_states` row. `mode` must be one
+         *     of `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live
+         *     `node_pool` resource in the workspace (else 400). 404 if the model isn't curated
+         *     yet. Returns the projected view. Session/human authed, workspace-scoped.
+         */
+        put: operations["set_model_policy"];
+        post?: never;
+        /**
+         * `DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy
+         *     (NULL out the policy columns + `dedicated=FALSE`) AND drop the model's
+         *     reconciliation row. 404 if the model isn't curated. Returns the projected view.
+         *     Session/human authed, workspace-scoped.
+         */
+        delete: operations["clear_model_policy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/replica": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/models/{model_id}/replica` — one model's replica state. */
+        get: operations["get_model_replica"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/models/{model_id}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/models/{model_id}/scale` — the L1 manual desired override. Writes
+         *     `desired_count`; the loop reconciles next tick. Upserts the row off the model's
+         *     folded-in autoscale policy (the `model_states` policy columns) so a scale before
+         *     the first reconcile still takes. 404 if the model isn't curated; 409 if the model
+         *     has no autoscale policy set (`autoscale_mode IS NULL`).
+         */
+        post: operations["scale_model_replica"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3737,6 +3768,91 @@ export interface components {
             type: "header";
             value?: string | null;
             value_env?: string | null;
+        };
+        /**
+         * @description `PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy
+         *     the operator sets on a curated model. `mode` + `node_pool` are required; the
+         *     rest are optional knobs.
+         */
+        AutoscalePolicyInput: {
+            /**
+             * Format: int64
+             * @description Cooldown between actuations (seconds).
+             */
+            cooldown_secs?: number | null;
+            /** @description Dedicated single-model fallback flag. */
+            dedicated?: boolean | null;
+            /**
+             * Format: int32
+             * @description Demand-slot ceiling / manual seed.
+             */
+            desired_replicas?: number | null;
+            /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
+            mode: string;
+            /**
+             * @description Alias of the `node_pool` resource this model packs onto (required, must
+             *     resolve to a live `node_pool` resource).
+             */
+            node_pool: string;
+            /** @description HARD residency zone requirement (GDPR §11). */
+            residency_zone?: string | null;
+            /**
+             * Format: double
+             * @description L2 reactive scale-down demand threshold.
+             */
+            scale_down_threshold?: number | null;
+            /**
+             * Format: double
+             * @description L2 reactive scale-up demand threshold.
+             */
+            scale_up_threshold?: number | null;
+        };
+        /**
+         * @description The folded-in per-model autoscale policy, projected onto [`ModelSetView`]. The
+         *     policy used to be its own `model_policy` resource; it now lives as nullable
+         *     columns on `model_states` (the config half) joined with the per-model
+         *     `model_replicas` reconciliation row (the live half — `desired_count` / `status`
+         *     / `last_error`).
+         */
+        AutoscaleView: {
+            /**
+             * Format: int64
+             * @description Cooldown between actuations (seconds).
+             */
+            cooldown_secs?: number | null;
+            /** @description When `true`, the model gets its own single-model dedicated job. */
+            dedicated: boolean;
+            /**
+             * Format: int32
+             * @description The reconciliation row's last desired COUNT (falls back to the policy's
+             *     `desired_replicas` when no row exists yet).
+             */
+            desired_count?: number | null;
+            /**
+             * Format: int32
+             * @description Demand-slot ceiling / manual seed.
+             */
+            desired_replicas?: number | null;
+            /** @description The reconciliation row's last error (`None` when none / no row). */
+            last_error?: string | null;
+            /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
+            mode: string;
+            /** @description Alias of the `node_pool` resource this model packs onto. */
+            node_pool?: string | null;
+            /** @description HARD residency zone requirement (GDPR §11). */
+            residency_zone?: string | null;
+            /**
+             * Format: double
+             * @description L2 reactive scale-down demand threshold.
+             */
+            scale_down_threshold?: number | null;
+            /**
+             * Format: double
+             * @description L2 reactive scale-up demand threshold.
+             */
+            scale_up_threshold?: number | null;
+            /** @description The reconciliation row's status (`None` when no row exists yet). */
+            status?: string | null;
         };
         /**
          * @description Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of
@@ -6273,11 +6389,6 @@ export interface components {
              */
             observed_count: number;
             /**
-             * Format: uuid
-             * @description The `model_policy` resource this row reconciles (UNIQUE — one row/policy).
-             */
-            policy_resource_id: string;
-            /**
              * @description Native job NAME registered on the cluster (Nomad service-job id). `None`
              *     until first actuation.
              */
@@ -6312,6 +6423,7 @@ export interface components {
          *     a `loaded`-but-unserved model.
          */
         ModelSetView: {
+            autoscale?: null | components["schemas"]["AutoscaleView"];
             /**
              * @description AND-gate: `state == Loaded` AND a live runner advertises `model_id`. This
              *     is the flag the editor model picker filters on.
@@ -12629,74 +12741,6 @@ export interface operations {
             };
         };
     };
-    get_model_replica: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description model_policy resource id */
-                policy_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One policy's replica row */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelReplicaRow"];
-                };
-            };
-            /** @description No replica row for that policy yet */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    scale_model_replica: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description model_policy resource id */
-                policy_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ModelReplicaScaleRequest"];
-            };
-        };
-        responses: {
-            /** @description Desired count written; the updated row */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelReplicaRow"];
-                };
-            };
-            /** @description No such model_policy resource */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     get_model: {
         parameters: {
             query?: never;
@@ -12786,6 +12830,160 @@ export interface operations {
             };
             /** @description DB write or NATS publish failed */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_model_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoscalePolicyInput"];
+            };
+        };
+        responses: {
+            /** @description Policy set; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description Invalid mode or unknown node_pool */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clear_model_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Policy cleared; the projected view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSetView"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_model_replica: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id (router routes on this) */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One model's replica row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReplicaRow"];
+                };
+            };
+            /** @description No replica row for that model yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    scale_model_replica: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Model id (router routes on this) */
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelReplicaScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description Desired count written; the updated row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReplicaRow"];
+                };
+            };
+            /** @description No such model in this workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Autoscaling not enabled for this model */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

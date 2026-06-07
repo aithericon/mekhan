@@ -30,8 +30,8 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::model_pool::{
-    reconcile_observed_state, CreateModelRequest, LoadModelRequest, ModelSetView, ModelState,
-    ModelStateRow, TransitionRequest,
+    reconcile_observed_state, AutoscalePolicyInput, CreateModelRequest, LoadModelRequest,
+    ModelSetView, ModelState, ModelStateRow, TransitionRequest,
 };
 use crate::models::runner::RunnerInterfaceCatalog;
 use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
@@ -231,10 +231,11 @@ async fn project_with_reconcile(
     workspace_id: Uuid,
     row: ModelStateRow,
     serving: u32,
+    replica: Option<&crate::models::model_replicas::ModelReplicaRow>,
 ) -> ModelSetView {
     let observed = ModelState::parse(&row.state).unwrap_or(ModelState::Unloaded);
     let reconciled = reconcile_row_state(db, workspace_id, &row.model_id, observed, serving).await;
-    let mut view = row.into_view(serving);
+    let mut view = row.into_view(serving, replica);
     view.state = reconciled;
     view.available = reconciled == ModelState::Loaded && serving > 0;
     view
@@ -259,8 +260,7 @@ pub async fn list_loaded_models(
     let workspace_id = caller_workspace(&user);
 
     let rows: Vec<ModelStateRow> = sqlx::query_as(
-        "SELECT workspace_id, registry_resource_id, model_id, state, base, replicas, note \
-         FROM model_states WHERE workspace_id = $1 ORDER BY model_id",
+        "SELECT * FROM model_states WHERE workspace_id = $1 ORDER BY model_id",
     )
     .bind(workspace_id)
     .fetch_all(&state.db)
@@ -268,14 +268,31 @@ pub async fn list_loaded_models(
     .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
     let counts = serving_runner_counts(&state.db, &state.runner_presence, workspace_id).await;
+    let replicas = replica_map(&state.db, workspace_id).await;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let serving = counts.get(&row.model_id).copied().unwrap_or(0);
-        out.push(project_with_reconcile(&state.db, workspace_id, row, serving).await);
+        let replica = replicas.get(&row.model_id);
+        out.push(project_with_reconcile(&state.db, workspace_id, row, serving, replica).await);
     }
 
     Ok(Json(out))
+}
+
+/// Fetch the workspace's `model_replicas` rows keyed by `model_id` (the live half
+/// of the autoscale view). Fail-soft: a DB error yields an empty map.
+async fn replica_map(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+) -> HashMap<String, crate::models::model_replicas::ModelReplicaRow> {
+    let rows: Vec<crate::models::model_replicas::ModelReplicaRow> =
+        sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_all(db)
+            .await
+            .unwrap_or_default();
+    rows.into_iter().map(|r| (r.model_id.clone(), r)).collect()
 }
 
 /// `GET /api/v1/models/{model_id}` — one model + its state/replica/serving facts.
@@ -298,8 +315,7 @@ pub async fn get_model(
     let workspace_id = caller_workspace(&user);
 
     let row: Option<ModelStateRow> = sqlx::query_as(
-        "SELECT workspace_id, registry_resource_id, model_id, state, base, replicas, note \
-         FROM model_states WHERE workspace_id = $1 AND model_id = $2",
+        "SELECT * FROM model_states WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)
     .bind(&model_id)
@@ -315,10 +331,27 @@ pub async fn get_model(
         .get(&row.model_id)
         .copied()
         .unwrap_or(0);
+    let replica = fetch_replica(&state.db, workspace_id, &row.model_id).await;
 
     Ok(Json(
-        project_with_reconcile(&state.db, workspace_id, row, serving).await,
+        project_with_reconcile(&state.db, workspace_id, row, serving, replica.as_ref()).await,
     ))
+}
+
+/// Fetch one `model_replicas` row by (workspace, model). Fail-soft: a DB error
+/// yields `None` (the autoscale view's live half degrades, the read proceeds).
+async fn fetch_replica(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    model_id: &str,
+) -> Option<crate::models::model_replicas::ModelReplicaRow> {
+    sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2")
+        .bind(workspace_id)
+        .bind(model_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// `POST /api/v1/models/{model_id}/transition` — the operator state-machine step.
@@ -374,7 +407,7 @@ pub async fn transition_model(
         "UPDATE model_states \
          SET state = $3, note = $4, last_transition_at = NOW() \
          WHERE workspace_id = $1 AND model_id = $2 \
-         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+         RETURNING *",
     )
     .bind(workspace_id)
     .bind(&model_id)
@@ -389,8 +422,9 @@ pub async fn transition_model(
         .get(&updated.model_id)
         .copied()
         .unwrap_or(0);
+    let replica = fetch_replica(&state.db, workspace_id, &updated.model_id).await;
 
-    Ok(Json(updated.into_view(serving)))
+    Ok(Json(updated.into_view(serving, replica.as_ref())))
 }
 
 /// `POST /api/v1/models` — operator curation: add a model to the workspace SET.
@@ -423,7 +457,7 @@ pub async fn create_model(
         "INSERT INTO model_states \
             (workspace_id, registry_resource_id, model_id, state, base, replicas, note) \
          VALUES ($1, $2, $3, 'approved', $4, 0, $5) \
-         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+         RETURNING *",
     )
     .bind(workspace_id)
     .bind(req.registry_resource_id)
@@ -450,7 +484,8 @@ pub async fn create_model(
         .copied()
         .unwrap_or(0);
 
-    Ok(Json(inserted.into_view(serving)))
+    // A freshly-curated model has no policy + no replica row yet.
+    Ok(Json(inserted.into_view(serving, None)))
 }
 
 /// `DELETE /api/v1/models/{model_id}` — hard-delete a curated model row from the
@@ -520,7 +555,7 @@ pub async fn load_model(
          ON CONFLICT (workspace_id, model_id) DO UPDATE \
             SET state = CASE WHEN model_states.state = 'loaded' THEN 'loaded' ELSE 'loading' END, \
                 last_transition_at = NOW() \
-         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+         RETURNING *",
     )
     .bind(workspace_id)
     .bind(&model_id)
@@ -548,8 +583,9 @@ pub async fn load_model(
         .get(&upserted.model_id)
         .copied()
         .unwrap_or(0);
+    let replica = fetch_replica(&state.db, workspace_id, &upserted.model_id).await;
 
-    Ok(Json(upserted.into_view(serving)))
+    Ok(Json(upserted.into_view(serving, replica.as_ref())))
 }
 
 /// `POST /api/v1/models/{model_id}/unload` — operator unload against a SPECIFIC
@@ -580,7 +616,7 @@ pub async fn unload_model(
     let updated: Option<ModelStateRow> = sqlx::query_as(
         "UPDATE model_states SET state = 'draining', last_transition_at = NOW() \
          WHERE workspace_id = $1 AND model_id = $2 AND state IN ('loaded', 'loading') \
-         RETURNING workspace_id, registry_resource_id, model_id, state, base, replicas, note",
+         RETURNING *",
     )
     .bind(workspace_id)
     .bind(&model_id)
@@ -611,7 +647,10 @@ pub async fn unload_model(
 
     // If a row was drained, project it; otherwise synthesize a draining view.
     let view = match updated {
-        Some(row) => row.into_view(serving),
+        Some(row) => {
+            let replica = fetch_replica(&state.db, workspace_id, &row.model_id).await;
+            row.into_view(serving, replica.as_ref())
+        }
         None => ModelSetView {
             model_id: model_id.clone(),
             state: ModelState::Draining,
@@ -620,16 +659,191 @@ pub async fn unload_model(
             available: false,
             serving_runners: serving,
             note: None,
+            autoscale: None,
         },
     };
 
     Ok(Json(view))
 }
 
+/// The valid autoscale modes. Validated service-side (no DB/schema enum), mirroring
+/// the `compute_target` match.
+fn valid_autoscale_mode(mode: &str) -> bool {
+    matches!(mode, "manual" | "scale_to_zero" | "keep_warm")
+}
+
+/// Re-fetch + project a model's `ModelSetView` (state row + serving count +
+/// replica row). Shared by the policy set/clear handlers so their response cannot
+/// drift from the `GET /api/v1/models/{model_id}` projection.
+async fn project_model(
+    state: &AppState,
+    workspace_id: Uuid,
+    model_id: &str,
+) -> Result<ModelSetView, ApiError> {
+    let row: ModelStateRow =
+        sqlx::query_as("SELECT * FROM model_states WHERE workspace_id = $1 AND model_id = $2")
+            .bind(workspace_id)
+            .bind(model_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?
+            .ok_or_else(|| ApiError::not_found("no such model in this workspace"))?;
+
+    let serving = serving_runner_counts(&state.db, &state.runner_presence, workspace_id)
+        .await
+        .get(model_id)
+        .copied()
+        .unwrap_or(0);
+    let replica = fetch_replica(&state.db, workspace_id, model_id).await;
+    Ok(row.into_view(serving, replica.as_ref()))
+}
+
+/// `PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a
+/// curated model. The policy used to be its own `model_policy` resource; it now
+/// lives as nullable columns on the model's `model_states` row. `mode` must be one
+/// of `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live
+/// `node_pool` resource in the workspace (else 400). 404 if the model isn't curated
+/// yet. Returns the projected view. Session/human authed, workspace-scoped.
+#[utoipa::path(
+    put,
+    path = "/api/v1/models/{model_id}/policy",
+    params(("model_id" = String, Path, description = "Model id")),
+    request_body = AutoscalePolicyInput,
+    responses(
+        (status = 200, description = "Policy set; the projected view", body = ModelSetView),
+        (status = 400, description = "Invalid mode or unknown node_pool", body = ErrorResponse),
+        (status = 404, description = "No such model in this workspace", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn set_model_policy(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(model_id): Path<String>,
+    Json(req): Json<AutoscalePolicyInput>,
+) -> Result<Json<ModelSetView>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    if !valid_autoscale_mode(&req.mode) {
+        return Err(ApiError::bad_request(format!(
+            "invalid autoscale mode '{}' (expected manual | scale_to_zero | keep_warm)",
+            req.mode
+        )));
+    }
+    if req.node_pool.trim().is_empty() {
+        return Err(ApiError::bad_request("node_pool must not be empty"));
+    }
+
+    // The referenced node_pool must exist (resolve like resolve_pool_net_id).
+    let pool_exists: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM resources \
+         WHERE resource_type = 'node_pool' AND workspace_id = $1 AND path = $2 \
+           AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(&req.node_pool)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("node_pool lookup: {e}")))?;
+    if pool_exists.is_none() {
+        return Err(ApiError::bad_request(format!(
+            "node_pool '{}' not found",
+            req.node_pool
+        )));
+    }
+
+    let res = sqlx::query(
+        "UPDATE model_states SET \
+            autoscale_mode = $3, desired_replicas = $4, scale_up_threshold = $5, \
+            scale_down_threshold = $6, cooldown_secs = $7, node_pool = $8, \
+            residency_zone = $9, dedicated = $10 \
+         WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(&model_id)
+    .bind(&req.mode)
+    .bind(req.desired_replicas.map(|v| v as i32))
+    .bind(req.scale_up_threshold)
+    .bind(req.scale_down_threshold)
+    .bind(req.cooldown_secs.map(|v| v as i64))
+    .bind(&req.node_pool)
+    .bind(&req.residency_zone)
+    .bind(req.dedicated.unwrap_or(false))
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states policy write: {e}")))?;
+
+    if res.rows_affected() == 0 {
+        return Err(ApiError::not_found("no such model in this workspace"));
+    }
+
+    Ok(Json(project_model(&state, workspace_id, &model_id).await?))
+}
+
+/// `DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy
+/// (NULL out the policy columns + `dedicated=FALSE`) AND drop the model's
+/// reconciliation row. 404 if the model isn't curated. Returns the projected view.
+/// Session/human authed, workspace-scoped.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/models/{model_id}/policy",
+    params(("model_id" = String, Path, description = "Model id")),
+    responses(
+        (status = 200, description = "Policy cleared; the projected view", body = ModelSetView),
+        (status = 404, description = "No such model in this workspace", body = ErrorResponse),
+    ),
+    tag = "models",
+)]
+pub async fn clear_model_policy(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(model_id): Path<String>,
+) -> Result<Json<ModelSetView>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+
+    let res = sqlx::query(
+        "UPDATE model_states SET \
+            autoscale_mode = NULL, desired_replicas = NULL, scale_up_threshold = NULL, \
+            scale_down_threshold = NULL, cooldown_secs = NULL, node_pool = NULL, \
+            residency_zone = NULL, dedicated = FALSE \
+         WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(&model_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states policy clear: {e}")))?;
+
+    if res.rows_affected() == 0 {
+        return Err(ApiError::not_found("no such model in this workspace"));
+    }
+
+    // Drop the reconciliation row — the policy is gone, the autoscaler no longer
+    // owns this model.
+    let _ = sqlx::query("DELETE FROM model_replicas WHERE workspace_id = $1 AND model_id = $2")
+        .bind(workspace_id)
+        .bind(&model_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("model_replicas delete: {e}")))?;
+
+    Ok(Json(project_model(&state, workspace_id, &model_id).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::runner::{ModelEntry, ModelInterfaceKind, RunnerInterfaceCatalog};
+
+    #[test]
+    fn autoscale_mode_validation() {
+        for ok in ["manual", "scale_to_zero", "keep_warm"] {
+            assert!(valid_autoscale_mode(ok), "{ok} should be valid");
+        }
+        for bad in ["", "auto", "Manual", "scale-to-zero", "bananas"] {
+            assert!(!valid_autoscale_mode(bad), "{bad} should be rejected");
+        }
+    }
 
     fn base(model_id: &str, c: u32) -> ModelEntry {
         ModelEntry {

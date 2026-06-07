@@ -3931,102 +3931,6 @@
         }
       }
     },
-    "/api/v1/models/replicas/{policy_id}": {
-      "get": {
-        "tags": [
-          "models"
-        ],
-        "summary": "`GET /api/v1/models/replicas/{policy_id}` — one policy's replica state.",
-        "operationId": "get_model_replica",
-        "parameters": [
-          {
-            "name": "policy_id",
-            "in": "path",
-            "description": "model_policy resource id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "One policy's replica row",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelReplicaRow"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No replica row for that policy yet",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/models/replicas/{policy_id}/scale": {
-      "post": {
-        "tags": [
-          "models"
-        ],
-        "summary": "`POST /api/v1/models/replicas/{policy_id}/scale` — the L1 manual desired\noverride. Writes `desired_count`; the loop reconciles next tick. Upserts the\nrow off the `model_policy` resource so a scale before the first reconcile\nstill takes (404 if the policy resource itself doesn't exist).",
-        "operationId": "scale_model_replica",
-        "parameters": [
-          {
-            "name": "policy_id",
-            "in": "path",
-            "description": "model_policy resource id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ModelReplicaScaleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Desired count written; the updated row",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelReplicaRow"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such model_policy resource",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/models/{model_id}": {
       "get": {
         "tags": [
@@ -4143,6 +4047,212 @@
           },
           "500": {
             "description": "DB write or NATS publish failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/policy": {
+      "put": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a\ncurated model. The policy used to be its own `model_policy` resource; it now\nlives as nullable columns on the model's `model_states` row. `mode` must be one\nof `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live\n`node_pool` resource in the workspace (else 400). 404 if the model isn't curated\nyet. Returns the projected view. Session/human authed, workspace-scoped.",
+        "operationId": "set_model_policy",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoscalePolicyInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Policy set; the projected view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSetView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid mode or unknown node_pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy\n(NULL out the policy columns + `dedicated=FALSE`) AND drop the model's\nreconciliation row. 404 if the model isn't curated. Returns the projected view.\nSession/human authed, workspace-scoped.",
+        "operationId": "clear_model_policy",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Policy cleared; the projected view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSetView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/replica": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/models/{model_id}/replica` — one model's replica state.",
+        "operationId": "get_model_replica",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id (router routes on this)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One model's replica row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No replica row for that model yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{model_id}/scale": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`POST /api/v1/models/{model_id}/scale` — the L1 manual desired override. Writes\n`desired_count`; the loop reconciles next tick. Upserts the row off the model's\nfolded-in autoscale policy (the `model_states` policy columns) so a scale before\nthe first reconcile still takes. 404 if the model isn't curated; 409 if the model\nhas no autoscale policy set (`autoscale_mode IS NULL`).",
+        "operationId": "scale_model_replica",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "description": "Model id (router routes on this)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelReplicaScaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Desired count written; the updated row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReplicaRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such model in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Autoscaling not enabled for this model",
             "content": {
               "application/json": {
                 "schema": {
@@ -10704,6 +10814,158 @@
         ],
         "description": "Authentication configuration."
       },
+      "AutoscalePolicyInput": {
+        "type": "object",
+        "description": "`PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy\nthe operator sets on a curated model. `mode` + `node_pool` are required; the\nrest are optional knobs.",
+        "required": [
+          "mode",
+          "node_pool"
+        ],
+        "properties": {
+          "cooldown_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cooldown between actuations (seconds).",
+            "minimum": 0
+          },
+          "dedicated": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Dedicated single-model fallback flag."
+          },
+          "desired_replicas": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Demand-slot ceiling / manual seed.",
+            "minimum": 0
+          },
+          "mode": {
+            "type": "string",
+            "description": "One of `manual` | `scale_to_zero` | `keep_warm`."
+          },
+          "node_pool": {
+            "type": "string",
+            "description": "Alias of the `node_pool` resource this model packs onto (required, must\nresolve to a live `node_pool` resource)."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone requirement (GDPR §11)."
+          },
+          "scale_down_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "L2 reactive scale-down demand threshold."
+          },
+          "scale_up_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "L2 reactive scale-up demand threshold."
+          }
+        }
+      },
+      "AutoscaleView": {
+        "type": "object",
+        "description": "The folded-in per-model autoscale policy, projected onto [`ModelSetView`]. The\npolicy used to be its own `model_policy` resource; it now lives as nullable\ncolumns on `model_states` (the config half) joined with the per-model\n`model_replicas` reconciliation row (the live half — `desired_count` / `status`\n/ `last_error`).",
+        "required": [
+          "mode",
+          "dedicated"
+        ],
+        "properties": {
+          "cooldown_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cooldown between actuations (seconds)."
+          },
+          "dedicated": {
+            "type": "boolean",
+            "description": "When `true`, the model gets its own single-model dedicated job."
+          },
+          "desired_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The reconciliation row's last desired COUNT (falls back to the policy's\n`desired_replicas` when no row exists yet)."
+          },
+          "desired_replicas": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Demand-slot ceiling / manual seed."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reconciliation row's last error (`None` when none / no row)."
+          },
+          "mode": {
+            "type": "string",
+            "description": "One of `manual` | `scale_to_zero` | `keep_warm`."
+          },
+          "node_pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Alias of the `node_pool` resource this model packs onto."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HARD residency zone requirement (GDPR §11)."
+          },
+          "scale_down_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "L2 reactive scale-down demand threshold."
+          },
+          "scale_up_threshold": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "L2 reactive scale-up demand threshold."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reconciliation row's status (`None` when no row exists yet)."
+          }
+        }
+      },
       "BackendCoverageEntry": {
         "type": "object",
         "description": "Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of\n0 means NO live worker serves this backend — steps on it will queue.",
@@ -16234,7 +16496,6 @@
         "required": [
           "id",
           "workspace_id",
-          "policy_resource_id",
           "model_id",
           "datacenter_resource_id",
           "desired_count",
@@ -16283,11 +16544,6 @@
             "type": "integer",
             "format": "int32",
             "description": "Live count from the fleet roster (runners advertising `model_id`). NOT the\nstaging effect result — that only proves \"registered\", not \"serving\"."
-          },
-          "policy_resource_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The `model_policy` resource this row reconciles (UNIQUE — one row/policy)."
           },
           "replica_slug": {
             "type": [
@@ -16342,6 +16598,17 @@
           "serving_runners"
         ],
         "properties": {
+          "autoscale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoscaleView",
+                "description": "The folded-in autoscale policy view (the `model_states` policy columns +\nthe reconciliation row's live facts). `None` when no policy is set."
+              }
+            ]
+          },
           "available": {
             "type": "boolean",
             "description": "AND-gate: `state == Loaded` AND a live runner advertises `model_id`. This\nis the flag the editor model picker filters on."

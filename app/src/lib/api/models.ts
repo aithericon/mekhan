@@ -13,6 +13,7 @@
  */
 import createClient, { type Middleware } from 'openapi-fetch';
 import type { components, paths } from './schema';
+import { listResources, type ResourceSummary } from './resources';
 
 const sessionExpiryMiddleware: Middleware = {
 	async onResponse({ response, request }) {
@@ -35,6 +36,10 @@ client.use(sessionExpiryMiddleware);
 
 /** One row of the loaded-set projection — model + state + the live AND-gate. */
 export type ModelSetView = components['schemas']['ModelSetView'];
+/** The folded-in autoscale policy view projected onto a {@link ModelSetView} row. */
+export type AutoscaleView = NonNullable<ModelSetView['autoscale']>;
+/** `PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy. */
+export type AutoscalePolicyInput = components['schemas']['AutoscalePolicyInput'];
 /** An advertised model on a runner's interface catalog (base or LoRA). */
 export type ModelEntry = components['schemas']['ModelEntry'];
 /** The operator-curated lifecycle position of a model in the pool. */
@@ -204,6 +209,64 @@ export async function listFleetEngines(): Promise<FleetEnginesResponse> {
 /** GET /api/v1/models/replicas — per-policy model-replica autoscaler rows. */
 export async function listModelReplicas(): Promise<ModelReplicaRow[]> {
 	return unwrap(await client.GET('/api/v1/models/replicas', {}));
+}
+
+/**
+ * PUT /api/v1/models/{model_id}/policy — set the folded-in autoscale policy on a
+ * curated model. `mode` + `node_pool` are required (the node_pool alias must
+ * resolve to a live `node_pool` resource, else 400); 404 if the model isn't
+ * curated. Returns the projected `ModelSetView` with `autoscale` populated.
+ */
+export async function setModelPolicy(
+	modelId: string,
+	body: AutoscalePolicyInput
+): Promise<ModelSetView> {
+	return unwrap(
+		await client.PUT('/api/v1/models/{model_id}/policy', {
+			params: { path: { model_id: modelId } },
+			body
+		})
+	);
+}
+
+/**
+ * DELETE /api/v1/models/{model_id}/policy — clear the folded-in autoscale policy
+ * (NULL out the columns) AND drop the model's reconciliation row. 404 if the
+ * model isn't curated. Returns the projected view (now with `autoscale` absent).
+ */
+export async function clearModelPolicy(modelId: string): Promise<ModelSetView> {
+	return unwrap(
+		await client.DELETE('/api/v1/models/{model_id}/policy', {
+			params: { path: { model_id: modelId } }
+		})
+	);
+}
+
+/**
+ * POST /api/v1/models/{model_id}/scale — the L1 manual desired override. Writes
+ * `desired_count` on the reconciliation row (the loop reconciles next tick). 404
+ * if the model isn't curated; 409 if it has no autoscale policy. Returns the row.
+ */
+export async function scaleModel(
+	modelId: string,
+	desired_replicas: number
+): Promise<ModelReplicaRow> {
+	return unwrap(
+		await client.POST('/api/v1/models/{model_id}/scale', {
+			params: { path: { model_id: modelId } },
+			body: { desired_replicas }
+		})
+	);
+}
+
+/**
+ * The node pools the autoscaler packs models onto — `node_pool` resources. Thin
+ * wrapper over `listResources` so the SET-tab policy editor can populate its
+ * pool picker without reaching into the resources API directly.
+ */
+export async function listNodePools(): Promise<ResourceSummary[]> {
+	const page = await listResources({ resource_type: 'node_pool', perPage: 100 });
+	return page.items;
 }
 
 /** GET /api/v1/node-replicas — per-pool node-replica autoscaler rows. */

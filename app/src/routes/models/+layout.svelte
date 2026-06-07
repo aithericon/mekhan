@@ -41,9 +41,9 @@
 		{
 			href: '/models/placement',
 			match: 'placement',
-			label: 'Placement',
+			label: 'Pools',
 			icon: Network,
-			title: 'Placement policies + node pools (the autoscaler rows)'
+			title: 'Node pools — engine capacity the autoscaler fills'
 		},
 		{
 			href: '/models/router',
