@@ -224,26 +224,37 @@ fn should_admit(e: &HumanPresenceEntry, now: Instant, ttl: Duration) -> bool {
 ///
 /// Reuses the runner plumbing VERBATIM (docs/33 §4): the `runner_id` field
 /// carries the MEMBER id so the engine pool net's generic `t_grant`/`t_reap_*`
-/// correlate on it without a human-specific net. `unit_id` is per-slot
-/// (`"{member}#{slot}"`) so each is an independently grantable lease; the shared
-/// `runner_id` is the reap key (the `presence_expired` signals reap all of them).
-/// `assignee` is an ADDITIVE field the P3 grant relays to the human inbox.
-/// `executor_namespace` is `human/<member>`. Wire shape is the engine's
-/// [`CrossNetTokenTransfer`] envelope; `dedup_id` keys on the per-slot `unit_id`
-/// so a redelivery suppresses exactly that slot (keying on the member alone would
-/// collapse all C-1 extra slots to one).
+/// correlate on it without a human-specific net. `unit_id` is per-slot AND
+/// per-episode (`"{member}#{slot}@{epoch}"`) so each is an independently grantable
+/// lease; the shared `runner_id` is the reap key (the `presence_expired` signals
+/// reap all of them by `runner_id`, NOT by `unit_id`, so a fresh per-episode
+/// `unit_id` is safe). `assignee` is an ADDITIVE field the P3 grant relays to the
+/// human inbox. `executor_namespace` is `human/<member>`. Wire shape is the
+/// engine's [`CrossNetTokenTransfer`] envelope.
+///
+/// `epoch` is a per-admission stamp (wall-clock millis captured ONCE at the
+/// absent→present edge in [`reconcile`], shared across the C slots). It is folded
+/// into the `unit_id` — and thereby the `dedup_id` — so every availability EPISODE
+/// re-admits fresh. WITHOUT it, a member toggling available→unavailable→available
+/// within JetStream's ~2-minute dedup window would have the re-acquire silently
+/// SUPPRESSED (the stable `presence-acquire:{member}#{slot}` dedup_id collides with
+/// the prior episode's still-cached publish) — a real human UX bug, since
+/// off→on is common (mirrors the model-pool generation-keyed fix). The per-slot
+/// suffix keeps the C slots distinct within one episode (keying on the member
+/// alone would collapse all C-1 extra slots to one).
 async fn inject_acquire(
     nats: &MekhanNats,
     pool_net_id: &str,
     member: Uuid,
     slot: u32,
+    epoch: i64,
     caps: &serde_json::Value,
 ) {
     let subject = format!(
         "petri.bridge.{pool_net_id}.{}",
         well_known::POOL_PRESENCE_ACQUIRE_INBOX
     );
-    let unit_id = format!("{member}#{slot}");
+    let unit_id = format!("{member}#{slot}@{epoch}");
     let envelope = json!({
         "source_net_id": "mekhan-human-presence-controller",
         "source_place_name": "presence",
@@ -335,6 +346,9 @@ async fn reconcile(nats: &MekhanNats, presence: &HumanPresenceMap, key: HumanKey
             pool_net_id: String,
             member: Uuid,
             concurrency: u32,
+            /// Per-admission stamp folded into each slot's `unit_id`/`dedup_id` so
+            /// a re-admit within JetStream's dedup window is NOT suppressed.
+            epoch: i64,
             caps: serde_json::Value,
         },
         Expire {
@@ -356,6 +370,10 @@ async fn reconcile(nats: &MekhanNats, presence: &HumanPresenceMap, key: HumanKey
                 pool_net_id: entry.pool_net_id.clone(),
                 member: entry.member_user_id,
                 concurrency: entry.concurrency,
+                // Stamp this admission EPISODE so the C slots' unit_ids (and thus
+                // dedup_ids) differ from any prior episode for this member — a
+                // toggle off→on inside JetStream's dedup window re-admits fresh.
+                epoch: Utc::now().timestamp_millis(),
                 caps: entry.caps.clone(),
             }
         } else if !should && entry.present {
@@ -375,10 +393,11 @@ async fn reconcile(nats: &MekhanNats, presence: &HumanPresenceMap, key: HumanKey
             pool_net_id,
             member,
             concurrency,
+            epoch,
             caps,
         } => {
             for slot in 0..concurrency {
-                inject_acquire(nats, &pool_net_id, member, slot, &caps).await;
+                inject_acquire(nats, &pool_net_id, member, slot, epoch, &caps).await;
             }
             tracing::info!(
                 %member, pool_net_id, concurrency,
