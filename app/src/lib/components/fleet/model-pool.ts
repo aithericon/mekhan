@@ -7,6 +7,7 @@ export function statusTone(s: string): string {
 	if (s === 'active' || s === 'loaded') return 'text-emerald-600 dark:text-emerald-400';
 	if (s === 'failed') return 'text-red-600 dark:text-red-400';
 	if (s === 'stopped' || s === 'unloaded') return 'text-muted-foreground';
+	if (s === 'sleeping') return 'text-indigo-500 dark:text-indigo-400';
 	return 'text-amber-600 dark:text-amber-400';
 }
 

@@ -471,6 +471,13 @@ pub struct ModelAgentSettings {
     #[serde(default)]
     pub served_base_model: Option<String>,
 
+    /// The GDPR residency zone this node serves inference from (e.g.
+    /// `"eu-dev"`). Advertised verbatim in the runner's interface catalog so the
+    /// inference router can fail-closed on a residency mismatch. `None` when the
+    /// node is zone-agnostic. Advisory; opaque to the engine.
+    #[serde(default)]
+    pub residency_zone: Option<String>,
+
     /// The per-engine concurrency budget C (`=--max-num-seqs`). C is NOT in
     /// `/v1/models` (it is a vLLM launch arg), so the agent sources it from here
     /// and attributes it to the served base only (LoRA adapters share the

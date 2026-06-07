@@ -358,6 +358,43 @@ pub struct RunnerInterfaceCatalog {
     /// "serving". Additive JSONB field; empty for non-model runners.
     #[serde(default)]
     pub pulled: Vec<String>,
+    /// This node's INFERENCE endpoint — the OpenAI-compatible base URL the
+    /// router routes requests to (the runner's `vllm_url`). Distinct from the
+    /// runner's control-plane credential: it is the data-plane address. Additive
+    /// JSONB; `None` for non-model runners. The public model-serving aggregator
+    /// emits one `ModelServingRunner` per present runner that carries this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// The GDPR residency zone this node serves inference from (e.g. `"eu-dev"`).
+    /// The router fails closed on a residency mismatch. Additive JSONB; `None`
+    /// when zone-agnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residency_zone: Option<String>,
+}
+
+/// One self-hosted model-serving runner, flattened for the inference router's
+/// live-inventory poll (`GET /api/v1/runners/model-serving`, docs/29 GAP A). The
+/// router has no session cookie, so this is a PUBLIC, all-workspace projection of
+/// the `presence ∩ runner_interfaces` join: it carries only the in-cluster
+/// data-plane facts the router already needs to route — the node's `base_url`,
+/// its residency zone, the model ids it serves, and its per-engine concurrency
+/// budget `C`. It deliberately omits any control-plane credential or workspace
+/// attribution.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ModelServingRunner {
+    /// The runner row id (the router formats its replica id off this).
+    pub runner_id: Uuid,
+    /// The OpenAI-compatible inference endpoint to route to.
+    pub base_url: String,
+    /// The runner's GDPR residency zone, or `None` when zone-agnostic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residency_zone: Option<String>,
+    /// Every model id this runner serves — base models plus loaded LoRA adapters.
+    pub model_ids: Vec<String>,
+    /// The per-engine concurrency budget `C` (vLLM `--max-num-seqs`) — the first
+    /// base entry's `max_num_seqs`, defaulting to `1` when unreported. The router
+    /// sizes its admission semaphore from this.
+    pub concurrency_c: u32,
 }
 
 /// Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,
@@ -613,6 +650,35 @@ mod tests {
             back.models[1].source_uri.as_deref(),
             Some("hf://acme/my-lora")
         );
+    }
+
+    #[test]
+    fn catalog_base_url_and_zone_round_trip() {
+        // The router's live-inventory poll reads these two additive top-level
+        // catalog fields; a present runner carrying them must survive the JSONB
+        // round-trip the `runner_interfaces.catalog` column does.
+        let catalog = RunnerInterfaceCatalog {
+            base_url: Some("http://localhost:8000".into()),
+            residency_zone: Some("eu-dev".into()),
+            ..Default::default()
+        };
+        let as_json = serde_json::to_value(&catalog).unwrap();
+        assert_eq!(as_json["base_url"], "http://localhost:8000");
+        assert_eq!(as_json["residency_zone"], "eu-dev");
+        let back: RunnerInterfaceCatalog = serde_json::from_value(as_json).unwrap();
+        assert_eq!(back.base_url.as_deref(), Some("http://localhost:8000"));
+        assert_eq!(back.residency_zone.as_deref(), Some("eu-dev"));
+
+        // Zone-agnostic / non-model runners omit both (skip_serializing_if) and
+        // still round-trip via serde default.
+        let bare = RunnerInterfaceCatalog::default();
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("base_url").is_none());
+        assert!(v.get("residency_zone").is_none());
+        let back2: RunnerInterfaceCatalog =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(back2.base_url.is_none());
+        assert!(back2.residency_zone.is_none());
     }
 
     #[test]

@@ -45,7 +45,7 @@
       "id": "consumer",
       "type": "automated_step",
       "slug": "consumer",
-      "position": { "x": 500, "y": 0 },
+      "position": { "x": 756, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Consumer (unchanged stream())",
@@ -77,7 +77,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 810, "y": 31 },
+      "position": { "x": 1066, "y": 31 },
       "data": {
         "type": "end",
         "label": "Done",

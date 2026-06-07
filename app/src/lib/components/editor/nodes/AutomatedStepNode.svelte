@@ -139,11 +139,7 @@
 				<span class="block px-3 text-sm uppercase tracking-wider text-muted-foreground/70">Channels</span>
 				<ul class="space-y-1">
 					{#each channels as channel (channel.name)}
-						<li
-							class="relative flex px-3 {channel.direction === 'out'
-								? 'justify-end'
-								: 'justify-start'}"
-						>
+						<li class="relative flex px-3">
 							<Handle
 								id={channel.name}
 								type={channel.direction === 'out' ? 'source' : 'target'}
@@ -153,15 +149,21 @@
 								title={`Channel ${channel.name} — ${channelTitle(channel)}`}
 							/>
 							<span
-								class="inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-sm font-medium {channel.plane ===
+								class="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-sm font-medium {channel.plane ===
 								'data'
 									? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
 									: 'bg-purple-500/15 text-purple-600 dark:text-purple-400'}"
 								title={channelTitle(channel)}
 							>
-								<span class="text-muted-foreground/70">{channel.direction === 'out' ? '→' : '←'}</span>
-								<span class="truncate font-mono">{channel.name}</span>
-								<span class="text-muted-foreground/60">{elementLabel(channel.element)}</span>
+								<span class="shrink-0 text-muted-foreground/70">{channel.direction === 'out' ? '→' : '←'}</span>
+								<!-- Name is the priority: it gets the available width and truncates
+								     last. The element type / content_type (e.g. a long
+								     `video/mp4;codecs="…"`) is capped and truncates first so it
+								     never overflows the fixed-width card; full value on hover. -->
+								<span class="min-w-0 flex-1 truncate font-mono" title={channel.name}>{channel.name}</span>
+								<span
+									class="min-w-0 max-w-[45%] shrink-0 truncate text-muted-foreground/60"
+									title={elementLabel(channel.element)}>{elementLabel(channel.element)}</span>
 							</span>
 						</li>
 					{/each}

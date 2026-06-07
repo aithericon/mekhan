@@ -68,7 +68,7 @@
       "id": "detector",
       "type": "automated_step",
       "slug": "detector",
-      "position": { "x": 600, "y": 0 },
+      "position": { "x": 856, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Detect objects (YOLO26 + ByteTrack)",
@@ -114,7 +114,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 910, "y": 10 },
+      "position": { "x": 1166, "y": 10 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -149,7 +149,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1220, "y": 24 },
+      "position": { "x": 1476, "y": 24 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -18,7 +18,7 @@
 <script lang="ts">
 	import { Canvas, T } from '@threlte/core';
 	import { OrbitControls } from '@threlte/extras';
-	import { LoadingManager, Mesh, MeshStandardMaterial, Object3D } from 'three';
+	import { Box3, LoadingManager, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three';
 	import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 	import URDFLoader, { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
@@ -32,6 +32,30 @@
 
 	let robot = $state<URDFRobot | null>(null);
 	let error = $state<string | null>(null);
+
+	// Camera framing — derived from the loaded robot's bounding box so the arm
+	// fills the stage at whatever size/aspect the edge widget gives us, instead of
+	// a fixed pose that leaves dead space when the container grows.
+	const FOV = 35;
+	let camPos = $state<[number, number, number]>([0.9, 0.7, 0.9]);
+	let camTarget = $state<[number, number, number]>([0, 0.35, 0]);
+
+	// Fit the camera to the robot's AABB: centre on it, back off just far enough
+	// (plus a small margin) that the tallest reach fits in the FOV. Framed once at
+	// load using the home pose (the arm's largest extent), so subsequent motion
+	// always stays in view without the camera jumping.
+	function frameRobot(r: URDFRobot) {
+		r.updateMatrixWorld(true);
+		const box = new Box3().setFromObject(r);
+		if (box.isEmpty()) return;
+		const center = box.getCenter(new Vector3());
+		const size = box.getSize(new Vector3());
+		const maxDim = Math.max(size.x, size.y, size.z) || 1;
+		const dist = (maxDim / 2 / Math.tan(((FOV * Math.PI) / 180) / 2)) * 1.2;
+		const dir = new Vector3(1, 0.5, 1).normalize();
+		camTarget = [center.x, center.y, center.z];
+		camPos = [center.x + dir.x * dist, center.y + dir.y * dist, center.z + dir.z * dist];
+	}
 
 	// Resolve a `package://…` (or already-resolved) mesh path back to the bytes in
 	// the unzipped bundle. Keys are full archive paths, e.g.
@@ -108,7 +132,9 @@
 					robot = null;
 					return;
 				}
-				robot = buildRobot(desc.urdfText, desc.meshes);
+				const r = buildRobot(desc.urdfText, desc.meshes);
+				frameRobot(r);
+				robot = r;
 				error = null;
 			} catch (e) {
 				if (!cancelled) {
@@ -140,8 +166,8 @@
 
 <div class="twin" class:frozen>
 	<Canvas renderMode="always">
-		<T.PerspectiveCamera makeDefault position={[0.85, 0.65, 0.85]} fov={40}>
-			<OrbitControls enableDamping enablePan={false} target={[0, 0.35, 0]} />
+		<T.PerspectiveCamera makeDefault position={camPos} fov={FOV}>
+			<OrbitControls enableDamping enablePan={false} target={camTarget} />
 		</T.PerspectiveCamera>
 		<T.AmbientLight intensity={0.75} />
 		<T.DirectionalLight position={[3, 5, 2]} intensity={1.5} />
@@ -163,12 +189,25 @@
 		height: 100%;
 		min-width: 160px;
 		min-height: 120px;
-		background: radial-gradient(circle at 50% 35%, #1b2027 0%, #0e1116 100%);
+		/* Brighter than the dark xyflow canvas so the stage reads as a distinct
+		   frame instead of blending into the page background. */
+		background: radial-gradient(circle at 50% 32%, #36404d 0%, #1c232c 100%);
 		border-radius: 4px;
 		overflow: hidden;
 	}
+	/* Threlte sizes the canvas from getBoundingClientRect (the zoom-SCALED size) and
+	   doesn't re-measure on xyflow zoom — ResizeObserver ignores CSS transforms — so
+	   the canvas otherwise keeps its mount-time pixel size and leaves a gap when the
+	   edge preview scales. Pin it to fill .twin so it always tracks the container. */
+	.twin :global(canvas) {
+		display: block;
+		width: 100% !important;
+		height: 100% !important;
+	}
 	.twin.frozen {
-		filter: saturate(0.6) brightness(0.85);
+		/* Frozen (passive) reads slightly muted but stays brighter than the page so
+		   it keeps the same contrast as the live stage. */
+		filter: saturate(0.78) brightness(0.96);
 	}
 	.err {
 		position: absolute;

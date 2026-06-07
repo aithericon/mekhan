@@ -234,6 +234,7 @@ pub(crate) struct ModelStatePolicyRow {
     pub node_pool: Option<String>,
     pub residency_zone: Option<String>,
     pub dedicated: bool,
+    pub idle_evict: bool,
 }
 
 impl ModelStatePolicyRow {
@@ -252,6 +253,7 @@ impl ModelStatePolicyRow {
             node_pool: self.node_pool.unwrap_or_default(),
             base: self.base,
             dedicated: Some(self.dedicated),
+            idle_evict: Some(self.idle_evict),
         }
     }
 }
@@ -274,7 +276,8 @@ async fn aggregate_pool_demand(
     // `autoscale_mode IS NOT NULL AND node_pool IS NOT NULL`.
     let policies: Vec<ModelStatePolicyRow> = match sqlx::query_as(
         "SELECT model_id, base, autoscale_mode, desired_replicas, scale_up_threshold, \
-                scale_down_threshold, cooldown_secs, node_pool, residency_zone, dedicated \
+                scale_down_threshold, cooldown_secs, node_pool, residency_zone, dedicated, \
+                idle_evict \
          FROM model_states \
          WHERE workspace_id = $1 AND autoscale_mode IS NOT NULL AND node_pool IS NOT NULL",
     )

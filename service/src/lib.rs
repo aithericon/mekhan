@@ -161,6 +161,11 @@ fn build_public_openapi_router() -> OpenApiRouter<AppState> {
         // by the `wt_` registration token in the body, so a fresh worker can
         // bootstrap its `wkr_` credential + scoped JWT before it has any.
         .routes(routes!(handlers::workers::enroll_worker))
+        // Model-serving inventory — PUBLIC by design (docs/29 GAP A): the
+        // inference router is an in-cluster control-plane peer with no session
+        // cookie, and this returns only the in-cluster runner base_urls/model_ids
+        // the router already holds to route. No credential, no workspace leak.
+        .routes(routes!(handlers::model_pool::list_model_serving_runners))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that

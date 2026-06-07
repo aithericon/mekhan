@@ -33,7 +33,7 @@
     {
       "id": "transform",
       "type": "automated_step",
-      "position": { "x": 500, "y": 11 },
+      "position": { "x": 756, "y": 11 },
       "data": {
         "type": "automated_step",
         "label": "Uppercase Transform",
@@ -53,7 +53,7 @@
     {
       "id": "reducer",
       "type": "automated_step",
-      "position": { "x": 810, "y": 0 },
+      "position": { "x": 1322, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Reducer",
@@ -76,7 +76,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1120, "y": 41 },
+      "position": { "x": 1632, "y": 41 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -81,7 +81,7 @@
       "id": "detector",
       "type": "automated_step",
       "slug": "detector",
-      "position": { "x": 600, "y": 118 },
+      "position": { "x": 856, "y": 118 },
       "data": {
         "type": "automated_step",
         "label": "Detect + annotate (YOLO26 + ByteTrack)",
@@ -135,7 +135,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 910, "y": 274 },
+      "position": { "x": 1422, "y": 274 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -171,7 +171,7 @@
       "id": "recorder",
       "type": "automated_step",
       "slug": "recorder",
-      "position": { "x": 910, "y": 0 },
+      "position": { "x": 1422, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Record annotated feed → file catalogue",
@@ -212,7 +212,7 @@
     {
       "id": "converge",
       "type": "join",
-      "position": { "x": 1220, "y": 215 },
+      "position": { "x": 1732, "y": 215 },
       "data": {
         "type": "join",
         "label": "Await report + recording",
@@ -224,7 +224,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1460, "y": 135 },
+      "position": { "x": 1972, "y": 135 },
       "data": {
         "type": "end",
         "label": "Done",

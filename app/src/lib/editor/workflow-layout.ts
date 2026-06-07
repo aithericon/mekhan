@@ -84,14 +84,23 @@ function isFlowEdge(e: LayoutEdge): boolean {
 
 const containerMinOf = (type: string) => CONTAINER_MIN[type] ?? { width: 200, height: 120 };
 
+// A data-plane channel edge renders an inline live-media preview (~240×136)
+// ON the edge in the instance view (see edge media feeds). Reserve that box as
+// a dagre edge label so the rank gap widens to fit the preview instead of it
+// overlapping the source/target cards. Control channels carry tokens, not
+// bytes, so they get no preview and no reservation.
+const STREAM_PREVIEW = { width: 256, height: 150 };
+
 /**
  * Flat dagre over one set of sibling nodes. Returns each node's top-left,
- * normalised so the whole cluster starts at (0, 0).
+ * normalised so the whole cluster starts at (0, 0). `edgeLabel` optionally
+ * reserves a label box on an edge (used for streaming-media previews).
  */
 function layoutFlat(
 	members: LayoutNode[],
 	edges: LayoutEdge[],
-	sizeOf: (n: LayoutNode) => { width: number; height: number }
+	sizeOf: (n: LayoutNode) => { width: number; height: number },
+	edgeLabel?: (e: LayoutEdge) => { width: number; height: number } | null
 ): Map<string, { x: number; y: number }> {
 	const tl = new Map<string, { x: number; y: number }>();
 	if (members.length === 0) return tl;
@@ -109,7 +118,9 @@ function layoutFlat(
 		if (e.source === e.target) continue;
 		if (!ids.has(e.source) || !ids.has(e.target)) continue;
 		if (!isFlowEdge(e)) continue;
-		g.setEdge(e.source, e.target);
+		const lbl = edgeLabel?.(e) ?? null;
+		if (lbl) g.setEdge(e.source, e.target, { width: lbl.width, height: lbl.height, labelpos: 'c' });
+		else g.setEdge(e.source, e.target);
 	}
 
 	dagre.layout(g);
@@ -137,6 +148,19 @@ export function layoutWorkflowGraph(
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const hasContainerParent = (n: LayoutNode): boolean =>
 		!!n.parentId && isContainerKind(byId.get(n.parentId)?.type);
+
+	// An edge leaving a producer's data-plane channel handle gets an inline
+	// live-preview in the instance view — reserve room for it.
+	const edgeLabel = (e: LayoutEdge): { width: number; height: number } | null => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const chans = (byId.get(e.source)?.data as any)?.channels;
+		if (!Array.isArray(chans)) return null;
+		const isData = chans.some(
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(c: any) => c?.name === e.sourceHandle && c?.direction === 'out' && c?.plane === 'data'
+		);
+		return isData ? STREAM_PREVIEW : null;
+	};
 
 	// Direct children per container.
 	const childrenOf = new Map<string, LayoutNode[]>();
@@ -189,7 +213,7 @@ export function layoutWorkflowGraph(
 			continue;
 		}
 
-		const childTL = layoutFlat(kids, edges, sizeOf);
+		const childTL = layoutFlat(kids, edges, sizeOf, edgeLabel);
 		let contentW = 0;
 		let contentH = 0;
 		for (const kid of kids) {
@@ -213,7 +237,7 @@ export function layoutWorkflowGraph(
 	// Top level: nodes without a container parent. Containers among them are
 	// opaque boxes at their fitted size.
 	const topLevel = nodes.filter((n) => !hasContainerParent(n));
-	const topTL = layoutFlat(topLevel, edges, sizeOf);
+	const topTL = layoutFlat(topLevel, edges, sizeOf, edgeLabel);
 	for (const n of topLevel) {
 		const tl = topTL.get(n.id) ?? { x: 0, y: 0 };
 		positions.set(n.id, { x: Math.round(tl.x), y: Math.round(tl.y) });

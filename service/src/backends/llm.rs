@@ -66,6 +66,70 @@ const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
 
 const RESOURCE_ALIAS_PATHS: &[&[&str]] = &[&["resource_alias"]];
 
+/// The graph-level `provider` value the editor persists for an in-cluster
+/// inference-router binding. Kept verbatim in the stored graph so the editor
+/// round-trips (`LlmCommonFields.svelte` keys `isInternal` off
+/// `provider === "internal"`), but it is NEVER emitted to the executor wire —
+/// the executor's `Provider` enum only knows `openai`/`anthropic`/`ollama`.
+pub const INTERNAL_PROVIDER: &str = "internal";
+
+/// Remap the editor-only `internal` provider value to the OpenAI-compatible
+/// wire provider. An internal binding IS the OpenAI adapter pointed at the
+/// router `base_url` supplied by the bound `internal_llm` resource overlay
+/// (`executor/crates/executor-llm/src/backend.rs::overlay_resource`), so the
+/// wire provider is `openai`. Every other provider passes through unchanged.
+///
+/// Single source of truth for the two emission seams (the plain-LLM
+/// AutomatedStep validator in this module and `agent_to_llm_config`) so they
+/// cannot drift.
+pub fn remap_internal_provider(provider: &str) -> &str {
+    if provider == INTERNAL_PROVIDER {
+        "openai"
+    } else {
+        provider
+    }
+}
+
+/// Enforce the internal-binding contract on a raw provider + its binding
+/// fields. Shared between the plain-LLM AutomatedStep validator and the agent
+/// lowering paths so the GDPR off-router lock cannot drift.
+///
+/// No-op when `provider` is not `internal`. When it is:
+/// - (a) `resource_alias` MUST be present + non-empty (the in-cluster router
+///   endpoint lives only in the bound `internal_llm` resource overlay), else
+///   [`CompileError::Validation`];
+/// - (b) `base_url` / `api_key` MUST be absent (a per-step override could let
+///   the model escape the in-cluster router off to an external host), else
+///   [`CompileError::Validation`].
+pub fn check_internal_binding(
+    provider: &str,
+    resource_alias: Option<&str>,
+    base_url: Option<&str>,
+    api_key: Option<&str>,
+) -> Result<(), CompileError> {
+    if provider != INTERNAL_PROVIDER {
+        return Ok(());
+    }
+    let present = |v: Option<&str>| v.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if !present(resource_alias) {
+        return Err(CompileError::Validation(
+            "llm config: provider \"internal\" requires a non-empty resource_alias \
+             bound to an internal_llm resource (the in-cluster router endpoint is \
+             supplied by that resource's base_url overlay)"
+                .into(),
+        ));
+    }
+    if present(base_url) || present(api_key) {
+        return Err(CompileError::Validation(
+            "llm config: provider \"internal\" forbids a per-step base_url or api_key \
+             (GDPR off-router lock — the endpoint comes from the bound internal_llm \
+             resource overlay; a per-step override could escape the in-cluster router)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub static LLM_DECL: BackendDecl = BackendDecl {
     meta: &LLM_META,
     backend_type: ExecutionBackendType::Llm,
@@ -104,6 +168,42 @@ fn validate(
     config: &Value,
     ctx: &ValidationCtx<'_>,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+    // Internal-binding normalization (GAP F keystone). The editor persists
+    // `provider: "internal"` so it round-trips as an in-cluster router
+    // binding, but the executor's `Provider` enum rejects that string. An
+    // internal binding IS the OpenAI adapter pointed at the `internal_llm`
+    // resource's router `base_url` (overlaid at fire time). So before serde
+    // parses into `LlmConfig`, detect `internal`, enforce the off-router lock,
+    // and rewrite the wire `provider` to `openai`.
+    let provider = config
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let config = if provider == INTERNAL_PROVIDER {
+        let str_field = |k: &str| config.get(k).and_then(|v| v.as_str());
+        // (a)+(b): enforce the off-router lock (alias required, base_url/api_key
+        // forbidden) before serde parsing.
+        check_internal_binding(
+            provider,
+            str_field("resource_alias"),
+            str_field("base_url"),
+            str_field("api_key"),
+        )?;
+        // (c) Rewrite the wire provider to `openai` and validate THAT
+        // normalized config, so the emitted wire carries `openai`.
+        let mut normalized = config.clone();
+        if let Some(obj) = normalized.as_object_mut() {
+            obj.insert(
+                "provider".to_string(),
+                Value::String(remap_internal_provider(INTERNAL_PROVIDER).to_string()),
+            );
+        }
+        normalized
+    } else {
+        config.clone()
+    };
+    let config = &config;
+
     let parsed: LlmConfig = serde_json::from_value(config.clone())
         .map_err(|e| CompileError::Validation(format!("invalid llm config: {e}")))?;
     if parsed.model.trim().is_empty() {
@@ -512,5 +612,78 @@ mod tests {
         let response = port.fields.iter().find(|f| f.name == "response").unwrap();
         assert_eq!(response.kind, FieldKind::Json);
         assert_eq!(response.label, "Tags");
+    }
+
+    // --- GAP F: internal-provider remap (keystone) -------------------------
+
+    fn validate_cfg(config: &Value) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
+        let node_files = std::collections::HashMap::new();
+        let ctx = ValidationCtx {
+            node_id: "n1",
+            node_files: &node_files,
+        };
+        validate(config, &ctx)
+    }
+
+    #[test]
+    fn internal_remaps_to_openai() {
+        // The editor persists `provider: "internal"`; the emitted WIRE config
+        // must carry `openai` so the executor's `Provider` enum accepts it.
+        let cfg = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+            "resource_alias": "internal_pool_router",
+        });
+        let (wire, _inputs) = validate_cfg(&cfg).expect("internal should normalize");
+        assert_eq!(
+            wire.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal must remap to openai on the wire"
+        );
+        // Round-trips through serde into the executor's LlmConfig.
+        let parsed: LlmConfig = serde_json::from_value(wire).unwrap();
+        assert_eq!(parsed.model, "llama3.2:1b");
+    }
+
+    #[test]
+    fn internal_requires_resource_alias() {
+        let cfg = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+        });
+        let err = validate_cfg(&cfg).expect_err("missing alias must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("resource_alias") && msg.contains("internal_llm"),
+            "error should name resource_alias + internal_llm, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn internal_forbids_per_step_base_url_and_api_key() {
+        let base = json!({
+            "provider": "internal",
+            "model": "llama3.2:1b",
+            "prompt": "hi",
+            "resource_alias": "internal_pool_router",
+        });
+
+        let mut with_base_url = base.clone();
+        with_base_url["base_url"] = json!("https://evil.example.com/v1");
+        let err = validate_cfg(&with_base_url).expect_err("per-step base_url must error");
+        assert!(
+            format!("{err:?}").contains("base_url"),
+            "error should mention base_url"
+        );
+
+        let mut with_api_key = base.clone();
+        with_api_key["api_key"] = json!("sk-leak");
+        let err = validate_cfg(&with_api_key).expect_err("per-step api_key must error");
+        assert!(
+            format!("{err:?}").contains("api_key"),
+            "error should mention api_key"
+        );
     }
 }
