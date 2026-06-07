@@ -236,9 +236,21 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // bypasses the engine net + presence net, no NATS subjects added.
         .routes(routes!(
             handlers::model_pool::list_loaded_models,
-            handlers::model_pool::transition_model
+            handlers::model_pool::create_model
         ))
-        .routes(routes!(handlers::model_pool::get_model))
+        .routes(routes!(
+            handlers::model_pool::get_model,
+            handlers::model_pool::delete_model
+        ))
+        .routes(routes!(handlers::model_pool::transition_model))
+        .routes(routes!(handlers::model_pool::load_model))
+        .routes(routes!(handlers::model_pool::unload_model))
+        // Folded-in autoscale policy (set/clear on the model SET row). The policy
+        // used to be its own `model_policy` resource; it now lives on `model_states`.
+        .routes(routes!(
+            handlers::model_pool::set_model_policy,
+            handlers::model_pool::clear_model_policy
+        ))
         // Model-pool reconciliation (docs/31 Phase 0) — the per-node engine
         // inventory read model both autoscaler loops + the router consume:
         // base engines, per-engine C, loaded LoRA adapters, headroom.

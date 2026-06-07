@@ -216,7 +216,48 @@ async fn reconcile_node_pools(
     Ok(())
 }
 
-/// Sum the per-model demand of every `model_policy` in `workspace_id`, bucketed by
+/// A `model_states` row's folded-in autoscale-policy columns. The autoscale policy
+/// stopped being a resource; it now lives on the model SET. This is the per-row
+/// projection the autoscaler loops read, converted to the in-memory
+/// [`ModelAutoscalePolicy`] DTO via [`ModelStatePolicyRow::into_policy`]. The
+/// `WHERE autoscale_mode IS NOT NULL AND node_pool IS NOT NULL` filter guarantees
+/// both are `Some`.
+#[derive(sqlx::FromRow)]
+pub(crate) struct ModelStatePolicyRow {
+    pub model_id: String,
+    pub base: Option<String>,
+    pub autoscale_mode: Option<String>,
+    pub desired_replicas: Option<i32>,
+    pub scale_up_threshold: Option<f64>,
+    pub scale_down_threshold: Option<f64>,
+    pub cooldown_secs: Option<i64>,
+    pub node_pool: Option<String>,
+    pub residency_zone: Option<String>,
+    pub dedicated: bool,
+}
+
+impl ModelStatePolicyRow {
+    /// Build the in-memory [`ModelAutoscalePolicy`] DTO from the row. `mode` /
+    /// `node_pool` are guaranteed `Some` by the load filter; defensively default
+    /// them rather than panic.
+    pub(crate) fn into_policy(self) -> aithericon_resources::types::ModelAutoscalePolicy {
+        aithericon_resources::types::ModelAutoscalePolicy {
+            model_id: self.model_id,
+            residency_zone: self.residency_zone.unwrap_or_default(),
+            mode: self.autoscale_mode.unwrap_or_default(),
+            desired_replicas: self.desired_replicas.map(|v| v as u32),
+            scale_up_threshold: self.scale_up_threshold,
+            scale_down_threshold: self.scale_down_threshold,
+            cooldown_secs: self.cooldown_secs.map(|v| v as u64),
+            node_pool: self.node_pool.unwrap_or_default(),
+            base: self.base,
+            dedicated: Some(self.dedicated),
+        }
+    }
+}
+
+/// Sum the per-model demand of every model with a folded-in autoscale policy in
+/// `workspace_id`, bucketed by
 /// the pool alias each policy draws from (`node_pool`). On L1 (`demand = None`) the
 /// per-model demand is `None` → contributes 0, so the bucket holds `Σ 0 = 0.0` and
 /// the pool floors at `min_nodes`. A policy whose pool alias is empty is skipped.
@@ -229,11 +270,13 @@ async fn aggregate_pool_demand(
     workspace_id: Uuid,
     demand: Option<&dyn DemandSource>,
 ) -> HashMap<String, f64> {
-    let policies: Vec<(Value,)> = match sqlx::query_as(
-        "SELECT rv.public_config \
-         FROM resources r \
-         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.resource_type = 'model_policy' AND r.workspace_id = $1 AND r.deleted_at IS NULL",
+    // The autoscale policy is folded onto `model_states`: a model has a policy iff
+    // `autoscale_mode IS NOT NULL AND node_pool IS NOT NULL`.
+    let policies: Vec<ModelStatePolicyRow> = match sqlx::query_as(
+        "SELECT model_id, base, autoscale_mode, desired_replicas, scale_up_threshold, \
+                scale_down_threshold, cooldown_secs, node_pool, residency_zone, dedicated \
+         FROM model_states \
+         WHERE workspace_id = $1 AND autoscale_mode IS NOT NULL AND node_pool IS NOT NULL",
     )
     .bind(workspace_id)
     .fetch_all(db)
@@ -241,18 +284,14 @@ async fn aggregate_pool_demand(
     {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!(%workspace_id, "aggregate_pool_demand: model_policy load failed: {e}");
+            tracing::warn!(%workspace_id, "aggregate_pool_demand: model_states policy load failed: {e}");
             return HashMap::new();
         }
     };
 
-    use aithericon_resources::types::ModelAutoscalePolicy;
     let mut buckets: HashMap<String, f64> = HashMap::new();
-    for (public_config,) in policies {
-        let policy: ModelAutoscalePolicy = match serde_json::from_value(public_config) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
+    for r in policies {
+        let policy = r.into_policy();
         if policy.node_pool.trim().is_empty() {
             continue;
         }

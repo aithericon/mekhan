@@ -1,11 +1,12 @@
 <script lang="ts">
 	// CATALOG tab — the model browser as a real page (was a modal). Discover
-	// models from the OFFICIAL upstream catalogs and provision them onto a runner:
-	//   Ollama Library — scraped from ollama.com; Provision pulls the slug.
+	// models from the OFFICIAL upstream catalogs and add them to the pool:
+	//   Ollama Library — scraped from ollama.com; Add to pool pulls the slug.
 	//   Hugging Face   — the HF JSON API (the vLLM source); on an Ollama runner a
 	//     GGUF repo pulls via hf.co/<id>, on vLLM it's informational (Copy id).
 	// With no model-server runner this is discovery-only — browse + copy ids, but
-	// Provision is disabled until a runner exists. Provision publishes a Pull
+	// Add to pool is disabled until a runner exists. Add to pool CURATES the model
+	// into the workspace SET (POST /api/v1/models) then publishes a Pull
 	// ModelCommand to the chosen runner (control plane only, never inference).
 	import { Tabs, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import { Input } from '$lib/components/ui/input';
@@ -16,13 +17,20 @@
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import {
 		listModelCatalog,
-		listFleetEngines,
+		listRunnerPresence,
 		publishModelCommand,
+		createModel,
 		baseCommand,
+		apiErrorMessage,
 		type CatalogModel,
-		type CatalogSource
+		type CatalogSource,
+		type RunnerPresenceSnapshot
 	} from '$lib/api/models';
 	import { shortId } from '$lib/components/fleet/model-pool';
+	import RunnerTargetPicker, {
+		runnerAdvertises
+	} from '$lib/components/fleet/RunnerTargetPicker.svelte';
+	import { toast } from 'svelte-sonner';
 
 	let source = $state<CatalogSource>('ollama');
 	let query = $state('');
@@ -33,22 +41,36 @@
 	let notice = $state<string | null>(null);
 	let busy = $state<string | null>(null);
 
-	// Provision targets — live model-server nodes. Refreshed on mount + after a
-	// provision so a freshly-enrolled runner appears in the picker.
-	let runners = $state<{ id: string; label: string }[]>([]);
+	// Provision targets — live PRESENT model-server runners, polled by the picker.
+	// We mirror the presence snapshot here so the page can reason about the
+	// SELECTED runner's advertised backends (vLLM-vs-Ollama gating below).
+	let runners = $state<RunnerPresenceSnapshot[]>([]);
 	let target = $state<string | null>(null);
-	const canProvision = $derived(target !== null && busy === null);
+	const selectedRunner = $derived(runners.find((r) => r.runner_id === target));
 
 	async function loadRunners() {
 		try {
-			const r = await listFleetEngines();
-			runners = r.nodes.map((n) => ({ id: n.runner_id, label: `runner ${shortId(n.runner_id)}` }));
-			if (target === null || !runners.some((x) => x.id === target)) {
-				target = runners[0]?.id ?? null;
+			const all = await listRunnerPresence();
+			runners = all.filter((r) => r.present === true);
+			if (target !== null && !runners.some((r) => r.runner_id === target)) {
+				target = runners[0]?.runner_id ?? null;
 			}
 		} catch {
 			/* leave the picker as-is on a transient error */
 		}
+	}
+
+	/** An hf.co/… pull only works on an Ollama runner — vLLM fixes its base at
+	 *  launch and cannot pull a GGUF repo. Gate Add-to-pool accordingly. */
+	const isHfId = (m: CatalogModel) => provisionId(m).startsWith('hf.co/');
+	const hfNeedsOllama = $derived(
+		(m: CatalogModel) => isHfId(m) && !runnerAdvertises(selectedRunner, 'ollama')
+	);
+	const canAdd = $derived(target !== null && busy === null);
+	function addDisabledReason(m: CatalogModel): string | null {
+		if (target === null) return 'Enrol a model-server runner to add to the pool';
+		if (hfNeedsOllama(m)) return 'Selected runner lacks the ollama backend (vLLM base is fixed at launch)';
+		return null;
 	}
 
 	// Debounced catalog fetch on (source, query).
@@ -86,17 +108,28 @@
 	 *  pull the GGUF repo; the Ollama slug is used verbatim. */
 	const provisionId = (m: CatalogModel) => (m.source === 'huggingface' ? `hf.co/${m.id}` : m.id);
 
-	async function provision(m: CatalogModel) {
+	async function addToPool(m: CatalogModel) {
 		if (!target) return;
 		const id = provisionId(m);
 		const runnerId = target;
 		busy = id;
 		notice = null;
+		error = null;
 		try {
+			// Curate the model into the workspace SET first. A 409 means it is
+			// already curated — benign, keep going to the pull.
+			try {
+				await createModel({ model_id: id, base: null, registry_resource_id: null, note: null });
+			} catch (e) {
+				if (!(e instanceof Error && /^API error 409:/.test(e.message))) throw e;
+			}
+			// Then publish the Pull command onto the chosen runner.
 			await publishModelCommand(runnerId, baseCommand('pull', id));
-			notice = `Provisioning ${id} onto runner ${shortId(runnerId)} — it will appear under Engines › ready to load when the download finishes.`;
+			const msg = `Added ${id} to the pool — pulling onto runner ${shortId(runnerId)}; it will appear under Set as approved/loading.`;
+			notice = msg;
+			toast.success(msg);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Provision failed';
+			toast.error(apiErrorMessage(e));
 		} finally {
 			busy = null;
 		}
@@ -115,27 +148,24 @@
 
 <div class="space-y-4" data-testid="models-catalog">
 	<div class="flex flex-wrap items-baseline gap-3">
-		<h2 class="text-sm font-semibold tracking-tight text-foreground">Catalog</h2>
-		<span class="text-sm text-muted-foreground">browse official sources, provision onto a runner</span>
+		<h2 class="text-base font-semibold tracking-tight text-foreground">Catalog</h2>
+		<span class="text-sm text-muted-foreground">browse official sources, add onto a runner</span>
 	</div>
 
-	<!-- Provision target. No runner ⇒ discovery-only (browse + Copy id). -->
+	<!-- Add-to-pool target. No runner ⇒ discovery-only (browse + Copy id). -->
 	{#if runners.length === 0}
-		<p class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+		<p class="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
 			No model-server runner enrolled — browse + copy ids here, then enrol a runner with a
-			<code>[model_agent]</code> backend to provision.
+			<code>[model_agent]</code> backend to add models to the pool.
 		</p>
 	{:else}
-		<label class="flex items-center gap-2 text-xs text-muted-foreground">
-			Provision onto
-			<select
-				class="h-7 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground"
-				bind:value={target}
-			>
-				{#each runners as r (r.id)}
-					<option value={r.id}>{r.label}</option>
-				{/each}
-			</select>
+		<label class="flex items-center gap-2 text-sm text-muted-foreground">
+			Add onto
+			<RunnerTargetPicker
+				value={target}
+				onChange={(id) => (target = id)}
+				requireBackend="ollama"
+			/>
 		</label>
 	{/if}
 
@@ -167,7 +197,7 @@
 		</div>
 
 		{#if source === 'huggingface'}
-			<p class="mt-2 text-xs text-muted-foreground/80">
+			<p class="mt-2 text-sm text-muted-foreground/80">
 				vLLM fixes its base at engine launch, so on a vLLM node these are informational — use
 				<span class="font-medium">Copy id</span> for config. An Ollama node can pull a GGUF repo
 				(<code>hf.co/…</code>) directly.
@@ -191,6 +221,7 @@
 			{:else}
 				<ul class="grid gap-1.5 sm:grid-cols-2">
 					{#each models as m (m.id)}
+						{@const disabledReason = addDisabledReason(m)}
 						<li
 							class="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-card p-2.5"
 						>
@@ -209,7 +240,7 @@
 										</a>
 									{/if}
 								</div>
-								<div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+								<div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
 									{#if m.pulls}<span>↓ {m.pulls}</span>{/if}
 									{#each (m.sizes ?? []).slice(0, 6) as s}
 										<span class="rounded bg-muted px-1 py-px font-mono">{s}</span>
@@ -224,7 +255,7 @@
 									<Button
 										variant="ghost"
 										size="sm"
-										class="h-7 gap-1 px-2 text-xs"
+										class="h-7 gap-1 px-2 text-sm"
 										onclick={() => copyId(m)}
 									>
 										<Copy class="size-3.5" />
@@ -234,15 +265,13 @@
 								<Button
 									variant="outline"
 									size="sm"
-									class="h-7 gap-1 px-2 text-xs"
-									disabled={!canProvision}
-									title={canProvision
-										? 'Pull onto the selected runner'
-										: 'Enrol a model-server runner to provision'}
-									onclick={() => provision(m)}
+									class="h-7 gap-1 px-2 text-sm"
+									disabled={!canAdd || disabledReason !== null}
+									title={disabledReason ?? 'Curate into the pool + pull onto the selected runner'}
+									onclick={() => addToPool(m)}
 								>
 									<Download class="size-3.5" />
-									{busy === provisionId(m) ? '…' : 'Provision'}
+									{busy === provisionId(m) ? '…' : 'Add to pool'}
 								</Button>
 							</div>
 						</li>

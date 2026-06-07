@@ -236,8 +236,12 @@ use utoipa::OpenApi;
             // picks it up) and surfaces via `GET /api/v1/resources/types`, not the
             // utoipa component block.
             crate::models::model_pool::ModelSetView,
+            crate::models::model_pool::AutoscaleView,
+            crate::models::model_pool::AutoscalePolicyInput,
             crate::models::model_pool::ModelState,
             crate::models::model_pool::TransitionRequest,
+            crate::models::model_pool::CreateModelRequest,
+            crate::models::model_pool::LoadModelRequest,
             crate::models::runner::ModelEntry,
             crate::models::runner::ModelInterfaceKind,
             // Model-pool reconciliation (docs/31 Phase 0) — per-node engine

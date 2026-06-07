@@ -3,6 +3,7 @@
 	import type { DelayNodeData } from '$lib/types/editor';
 	import Timer from '@lucide/svelte/icons/timer';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: DelayNodeData; selected?: boolean } = $props();
 
@@ -21,7 +22,7 @@
 	icon={Timer}
 	label={data.label}
 	{selected}
-	class="min-w-[170px]"
+	width={NODE_WIDTH.delay}
 	data-testid="node-delay"
 	body={delayBody}
 />

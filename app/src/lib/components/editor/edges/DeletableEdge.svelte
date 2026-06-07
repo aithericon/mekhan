@@ -108,7 +108,7 @@
 {/if}
 
 {#if feed}
-	<EdgeLabel x={pathResult[1]} y={pathResult[2]} width={240} height={136}>
+	<EdgeLabel x={pathResult[1]} y={pathResult[2]} width={320} height={180}>
 		<EdgeMediaWidget {feed} />
 	</EdgeLabel>
 {/if}

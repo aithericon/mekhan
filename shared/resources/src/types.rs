@@ -145,16 +145,12 @@ pub struct ModelRegistry {
     pub approved_models: Vec<ApprovedModelConfig>,
 }
 
-/// Per-model autoscale POLICY (docs/28 + docs/29 P4). NOT a credential surface
-/// and NOT a capacity backend — it is a plain typed CONFIG kind the autoscaler
-/// control loop reads to drive the model-server replica COUNT on a target
-/// datacenter, residency-aware. The operator curates the approved model SET (via
-/// [`ModelRegistry`]); THIS policy scales the replica COUNT+placement within it.
-///
-/// Registered purely via the `ResourceType` derive (inventory submit at link
-/// time) exactly like [`InternalLlm`]/[`ModelRegistry`] — zero service-side code,
-/// zero migration. `axes_for_resource` returns `None` for `model_policy`, so
-/// `ensure_pool_net_for_resource` deploys NO admission net.
+/// In-memory autoscaler DTO built from a `model_states` row — NOT a resource
+/// kind. The per-model autoscale POLICY used to be its own `model_policy`
+/// resource; it is now folded into the model SET as nullable columns on
+/// `model_states`, and this struct is the plain in-memory view the autoscaler
+/// control loop assembles from one such row. The `node_pool` + `datacenter`
+/// resources STAY resources (this DTO references the pool by alias).
 ///
 /// ## GDPR (doc 28 §11)
 ///
@@ -166,28 +162,14 @@ pub struct ModelRegistry {
 ///
 /// ## Two-resource split (docs/31 OQ-1)
 ///
-/// Engine PROVISIONING moved off this policy onto [`NodePoolPolicy`]: a
-/// `model_policy` is now a PURE per-model demand + residency-requirement policy
-/// that REFERENCES a `node_pool` by alias (`node_pool`) and packs onto its shared
-/// engine fleet. It no longer carries `datacenter_resource_id` / `replica_spec` /
-/// `min_replicas` / `max_replicas` — the pool owns datacenter, engine spec, and
-/// the node COUNT bounds. The placement controller (docs/31 Loop 2) decides where
-/// the model lands (adapter-load → sleep/wake → raise-node-demand → dedicated job).
-///
-/// ## Required vs optional
-///
-/// `model_id`, `residency_zone`, `mode`, `node_pool` are plain fields ⇒ REQUIRED
-/// on create (schemars `required` array). `desired_replicas` (the demand-slot
-/// ceiling for the dedicated fallback), the L2 reactive knobs
-/// (`scale_up_threshold`/`scale_down_threshold`/`cooldown_secs`), the `base`
-/// back-pointer, and the `dedicated` flag are `Option<T> + #[serde(default)]` ⇒
-/// OPTIONAL. No `#[resource(secret)]` fields — all public config.
-#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema, Clone)]
-#[resource(
-    name = "model_policy",
-    display_name = "Model Autoscale Policy",
-    icon = "lucide-gauge"
-)]
+/// Engine PROVISIONING moved off this policy onto [`NodePoolPolicy`]: the policy
+/// is a PURE per-model demand + residency-requirement config that REFERENCES a
+/// `node_pool` by alias (`node_pool`) and packs onto its shared engine fleet. It
+/// carries no `datacenter_resource_id` / `replica_spec` / `min_replicas` /
+/// `max_replicas` — the pool owns datacenter, engine spec, and the node COUNT
+/// bounds. The placement controller (docs/31 Loop 2) decides where the model
+/// lands (adapter-load → sleep/wake → raise-node-demand → dedicated job).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ModelAutoscalePolicy {
     /// Router model id this policy scales (matches [`ApprovedModelConfig::model_id`]
     /// and the `ModelEntry.model_id` a runner advertises).
@@ -721,72 +703,6 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use crate::registry::{lookup, schema_json_cached};
-
-    /// The `ModelAutoscalePolicy` struct's `#[derive(ResourceType)]` must register
-    /// the `model_policy` kind in the inventory registry, with NO secret fields and
-    /// the schemars `required` array gating exactly the plain (non-Option) fields.
-    #[test]
-    fn model_policy_round_trips_through_registry() {
-        let d = lookup("model_policy").expect("model_policy registered via inventory");
-        assert_eq!(d.display_name, "Model Autoscale Policy");
-        assert_eq!(d.icon, "lucide-gauge");
-        assert!(!d.dynamic_fields, "model_policy is a typed kind, not kv");
-        // No secrets — all public config.
-        assert!(
-            d.secret_fields.is_empty(),
-            "model_policy has no secret fields, got {:?}",
-            d.secret_fields
-        );
-
-        // The schemars `required` array is what the resource create-handler's
-        // required-field gate keys off: plain fields required, Option fields not.
-        let schema = schema_json_cached(d);
-        let required: Vec<&str> = schema
-            .get("required")
-            .and_then(|r| r.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-            .unwrap_or_default();
-        for req in [
-            "model_id",
-            "residency_zone",
-            "mode",
-            // docs/31 OQ-1 reframe — the pool alias is a REQUIRED field; engine
-            // provisioning (datacenter_resource_id / replica_spec / min/max_replicas)
-            // moved onto `node_pool`.
-            "node_pool",
-        ] {
-            assert!(
-                required.contains(&req),
-                "{req} must be required, got {required:?}"
-            );
-        }
-        // The reframe DROPPED these engine-provisioning fields off model_policy.
-        for gone in [
-            "datacenter_resource_id",
-            "replica_spec",
-            "min_replicas",
-            "max_replicas",
-        ] {
-            assert!(
-                !required.contains(&gone),
-                "{gone} was moved onto node_pool — must NOT be on model_policy, got {required:?}"
-            );
-        }
-        for opt in [
-            "desired_replicas",
-            "scale_up_threshold",
-            "scale_down_threshold",
-            "cooldown_secs",
-            // docs/31 OQ-1 reframe — back-pointer + fallback flag are optional.
-            "base",
-            "dedicated",
-        ] {
-            assert!(
-                !required.contains(&opt),
-                "{opt} must be optional (Option + #[serde(default)]), got {required:?}"
-            );
-        }
-    }
 
     /// The `NodePoolPolicy` struct's `#[derive(ResourceType)]` must register the
     /// `node_pool` capacity kind, with NO secret fields and the schemars `required`

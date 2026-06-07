@@ -3,12 +3,9 @@
     {
       "id": "scope-parallel",
       "type": "scope",
-      "position": {
-        "x": 1040,
-        "y": 10
-      },
-      "width": 900,
-      "height": 280,
+      "position": { "x": 0, "y": 0 },
+      "width": 942,
+      "height": 324,
       "data": {
         "type": "scope",
         "label": "High-Value Review"
@@ -17,10 +14,7 @@
     {
       "id": "trigger-invoice-api",
       "type": "trigger",
-      "position": {
-        "x": 40,
-        "y": 110
-      },
+      "position": { "x": 381, "y": 360 },
       "data": {
         "type": "trigger",
         "label": "API Call",
@@ -45,10 +39,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 40,
-        "y": 280
-      },
+      "position": { "x": 1012, "y": 340 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -77,10 +68,7 @@
     {
       "id": "review",
       "type": "human_task",
-      "position": {
-        "x": 240,
-        "y": 250
-      },
+      "position": { "x": 1302, "y": 360 },
       "data": {
         "type": "human_task",
         "label": "Review Invoice",
@@ -92,10 +80,7 @@
     {
       "id": "extract",
       "type": "automated_step",
-      "position": {
-        "x": 520,
-        "y": 250
-      },
+      "position": { "x": 1572, "y": 306 },
       "data": {
         "type": "automated_step",
         "label": "Extract Data",
@@ -147,10 +132,7 @@
     {
       "id": "check-amount",
       "type": "decision",
-      "position": {
-        "x": 800,
-        "y": 255
-      },
+      "position": { "x": 1882, "y": 342 },
       "data": {
         "type": "decision",
         "label": "Amount Check",
@@ -169,10 +151,7 @@
       "id": "split",
       "type": "parallel_split",
       "parentId": "scope-parallel",
-      "position": {
-        "x": 40,
-        "y": 110
-      },
+      "position": { "x": 16, "y": 172 },
       "data": {
         "type": "parallel_split",
         "label": "Dual Review"
@@ -182,10 +161,7 @@
       "id": "manager-approval",
       "type": "human_task",
       "parentId": "scope-parallel",
-      "position": {
-        "x": 280,
-        "y": 30
-      },
+      "position": { "x": 276, "y": 232 },
       "data": {
         "type": "human_task",
         "label": "Manager Approval",
@@ -198,10 +174,7 @@
       "id": "compliance",
       "type": "automated_step",
       "parentId": "scope-parallel",
-      "position": {
-        "x": 280,
-        "y": 200
-      },
+      "position": { "x": 256, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Compliance Check",
@@ -248,10 +221,7 @@
       "id": "join",
       "type": "join",
       "parentId": "scope-parallel",
-      "position": {
-        "x": 560,
-        "y": 110
-      },
+      "position": { "x": 566, "y": 154 },
       "data": {
         "type": "join",
         "label": "Merge Results",
@@ -262,10 +232,7 @@
       "id": "end-approved",
       "type": "end",
       "parentId": "scope-parallel",
-      "position": {
-        "x": 770,
-        "y": 110
-      },
+      "position": { "x": 806, "y": 174 },
       "data": {
         "type": "end",
         "label": "Approved"
@@ -274,10 +241,7 @@
     {
       "id": "end-processed",
       "type": "end",
-      "position": {
-        "x": 1080,
-        "y": 410
-      },
+      "position": { "x": 2192, "y": 380 },
       "data": {
         "type": "end",
         "label": "Processed"

@@ -3,10 +3,7 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": {
-        "x": 52,
-        "y": 60
-      },
+      "position": { "x": 0, "y": 64 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -31,10 +28,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 52,
-        "y": 330
-      },
+      "position": { "x": 250, "y": 44 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -63,10 +57,7 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": {
-        "x": 364,
-        "y": 330
-      },
+      "position": { "x": 540, "y": 20 },
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
@@ -116,10 +107,7 @@
     {
       "id": "classify",
       "type": "agent",
-      "position": {
-        "x": 702,
-        "y": 330
-      },
+      "position": { "x": 850, "y": 0 },
       "data": {
         "type": "agent",
         "label": "Group & classify (vision LLM)",
@@ -150,10 +138,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": {
-        "x": 1066,
-        "y": 330
-      },
+      "position": { "x": 1180, "y": 34 },
       "data": {
         "type": "end",
         "label": "Done",

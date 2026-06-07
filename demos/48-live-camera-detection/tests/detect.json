@@ -1,5 +1,5 @@
 {
-  "name": "Live camera detection: a live feed (webcam index, RTSP/HTTP URL, or file path) flows over the lossy `nats-latest` `frames` data channel; a YOLO26 + ByteTrack detector drains it per frame, emits each recognized object on the `detections` control channel, and streams a box-annotated MJPEG feed over `annotated`; a consumer-edge gather folds the detections into a per-class report. LIVE-ONLY (the detector cold-installs ultralytics/torch + downloads yolo26n.pt — past the 60 s test cap; and a webcam source needs camera permission). Run via `mekhan run … --start-tokens sample-input.json` and read the instance outputs / tap the `annotated` channel.",
+  "name": "Live camera detection: a live feed (webcam index, RTSP/HTTP URL, or file path) flows over the lossy `nats-latest` `frames` data channel; a YOLO26 + ByteTrack detector drains it per frame, emits each recognized object on the `detections` control channel, and streams a box-annotated feed over the durable `annotated` jetstream channel; that one channel has two consumers — the instance view taps it for a live MJPEG feed and a `recorder` step drains it into an MP4 registered in the file catalogue via `log_artifact` — and a consumer-edge gather folds the detections into a per-class report. The report + recording branches converge at an AND-join before End. LIVE-ONLY (the detector cold-installs ultralytics/torch + downloads yolo26n.pt — past the 60 s test cap; and a webcam source needs camera permission). Run via `mekhan run … --start-tokens sample-input.json`, read the instance outputs / tap the `annotated` channel / find the recorded MP4 in the file catalogue.",
   "enabled": false,
   "start_tokens": [
     {
@@ -9,6 +9,7 @@
   ],
   "human_answers": {},
   "assertions": [
-    { "path": "result.value.frames_processed", "op": "gte", "value": 1 }
+    { "path": "result.value.frames_processed", "op": "gte", "value": 1 },
+    { "path": "result.value.frames_recorded", "op": "gte", "value": 1 }
   ]
 }

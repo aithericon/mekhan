@@ -2,8 +2,9 @@
 //! decision math.
 //!
 //! The autoscaler control loop (`crate::autoscaler`) reconciles ONE
-//! [`ModelReplicaRow`] per `model_policy` resource: each tick it reads the policy
-//! config, computes a desired replica COUNT ([`compute_target`]) — gated by a
+//! [`ModelReplicaRow`] per (workspace, model): each tick it reads the per-model
+//! policy (folded onto `model_states`),
+//! computes a desired replica COUNT ([`compute_target`]) — gated by a
 //! durable cooldown ([`in_cooldown`]) anchored on `last_actuated_at` — observes
 //! the live count from the FLEET ROSTER (live runners advertising the model_id,
 //! NOT the staging effect result), actuates via a generated `model-replica-<id>`
@@ -21,7 +22,7 @@ use uuid::Uuid;
 use aithericon_resources::types::ModelAutoscalePolicy;
 
 /// Terminal + transient states of a replica row's reconciliation. Stored as TEXT
-/// (DB CHECK enforces the set — see `20240146000000_model_replicas.sql`).
+/// (DB CHECK enforces the set — see `20240151000000_model_states_policy.sql`).
 pub mod status {
     pub const PROVISIONING: &str = "provisioning";
     pub const ACTIVE: &str = "active";
@@ -38,8 +39,6 @@ pub mod status {
 pub struct ModelReplicaRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
-    /// The `model_policy` resource this row reconciles (UNIQUE — one row/policy).
-    pub policy_resource_id: Uuid,
     pub model_id: String,
     /// Resolved `datacenter` resource UUID (the policy carries an alias; the loop
     /// resolves it before the upsert).

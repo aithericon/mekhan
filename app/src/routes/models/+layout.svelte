@@ -41,9 +41,9 @@
 		{
 			href: '/models/placement',
 			match: 'placement',
-			label: 'Placement',
+			label: 'Pools',
 			icon: Network,
-			title: 'Placement policies + node pools (the autoscaler rows)'
+			title: 'Node pools — engine capacity the autoscaler fills'
 		},
 		{
 			href: '/models/router',
@@ -63,7 +63,7 @@
 	<div class="border-b border-border bg-card px-6 pt-5 shrink-0">
 		<div class="mx-auto max-w-6xl">
 			<h1 class="text-xl font-semibold tracking-tight text-foreground">Model Pool</h1>
-			<p class="mt-0.5 text-sm text-muted-foreground">
+			<p class="mt-0.5 text-base text-muted-foreground">
 				Self-hosted LLM serving — operator curates the model set, the autoscaler manages count +
 				placement. Inference bypasses the engine net (HTTP router).
 			</p>

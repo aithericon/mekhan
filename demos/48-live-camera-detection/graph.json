@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 180 },
+      "position": { "x": 0, "y": 185 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -38,7 +38,7 @@
       "id": "camera",
       "type": "automated_step",
       "slug": "camera",
-      "position": { "x": 340, "y": 180 },
+      "position": { "x": 290, "y": 124 },
       "data": {
         "type": "automated_step",
         "label": "Capture live camera (cv2 → MJPEG)",
@@ -81,11 +81,11 @@
       "id": "detector",
       "type": "automated_step",
       "slug": "detector",
-      "position": { "x": 660, "y": 180 },
+      "position": { "x": 600, "y": 118 },
       "data": {
         "type": "automated_step",
         "label": "Detect + annotate (YOLO26 + ByteTrack)",
-        "description": "Drains the LIVE `frames` channel and runs YOLO26 + ByteTrack per frame AS each arrives (`model.track(frame, persist=True)` keeps stable ids across the per-frame calls). Two outputs at once: (1) the Control/Out channel `detections` — one `{frame,label,confidence,bbox,track_id}` token per recognized object, emitted the moment its frame is processed (open → item* → close), folded by the `summary` step's `join: gather`; and (2) the Data/Out channel `annotated` — the SAME frame with YOLO's boxes/labels/track-ids drawn on it (`res.plot()`), JPEG-encoded. No node consumes `annotated`; the instance view taps it and plays it as a LIVE MJPEG feed via the frontend `mjpeg` render adapter (which splits the byte stream on JPEG EOI markers). So you WATCH the processed video — frames + bounding boxes — in the same panel as the run, while the structured detections fold into the report. Pure-cv2 (no PyAV) to avoid the libav clash. LIVE-ONLY: the first run pip-installs ultralytics (PyTorch + OpenCV) and downloads yolo26n.pt (~5 MB), past the 60 s test cap on a cold run; warm runs are fast.",
+        "description": "Drains the LIVE `frames` channel and runs YOLO26 + ByteTrack per frame AS each arrives (`model.track(frame, persist=True)` keeps stable ids across the per-frame calls). Two outputs at once: (1) the Control/Out channel `detections` — one `{frame,label,confidence,bbox,track_id}` token per recognized object, emitted the moment its frame is processed (open → item* → close), folded by the `summary` step's `join: gather`; and (2) the Data/Out channel `annotated` (transport `jetstream` — durable, lossless, ordered, replayable) — the SAME frame with YOLO's boxes/labels/track-ids drawn on it (`res.plot()`), JPEG-encoded and written as one self-contained chunk. The `annotated` channel has TWO consumers off the one durable datastream: the instance view taps it and plays it as a live MJPEG feed (the frontend `mjpeg` render adapter splits the byte stream on JPEG EOI markers), AND the downstream `recorder` step drains it into an MP4 it registers in the file catalogue. So you WATCH the processed video as the run goes AND keep a durable recording — from a single channel, no WebRTC. Pure-cv2 (no PyAV) to avoid the libav clash. LIVE-ONLY: the first run pip-installs ultralytics (PyTorch + OpenCV) and downloads yolo26n.pt (~5 MB), past the 60 s test cap on a cold run; warm runs are fast.",
         "channels": [
           {
             "name": "frames",
@@ -105,7 +105,7 @@
             "direction": "out",
             "plane": "data",
             "element": { "type": "binary", "content_type": "image/jpeg" },
-            "transport": "livekit"
+            "transport": "jetstream"
           }
         ],
         "executionSpec": {
@@ -135,7 +135,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 980, "y": 180 },
+      "position": { "x": 910, "y": 274 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -168,9 +168,63 @@
       }
     },
     {
+      "id": "recorder",
+      "type": "automated_step",
+      "slug": "recorder",
+      "position": { "x": 910, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Record annotated feed → file catalogue",
+        "description": "Drains the detector's durable `annotated` Data/In channel (transport `jetstream`: lossless, ordered, replayable — the right contract for a recorder) and assembles the annotated JPEG frames into a single MP4 with `cv2.VideoWriter` (mp4v), sized lazily to the first frame. When the stream closes it finalizes the file and registers it in the platform's file catalogue via the SDK `log_artifact(..., blocking=True)` — blocking so the upload + catalogue registration complete before this node (and therefore the run) finishes. The same `annotated` datastream also feeds the live MJPEG view in the instance panel; JetStream's Limits retention lets the browser tap and this in-net consumer read it independently. LIVE-ONLY: rides the same heavy detector run.",
+        "channels": [
+          {
+            "name": "annotated",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "image/jpeg" },
+            "transport": "jetstream"
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["opencv-python-headless"],
+            "virtualenv": true,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Recording",
+          "fields": [
+            { "name": "frames_recorded", "label": "Frames recorded", "kind": "number" },
+            { "name": "bytes_recorded", "label": "Bytes recorded", "kind": "number" },
+            { "name": "artifact", "label": "Artifact name", "kind": "text" },
+            { "name": "resolution", "label": "Resolution", "kind": "text" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "converge",
+      "type": "join",
+      "position": { "x": 1220, "y": 215 },
+      "data": {
+        "type": "join",
+        "label": "Await report + recording",
+        "description": "AND-join (`mode: \"all\"`): waits for BOTH the `summary` report branch AND the `recorder` artifact branch before letting control reach End. This barrier is load-bearing — without it whichever branch finished first would fire End, the engine would declare the instance complete and tear the net down, and an in-flight recorder could be killed before its `log_artifact` upload finished. Gating End on both makes the persisted recording a guaranteed side effect of the run.",
+        "mode": "all",
+        "mergeStrategy": "shallow_last_wins"
+      }
+    },
+    {
       "id": "end",
       "type": "end",
-      "position": { "x": 1300, "y": 180 },
+      "position": { "x": 1460, "y": 135 },
       "data": {
         "type": "end",
         "label": "Done",
@@ -180,7 +234,9 @@
           { "targetField": "distinct_tracked", "expression": "summary.distinct_tracked" },
           { "targetField": "peak_per_frame", "expression": "summary.peak_per_frame" },
           { "targetField": "frames_processed", "expression": "detector.frames_processed" },
-          { "targetField": "device", "expression": "detector.device" }
+          { "targetField": "device", "expression": "detector.device" },
+          { "targetField": "frames_recorded", "expression": "recorder.frames_recorded" },
+          { "targetField": "recording_artifact", "expression": "recorder.artifact" }
         ]
       }
     }
@@ -189,6 +245,9 @@
     { "id": "e_start_camera", "source": "start", "target": "camera", "targetHandle": "in", "type": "sequence" },
     { "id": "e_camera_frames_detector", "source": "camera", "sourceHandle": "frames", "target": "detector", "targetHandle": "frames", "type": "sequence" },
     { "id": "e_detector_detections_summary", "source": "detector", "sourceHandle": "detections", "target": "summary", "targetHandle": "in", "type": "sequence", "join": "gather" },
-    { "id": "e_summary_end", "source": "summary", "target": "end", "targetHandle": "in", "type": "sequence" }
+    { "id": "e_detector_annotated_recorder", "source": "detector", "sourceHandle": "annotated", "target": "recorder", "targetHandle": "annotated", "type": "sequence" },
+    { "id": "e_summary_converge", "source": "summary", "target": "converge", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_recorder_converge", "source": "recorder", "target": "converge", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_converge_end", "source": "converge", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

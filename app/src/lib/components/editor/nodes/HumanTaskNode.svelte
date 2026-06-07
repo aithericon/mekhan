@@ -3,6 +3,7 @@
 	import type { HumanTaskNodeData } from '$lib/types/editor';
 	import User from '@lucide/svelte/icons/user';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: HumanTaskNodeData; selected?: boolean } = $props();
 
@@ -19,7 +20,7 @@
 	icon={User}
 	label={data.label}
 	{selected}
-	class="min-w-[180px]"
+	width={NODE_WIDTH.human_task}
 	data-testid="node-human-task"
 	body={humanTaskBody}
 />

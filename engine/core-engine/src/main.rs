@@ -552,6 +552,13 @@ async fn main() {
         info!("Executor events SSE endpoint enabled at /api/executor/events/stream");
     }
 
+    // Raise the request-body limit well above axum's 2 MiB default: a compiled
+    // net for a workflow that inlines several SubWorkflows (e.g. the xArm
+    // sample-handling capstone, which inlines pick + place + swap, each now with
+    // approach + cartesian-descent legs) serializes past 2 MiB and the deploy
+    // POST 413s. 32 MiB leaves ample headroom (cf. the 8 MiB NATS max_payload).
+    let app = app.layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024));
+
     start_server(app, engine_config.port).await;
 
     // Signal shutdown to all event consumers

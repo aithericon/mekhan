@@ -1,0 +1,27 @@
+{
+  "asset_type": {
+    "name": "robot_description",
+    "display_name": "Robot Description",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "robot_model", "label": "Robot Model", "kind": "text", "required": true },
+      { "name": "urdf", "label": "URDF", "kind": "file", "required": true },
+      { "name": "meshes", "label": "Meshes", "kind": "file", "required": true },
+      { "name": "metadata", "label": "Metadata", "kind": "json", "required": false }
+    ]
+  },
+  "ref_key": "robot_descriptions",
+  "display_name": "Robot Description",
+  "records": [
+    {
+      "robot_model": "xarm6",
+      "urdf": { "__file": "files/xarm6.urdf" },
+      "meshes": { "__file": "files/xarm6_meshes.zip" },
+      "metadata": {
+        "base_link": "link_base",
+        "dof": 6,
+        "arm_joints": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+      }
+    }
+  ]
+}

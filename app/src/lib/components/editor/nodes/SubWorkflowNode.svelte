@@ -3,6 +3,7 @@
 	import type { SubWorkflowNodeData } from '$lib/types/editor';
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: SubWorkflowNodeData; selected?: boolean } =
 		$props();
@@ -51,7 +52,7 @@
 	icon={Workflow}
 	label={data.label}
 	{selected}
-	class="min-w-[200px]"
+	width={NODE_WIDTH.sub_workflow}
 	data-testid="node-sub-workflow"
 	body={subWorkflowBody}
 />

@@ -108,6 +108,23 @@ DEFAULT_JUMP_THRESHOLD = 0.0
 #   GRIPPER_ACTION — FollowJointTrajectory controller for best-effort actuation.
 #   GRIPPER_JOINT  — the actuated gripper joint.
 ATTACH_LINK = "link_tcp"
+# Links allowed to TOUCH the grasped object without it counting as a collision.
+# Without these, MoveIt treats the closed gripper fingers contacting the attached
+# sample as a self-collision, so EVERY plan after the grasp fails from the start
+# state (the retreat lift solves fraction 0.0; the next job's /compute_ik returns
+# NO_IK_SOLUTION). Listing the whole gripper link set as touch_links is the
+# standard MoveIt grasp practice and unblocks retreat + move-to-place + place.
+GRIPPER_TOUCH_LINKS = [
+    "link_tcp",
+    "link_eef",
+    "xarm_gripper_base_link",
+    "left_outer_knuckle",
+    "left_inner_knuckle",
+    "left_finger",
+    "right_outer_knuckle",
+    "right_inner_knuckle",
+    "right_finger",
+]
 GRIPPER_ACTION = "/xarm_gripper_traj_controller/follow_joint_trajectory"
 GRIPPER_JOINT = "drive_joint"
 # How long to wait for the (optional) gripper action server before giving up and
@@ -603,6 +620,30 @@ class MotionBridge(Node):
 
         joint_traj = cart_resp.solution.joint_trajectory
         points = list(joint_traj.points)
+        # /compute_cartesian_path returns a GEOMETRIC path: every point carries
+        # time_from_start=0 and no velocities, which a FollowJointTrajectory
+        # controller cannot execute (all points "due" at t=0 -> rejected / instant
+        # jump). Stamp a monotonic time parameterization: advance time per segment
+        # by the largest joint displacement / a nominal joint speed, floored so
+        # timestamps strictly increase, and clear velocities/accelerations so the
+        # controller interpolates. Adequate for the fake joint_trajectory_controller
+        # on these slow fine-approach (grasp descend / retreat) motions.
+        nominal_speed = 0.5  # rad/s
+        min_dt = 0.05  # s — floor so consecutive points never share a timestamp
+        elapsed = 0.0
+        prev = None
+        for pt in points:
+            if prev is not None:
+                max_delta = max(
+                    (abs(a - b) for a, b in zip(pt.positions, prev.positions)),
+                    default=0.0,
+                )
+                elapsed += max(max_delta / nominal_speed, min_dt)
+            pt.time_from_start.sec = int(elapsed)
+            pt.time_from_start.nanosec = int(round((elapsed - int(elapsed)) * 1e9))
+            pt.velocities = []
+            pt.accelerations = []
+            prev = pt
         try:
             traj_json = json.dumps(message_to_ordereddict(joint_traj))
         except Exception as exc:  # noqa: BLE001
@@ -689,6 +730,10 @@ class MotionBridge(Node):
         """Apply an AttachedCollisionObject ADD/REMOVE diff. Returns (ok, message)."""
         aco = AttachedCollisionObject()
         aco.link_name = ATTACH_LINK
+        # Allow the gripper links to touch the attached body — otherwise the
+        # closed fingers around the sample read as a self-collision and block
+        # every subsequent plan (retreat / move-to-place IK).
+        aco.touch_links = list(GRIPPER_TOUCH_LINKS)
         aco.object.id = object_id
         aco.object.header.frame_id = ATTACH_LINK
         aco.object.header.stamp = self.get_clock().now().to_msg()

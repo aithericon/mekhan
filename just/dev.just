@@ -54,6 +54,9 @@ router_url   := env_var_or_default("MEKHAN_ROUTER_URL", "http://localhost:13200"
 router_port  := env_var_or_default("MEKHAN_ROUTER_PORT", "13200")
 ollama_port  := env_var_or_default("OLLAMA_PORT", "11434")
 ollama_model := env_var_or_default("OLLAMA_MODEL", "qwen3.5:9b")
+# The small/fast model the internal-pool demos test against (fits the 60s
+# template-test wall clock where a reasoning 9B does not); pulled by up-ollama.
+ollama_small_model := env_var_or_default("DEMO36_MODEL", "llama3.2:1b")
 service_port := env_var_or_default("MEKHAN_SERVICE_PORT", "13100")
 engine_port  := env_var_or_default("MEKHAN_ENGINE_PORT", "13030")
 cancel_port  := env_var_or_default("MEKHAN_CANCEL_PORT", "13105")
@@ -359,10 +362,13 @@ _wait-infra:
 #
 #   brew install ollama
 #
-# The recipe defers to an already-running daemon (macOS app or external
-# `ollama serve`) and only spawns its own when nothing is listening on
-# OLLAMA_PORT. Model pulls are idempotent — first `up` downloads the default
-# model (~7.8 GB for llama3.2-vision:11b); subsequent runs are no-ops.
+# The dev stack OWNS this daemon (load-bearing for the model pool + router +
+# `provider:ollama` steps): the recipe runs a MANAGED, pidfiled `ollama serve`
+# and TAKES OVER OLLAMA_PORT, stopping any external daemon (a macOS Ollama.app,
+# a stray `ollama serve`) holding it — so `down`/`reset` control its lifecycle.
+# Model pulls are idempotent — first `up` downloads the default model;
+# subsequent runs are no-ops (the ~/.ollama blob store is shared, so a takeover
+# never re-downloads).
 #
 # Knobs (env-overridable on the recipe call):
 #   OLLAMA_MODEL                   — model tag (default qwen3.5:9b — direct Ollama-library equivalent
@@ -387,11 +393,18 @@ up-ollama:
     model="${OLLAMA_MODEL:-qwen3.5:9b}"
     ready_timeout="${OLLAMA_READY_TIMEOUT_SECS:-60}"
 
-    # Defer to an already-running daemon (macOS Ollama.app, system service,
-    # or a prior `ollama serve`). We only spawn — and pidfile — when nothing
-    # answers on the port.
-    if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
-      echo "  ollama already serving on :${port} (external — no pidfile)"
+    # The dev stack OWNS the Ollama daemon (it's load-bearing: the model-pool
+    # node, the inference router, AND `provider:ollama` LLM steps all dispatch
+    # against it). So we run a MANAGED, pidfiled `ollama serve` and TAKE OVER the
+    # port — rather than silently piggy-backing on whatever external daemon (a
+    # macOS Ollama.app, a stray `ollama serve`) happens to hold it, which `down`/
+    # `reset` could never control. If OUR managed daemon is already up, reuse it
+    # (idempotent); otherwise stop any external listener on the port and spawn
+    # ours. (Ollama is no longer the shared-across-worktrees exception — the dev
+    # stack that's up owns :${port}; the model BLOB store under ~/.ollama is still
+    # shared, so taking over never re-downloads.)
+    if [ -s "{{pid_dir}}/ollama.pid" ] && kill -0 "$(cat {{pid_dir}}/ollama.pid)" 2>/dev/null; then
+      echo "  ollama already managed by this stack (pid $(cat {{pid_dir}}/ollama.pid))"
     else
       if ! command -v ollama >/dev/null 2>&1; then
         echo "  · ollama not installed — skipping"
@@ -399,7 +412,31 @@ up-ollama:
         echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
         exit 0
       fi
-      echo "▶ starting ollama serve on :${port}…"
+      # Take over the port so OUR managed daemon is authoritative. The macOS
+      # Ollama.app SUPERVISES its serve and instantly respawns it on the port, so
+      # killing the serve alone loses the race — we must quit the app itself
+      # first (it stays quit; relaunch it by hand if you want it back). Then kill
+      # any remaining listener (a plain external `ollama serve`, or Linux).
+      if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+        echo "▶ stopping external ollama on :${port} (managed dev ollama takes over)…"
+        if command -v osascript >/dev/null 2>&1 && pgrep -f "Ollama.app/Contents" >/dev/null 2>&1; then
+          echo "  · quitting the macOS Ollama.app (it supervises + re-binds :${port})"
+          osascript -e 'tell application "Ollama" to quit' >/dev/null 2>&1 || true
+          sleep 1
+          pkill -if "Ollama.app/Contents" 2>/dev/null || true
+        fi
+        pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
+        [ -n "$pids" ] && kill $pids 2>/dev/null || true
+        for _ in $(seq 1 10); do
+          curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1 || break
+          sleep 0.5
+        done
+        if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+          echo "✗ :${port} still held after stop attempt — quit the macOS Ollama app manually (it re-binds the port) and re-run" >&2
+          exit 1
+        fi
+      fi
+      echo "▶ starting managed ollama serve on :${port}…"
       nohup env OLLAMA_HOST="127.0.0.1:${port}" ollama serve \
         > "{{log_dir}}/ollama.log" 2>&1 &
       echo $! > "{{pid_dir}}/ollama.pid"
@@ -884,14 +921,18 @@ up-router:
       echo "  inference-router already running (pid $(cat {{pid_dir}}/router.pid))"
       exit 0
     fi
+    # An orphaned router (lost pidfile, still bound) wedges this on "address
+    # already in use" — the pidfile check above proved it isn't ours, so reclaim.
+    just dev::_reclaim-port router {{router_port}}
     echo "▶ building inference-router…"
     # Umbrella workspace member → output lands in ./target/, like mekhan-service.
     cargo build -p inference-router
-    # One static upstream: the shared Ollama (OpenAI-compat) serving the default
-    # model. `inventory.rs`'s live mekhan poll is a deferred upgrade; the static
-    # ROUTER_REPLICAS table is the MVP source of truth.
-    replicas='[{"base_url":"http://localhost:{{ollama_port}}","model_ids":["{{ollama_model}}"],"concurrency_c":4}]'
-    echo "▶ starting inference-router on :{{router_port}} (upstream: ollama {{ollama_model}})…"
+    # One static upstream: the shared Ollama (OpenAI-compat) serving BOTH the
+    # default model and the small internal-pool demo model. `inventory.rs`'s live
+    # mekhan poll is a deferred upgrade; the static ROUTER_REPLICAS table is the
+    # MVP source of truth.
+    replicas='[{"base_url":"http://localhost:{{ollama_port}}","model_ids":["{{ollama_model}}","{{ollama_small_model}}"],"concurrency_c":4}]'
+    echo "▶ starting inference-router on :{{router_port}} (upstream: ollama {{ollama_model}} + {{ollama_small_model}})…"
     pid=$(just/scripts/spawn-daemon.sh router "{{pid_dir}}/router.pid" "{{log_dir}}/router.log" \
       -- env \
         RUST_LOG="info,inference_router=debug" \
@@ -1013,6 +1054,34 @@ up-model-runner:
         bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
     echo "  ✓ model-pool runner (pid $pid)  log: {{log_dir}}/model-runner.log"
     echo "  /models Engines now shows this node; '{{ollama_model}}' is ready to load."
+
+    # Warm the curated served model so the live-runner AND-gate flips
+    # available=true (GET /api/v1/models) — the editor's internal-pool picker +
+    # the internal-pool demos (36/37) need an *advertised* (resident) model, not
+    # just pulled. The agent applies it async (the POST is fire-and-forget over
+    # NATS, 202); it goes resident in the background and the next /models poll
+    # shows it available. Best-effort — never blocks `up`.
+    rid="$(jq -r '.runner_id // empty' "$runner_base/runner/identity.json" 2>/dev/null || true)"
+    if [ -n "$rid" ]; then
+      # Wait for the agent to publish its catalog (⇒ its command listener is up)
+      # so the ephemeral load commands aren't sent before they can be received.
+      for _ in $(seq 1 30); do
+        curl -fsS "{{service_url}}/api/v1/runners/$rid/interfaces" >/dev/null 2>&1 && break
+        sleep 1
+      done
+      # Load BOTH curated models so each is advertised → available=true: the
+      # default {{ollama_model}} AND the small {{ollama_small_model}} the
+      # internal-pool demos test against (fits the 60s budget).
+      for m in "{{ollama_model}}" "{{ollama_small_model}}"; do
+        if curl -fsS -X POST "{{service_url}}/api/v1/runners/$rid/model-commands" \
+            -H 'content-type: application/json' \
+            -d "{\"kind\":\"load\",\"target\":{\"Base\":{\"model_id\":\"$m\"}}}" >/dev/null 2>&1; then
+          echo "  ▶ loading '$m' (warming async → available on next /models poll)"
+        else
+          echo "  · couldn't issue load for '$m' — load it from /models when ready"
+        fi
+      done
+    fi
 
 down-model-runner:
     @just dev::_kill model-runner
@@ -1370,6 +1439,9 @@ up-engine scheduler="off":
       echo "  engine already running (pid $(cat {{pid_dir}}/engine.pid))"
       exit 0
     fi
+    # An orphaned engine (lost pidfile, still bound) wedges this on "address
+    # already in use" — the pidfile check above proved it isn't ours, so reclaim.
+    just dev::_reclaim-port engine {{engine_port}}
     echo "▶ building engine…"
     (cd engine && cargo build -p core-engine)
 
@@ -1963,6 +2035,10 @@ up-mekhan auth_mode="dev_noop":
       echo "  mekhan-service already running (pid $(cat {{pid_dir}}/mekhan.pid))"
       exit 0
     fi
+    # An orphaned mekhan (lost pidfile, still bound) keeps answering /healthz with
+    # STALE code/seeds while masking a crashed fresh boot — the pidfile check above
+    # proved it isn't ours, so reclaim :{{service_port}} before (re)building.
+    just dev::_reclaim-port mekhan {{service_port}}
     echo "▶ building mekhan-service…"
     # mekhan-service is a member of the platform-root workspace, so its build
     # output lands in ./target/, not service/target/. Build from repo root.
@@ -2010,6 +2086,7 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__LIVEKIT__API_KEY="devkey" \
         MEKHAN__LIVEKIT__API_SECRET="secret" \
         AUTOSCALER_DEMAND_URL="{{router_url}}" \
+        MEKHAN_ROUTER_URL="{{router_url}}" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
         ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
@@ -2108,6 +2185,28 @@ _kill name:
     fi
     rm -f "$pf"
     echo "  ✓ {{name}} stopped"
+
+# Reclaim a host port from an ORPHANED daemon before (re)spawning it. `_kill`
+# (and therefore `down`/`reset`) is purely pidfile-driven, so a daemon whose
+# pidfile was lost while it kept running (a clobbered .dev/pid, a crash mid-
+# write, a process that out-lived its pidfile) stays bound to its port: `_kill`
+# prints "no pidfile" and skips it, and every later `up-*` then dies on
+# "address already in use". Callers invoke this AFTER the pidfile idempotency
+# check has proven OUR managed daemon isn't the listener — so anything still on
+# the port is stale and gets taken over (SIGTERM, then SIGKILL). Mirrors the
+# up-ollama takeover, generalised.
+_reclaim-port name port:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stale="$(lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t 2>/dev/null || true)"
+    [ -z "$stale" ] && exit 0
+    echo "▶ reclaiming :{{port}} from orphaned {{name}} (pid $stale)…"
+    kill $stale 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    lsof -nP -iTCP:"{{port}}" -sTCP:LISTEN -t >/dev/null 2>&1 && kill -9 $stale 2>/dev/null || true
 
 _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""

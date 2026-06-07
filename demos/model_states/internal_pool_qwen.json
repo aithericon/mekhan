@@ -1,0 +1,7 @@
+{
+  "model_id": "qwen3.5:9b",
+  "state": "loaded",
+  "replicas": 1,
+  "registry_resource": "internal_pool_registry",
+  "note": "Seeded loaded for the internal-pool demos (36/37). The dev model runner serves qwen3.5:9b (the OLLAMA_MODEL default) and up-model-runner loads it resident, so the live-runner AND-gate flips available=true; served through internal_pool_router \u2192 the in-cluster inference router."
+}

@@ -3,6 +3,7 @@
 	import type { JoinNodeData } from '$lib/types/editor';
 	import GitMerge from '@lucide/svelte/icons/git-merge';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: JoinNodeData; selected?: boolean } = $props();
 
@@ -16,6 +17,7 @@
 	icon={GitMerge}
 	label={data.label}
 	{selected}
+	width={NODE_WIDTH.join}
 	data-testid="node-join"
 >
 	{#snippet body()}

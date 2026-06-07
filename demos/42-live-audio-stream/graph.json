@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 160 },
+      "position": { "x": 0, "y": 61 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "streamer",
       "type": "automated_step",
       "slug": "streamer",
-      "position": { "x": 360, "y": 160 },
+      "position": { "x": 290, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Pace audio over a data channel",
@@ -66,7 +66,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 680, "y": 160 },
+      "position": { "x": 600, "y": 51 },
       "data": {
         "type": "end",
         "label": "Done",

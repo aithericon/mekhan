@@ -4,7 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": { "x": 40, "y": 320 },
+      "position": { "x": 0, "y": 262 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -16,8 +16,8 @@
       "id": "lease",
       "type": "lease_scope",
       "slug": "cell",
-      "position": { "x": 280, "y": 80 },
-      "width": 1500,
+      "position": { "x": 190, "y": 0 },
+      "width": 2506,
       "height": 560,
       "data": {
         "type": "lease_scope",
@@ -36,9 +36,9 @@
       "type": "map",
       "slug": "seed_inventory",
       "parentId": "lease",
-      "position": { "x": 40, "y": 120 },
-      "width": 520,
-      "height": 220,
+      "position": { "x": 636, "y": 202 },
+      "width": 272,
+      "height": 172,
       "data": {
         "type": "map",
         "label": "Seed Inventory into Scene",
@@ -63,7 +63,7 @@
       "type": "automated_step",
       "slug": "add_sample",
       "parentId": "seed_inv",
-      "position": { "x": 40, "y": 60 },
+      "position": { "x": 16, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Add Sample to Scene",
@@ -115,7 +115,7 @@
       "type": "automated_step",
       "slug": "reset_scene",
       "parentId": "lease",
-      "position": { "x": 40, "y": 380 },
+      "position": { "x": 16, "y": 216 },
       "data": {
         "type": "automated_step",
         "label": "Reset Scene (clear move_group)",
@@ -150,7 +150,7 @@
       "type": "automated_step",
       "slug": "home_arm",
       "parentId": "lease",
-      "position": { "x": 320, "y": 380 },
+      "position": { "x": 326, "y": 226 },
       "data": {
         "type": "automated_step",
         "label": "Home Arm (reference config)",
@@ -190,7 +190,7 @@
       "type": "automated_step",
       "slug": "load_jobs",
       "parentId": "lease",
-      "position": { "x": 40, "y": 470 },
+      "position": { "x": 978, "y": 216 },
       "data": {
         "type": "automated_step",
         "label": "Load Jobs → array",
@@ -220,9 +220,9 @@
       "type": "loop",
       "slug": "job_loop",
       "parentId": "lease",
-      "position": { "x": 620, "y": 120 },
-      "width": 820,
-      "height": 380,
+      "position": { "x": 1288, "y": 32 },
+      "width": 1202,
+      "height": 512,
       "data": {
         "type": "loop",
         "label": "Handle Jobs (sequential)",
@@ -237,7 +237,7 @@
       "type": "automated_step",
       "slug": "resolve_poses",
       "parentId": "handle_jobs",
-      "position": { "x": 40, "y": 60 },
+      "position": { "x": 16, "y": 142 },
       "data": {
         "type": "automated_step",
         "label": "Resolve Job Poses",
@@ -277,7 +277,7 @@
       "type": "decision",
       "slug": "op_gate",
       "parentId": "handle_jobs",
-      "position": { "x": 320, "y": 60 },
+      "position": { "x": 326, "y": 184 },
       "data": {
         "type": "decision",
         "label": "Dispatch on op",
@@ -302,7 +302,7 @@
       "type": "sub_workflow",
       "slug": "do_pick",
       "parentId": "handle_jobs",
-      "position": { "x": 600, "y": 40 },
+      "position": { "x": 636, "y": 352 },
       "data": {
         "type": "sub_workflow",
         "label": "Pick (37)",
@@ -329,7 +329,7 @@
       "type": "sub_workflow",
       "slug": "do_place",
       "parentId": "handle_jobs",
-      "position": { "x": 600, "y": 160 },
+      "position": { "x": 636, "y": 192 },
       "data": {
         "type": "sub_workflow",
         "label": "Place (38)",
@@ -355,7 +355,7 @@
       "type": "sub_workflow",
       "slug": "do_swap",
       "parentId": "handle_jobs",
-      "position": { "x": 600, "y": 280 },
+      "position": { "x": 636, "y": 32 },
       "data": {
         "type": "sub_workflow",
         "label": "Swap (39)",
@@ -386,7 +386,7 @@
       "type": "automated_step",
       "slug": "mark_done",
       "parentId": "handle_jobs",
-      "position": { "x": 1000, "y": 160 },
+      "position": { "x": 946, "y": 192 },
       "data": {
         "type": "automated_step",
         "label": "Mark Job Done",
@@ -416,7 +416,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1840, "y": 320 },
+      "position": { "x": 2766, "y": 222 },
       "data": {
         "type": "end",
         "label": "Done",

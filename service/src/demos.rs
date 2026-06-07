@@ -840,6 +840,24 @@ async fn seed_demo_capability_types(state: &crate::AppState, root: &Path) {
 }
 
 /// Provision the resource fixtures demos bind, from `<root>/resources/*.json`.
+/// Substitute `${VAR}` and `${VAR:-default}` in a fixture string from the
+/// seeder process env. Lets a demo resource point at a slot-varying dev
+/// endpoint (the inference router's port differs per worktree slot) without
+/// hardcoding it; an unset var with no `:-default` collapses to empty. Seed-time
+/// only (once per boot), so the per-call regex compile is irrelevant.
+fn interpolate_env(raw: &str) -> String {
+    let re = regex::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+        .expect("static env-interpolation regex is valid");
+    re.replace_all(raw, |caps: &regex::Captures| match std::env::var(&caps[1]) {
+        Ok(v) => v,
+        Err(_) => caps
+            .get(2)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default(),
+    })
+    .into_owned()
+}
+
 /// Each file is a [`CreateResourceRequest`] (path + resource_type + config);
 /// the workspace is forced to the demo workspace and the resource is created
 /// as the seeder principal (Vault secret + ACL + audit, identical to the HTTP
@@ -871,6 +889,11 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
                 continue;
             }
         };
+        // Interpolate `${VAR}` / `${VAR:-default}` against the seeder process env
+        // BEFORE parsing, so a fixture can point at a slot-varying endpoint
+        // (e.g. `internal_pool_router.base_url = ${MEKHAN_ROUTER_URL:-…}` → the
+        // live inference-router for this dev slot) instead of a hardcoded port.
+        let raw = interpolate_env(&raw);
         let req: CreateResourceRequest = match serde_json::from_str(&raw) {
             Ok(r) => r,
             Err(e) => {

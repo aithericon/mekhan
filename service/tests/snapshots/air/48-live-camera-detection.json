@@ -4,7 +4,15 @@
       "additionalProperties": true,
       "type": "object"
     },
+    "Ctrl__converge": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "Ctrl__detector": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__recorder": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -100,6 +108,96 @@
       },
       "type": "object"
     },
+    "Data__converge": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "class_counts": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "distinct_classes": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "distinct_tracked": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "labels": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "peak_per_frame": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "total_objects": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Data__detector": {
       "additionalProperties": true,
       "properties": {
@@ -130,6 +228,84 @@
                 "frames_processed": {
                   "type": [
                     "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__recorder": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "artifact": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "bytes_recorded": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "frames_recorded": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "resolution": {
+                  "type": [
+                    "string",
                     "null"
                   ]
                 }
@@ -1357,7 +1533,7 @@
     },
     {
       "id": "group_15",
-      "name": "Summarize detections"
+      "name": "Record annotated feed → file catalogue"
     },
     {
       "id": "group_16",
@@ -1395,6 +1571,40 @@
       "parent_id": "group_15"
     },
     {
+      "id": "group_22",
+      "name": "Summarize detections"
+    },
+    {
+      "id": "group_23",
+      "name": "Submission",
+      "parent_id": "group_22"
+    },
+    {
+      "id": "group_24",
+      "name": "Status Tracking",
+      "parent_id": "group_22"
+    },
+    {
+      "id": "group_25",
+      "name": "Failure & Timeout",
+      "parent_id": "group_22"
+    },
+    {
+      "id": "group_26",
+      "name": "Cancellation",
+      "parent_id": "group_22"
+    },
+    {
+      "id": "group_27",
+      "name": "Events",
+      "parent_id": "group_22"
+    },
+    {
+      "id": "group_28",
+      "name": "Effect Error Recovery",
+      "parent_id": "group_22"
+    },
+    {
       "id": "group_3",
       "name": "Status Tracking",
       "parent_id": "group_1"
@@ -1429,7 +1639,7 @@
       "parent_id": "group_8"
     }
   ],
-  "name": "48 · Live Camera Detection (live feed → YOLO26 → detections + annotated MJPEG feed)",
+  "name": "48 · Live Camera Detection (live feed → YOLO26 → detections + annotated MJPEG feed + recorded artifact)",
   "places": [
     {
       "group_id": "group_3",
@@ -1930,6 +2140,18 @@
       "type": "state"
     },
     {
+      "id": "p_converge_data",
+      "name": "Await report + recording - Parked data",
+      "token_schema": "#/definitions/Data__converge",
+      "type": "state"
+    },
+    {
+      "id": "p_converge_output",
+      "name": "Await report + recording - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_detector_annotated",
       "name": "Detect + annotate (YOLO26 + ByteTrack) - Data Channel 'annotated'",
       "token_schema": "#/definitions/DynamicToken",
@@ -2002,6 +2224,24 @@
       "type": "state"
     },
     {
+      "id": "p_recorder_ctrl",
+      "name": "Record annotated feed → file catalogue - Control Token",
+      "token_schema": "#/definitions/Ctrl__recorder",
+      "type": "state"
+    },
+    {
+      "id": "p_recorder_data",
+      "name": "Record annotated feed → file catalogue - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__recorder",
+      "type": "state"
+    },
+    {
+      "id": "p_recorder_output",
+      "name": "Record annotated feed → file catalogue - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_start_data",
       "name": "Start - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__start",
@@ -2057,230 +2297,461 @@
     },
     {
       "group_id": "group_17",
-      "id": "summary/accepted",
+      "id": "recorder/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/artifact_log",
+      "id": "recorder/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_19",
-      "id": "summary/cancel_request",
+      "id": "recorder/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
       "group_id": "group_19",
-      "id": "summary/cancelled",
+      "id": "recorder/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_19",
-      "id": "summary/cancelling",
+      "id": "recorder/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/completed",
+      "id": "recorder/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/dead_letter",
+      "id": "recorder/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/effect_errors",
+      "id": "recorder/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
       "group_id": "group_18",
-      "id": "summary/failed",
+      "id": "recorder/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/failure",
+      "id": "recorder/failure",
       "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/failure_log",
+      "id": "recorder/failure_log",
       "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/failure_logged",
+      "id": "recorder/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/inbox",
+      "id": "recorder/inbox",
       "name": "Inbox",
       "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/message_log",
+      "id": "recorder/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/metric_log",
+      "id": "recorder/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/output_log",
+      "id": "recorder/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/phase_log",
+      "id": "recorder/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_20",
-      "id": "summary/progress_log",
+      "id": "recorder/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_17",
-      "id": "summary/running",
+      "id": "recorder/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_accepted",
+      "id": "recorder/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_artifact",
+      "id": "recorder/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_cancelled",
+      "id": "recorder/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_completed",
+      "id": "recorder/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_failed",
+      "id": "recorder/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_log",
+      "id": "recorder/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_metric",
+      "id": "recorder/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_output",
+      "id": "recorder/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_phase",
+      "id": "recorder/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_progress",
+      "id": "recorder/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_running",
+      "id": "recorder/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_15",
-      "id": "summary/sig_timed_out",
+      "id": "recorder/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_16",
-      "id": "summary/submitted",
+      "id": "recorder/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
       "group_id": "group_18",
+      "id": "recorder/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_24",
+      "id": "summary/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_26",
+      "id": "summary/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_26",
+      "id": "summary/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_26",
+      "id": "summary/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_25",
+      "id": "summary/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "summary/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_24",
+      "id": "summary/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "summary/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_23",
+      "id": "summary/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_25",
       "id": "summary/timed_out",
       "name": "Timed Out",
       "token_schema": "#/definitions/DynamicToken",
@@ -4544,7 +5015,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"detector\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Detector — drain the LIVE `frames` channel, run YOLO per frame as each arrives,\\nemit recognized objects on a control stream AND stream back a box-annotated feed.\\n\\nThe first node to run object detection on a TRUE live stream and close the loop\\nwith a *viewable* result. `stream('frames')` yields one JPEG per frame off the\\nlossy `nats-latest` transport (late frames already dropped — latest wins); we\\n`cv2.imdecode` each and call `model.track(frame, persist=True)` so ByteTrack\\nkeeps stable ids ACROSS the per-frame calls (the live-tracking pattern).\\n\\nTwo outputs at once:\\n  • `detections` (Control/Out) — one `{frame,label,confidence,bbox,track_id}`\\n    control token per recognized object, emitted the moment its frame is\\n    processed (open → item* → close). A consumer-edge `join: gather` folds these\\n    into the `summary` report. This is the durable, structured record.\\n  • `annotated` (Data/Out, image/jpeg, durable JetStream) — the SAME frame with\\n    YOLO's boxes + labels + track ids drawn on it (`res.plot()`), JPEG-encoded\\n    and written as one self-contained chunk. No node consumes it; the instance\\n    view taps it and plays it as a live MJPEG feed (the frontend `mjpeg` render\\n    adapter splits the byte stream on JPEG EOI markers). So you WATCH the\\n    processed video — frames + bounding boxes — in the same panel as the run.\\n\\nPure-cv2 (ultralytics' bundled OpenCV) for decode + annotate + encode — no PyAV,\\nso no libav symbol clash with the encoder path. LIVE-ONLY: the first run\\npip-installs ultralytics (PyTorch + OpenCV) and downloads yolo26n.pt; warm runs\\nare fast.\\n\\\"\\\"\\\"\\n\\nimport cv2\\nimport numpy as np\\nimport torch\\nfrom ultralytics import YOLO\\n\\nimport aithericon\\nfrom aithericon import log_info, open_output, set_output, stream\\n\\ndevice = \\\"mps\\\" if torch.backends.mps.is_available() else \\\"cpu\\\"\\nmodel = YOLO(\\\"yolo26n.pt\\\")  # auto-downloads weights on first use\\nlog_info(f\\\"detector ready — YOLO26 + ByteTrack on {device}\\\", device=device)\\n\\nemitted = 0\\nframes_processed = 0\\nannotated_bytes = 0\\n\\n# Open both outputs together: the structured control stream and the viewable\\n# annotated MJPEG feed. Each `model.track(...)` call advances ByteTrack state.\\nwith aithericon.out(\\\"detections\\\") as det_chan, open_output(\\\"annotated\\\") as viz_chan:\\n    for frame_idx, chunk in enumerate(stream(\\\"frames\\\")):\\n        if not isinstance(chunk, (bytes, bytearray)):\\n            continue\\n        frame = cv2.imdecode(np.frombuffer(chunk, dtype=np.uint8), cv2.IMREAD_COLOR)\\n        if frame is None:\\n            continue\\n        frames_processed += 1\\n\\n        res = model.track(frame, persist=True, device=device, verbose=False)[0]\\n\\n        # Annotated frame (boxes + labels + track ids drawn) → viewable feed. We\\n        # emit EVERY processed frame, even object-free ones, so the feed is a\\n        # continuous video rather than only firing on detections.\\n        ok, buf = cv2.imencode(\\\".jpg\\\", res.plot(), [cv2.IMWRITE_JPEG_QUALITY, 80])\\n        if ok:\\n            jpeg = buf.tobytes()\\n            viz_chan.write(jpeg, content_type=\\\"image/jpeg\\\")\\n            annotated_bytes += len(jpeg)\\n\\n        boxes = res.boxes\\n        n = 0 if boxes is None else len(boxes)\\n        frame_labels = {}\\n        if boxes is not None and n:\\n            ids = boxes.id.tolist() if boxes.id is not None else [None] * n\\n            for xyxy, conf, cls, tid in zip(\\n                boxes.xyxy.tolist(), boxes.conf.tolist(), boxes.cls.tolist(), ids\\n            ):\\n                label = model.names[int(cls)]\\n                det_chan.emit(\\n                    {\\n                        \\\"frame\\\": frame_idx,\\n                        \\\"label\\\": label,\\n                        \\\"confidence\\\": round(float(conf), 3),\\n                        \\\"bbox\\\": [round(float(v), 1) for v in xyxy],  # x1,y1,x2,y2\\n                        \\\"track_id\\\": int(tid) if tid is not None else None,\\n                    }\\n                )\\n                emitted += 1\\n                frame_labels[label] = frame_labels.get(label, 0) + 1\\n\\n        # One structured log line per frame, AS it is detected — the live feed.\\n        tally = \\\", \\\".join(f\\\"{k}×{v}\\\" for k, v in sorted(frame_labels.items()))\\n        log_info(\\n            f\\\"frame {frame_idx:>3} — {n} objects: {tally or '(none)'}\\\",\\n            frame=frame_idx,\\n            objects=n,\\n            **{f\\\"n_{k}\\\": v for k, v in frame_labels.items()},\\n        )\\n\\nlog_info(\\n    f\\\"live detection complete — {emitted} objects across {frames_processed} frames; \\\"\\n    f\\\"streamed {annotated_bytes} B of annotated feed\\\",\\n    detections_emitted=emitted,\\n    frames_processed=frames_processed,\\n    device=device,\\n)\\n\\nset_output(\\\"detections_emitted\\\", emitted)\\nset_output(\\\"frames_processed\\\", frames_processed)\\nset_output(\\\"device\\\", device)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"detections_emitted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"frames_processed\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"device\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/detector/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}, #{\"element_kind\": \"any\", \"name\": \"detections\", \"plane\": \"control\", \"transport\": \"jetstream\"}, #{\"element_kind\": \"binary\", \"name\": \"annotated\", \"plane\": \"data\", \"transport\": \"jetstream\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"detector\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Detector — drain the LIVE `frames` channel, run YOLO per frame as each arrives,\\nemit recognized objects on a control stream AND stream back a box-annotated feed.\\n\\nThe first node to run object detection on a TRUE live stream and close the loop\\nwith a *viewable* result. `stream('frames')` yields one JPEG per frame off the\\nlossy `nats-latest` transport (late frames already dropped — latest wins); we\\n`cv2.imdecode` each and call `model.track(frame, persist=True)` so ByteTrack\\nkeeps stable ids ACROSS the per-frame calls (the live-tracking pattern).\\n\\nTwo outputs at once:\\n  • `detections` (Control/Out) — one `{frame,label,confidence,bbox,track_id}`\\n    control token per recognized object, emitted the moment its frame is\\n    processed (open → item* → close). A consumer-edge `join: gather` folds these\\n    into the `summary` report. This is the durable, structured record.\\n  • `annotated` (Data/Out, image/jpeg, transport `jetstream`) — the SAME frame\\n    with YOLO's boxes + labels + track ids drawn on it (`res.plot()`),\\n    JPEG-encoded and written as one self-contained chunk onto a durable,\\n    lossless, ordered datastream. It has TWO consumers off the one stream: the\\n    instance view taps it and plays it as a live MJPEG feed (the frontend\\n    `mjpeg` render adapter splits the byte stream on JPEG EOI markers), AND the\\n    downstream `recorder` step drains it into an MP4 it registers in the file\\n    catalogue. So you WATCH the processed video as the run goes AND keep a\\n    durable recording — one channel, no WebRTC.\\n\\nPure-cv2 (ultralytics' bundled OpenCV) for decode + annotate + encode — no PyAV,\\nso no libav symbol clash with the encoder path. LIVE-ONLY: the first run\\npip-installs ultralytics (PyTorch + OpenCV) and downloads yolo26n.pt; warm runs\\nare fast.\\n\\\"\\\"\\\"\\n\\nimport cv2\\nimport numpy as np\\nimport torch\\nfrom ultralytics import YOLO\\n\\nimport aithericon\\nfrom aithericon import log_info, open_output, set_output, stream\\n\\ndevice = \\\"mps\\\" if torch.backends.mps.is_available() else \\\"cpu\\\"\\nmodel = YOLO(\\\"yolo26n.pt\\\")  # auto-downloads weights on first use\\nlog_info(f\\\"detector ready — YOLO26 + ByteTrack on {device}\\\", device=device)\\n\\nemitted = 0\\nframes_processed = 0\\nannotated_bytes = 0\\n\\n# Open both outputs together: the structured control stream and the annotated\\n# feed. `annotated` is a durable `jetstream` data channel with TWO consumers off\\n# the one stream — the instance view taps it for a live MJPEG feed, and the\\n# downstream `recorder` step drains it into an MP4 for the file catalogue\\n# (JetStream's Limits retention lets both read independently). Encode once,\\n# write once. Each `model.track(...)` call advances ByteTrack state.\\nwith aithericon.out(\\\"detections\\\") as det_chan, open_output(\\\"annotated\\\") as viz_chan:\\n    for frame_idx, chunk in enumerate(stream(\\\"frames\\\")):\\n        if not isinstance(chunk, (bytes, bytearray)):\\n            continue\\n        frame = cv2.imdecode(np.frombuffer(chunk, dtype=np.uint8), cv2.IMREAD_COLOR)\\n        if frame is None:\\n            continue\\n        frames_processed += 1\\n\\n        res = model.track(frame, persist=True, device=device, verbose=False)[0]\\n\\n        # Annotated frame (boxes + labels + track ids drawn) → the durable feed.\\n        # We emit EVERY processed frame, even object-free ones, so the feed is a\\n        # continuous video rather than only firing on detections. The live MJPEG\\n        # view and the recorder both read these same frames off the stream.\\n        ok, buf = cv2.imencode(\\\".jpg\\\", res.plot(), [cv2.IMWRITE_JPEG_QUALITY, 80])\\n        if ok:\\n            jpeg = buf.tobytes()\\n            viz_chan.write(jpeg, content_type=\\\"image/jpeg\\\")\\n            annotated_bytes += len(jpeg)\\n\\n        boxes = res.boxes\\n        n = 0 if boxes is None else len(boxes)\\n        frame_labels = {}\\n        if boxes is not None and n:\\n            ids = boxes.id.tolist() if boxes.id is not None else [None] * n\\n            for xyxy, conf, cls, tid in zip(\\n                boxes.xyxy.tolist(), boxes.conf.tolist(), boxes.cls.tolist(), ids\\n            ):\\n                label = model.names[int(cls)]\\n                det_chan.emit(\\n                    {\\n                        \\\"frame\\\": frame_idx,\\n                        \\\"label\\\": label,\\n                        \\\"confidence\\\": round(float(conf), 3),\\n                        \\\"bbox\\\": [round(float(v), 1) for v in xyxy],  # x1,y1,x2,y2\\n                        \\\"track_id\\\": int(tid) if tid is not None else None,\\n                    }\\n                )\\n                emitted += 1\\n                frame_labels[label] = frame_labels.get(label, 0) + 1\\n\\n        # One structured log line per frame, AS it is detected — the live feed.\\n        tally = \\\", \\\".join(f\\\"{k}×{v}\\\" for k, v in sorted(frame_labels.items()))\\n        log_info(\\n            f\\\"frame {frame_idx:>3} — {n} objects: {tally or '(none)'}\\\",\\n            frame=frame_idx,\\n            objects=n,\\n            **{f\\\"n_{k}\\\": v for k, v in frame_labels.items()},\\n        )\\n\\nlog_info(\\n    f\\\"live detection complete — {emitted} objects across {frames_processed} frames; \\\"\\n    f\\\"streamed {annotated_bytes} B of annotated feed\\\",\\n    detections_emitted=emitted,\\n    frames_processed=frames_processed,\\n    device=device,\\n)\\n\\nset_output(\\\"detections_emitted\\\", emitted)\\nset_output(\\\"frames_processed\\\", frames_processed)\\nset_output(\\\"device\\\", device)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"detections_emitted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"frames_processed\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"device\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/detector/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"frames\", \"plane\": \"data\", \"transport\": \"nats-latest\"}, #{\"element_kind\": \"any\", \"name\": \"detections\", \"plane\": \"control\", \"transport\": \"jetstream\"}, #{\"element_kind\": \"binary\", \"name\": \"annotated\", \"plane\": \"data\", \"transport\": \"jetstream\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
       "name": "Detect + annotate (YOLO26 + ByteTrack) - Prepare",
@@ -5358,9 +5829,1520 @@
     },
     {
       "caused_signals": [
-        "summary/sig_cancelled"
+        "recorder/sig_cancelled"
       ],
       "group_id": "group_19",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorCancelInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorCancelInput": {
+            "$ref": "#/definitions/ExecutorCancelInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/cancel_request",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_cancel",
+        "type": "effect"
+      },
+      "name": "Cancel Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/cancelling",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "recorder/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_21",
+      "guard": {
+        "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "recorder/dlq_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ dead: #{ job_id: err.inputs.job.job_id, run: err.inputs.job.run, reason: err.error, retries_exhausted: 0 } }",
+        "type": "rhai"
+      },
+      "name": "Dead Letter Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "recorder/exhausted_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Record annotated feed → file catalogue' failed and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted (no handler — crash net)"
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_artifact",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "artifacts",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_artifact",
+          "port": "artifacts",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "catalogue_register",
+        "type": "effect"
+      },
+      "name": "Log Artifact",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "catalogued",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/artifact_log",
+          "port": "catalogued",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "id": "recorder/log_failure",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/failure_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Message",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/message_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_metric",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "metric",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_metric",
+          "port": "metric",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_metric",
+        "type": "effect"
+      },
+      "name": "Log Metric",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/metric_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "evt",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_output",
+          "port": "evt",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ log: evt }",
+        "type": "rhai"
+      },
+      "name": "Log Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/output_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_phase",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "phase",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_phase",
+          "port": "phase",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_phase",
+        "type": "effect"
+      },
+      "name": "Log Phase",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/phase_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_20",
+      "id": "recorder/log_progress",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "progress",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/sig_progress",
+          "port": "progress",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_progress",
+        "type": "effect"
+      },
+      "name": "Log Progress",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "id": "recorder/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "recorder/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "id": "recorder/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "recorder/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "id": "recorder/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_detector_annotated",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"recorder\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Recorder — drain the detector's annotated feed and persist it as a single MP4\\nregistered in the platform's file catalogue.\\n\\nThe detector's `annotated` Data/Out channel is a durable `jetstream` datastream\\n(lossless, ordered, replayable). It has two independent consumers off the one\\nstream: the instance view taps it for the live MJPEG feed, and THIS node drains\\nit for the recording. JetStream's Limits retention (messages kept by age/size,\\nnot deleted on ack) is what lets both read it without stepping on each other.\\n\\nEach chunk is one JPEG (`image/jpeg`). We decode it, lazily open a\\n`cv2.VideoWriter` (mp4v) sized to the first frame, append every frame, finalize\\nthe MP4 when the stream closes, then hand the file to\\n`log_artifact(..., blocking=True)`. Blocking matters: it waits for the upload +\\ncatalogue registration to complete before this node returns, so the recording is\\na guaranteed side effect of the run (the graph's AND-join at `converge` also\\ngates End on this branch, so the net is never torn down mid-write).\\n\\\"\\\"\\\"\\n\\nimport cv2\\nimport numpy as np\\n\\nfrom aithericon import log_artifact, log_info, set_output, stream\\n\\nOUTPUT_PATH = \\\"annotated-detection.mp4\\\"\\n# Container playback frame rate. The true capture cadence is set by the `camera`\\n# step's `fps`; this only affects how fast the saved file plays back. A fixed\\n# value keeps the recorder self-contained (it consumes only the byte stream).\\nOUTPUT_FPS = 10.0\\n\\nwriter = None\\nframes_recorded = 0\\nbytes_recorded = 0\\nwidth = height = 0\\n\\n# `annotated` is a Data/In channel: this node fires on its `open`, then\\n# `stream(...)` yields one JPEG (bytes) per frame in order until `close`.\\nfor chunk in stream(\\\"annotated\\\"):\\n    if not isinstance(chunk, (bytes, bytearray)):\\n        continue\\n    frame = cv2.imdecode(np.frombuffer(chunk, dtype=np.uint8), cv2.IMREAD_COLOR)\\n    if frame is None:\\n        continue\\n    bytes_recorded += len(chunk)\\n    if writer is None:\\n        height, width = frame.shape[:2]\\n        fourcc = cv2.VideoWriter_fourcc(*\\\"mp4v\\\")\\n        writer = cv2.VideoWriter(OUTPUT_PATH, fourcc, OUTPUT_FPS, (width, height))\\n        log_info(\\n            f\\\"recording started — {width}x{height} @ {OUTPUT_FPS:g} fps → {OUTPUT_PATH}\\\",\\n            resolution=f\\\"{width}x{height}\\\",\\n        )\\n    writer.write(frame)\\n    frames_recorded += 1\\n    if frames_recorded % 10 == 1:\\n        log_info(\\n            f\\\"recorded {frames_recorded} frames ({bytes_recorded} B)\\\",\\n            frames=frames_recorded,\\n            bytes=bytes_recorded,\\n        )\\n\\nif writer is not None:\\n    writer.release()\\n\\nresolution = f\\\"{width}x{height}\\\" if frames_recorded else \\\"\\\"\\n\\nif frames_recorded:\\n    log_info(\\n        f\\\"recording complete — {frames_recorded} frames ({resolution}, {bytes_recorded} B); \\\"\\n        f\\\"registering {OUTPUT_PATH!r} in the file catalogue\\\",\\n        frames_recorded=frames_recorded,\\n    )\\n    # blocking=True: wait for the upload + catalogue registration before\\n    # returning, so the artifact is durable before the run completes.\\n    log_artifact(\\n        OUTPUT_PATH,\\n        name=OUTPUT_PATH,\\n        category=\\\"dataset\\\",\\n        mime_type=\\\"video/mp4\\\",\\n        metadata={\\n            \\\"frames\\\": str(frames_recorded),\\n            \\\"resolution\\\": resolution,\\n            \\\"fps\\\": str(OUTPUT_FPS),\\n            \\\"source\\\": \\\"annotated YOLO26 detection feed\\\",\\n        },\\n        extract_metadata=True,\\n        blocking=True,\\n    )\\nelse:\\n    log_info(\\\"no frames received on `recording` channel — nothing to register\\\")\\n\\nset_output(\\\"frames_recorded\\\", frames_recorded)\\nset_output(\\\"bytes_recorded\\\", bytes_recorded)\\nset_output(\\\"artifact\\\", OUTPUT_PATH if frames_recorded else \\\"\\\")\\nset_output(\\\"resolution\\\", resolution)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"frames_recorded\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"bytes_recorded\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"artifact\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"resolution\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/recorder/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"binary\", \"name\": \"annotated\", \"plane\": \"data\", \"transport\": \"jetstream\"}] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "Record annotated feed → file catalogue - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_15",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "recorder/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_21",
+      "guard": {
+        "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "recorder/retry_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "{\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    job.retries = retries + 1;\n                    #{ job: job }\n                }",
+        "type": "rhai"
+      },
+      "name": "Retry Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "recorder/sig_accepted",
+        "recorder/sig_running",
+        "recorder/sig_completed",
+        "recorder/sig_failed",
+        "recorder/sig_timed_out"
+      ],
+      "effect_config": {
+        "event_routes": {
+          "artifact": "recorder/sig_artifact",
+          "log": "recorder/sig_log",
+          "metric": "recorder/sig_metric",
+          "output": "recorder/sig_output",
+          "phase": "recorder/sig_phase",
+          "progress": "recorder/sig_progress"
+        },
+        "signal_routes": {
+          "accepted": "recorder/sig_accepted",
+          "cancelled": "recorder/sig_cancelled",
+          "completed": "recorder/sig_completed",
+          "failed": "recorder/sig_failed",
+          "running": "recorder/sig_running",
+          "timed_out": "recorder/sig_timed_out"
+        }
+      },
+      "group_id": "group_16",
+      "id": "recorder/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "recorder/sig_artifact",
+            "log": "recorder/sig_log",
+            "metric": "recorder/sig_metric",
+            "output": "recorder/sig_output",
+            "phase": "recorder/sig_phase",
+            "progress": "recorder/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "recorder/sig_accepted",
+            "cancelled": "recorder/sig_cancelled",
+            "completed": "recorder/sig_completed",
+            "failed": "recorder/sig_failed",
+            "running": "recorder/sig_running",
+            "timed_out": "recorder/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "recorder/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_17",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_accepted",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/submitted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_accepted",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Accepted",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/accepted",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_19",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_cancelled",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/cancelling",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_cancelled",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Cancelled",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/cancelled",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_18",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_18",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_failed_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_17",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_running",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_running",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Running",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/running",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_17",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_success",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_completed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __done = #{\n                    job_id: job.job_id,\n                    run: job.run,\n                    execution_id: job.execution_id,\n                    detail: sig.detail,\n                    source: if sig.source != () { sig.source } else { \"\" },\n                    status: sig.status\n                };\n                for __k in job.keys() { if __k.starts_with(\"_\") { __done[__k] = job[__k]; } }\n                #{ done: __done }",
+        "type": "rhai"
+      },
+      "name": "Execution Completed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_18",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_18",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "recorder/t_timeout_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "recorder/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "recorder/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "summary/sig_cancelled"
+      ],
+      "group_id": "group_26",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -5443,7 +7425,7 @@
       ]
     },
     {
-      "group_id": "group_21",
+      "group_id": "group_28",
       "guard": {
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
@@ -5500,7 +7482,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "guard": {
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
@@ -5535,7 +7517,7 @@
       "name": "Retries Exhausted (no handler — crash net)"
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_artifact",
       "input_ports": [
         {
@@ -5588,7 +7570,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "id": "summary/log_failure",
       "input_ports": [
         {
@@ -5641,7 +7623,7 @@
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_message",
       "input_ports": [
         {
@@ -5694,7 +7676,7 @@
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_metric",
       "input_ports": [
         {
@@ -5747,7 +7729,7 @@
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_output",
       "input_ports": [
         {
@@ -5800,7 +7782,7 @@
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_phase",
       "input_ports": [
         {
@@ -5853,7 +7835,7 @@
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_27",
       "id": "summary/log_progress",
       "input_ports": [
         {
@@ -5906,7 +7888,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "id": "summary/on_failed",
       "input_ports": [
         {
@@ -5969,7 +7951,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "id": "summary/on_timeout",
       "input_ports": [
         {
@@ -6032,7 +8014,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "id": "summary/prepare",
       "input_ports": [
         {
@@ -6085,7 +8067,7 @@
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_22",
       "guard": {
         "source": "f.retries < f.max_retries",
         "type": "rhai"
@@ -6142,7 +8124,7 @@
       ]
     },
     {
-      "group_id": "group_21",
+      "group_id": "group_28",
       "guard": {
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
@@ -6224,7 +8206,7 @@
           "timed_out": "summary/sig_timed_out"
         }
       },
-      "group_id": "group_16",
+      "group_id": "group_23",
       "id": "summary/submit",
       "input_ports": [
         {
@@ -6308,7 +8290,7 @@
       ]
     },
     {
-      "group_id": "group_17",
+      "group_id": "group_24",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6378,7 +8360,7 @@
       ]
     },
     {
-      "group_id": "group_19",
+      "group_id": "group_26",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6448,7 +8430,7 @@
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_25",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6518,7 +8500,7 @@
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_25",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6588,7 +8570,7 @@
       ]
     },
     {
-      "group_id": "group_17",
+      "group_id": "group_24",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6658,7 +8640,7 @@
       ]
     },
     {
-      "group_id": "group_17",
+      "group_id": "group_24",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6728,7 +8710,7 @@
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_25",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6798,7 +8780,7 @@
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_25",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -7085,6 +9067,78 @@
         {
           "place": "p_camera_ctrl",
           "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_converge_join",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "in_0",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "in_1",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_summary_ctrl",
+          "port": "in_0",
+          "weight": 1
+        },
+        {
+          "place": "p_recorder_ctrl",
+          "port": "in_1",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = in_0; for k in in_1.keys() { result[k] = in_1[k]; } #{ output: result, data: result }",
+        "type": "rhai"
+      },
+      "name": "Await report + recording - Join",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_converge_output",
+          "port": "output",
+          "weight": 1
+        },
+        {
+          "place": "p_converge_data",
+          "port": "data",
           "weight": 1
         }
       ]
@@ -7580,6 +9634,11 @@
           "cardinality": "single",
           "name": "d_detector",
           "schema_ref": "#/definitions/Data__detector"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_recorder",
+          "schema_ref": "#/definitions/Data__recorder"
         }
       ],
       "input_schema": {
@@ -7592,7 +9651,7 @@
       },
       "inputs": [
         {
-          "place": "p_summary_ctrl",
+          "place": "p_converge_output",
           "port": "input",
           "weight": 1
         },
@@ -7607,10 +9666,16 @@
           "port": "d_detector",
           "read": true,
           "weight": 1
+        },
+        {
+          "place": "p_recorder_data",
+          "port": "d_recorder",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_summary.detail.outputs.total_objects); let __rv1 = (d_summary.detail.outputs.labels); let __rv2 = (d_summary.detail.outputs.distinct_tracked); let __rv3 = (d_summary.detail.outputs.peak_per_frame); let __rv4 = (d_detector.detail.outputs.frames_processed); let __rv5 = (d_detector.detail.outputs.device); let __rv = #{ \"total_objects\": __rv0, \"labels\": __rv1, \"distinct_tracked\": __rv2, \"peak_per_frame\": __rv3, \"frames_processed\": __rv4, \"device\": __rv5 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_summary.detail.outputs.total_objects); let __rv1 = (d_summary.detail.outputs.labels); let __rv2 = (d_summary.detail.outputs.distinct_tracked); let __rv3 = (d_summary.detail.outputs.peak_per_frame); let __rv4 = (d_detector.detail.outputs.frames_processed); let __rv5 = (d_detector.detail.outputs.device); let __rv6 = (d_recorder.detail.outputs.frames_recorded); let __rv7 = (d_recorder.detail.outputs.artifact); let __rv = #{ \"total_objects\": __rv0, \"labels\": __rv1, \"distinct_tracked\": __rv2, \"peak_per_frame\": __rv3, \"frames_processed\": __rv4, \"device\": __rv5, \"frames_recorded\": __rv6, \"recording_artifact\": __rv7 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Done - Result",
@@ -7633,6 +9698,150 @@
         {
           "place": "p_end_result",
           "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_recorder_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Record annotated feed → file catalogue' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Record annotated feed → file catalogue - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_recorder_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "recorder/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Record annotated feed → file catalogue - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_recorder_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_recorder_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_recorder_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Record annotated feed → file catalogue - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__recorder"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__recorder"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_recorder_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_recorder_ctrl",
+          "port": "ctrl",
           "weight": 1
         }
       ]

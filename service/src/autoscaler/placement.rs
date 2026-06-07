@@ -187,12 +187,22 @@ pub async fn reconcile_placement(
     runner_presence: &RunnerPresence,
     demand: Option<&dyn DemandSource>,
 ) -> Result<(), sqlx::Error> {
-    // (policy_resource_id, workspace_id, public_config) for every live model_policy.
-    let policies: Vec<(Uuid, Uuid, serde_json::Value)> = sqlx::query_as(
-        "SELECT r.id, r.workspace_id, rv.public_config \
-         FROM resources r \
-         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.resource_type = 'model_policy' AND r.deleted_at IS NULL",
+    // The autoscale policy is folded onto `model_states` (no longer a resource).
+    // Scan every model in every workspace that has a policy set
+    // (`autoscale_mode IS NOT NULL AND node_pool IS NOT NULL`); the per-model KEY is
+    // now (workspace_id, model_id).
+    #[derive(sqlx::FromRow)]
+    struct PolicyScanRow {
+        workspace_id: Uuid,
+        #[sqlx(flatten)]
+        policy: super::ModelStatePolicyRow,
+    }
+    let policies: Vec<PolicyScanRow> = sqlx::query_as(
+        "SELECT workspace_id, model_id, base, autoscale_mode, desired_replicas, \
+                scale_up_threshold, scale_down_threshold, cooldown_secs, node_pool, \
+                residency_zone, dedicated \
+         FROM model_states \
+         WHERE autoscale_mode IS NOT NULL AND node_pool IS NOT NULL",
     )
     .fetch_all(db)
     .await?;
@@ -202,14 +212,10 @@ pub async fn reconcile_placement(
     let mut membership_by_ws: HashMap<Uuid, HashMap<Uuid, String>> = HashMap::new();
     let mut pools_by_ws: HashMap<Uuid, HashMap<String, NodePoolPolicy>> = HashMap::new();
 
-    for (policy_id, workspace_id, public_config) in policies {
-        let policy: ModelAutoscalePolicy = match serde_json::from_value(public_config) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(%policy_id, "placement: skipping unparseable model_policy: {e}");
-                continue;
-            }
-        };
+    for scan in policies {
+        let workspace_id = scan.workspace_id;
+        let policy: ModelAutoscalePolicy = scan.policy.into_policy();
+        let model_id = policy.model_id.clone();
 
         // Demand gate: only models with demand > 0 are placed (L1 demand=None ⇒
         // skip — nothing to place; Loop 1 floors capacity at min_nodes).
@@ -230,8 +236,8 @@ pub async fn reconcile_placement(
         };
         let Some(pool) = pools.get(&policy.node_pool).cloned() else {
             let msg = format!("node_pool alias '{}' not found", policy.node_pool);
-            tracing::warn!(%policy_id, "placement: {msg}");
-            mark_placement_failed(db, policy_id, workspace_id, &msg).await;
+            tracing::warn!(%workspace_id, %model_id, "placement: {msg}");
+            mark_placement_failed(db, workspace_id, &model_id, &msg).await;
             continue;
         };
 
@@ -261,15 +267,15 @@ pub async fn reconcile_placement(
             petri,
             nats,
             workspace_id,
-            policy_id,
+            &model_id,
             &policy,
             &pool,
             outcome,
         )
         .await
         {
-            tracing::warn!(%policy_id, model_id = %policy.model_id, "placement apply failed: {e}");
-            mark_placement_failed(db, policy_id, workspace_id, &e).await;
+            tracing::warn!(%workspace_id, %model_id, "placement apply failed: {e}");
+            mark_placement_failed(db, workspace_id, &model_id, &e).await;
         }
     }
     Ok(())
@@ -411,7 +417,7 @@ async fn apply_outcome(
     petri: &PetriClient,
     nats: &MekhanNats,
     workspace_id: Uuid,
-    policy_id: Uuid,
+    model_id: &str,
     policy: &ModelAutoscalePolicy,
     pool: &NodePoolPolicy,
     outcome: PlacementOutcome,
@@ -422,7 +428,7 @@ async fn apply_outcome(
                 "GDPR fail-closed: model residency_zone '{wanted}' ≠ node_pool zone '{pool_zone}' \
                  — refusing to place (single-zone-per-pool, strict equality)"
             );
-            mark_placement_failed(db, policy_id, workspace_id, &msg).await;
+            mark_placement_failed(db, workspace_id, model_id, &msg).await;
             Ok(())
         }
         PlacementOutcome::AdapterLoad {
@@ -441,7 +447,7 @@ async fn apply_outcome(
             publish_model_command(nats, runner_id, &cmd)
                 .await
                 .map_err(|e| format!("publish adapter-load: {e}"))?;
-            set_placement_status(db, policy_id, workspace_id, status::ACTIVE, None).await;
+            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
             Ok(())
         }
         PlacementOutcome::Wake { runner_id, base } => {
@@ -451,11 +457,11 @@ async fn apply_outcome(
             publish_model_command(nats, runner_id, &cmd)
                 .await
                 .map_err(|e| format!("publish wake: {e}"))?;
-            set_placement_status(db, policy_id, workspace_id, status::ACTIVE, None).await;
+            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
             Ok(())
         }
         PlacementOutcome::AlreadyPlaced => {
-            set_placement_status(db, policy_id, workspace_id, status::ACTIVE, None).await;
+            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
             Ok(())
         }
         PlacementOutcome::RaiseNodeDemand => {
@@ -463,11 +469,11 @@ async fn apply_outcome(
             // will provision a node next tick; just mark pending + retry. Cooldown
             // gates the status flap (no actuation happens here, so this is purely a
             // status hygiene — re-marking pending each tick is harmless).
-            set_placement_status(db, policy_id, workspace_id, status::PROVISIONING, None).await;
+            set_placement_status(db, workspace_id, model_id, status::PROVISIONING, None).await;
             Ok(())
         }
         PlacementOutcome::DedicatedFallback => {
-            dedicated_fallback(db, petri, workspace_id, policy_id, policy, pool).await
+            dedicated_fallback(db, petri, workspace_id, model_id, policy, pool).await
         }
     }
 }
@@ -480,22 +486,25 @@ async fn dedicated_fallback(
     db: &PgPool,
     petri: &PetriClient,
     workspace_id: Uuid,
-    policy_id: Uuid,
+    model_id: &str,
     policy: &ModelAutoscalePolicy,
     pool: &NodePoolPolicy,
 ) -> Result<(), String> {
     use chrono::Utc;
 
-    // Resolve the pool's datacenter (the model_policy no longer carries one).
+    // Resolve the pool's datacenter (the model policy no longer carries one).
     let dc_uuid = resolve_datacenter_uuid(db, workspace_id, &pool.datacenter_resource_id).await?;
 
-    // The durable reconciliation row (per policy). Cooldown-gate the dedicated leg.
-    let existing: Option<ModelReplicaRow> =
-        sqlx::query_as("SELECT * FROM model_replicas WHERE policy_resource_id = $1")
-            .bind(policy_id)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| format!("load model_replicas row: {e}"))?;
+    // The durable reconciliation row (per (workspace, model)). Cooldown-gate the
+    // dedicated leg.
+    let existing: Option<ModelReplicaRow> = sqlx::query_as(
+        "SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(model_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("load model_replicas row: {e}"))?;
 
     let now = Utc::now();
     let prev_actuated = existing.as_ref().and_then(|r| r.last_actuated_at);
@@ -512,7 +521,6 @@ async fn dedicated_fallback(
     let row = upsert_dedicated_row(
         db,
         workspace_id,
-        policy_id,
         policy,
         dc_uuid,
         target,
@@ -556,11 +564,9 @@ async fn dedicated_fallback(
 
 /// Upsert a `model_replicas` row for the dedicated fallback, stamping
 /// `last_actuated_at` (the generation source) + `desired_count`.
-#[allow(clippy::too_many_arguments)]
 async fn upsert_dedicated_row(
     db: &PgPool,
     workspace_id: Uuid,
-    policy_id: Uuid,
     policy: &ModelAutoscalePolicy,
     dc_uuid: Uuid,
     desired: u32,
@@ -571,11 +577,10 @@ async fn upsert_dedicated_row(
         (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
     sqlx::query_as::<_, ModelReplicaRow>(
         "INSERT INTO model_replicas \
-            (workspace_id, policy_resource_id, model_id, datacenter_resource_id, \
+            (workspace_id, model_id, datacenter_resource_id, \
              desired_count, observed_count, status, residency_zone, last_actuated_at) \
-         VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8) \
-         ON CONFLICT (policy_resource_id) DO UPDATE SET \
-            model_id = EXCLUDED.model_id, \
+         VALUES ($1, $2, $3, $4, 0, $5, $6, $7) \
+         ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
             datacenter_resource_id = EXCLUDED.datacenter_resource_id, \
             desired_count = EXCLUDED.desired_count, \
             status = EXCLUDED.status, \
@@ -585,7 +590,6 @@ async fn upsert_dedicated_row(
          RETURNING *",
     )
     .bind(workspace_id)
-    .bind(policy_id)
     .bind(&policy.model_id)
     .bind(dc_uuid)
     .bind(desired as i32)
@@ -602,26 +606,26 @@ async fn upsert_dedicated_row(
 /// status is informational only and the upsert is skipped (no-op on 0 rows).
 async fn set_placement_status(
     db: &PgPool,
-    policy_id: Uuid,
     workspace_id: Uuid,
+    model_id: &str,
     status: &str,
     last_error: Option<&str>,
 ) {
     let _ = sqlx::query(
         "UPDATE model_replicas SET status = $3, last_error = $4, updated_at = NOW() \
-         WHERE policy_resource_id = $1 AND workspace_id = $2",
+         WHERE workspace_id = $1 AND model_id = $2",
     )
-    .bind(policy_id)
     .bind(workspace_id)
+    .bind(model_id)
     .bind(status)
     .bind(last_error)
     .execute(db)
     .await;
 }
 
-/// Record a placement failure on the policy's row (best-effort, like `mark_failed`).
-async fn mark_placement_failed(db: &PgPool, policy_id: Uuid, workspace_id: Uuid, error: &str) {
-    set_placement_status(db, policy_id, workspace_id, status::FAILED, Some(error)).await;
+/// Record a placement failure on the model's row (best-effort, like `mark_failed`).
+async fn mark_placement_failed(db: &PgPool, workspace_id: Uuid, model_id: &str, error: &str) {
+    set_placement_status(db, workspace_id, model_id, status::FAILED, Some(error)).await;
 }
 
 #[cfg(test)]

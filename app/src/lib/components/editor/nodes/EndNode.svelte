@@ -3,6 +3,7 @@
 	import type { EndNodeData } from '$lib/types/editor';
 	import Square from '@lucide/svelte/icons/square';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: EndNodeData; selected?: boolean } = $props();
 
@@ -23,7 +24,7 @@
 		icon={Square}
 		label={data.label}
 		{selected}
-		class="min-w-[200px]"
+		width={NODE_WIDTH.end}
 		data-testid="node-end"
 		body={resultBody}
 	/>

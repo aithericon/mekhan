@@ -29,8 +29,12 @@
 #             100-wide blocks from 20000 leave room for ~450 slots before
 #             the 16-bit port ceiling — far more than the worktree count.
 #
-# Ollama (11434) is intentionally NOT slotted: model downloads are heavy and
-# serving is read-only, so all worktrees share one daemon.
+# Ollama (11434) is NOT slotted — it stays on the fixed port. But the dev stack
+# now OWNS it: `up-ollama` runs a managed, pidfiled daemon and TAKES OVER the
+# port (stopping any external one), since the model pool + router + provider:ollama
+# steps all dispatch against it. The ~/.ollama blob store is shared, so no
+# re-downloads; but two concurrent stacks would fight over :11434 (last `up`
+# wins) — run one stack's ollama at a time, or override OLLAMA_PORT per worktree.
 #
 # NOTE: deliberately no `set -euo pipefail` — this script is sourced into
 # interactive/direnv shells, where those options would leak and bite the

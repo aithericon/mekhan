@@ -12,12 +12,15 @@ Two outputs at once:
     control token per recognized object, emitted the moment its frame is
     processed (open → item* → close). A consumer-edge `join: gather` folds these
     into the `summary` report. This is the durable, structured record.
-  • `annotated` (Data/Out, image/jpeg, durable JetStream) — the SAME frame with
-    YOLO's boxes + labels + track ids drawn on it (`res.plot()`), JPEG-encoded
-    and written as one self-contained chunk. No node consumes it; the instance
-    view taps it and plays it as a live MJPEG feed (the frontend `mjpeg` render
-    adapter splits the byte stream on JPEG EOI markers). So you WATCH the
-    processed video — frames + bounding boxes — in the same panel as the run.
+  • `annotated` (Data/Out, image/jpeg, transport `jetstream`) — the SAME frame
+    with YOLO's boxes + labels + track ids drawn on it (`res.plot()`),
+    JPEG-encoded and written as one self-contained chunk onto a durable,
+    lossless, ordered datastream. It has TWO consumers off the one stream: the
+    instance view taps it and plays it as a live MJPEG feed (the frontend
+    `mjpeg` render adapter splits the byte stream on JPEG EOI markers), AND the
+    downstream `recorder` step drains it into an MP4 it registers in the file
+    catalogue. So you WATCH the processed video as the run goes AND keep a
+    durable recording — one channel, no WebRTC.
 
 Pure-cv2 (ultralytics' bundled OpenCV) for decode + annotate + encode — no PyAV,
 so no libav symbol clash with the encoder path. LIVE-ONLY: the first run
@@ -41,8 +44,12 @@ emitted = 0
 frames_processed = 0
 annotated_bytes = 0
 
-# Open both outputs together: the structured control stream and the viewable
-# annotated MJPEG feed. Each `model.track(...)` call advances ByteTrack state.
+# Open both outputs together: the structured control stream and the annotated
+# feed. `annotated` is a durable `jetstream` data channel with TWO consumers off
+# the one stream — the instance view taps it for a live MJPEG feed, and the
+# downstream `recorder` step drains it into an MP4 for the file catalogue
+# (JetStream's Limits retention lets both read independently). Encode once,
+# write once. Each `model.track(...)` call advances ByteTrack state.
 with aithericon.out("detections") as det_chan, open_output("annotated") as viz_chan:
     for frame_idx, chunk in enumerate(stream("frames")):
         if not isinstance(chunk, (bytes, bytearray)):
@@ -54,9 +61,10 @@ with aithericon.out("detections") as det_chan, open_output("annotated") as viz_c
 
         res = model.track(frame, persist=True, device=device, verbose=False)[0]
 
-        # Annotated frame (boxes + labels + track ids drawn) → viewable feed. We
-        # emit EVERY processed frame, even object-free ones, so the feed is a
-        # continuous video rather than only firing on detections.
+        # Annotated frame (boxes + labels + track ids drawn) → the durable feed.
+        # We emit EVERY processed frame, even object-free ones, so the feed is a
+        # continuous video rather than only firing on detections. The live MJPEG
+        # view and the recorder both read these same frames off the stream.
         ok, buf = cv2.imencode(".jpg", res.plot(), [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             jpeg = buf.tobytes()
