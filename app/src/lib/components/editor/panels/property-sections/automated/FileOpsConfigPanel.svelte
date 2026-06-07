@@ -43,7 +43,7 @@
 	}
 
 	const useSingleStorage = $derived(
-		['stat', 'probe', 'delete', 'annotate', 'list'].includes(operation)
+		['stat', 'probe', 'delete', 'annotate', 'list', 'crawl'].includes(operation)
 	);
 
 	const operationLabels: Record<string, string> = {
@@ -53,7 +53,8 @@
 		move: 'Move',
 		delete: 'Delete',
 		list: 'List',
-		annotate: 'Annotate'
+		annotate: 'Annotate',
+		crawl: 'Crawl'
 	};
 
 	const storageLabels: Record<string, string> = {
@@ -82,6 +83,11 @@
 			} else if (v === 'list') {
 				base.prefix = '';
 				base.storage = storage;
+			} else if (v === 'crawl') {
+				base.prefix = '';
+				base.batch_size = 5000;
+				base.stat = true;
+				base.storage = storage;
 			} else if (v === 'annotate') {
 				base.path = '';
 				base.annotations = {};
@@ -101,6 +107,7 @@
 			<Select.Item value="move" label="Move" />
 			<Select.Item value="delete" label="Delete" />
 			<Select.Item value="list" label="List" />
+			<Select.Item value="crawl" label="Crawl" />
 			<Select.Item value="annotate" label="Annotate" />
 		</Select.Content>
 	</Select.Root>
@@ -159,6 +166,41 @@
 			class="font-mono"
 		/>
 	</FormField>
+{:else if operation === 'crawl'}
+	<FormField label="Prefix" for="fo-crawl-prefix">
+		<Input
+			id="fo-crawl-prefix"
+			type="text"
+			value={(config.prefix as string) ?? ''}
+			placeholder="datasets/"
+			disabled={readonly}
+			oninput={(e) =>
+				onchange({ ...config, prefix: (e.currentTarget as HTMLInputElement).value })}
+			class="font-mono"
+		/>
+	</FormField>
+	<FormField label="Batch size" for="fo-crawl-batch">
+		<Input
+			id="fo-crawl-batch"
+			type="number"
+			min={1}
+			value={(config.batch_size as number) ?? 5000}
+			placeholder="5000"
+			disabled={readonly}
+			oninput={(e) => {
+				const val = parseInt((e.currentTarget as HTMLInputElement).value);
+				onchange({ ...config, batch_size: isNaN(val) ? undefined : val });
+			}}
+		/>
+	</FormField>
+	<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
+		<Checkbox
+			checked={(config.stat as boolean) ?? true}
+			disabled={readonly}
+			onCheckedChange={(v) => onchange({ ...config, stat: v })}
+		/>
+		Stat each entry for size + modified time
+	</label>
 {:else if operation === 'annotate'}
 	<FormField label="Path" for="fo-path">
 		<Input

@@ -114,6 +114,7 @@ fn derive_output_port(config: &Value) -> Port {
         "delete" => delete_fields(),
         "annotate" => annotate_fields(),
         "probe" => probe_fields(),
+        "crawl" => crawl_fields(),
         _ => stat_fields(),
     };
     Port {
@@ -192,6 +193,18 @@ fn annotate_fields() -> Vec<PortField> {
     ]
 }
 
+/// Crawl emits scalar summary outputs (`prefix`/`count`/`last_path`/`batches`);
+/// the per-file `{path,size,mtime}` stream rides the `crawl` channel, not the
+/// output port. Mirrors `executor-file-ops/src/ops/crawl.rs` "# Outputs".
+fn crawl_fields() -> Vec<PortField> {
+    vec![
+        pf("prefix", "Prefix", FieldKind::Text),
+        pf("count", "File count", FieldKind::Number),
+        pf("last_path", "Last path (resume cursor)", FieldKind::Text),
+        pf("batches", "Batches emitted", FieldKind::Number),
+    ]
+}
+
 fn probe_fields() -> Vec<PortField> {
     vec![
         pf("path", "Path", FieldKind::Text),
@@ -240,6 +253,12 @@ mod tests {
         let port = derive_output_port(&json!({ "operation": "probe" }));
         assert!(names(&port).contains(&"format"));
         assert!(names(&port).contains(&"num_rows"));
+    }
+
+    #[test]
+    fn derive_crawl() {
+        let port = derive_output_port(&json!({ "operation": "crawl" }));
+        assert_eq!(names(&port), ["prefix", "count", "last_path", "batches"]);
     }
 
     #[test]
