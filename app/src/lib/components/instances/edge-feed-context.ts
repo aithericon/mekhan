@@ -32,6 +32,14 @@ export interface EdgeFeed {
 	executionId: string;
 	/** The source channel name (== the edge `sourceHandle`). */
 	channelName: string;
+	/** The id of the node producing this feed (the edge's `source`). */
+	sourceNodeId: string;
+	/**
+	 * The producing node's statically-declared robot model, resolved from its
+	 * `requirements.constraints` (`capability === 'ros' && field === 'robot_model'`
+	 * → `value`), or null when the node declares no such constraint.
+	 */
+	robotModel: string | null;
 	/** The channel element's declared `content_type` (the live tap mime). */
 	contentType: string;
 	/**
@@ -142,11 +150,60 @@ function channelsOf(node: WorkflowNode | undefined): { name: string; plane: stri
 	return Array.isArray(channels) ? channels : [];
 }
 
+/**
+ * Resolve a producing node's statically-declared robot model from its
+ * `requirements.constraints`: the `value` of the constraint with
+ * `capability === 'ros' && field === 'robot_model'`. Returns null when the node,
+ * its `requirements`, the `constraints` array, the constraint, or its `value` is
+ * missing/non-string. Traversal: `node.data.requirements.constraints[]`.
+ */
+function robotModelOf(node: WorkflowNode | undefined): string | null {
+	if (!node) return null;
+	const requirements = (node.data as { requirements?: unknown }).requirements;
+	if (!requirements || typeof requirements !== 'object') return null;
+	const constraints = (requirements as { constraints?: unknown }).constraints;
+	if (!Array.isArray(constraints)) return null;
+	for (const c of constraints) {
+		if (c && typeof c === 'object') {
+			const { capability, field, value } = c as {
+				capability?: unknown;
+				field?: unknown;
+				value?: unknown;
+			};
+			if (capability === 'ros' && field === 'robot_model' && typeof value === 'string') {
+				return value;
+			}
+		}
+	}
+	return null;
+}
+
 /** Pull a binary channel's `content_type` off its `element` descriptor, or null. */
 function binaryContentType(element: unknown): string | null {
 	if (element && typeof element === 'object') {
 		const el = element as { type?: string; content_type?: string };
 		if (el.type === 'binary' && typeof el.content_type === 'string') return el.content_type;
+	}
+	return null;
+}
+
+/**
+ * Pull a `;model=<id>` parameter off a channel content_type, or null. The robot
+ * model travels WITH the joint-state stream (e.g.
+ * `application/vnd.aithericon.joint-state+x-ndjson;model=xarm6`) so a view-only
+ * producer that carries no ROS requirement — a playback node, or any data-plane
+ * joint source — still tells the twin which URDF (`robot_description` asset) to
+ * load. Complements {@link robotModelOf} (the ROS-requirement path).
+ */
+function modelFromContentType(contentType: string | null): string | null {
+	if (!contentType) return null;
+	for (const part of contentType.split(';').slice(1)) {
+		const eq = part.indexOf('=');
+		if (eq < 0) continue;
+		if (part.slice(0, eq).trim().toLowerCase() === 'model') {
+			const v = part.slice(eq + 1).trim();
+			if (v) return v;
+		}
 	}
 	return null;
 }
@@ -219,6 +276,8 @@ export function deriveEdgeFeeds(
 			edgeId: edge.id,
 			executionId,
 			channelName: ch.name,
+			sourceNodeId: edge.source,
+			robotModel: robotModelOf(source) ?? modelFromContentType(contentType),
 			contentType,
 			plan,
 			runtime,
