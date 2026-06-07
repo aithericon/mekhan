@@ -97,6 +97,23 @@
 	/** Fast lookup: runner_id → presence snapshot */
 	const presenceById = $derived(Object.fromEntries(presence.map((p) => [p.runner_id, p])));
 
+	/** Compact accelerator label for the host fingerprint, e.g.
+	 *  "CUDA ×2 · 80 GB · cc9.0", "Metal · 128 GB unified", or "CPU". */
+	function accelLabel(h: NonNullable<RunnerPresenceSnapshot['host']>): string {
+		const accel = (h.accelerator ?? '').toLowerCase();
+		if (accel === 'cuda' || accel === 'rocm') {
+			let head = accel.toUpperCase();
+			if (h.gpu_count) head += ` ×${h.gpu_count}`;
+			const parts = [head];
+			if (h.vram_gb) parts.push(`${h.vram_gb} GB`);
+			if (h.compute_capability) parts.push(`cc${h.compute_capability}`);
+			return parts.join(' · ');
+		}
+		if (accel === 'metal') return `Metal${h.vram_gb ? ` · ${h.vram_gb} GB unified` : ''}`;
+		if (accel === 'cpu') return 'CPU';
+		return h.accelerator ?? '—';
+	}
+
 	/** The fleet split into ordered sections (backed → unbacked → ungrouped). */
 	const sections = $derived(groupFleet(runners, presenceById, groups));
 
@@ -575,6 +592,39 @@
 						<dd class="col-span-2 break-all font-mono text-sm">{detail.nats_public_key}</dd>
 					{/if}
 				</dl>
+
+				{#if snap?.host}
+					{@const h = snap.host}
+					<div class="space-y-1">
+						<h3 class="text-sm font-medium text-muted-foreground">Host</h3>
+						<dl class="grid grid-cols-3 gap-x-3 gap-y-1.5 text-sm">
+							{#if h.hostname}
+								<dt class="text-muted-foreground">Hostname</dt>
+								<dd class="col-span-2 break-all font-mono">{h.hostname}</dd>
+							{/if}
+							{#if h.os || h.arch}
+								<dt class="text-muted-foreground">Platform</dt>
+								<dd class="col-span-2">{[h.os, h.arch].filter(Boolean).join(' · ')}</dd>
+							{/if}
+							{#if h.cpu_cores || h.mem_gb}
+								<dt class="text-muted-foreground">CPU / RAM</dt>
+								<dd class="col-span-2">
+									{[h.cpu_cores ? `${h.cpu_cores} cores` : null, h.mem_gb ? `${h.mem_gb} GB` : null]
+										.filter(Boolean)
+										.join(' · ')}
+								</dd>
+							{/if}
+							{#if h.accelerator}
+								<dt class="text-muted-foreground">Accelerator</dt>
+								<dd class="col-span-2">{accelLabel(h)}</dd>
+							{/if}
+							{#if h.ips && h.ips.length > 0}
+								<dt class="text-muted-foreground">IP</dt>
+								<dd class="col-span-2 break-all font-mono">{h.ips.join(', ')}</dd>
+							{/if}
+						</dl>
+					</div>
+				{/if}
 
 				<div class="space-y-1">
 					<h3 class="text-sm font-medium text-muted-foreground">Capabilities</h3>

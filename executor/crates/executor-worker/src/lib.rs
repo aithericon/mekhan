@@ -7,6 +7,7 @@ pub mod drain;
 pub mod event_emitter;
 pub mod executor;
 pub mod handler;
+pub mod host_probe;
 pub mod ipc_sidecar;
 pub mod nix;
 pub mod presence;
@@ -32,6 +33,7 @@ pub use drain::{drain_signal, DrainConfig};
 pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};
 pub use executor::JobExecutor;
 pub use handler::handle_execution;
+pub use host_probe::{probe_host, HostInfo};
 pub use ipc_sidecar::{start_ipc_sidecar, SidecarLogConfig, SidecarResult};
 pub use nix::{NixConfig, NixEnvironmentHook};
 pub use presence::{

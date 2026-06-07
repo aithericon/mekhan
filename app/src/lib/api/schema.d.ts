@@ -5667,6 +5667,52 @@ export interface components {
             status: string;
             version: string;
         };
+        /**
+         * @description Best-effort host / hardware fingerprint a runner self-reports in its presence
+         *     heartbeat — surfaced purely for FLEET VISIBILITY (which machine, what
+         *     accelerator, which IP), never to gate placement. Every field is optional: a
+         *     probe that can't run (no `nvidia-smi`, a locked-down sandbox) omits it, and an
+         *     older runner that predates the probe sends no `host` block at all. Like
+         *     `backends`/`concurrency` this is advisory wire-truth from the UNTRUSTED
+         *     presence payload — caps/namespace stay DB-authoritative.
+         */
+        HostInfo: {
+            /** @description Accelerator kind the runner probed: `cuda`, `rocm`, `metal`, or `cpu`. */
+            accelerator?: string | null;
+            /** @description CPU architecture (`std::env::consts::ARCH`): `x86_64`, `aarch64`, …. */
+            arch?: string | null;
+            /**
+             * @description CUDA compute capability (e.g. `8.9`) when probed — the closest the CLI
+             *     probe gets to a driver/GPU fingerprint; `None` otherwise.
+             */
+            compute_capability?: string | null;
+            /**
+             * Format: int32
+             * @description Physical CPU core count.
+             */
+            cpu_cores?: number | null;
+            /**
+             * Format: int32
+             * @description Number of discrete GPUs (CUDA/ROCm); omitted for Metal/CPU.
+             */
+            gpu_count?: number | null;
+            /** @description Reported hostname (`hostname`), e.g. `gpu-box-3`. */
+            hostname?: string | null;
+            /** @description Advertised non-loopback IP(s) — the runner's primary outbound address(es). */
+            ips?: string[];
+            /**
+             * Format: int32
+             * @description Total system memory in GB (rounded down).
+             */
+            mem_gb?: number | null;
+            /** @description OS family (`std::env::consts::OS`): `linux`, `macos`, …. */
+            os?: string | null;
+            /**
+             * Format: int32
+             * @description VRAM (CUDA/ROCm) or unified memory (Metal) in GB.
+             */
+            vram_gb?: number | null;
+        };
         HpiLog: {
             detail: unknown;
             /** Format: int64 */
@@ -8522,6 +8568,7 @@ export interface components {
              *     queue until a covering runner checks in).
              */
             backends?: string[];
+            host?: null | components["schemas"]["HostInfo"];
             /**
              * Format: int64
              * @description Milliseconds since the last presence heartbeat from this runner.

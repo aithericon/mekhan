@@ -389,11 +389,17 @@ async fn run_nats_daemon(
 
     if let Some(runner_id) = config.runner_id.clone() {
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        // Probe the host/hardware fingerprint ONCE at startup (subprocess calls
+        // to nvidia-smi/sysctl/etc. are too costly per-heartbeat, and the host is
+        // static for the daemon's lifetime). Attached to every heartbeat for
+        // fleet visibility; best-effort — absent fields simply don't appear.
+        let host = Some(aithericon_executor_worker::probe_host());
         spawn_presence_task(
             nats_client_for_cancel.clone(),
             runner_id.clone(),
             backends.clone(),
             model_state.clone(),
+            host,
             config.presence_interval(),
             cancel_shutdown.clone(),
         );

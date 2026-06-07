@@ -14946,6 +14946,90 @@
           }
         }
       },
+      "HostInfo": {
+        "type": "object",
+        "description": "Best-effort host / hardware fingerprint a runner self-reports in its presence\nheartbeat — surfaced purely for FLEET VISIBILITY (which machine, what\naccelerator, which IP), never to gate placement. Every field is optional: a\nprobe that can't run (no `nvidia-smi`, a locked-down sandbox) omits it, and an\nolder runner that predates the probe sends no `host` block at all. Like\n`backends`/`concurrency` this is advisory wire-truth from the UNTRUSTED\npresence payload — caps/namespace stay DB-authoritative.",
+        "properties": {
+          "accelerator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Accelerator kind the runner probed: `cuda`, `rocm`, `metal`, or `cpu`."
+          },
+          "arch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CPU architecture (`std::env::consts::ARCH`): `x86_64`, `aarch64`, …."
+          },
+          "compute_capability": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CUDA compute capability (e.g. `8.9`) when probed — the closest the CLI\nprobe gets to a driver/GPU fingerprint; `None` otherwise."
+          },
+          "cpu_cores": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Physical CPU core count.",
+            "minimum": 0
+          },
+          "gpu_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of discrete GPUs (CUDA/ROCm); omitted for Metal/CPU.",
+            "minimum": 0
+          },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported hostname (`hostname`), e.g. `gpu-box-3`."
+          },
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Advertised non-loopback IP(s) — the runner's primary outbound address(es)."
+          },
+          "mem_gb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Total system memory in GB (rounded down).",
+            "minimum": 0
+          },
+          "os": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OS family (`std::env::consts::OS`): `linux`, `macos`, …."
+          },
+          "vram_gb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "VRAM (CUDA/ROCm) or unified memory (Metal) in GB.",
+            "minimum": 0
+          }
+        }
+      },
       "HpiLog": {
         "type": "object",
         "required": [
@@ -20923,6 +21007,17 @@
               "type": "string"
             },
             "description": "The runner's self-reported executor `backends` (wire-names, e.g.\n`[\"python\"]`) — the set-membership dimension it advertises in its\npresence heartbeat, ORTHOGONAL to its typed `capabilities`. Surfaced for\nfleet visibility so an operator can see which execution backends a live\nrunner actually serves (a presence-pool step on an uncovered backend will\nqueue until a covering runner checks in)."
+          },
+          "host": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostInfo",
+                "description": "Best-effort host / hardware fingerprint the runner self-reports (hostname,\naccelerator, VRAM, IP). `None` for an older runner that predates the probe\nor a sandbox where probing failed. Advisory wire-truth (see [`HostInfo`])."
+              }
+            ]
           },
           "last_seen_ms_ago": {
             "type": "integer",
