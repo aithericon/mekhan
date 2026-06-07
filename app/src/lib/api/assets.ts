@@ -231,6 +231,34 @@ export async function deleteAsset(id: string): Promise<void> {
 	}
 }
 
+// ── File-field byte retrieval ────────────────────────────────────────────────
+
+/**
+ * Fetch the bytes a `File`-field value points at. A File-field value in an
+ * asset record is a `storage_path` string (`InputSource::StoragePath`); the
+ * backend serves the object at `GET /api/v1/files/{storage_path}`.
+ *
+ * The path may itself contain `/` (it is an S3 key like
+ * `assets/<id>/meshes.zip`), so it is appended raw — the backend route is
+ * `/api/v1/files/{*key}` (greedy). Throws `ApiError` on non-2xx.
+ */
+export async function fetchAssetFileBytes(storagePath: string): Promise<Uint8Array> {
+	const res = await authFetch(`${API_BASE}/files/${storagePath}`);
+	if (!res.ok) {
+		throw new ApiError(res.status, await parseErrorBody(res));
+	}
+	return new Uint8Array(await res.arrayBuffer());
+}
+
+/** Same as {@link fetchAssetFileBytes} but decodes the body as UTF-8 text. */
+export async function fetchAssetFileText(storagePath: string): Promise<string> {
+	const res = await authFetch(`${API_BASE}/files/${storagePath}`);
+	if (!res.ok) {
+		throw new ApiError(res.status, await parseErrorBody(res));
+	}
+	return res.text();
+}
+
 // ── Multipart endpoints (file upload + CSV import) ───────────────────────────
 
 async function parseErrorBody(res: Response): Promise<Record<string, unknown> | string> {

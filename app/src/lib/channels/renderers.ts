@@ -26,13 +26,15 @@ export type LiveRenderKind =
 	/** Fragmented audio/video the browser's MSE can append progressively. */
 	| 'mse'
 	/** A stream of self-contained JPEG frames → swap each into an `<img>`. */
-	| 'mjpeg';
+	| 'mjpeg'
+	/** A robot joint-angle (joint-state) stream → drive a 3D URDF twin. */
+	| 'urdf';
 
 export interface LiveRenderPlan {
 	kind: LiveRenderKind;
 	/** Which media element the bytes drive (MSE needs one; PCM uses AudioContext;
-	 *  MJPEG swaps frames into an `<img>`). */
-	mediaKind: 'audio' | 'video' | 'image';
+	 *  MJPEG swaps frames into an `<img>`; URDF drives a `'3d'` scene). */
+	mediaKind: 'audio' | 'video' | 'image' | '3d';
 	/** The content_type to hand the renderer (the full MIME incl. any `codecs=`
 	 *  param — MSE's `addSourceBuffer`/`isTypeSupported` require codecs). */
 	mime: string;
@@ -99,6 +101,13 @@ export function planLiveRender(
 	// `image/jpeg` (the EOI split is JPEG-specific); other `image/*` fall through.
 	if (base === 'image/jpeg') {
 		return { kind: 'mjpeg', mediaKind: 'image', mime: contentType };
+	}
+	// URDF twin: a data channel of robot joint-angle (joint-state) records (one
+	// NDJSON object per tick). No MSE probe — it isn't a media container; the
+	// player feeds each joint-state frame into a 3D URDF model rendered live.
+	// Only this exact base type (the NDJSON joint-state shape); others fall through.
+	if (base === 'application/vnd.aithericon.joint-state+x-ndjson') {
+		return { kind: 'urdf', mediaKind: '3d', mime: contentType };
 	}
 	return null;
 }
