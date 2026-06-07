@@ -363,6 +363,13 @@ publish-backend-executor registry_image commit_sha ref_slug:
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
 
+    # The executor Dockerfile compiles Rust IN-DOCKER. On the x86 CI worker,
+    # building --platform linux/arm64 runs that compile under QEMU emulation, so
+    # binfmt must be registered (idempotent). NOTE: emulated compilation of the
+    # executor (kreuzberg/tesseract/ONNX native deps) is SLOW — consider a
+    # dedicated arm builder or cross-compiling if this gets too slow / times out.
+    docker run --rm --privileged tonistiigi/binfmt --install arm64 >/dev/null 2>&1 || true
+
     echo "▶ docker buildx build + push → {{registry_image}}/aithericon-executor:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
@@ -384,6 +391,11 @@ publish-backend-engine registry_image commit_sha ref_slug:
     cd ..
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
+
+    # Engine also compiles Rust in-docker → emulated arm64 build on the x86 CI
+    # worker; register binfmt (idempotent). Engine is pure-Rust/rustls (no ONNX),
+    # so emulation is far lighter than the executor's.
+    docker run --rm --privileged tonistiigi/binfmt --install arm64 >/dev/null 2>&1 || true
 
     echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
     docker buildx build \
@@ -411,11 +423,14 @@ publish-backend-engine registry_image commit_sha ref_slug:
 build-ci-builder registry_image:
     #!/usr/bin/env bash
     cd ..
-    docker build \
+    # amd64 — the Woodpecker CI worker is now an x86 node (cpx42). It carries the
+    # x86-hosted aarch64 cross toolchain to build the aarch64 service binary.
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
       -f deploy/docker/Dockerfile.ci-build \
       -t "{{registry_image}}/mekhan-ci-builder:latest" \
       .
-    docker push "{{registry_image}}/mekhan-ci-builder:latest"
 
 # ── Deploy (Terraform / Nomad) ──────────────────────────────────────────────
 #
