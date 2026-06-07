@@ -95,7 +95,15 @@ async fn spawn_consumers(
     let c_live = LiveBroadcasts::new();
     let c_triggers = triggers.clone();
     let causality = tokio::spawn(async move {
-        start_causality_ingest(c_nats, c_db, c_sub, c_live, Some(c_triggers)).await;
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            Some(c_triggers),
+            "mekhan-artifacts".to_string(),
+        )
+        .await;
     });
 
     let l_nats = nats.clone();
@@ -355,6 +363,11 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     let execution_id = format!("test-exec-{}", Uuid::new_v4());
     let artifact_id = format!("test-art-{}", Uuid::new_v4());
     let net_id = format!("mekhan-fake-{}", Uuid::new_v4());
+    // The projector now content-addresses the artifact and refuses to write a
+    // half catalogue/inventory row, so the synthetic command must carry a
+    // content_hash (unique per run to avoid ON CONFLICT (content_hash) clashing
+    // with prior runs on the shared dev DB) and a storage_path.
+    let content_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let cmd = json!({
         "execution_id": execution_id,
         "job_id": "test-job",
@@ -364,7 +377,8 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
         "filename": "obs.json",
         "mime_type": "application/json",
         "size_bytes": 0,
-        "storage_path": "test/path/obs.json",
+        "storage_path": format!("test/path/{artifact_id}.json"),
+        "content_hash": content_hash,
         // CatalogueRegisterCommand requires `created_at`; without it the
         // ingest projector silently drops the event (warns but returns Ok)
         // and the trigger never fires.
@@ -448,6 +462,9 @@ async fn metric_with_kind_sentinel_fires_payload_mapping_trigger() {
     let execution_id = format!("test-exec-{}", Uuid::new_v4());
     let artifact_id = format!("test-art-{}", Uuid::new_v4());
     let net_id = format!("mekhan-fake-{}", Uuid::new_v4());
+    // Content-address the synthetic artifact (see sibling test) so the projector
+    // couples it into both catalogue + inventory rather than failing closed.
+    let content_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let cmd = json!({
         "execution_id": execution_id,
         "job_id": "test-job",
@@ -457,7 +474,8 @@ async fn metric_with_kind_sentinel_fires_payload_mapping_trigger() {
         "filename": "obs.json",
         "mime_type": "application/json",
         "size_bytes": 0,
-        "storage_path": "test/path/obs.json",
+        "storage_path": format!("test/path/{artifact_id}.json"),
+        "content_hash": content_hash,
         "user_metadata": {
             "kind": kind_sentinel,
             "observations": "[{\"a\":0.3,\"d\":0.7,\"z\":1.42}]",

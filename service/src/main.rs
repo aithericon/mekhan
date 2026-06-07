@@ -136,12 +136,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
     // Single projection path for processes, tasks, metrics, logs, and catalogue.
+    // The bucket workflow artifacts physically land in — used as the
+    // `file_server_id` for the platform's own object store when the causality
+    // projector couples a catalogued artifact to its physical-copy inventory
+    // row. Mirrors the artifact-store selection (artifact_s3 overrides s3).
+    let object_store_id = config
+        .artifact_s3
+        .as_ref()
+        .map(|c| c.bucket.clone())
+        .unwrap_or_else(|| config.s3.bucket.clone());
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),
         subscription_manager.clone(),
         live.clone(),
         Some(trigger_dispatcher.clone()),
+        object_store_id,
     ));
 
     // Step-executions projection (PETRI_GLOBAL domain events → step_execution

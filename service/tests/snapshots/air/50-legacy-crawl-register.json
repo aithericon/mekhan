@@ -8,6 +8,10 @@
       "additionalProperties": true,
       "type": "object"
     },
+    "Ctrl__index": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "Ctrl__register": {
       "additionalProperties": true,
       "type": "object"
@@ -120,6 +124,72 @@
                   ]
                 },
                 "files": {}
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__index": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "files_seen": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "inventory_upserted": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
               },
               "type": "object"
             }
@@ -1425,7 +1495,7 @@
     },
     {
       "id": "group_22",
-      "name": "Register by reference (inventory)"
+      "name": "Index by observation (inventory only)"
     },
     {
       "id": "group_23",
@@ -1458,9 +1528,43 @@
       "parent_id": "group_22"
     },
     {
+      "id": "group_29",
+      "name": "Probe + register (fills both)"
+    },
+    {
       "id": "group_3",
       "name": "Status Tracking",
       "parent_id": "group_1"
+    },
+    {
+      "id": "group_30",
+      "name": "Submission",
+      "parent_id": "group_29"
+    },
+    {
+      "id": "group_31",
+      "name": "Status Tracking",
+      "parent_id": "group_29"
+    },
+    {
+      "id": "group_32",
+      "name": "Failure & Timeout",
+      "parent_id": "group_29"
+    },
+    {
+      "id": "group_33",
+      "name": "Cancellation",
+      "parent_id": "group_29"
+    },
+    {
+      "id": "group_34",
+      "name": "Events",
+      "parent_id": "group_29"
+    },
+    {
+      "id": "group_35",
+      "name": "Effect Error Recovery",
+      "parent_id": "group_29"
     },
     {
       "id": "group_4",
@@ -1492,7 +1596,7 @@
       "parent_id": "group_8"
     }
   ],
-  "name": "50 · Legacy File Crawl + Inventory Register (file-ops crawl stream → register)",
+  "name": "50 · Legacy File Crawl → Index → Register (file-ops crawl → couple catalogue + inventory)",
   "places": [
     {
       "group_id": "group_10",
@@ -1957,6 +2061,237 @@
       "type": "state"
     },
     {
+      "group_id": "group_24",
+      "id": "index/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_26",
+      "id": "index/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_26",
+      "id": "index/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_26",
+      "id": "index/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_25",
+      "id": "index/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_24",
+      "id": "index/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_23",
+      "id": "index/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_25",
+      "id": "index/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_crawl_control_in",
       "name": "Crawl the file tree (file-ops crawl) - Control Emit Inbox",
       "token_schema": "#/definitions/DynamicToken",
@@ -2035,20 +2370,38 @@
       "type": "state"
     },
     {
+      "id": "p_index_ctrl",
+      "name": "Index by observation (inventory only) - Control Token",
+      "token_schema": "#/definitions/Ctrl__index",
+      "type": "state"
+    },
+    {
+      "id": "p_index_data",
+      "name": "Index by observation (inventory only) - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__index",
+      "type": "state"
+    },
+    {
+      "id": "p_index_output",
+      "name": "Index by observation (inventory only) - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_register_ctrl",
-      "name": "Register by reference (inventory) - Control Token",
+      "name": "Probe + register (fills both) - Control Token",
       "token_schema": "#/definitions/Ctrl__register",
       "type": "state"
     },
     {
       "id": "p_register_data",
-      "name": "Register by reference (inventory) - Parked Data (write-once)",
+      "name": "Probe + register (fills both) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__register",
       "type": "state"
     },
     {
       "id": "p_register_output",
-      "name": "Register by reference (inventory) - Output",
+      "name": "Probe + register (fills both) - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -2107,231 +2460,231 @@
       "type": "state"
     },
     {
-      "group_id": "group_24",
+      "group_id": "group_31",
       "id": "register/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_26",
+      "group_id": "group_33",
       "id": "register/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
-      "group_id": "group_26",
+      "group_id": "group_33",
       "id": "register/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_26",
+      "group_id": "group_33",
       "id": "register/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "id": "register/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/failure",
       "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/failure_log",
       "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/inbox",
       "name": "Inbox",
       "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_24",
+      "group_id": "group_31",
       "id": "register/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_23",
+      "group_id": "group_30",
       "id": "register/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "id": "register/timed_out",
       "name": "Timed Out",
       "token_schema": "#/definitions/DynamicToken",
@@ -5627,9 +5980,1542 @@
     },
     {
       "caused_signals": [
-        "register/sig_cancelled"
+        "index/sig_cancelled"
       ],
       "group_id": "group_26",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorCancelInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorCancelInput": {
+            "$ref": "#/definitions/ExecutorCancelInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/cancel_request",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_cancel",
+        "type": "effect"
+      },
+      "name": "Cancel Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/cancelling",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "index/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_28",
+      "guard": {
+        "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "index/dlq_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ dead: #{ job_id: err.inputs.job.job_id, run: err.inputs.job.run, reason: err.error, retries_exhausted: 0 } }",
+        "type": "rhai"
+      },
+      "name": "Dead Letter Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "index/exhausted_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Index by observation (inventory only)' failed and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted (no handler — crash net)"
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_artifact",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "artifacts",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_artifact",
+          "port": "artifacts",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "catalogue_register",
+        "type": "effect"
+      },
+      "name": "Log Artifact",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "catalogued",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/artifact_log",
+          "port": "catalogued",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/log_failure",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/failure_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Message",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/message_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_metric",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "metric",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_metric",
+          "port": "metric",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_metric",
+        "type": "effect"
+      },
+      "name": "Log Metric",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/metric_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "evt",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_output",
+          "port": "evt",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ log: evt }",
+        "type": "rhai"
+      },
+      "name": "Log Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/output_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_phase",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "phase",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_phase",
+          "port": "phase",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_phase",
+        "type": "effect"
+      },
+      "name": "Log Phase",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/phase_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_27",
+      "id": "index/log_progress",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "progress",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/sig_progress",
+          "port": "progress",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_progress",
+        "type": "effect"
+      },
+      "name": "Log Progress",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "index/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "index/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "id": "index/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_fold",
+          "schema_ref": "#/definitions/Data__fold"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_fold_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_fold_data",
+          "port": "d_fold",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"index\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Index each crawled file into file_inventory by observation (docs/32 §4).\\n\\nThe hashless OBSERVE half: reads the flattened listing from the `fold` step and\\nthe Start parameters, then POSTs a batched request to mekhan's own\\n`/api/v1/inventory/index` endpoint — one `{path}` row per file under the given\\n`file_server_id`, status `indexed`. This writes `file_inventory` rows ONLY; it\\nnever touches `catalogue_entries`, because an indexed file has a location but no\\nclaimed content identity yet (crawl read no bytes). The `register` step later\\nhashes the bytes and promotes these same rows to a coupled catalogue entry.\\n\\nThe literal `fold.files`, `start.file_server_id`, and `start.mekhan_url` reads\\nbelow MUST remain verbatim — the compiler scans this source for those\\n`<slug>.<field>` references to synthesize the read-arcs that borrow the upstream\\nfields onto this node.\\n\\\"\\\"\\\"\\n\\nimport json\\nimport os\\nimport urllib.request\\n\\nfrom aithericon import log_info, set_output\\n\\nfiles = fold.files or []  # noqa: F821 — borrowed from the `fold` step\\nserver_id = start.file_server_id or \\\"demo-nas\\\"  # noqa: F821 — Start borrow\\n\\n# Target precedence: explicit Start field → executor env → localhost default.\\nbase_url = (start.mekhan_url or \\\"\\\").rstrip(\\\"/\\\")  # noqa: F821 — Start borrow\\nif not base_url:\\n    base_url = os.environ.get(\\\"MEKHAN_SERVICE_URL\\\", \\\"http://localhost:13100\\\").rstrip(\\\"/\\\")\\n\\nitems = [\\n    {\\\"path\\\": f[\\\"path\\\"], \\\"status\\\": \\\"indexed\\\"}\\n    for f in files\\n    if isinstance(f, dict) and f.get(\\\"path\\\")\\n]\\n\\nurl = f\\\"{base_url}/api/v1/inventory/index\\\"\\nbody = json.dumps({\\\"file_server_id\\\": server_id, \\\"items\\\": items}).encode()\\nreq = urllib.request.Request(\\n    url, data=body, method=\\\"POST\\\", headers={\\\"Content-Type\\\": \\\"application/json\\\"}\\n)\\nwith urllib.request.urlopen(req, timeout=30) as resp:\\n    result = json.loads(resp.read().decode())\\n\\ninv = int(result.get(\\\"inventory_upserted\\\", 0))\\nlog_info(\\n    f\\\"indexed {len(items)} files into '{server_id}' via {url} → \\\"\\n    f\\\"inventory_upserted={inv} (no catalogue rows — hashless observation)\\\",\\n    files_seen=len(items),\\n    inventory_upserted=inv,\\n)\\n\\nset_output(\\\"files_seen\\\", len(items))\\nset_output(\\\"inventory_upserted\\\", inv)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __flat_fold = #{}; for __k in d_fold.keys() { if __k != \"detail\" { __flat_fold[__k] = d_fold[__k]; } } let __h_fold = d_fold; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"detail\"] } else { () }; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"outputs\"] } else { () }; if type_of(__h_fold) == \"map\" { for __k in __h_fold.keys() { __flat_fold[__k] = __h_fold[__k]; } } job_inputs.push(#{ \"name\": \"fold.json\", \"source\": #{ \"type\": \"inline\", \"value\": __flat_fold } }); job_inputs.push(#{ \"name\": \"start.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_start } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"files_seen\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"inventory_upserted\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/index/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "Index by observation (inventory only) - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_22",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "index/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_28",
+      "guard": {
+        "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "index/retry_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "{\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    job.retries = retries + 1;\n                    #{ job: job }\n                }",
+        "type": "rhai"
+      },
+      "name": "Retry Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "index/sig_accepted",
+        "index/sig_running",
+        "index/sig_completed",
+        "index/sig_failed",
+        "index/sig_timed_out"
+      ],
+      "effect_config": {
+        "event_routes": {
+          "artifact": "index/sig_artifact",
+          "log": "index/sig_log",
+          "metric": "index/sig_metric",
+          "output": "index/sig_output",
+          "phase": "index/sig_phase",
+          "progress": "index/sig_progress"
+        },
+        "signal_routes": {
+          "accepted": "index/sig_accepted",
+          "cancelled": "index/sig_cancelled",
+          "completed": "index/sig_completed",
+          "failed": "index/sig_failed",
+          "running": "index/sig_running",
+          "timed_out": "index/sig_timed_out"
+        }
+      },
+      "group_id": "group_23",
+      "id": "index/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "index/sig_artifact",
+            "log": "index/sig_log",
+            "metric": "index/sig_metric",
+            "output": "index/sig_output",
+            "phase": "index/sig_phase",
+            "progress": "index/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "index/sig_accepted",
+            "cancelled": "index/sig_cancelled",
+            "completed": "index/sig_completed",
+            "failed": "index/sig_failed",
+            "running": "index/sig_running",
+            "timed_out": "index/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "index/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_24",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_accepted",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/submitted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_accepted",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Accepted",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/accepted",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_26",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_cancelled",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/cancelling",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_cancelled",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Cancelled",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/cancelled",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_25",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_25",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_failed_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_24",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_running",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_running",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Running",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/running",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_24",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_success",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_completed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __done = #{\n                    job_id: job.job_id,\n                    run: job.run,\n                    execution_id: job.execution_id,\n                    detail: sig.detail,\n                    source: if sig.source != () { sig.source } else { \"\" },\n                    status: sig.status\n                };\n                for __k in job.keys() { if __k.starts_with(\"_\") { __done[__k] = job[__k]; } }\n                #{ done: __done }",
+        "type": "rhai"
+      },
+      "name": "Execution Completed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_25",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_25",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "index/t_timeout_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "index/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "index/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "register/sig_cancelled"
+      ],
+      "group_id": "group_33",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -5712,7 +7598,7 @@
       ]
     },
     {
-      "group_id": "group_28",
+      "group_id": "group_35",
       "guard": {
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
@@ -5769,7 +7655,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "guard": {
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
@@ -5798,13 +7684,13 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Register by reference (inventory)' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Probe + register (fills both)' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_artifact",
       "input_ports": [
         {
@@ -5857,7 +7743,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/log_failure",
       "input_ports": [
         {
@@ -5910,7 +7796,7 @@
       ]
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_message",
       "input_ports": [
         {
@@ -5963,7 +7849,7 @@
       ]
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_metric",
       "input_ports": [
         {
@@ -6016,7 +7902,7 @@
       ]
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_output",
       "input_ports": [
         {
@@ -6069,7 +7955,7 @@
       ]
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_phase",
       "input_ports": [
         {
@@ -6122,7 +8008,7 @@
       ]
     },
     {
-      "group_id": "group_27",
+      "group_id": "group_34",
       "id": "register/log_progress",
       "input_ports": [
         {
@@ -6175,7 +8061,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/on_failed",
       "input_ports": [
         {
@@ -6238,7 +8124,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/on_timeout",
       "input_ports": [
         {
@@ -6301,7 +8187,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "id": "register/prepare",
       "input_ports": [
         {
@@ -6318,6 +8204,11 @@
           "cardinality": "single",
           "name": "d_start",
           "schema_ref": "#/definitions/Data__start"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_seed_nas",
+          "schema_ref": "#/definitions/Data__seed_nas"
         }
       ],
       "input_schema": {
@@ -6330,7 +8221,7 @@
       },
       "inputs": [
         {
-          "place": "p_fold_ctrl",
+          "place": "p_index_ctrl",
           "port": "input",
           "weight": 1
         },
@@ -6345,13 +8236,19 @@
           "port": "d_start",
           "read": true,
           "weight": 1
+        },
+        {
+          "place": "p_seed_nas_data",
+          "port": "d_seed_nas",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"register\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Register each crawled file into file_inventory by reference (docs/32 §4).\\n\\nReads the flattened listing from the `fold` step and the Start parameters, then\\nPOSTs a batched by-reference register request to mekhan's own\\n`/api/v1/inventory/register` endpoint — one `{file_server_id, path, status:\\n\\\"indexed\\\"}` row per file. No bytes move. Crawl carries no content hash, so no\\ncatalogue rows are inserted here (those appear once a later `probe` populates\\ncontent_hash and re-registers with it). The registered rows then show up in the\\napp's Inventory view.\\n\\nThe literal `fold.files`, `start.file_server_id`, and `start.mekhan_url` reads\\nbelow MUST remain verbatim — the compiler scans this source for those\\n`<slug>.<field>` references to synthesize the read-arcs that borrow the upstream\\nfields onto this node.\\n\\\"\\\"\\\"\\n\\nimport json\\nimport os\\nimport urllib.request\\n\\nfrom aithericon import log_info, set_output\\n\\nfiles = fold.files or []  # noqa: F821 — borrowed from the `fold` step\\nserver_id = start.file_server_id or \\\"demo-nas\\\"  # noqa: F821 — Start borrow\\n\\n# Target precedence: explicit Start field → executor env → localhost default.\\nbase_url = (start.mekhan_url or \\\"\\\").rstrip(\\\"/\\\")  # noqa: F821 — Start borrow\\nif not base_url:\\n    base_url = os.environ.get(\\\"MEKHAN_SERVICE_URL\\\", \\\"http://localhost:13100\\\").rstrip(\\\"/\\\")\\n\\nentries = [\\n    {\\\"file_server_id\\\": server_id, \\\"path\\\": f[\\\"path\\\"], \\\"status\\\": \\\"indexed\\\"}\\n    for f in files\\n    if isinstance(f, dict) and f.get(\\\"path\\\")\\n]\\n\\nurl = f\\\"{base_url}/api/v1/inventory/register\\\"\\nbody = json.dumps({\\\"entries\\\": entries}).encode()\\nreq = urllib.request.Request(\\n    url, data=body, method=\\\"POST\\\", headers={\\\"Content-Type\\\": \\\"application/json\\\"}\\n)\\nwith urllib.request.urlopen(req, timeout=30) as resp:\\n    result = json.loads(resp.read().decode())\\n\\ninv = int(result.get(\\\"inventory_upserted\\\", 0))\\ncat = int(result.get(\\\"catalogue_inserted\\\", 0))\\nlog_info(\\n    f\\\"registered {len(entries)} files into '{server_id}' via {url} → \\\"\\n    f\\\"inventory_upserted={inv}, catalogue_inserted={cat}\\\",\\n    files_seen=len(entries),\\n    inventory_upserted=inv,\\n    catalogue_inserted=cat,\\n)\\n\\nset_output(\\\"files_seen\\\", len(entries))\\nset_output(\\\"inventory_upserted\\\", inv)\\nset_output(\\\"catalogue_inserted\\\", cat)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __flat_fold = #{}; for __k in d_fold.keys() { if __k != \"detail\" { __flat_fold[__k] = d_fold[__k]; } } let __h_fold = d_fold; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"detail\"] } else { () }; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"outputs\"] } else { () }; if type_of(__h_fold) == \"map\" { for __k in __h_fold.keys() { __flat_fold[__k] = __h_fold[__k]; } } job_inputs.push(#{ \"name\": \"fold.json\", \"source\": #{ \"type\": \"inline\", \"value\": __flat_fold } }); job_inputs.push(#{ \"name\": \"start.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_start } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"files_seen\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"inventory_upserted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"catalogue_inserted\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/register/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"register\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Probe + register each indexed file — fills BOTH halves (docs/32 §4).\\n\\nThe coupling half of the lifecycle. The runner is co-located with the seeded\\nfiles, so it HASHES each one (stdlib hashlib SHA-256 over the storage root +\\ncrawled path) — the migration model where the edge probes and the server\\ncouples. It then POSTs a batched register request to mekhan's\\n`/api/v1/inventory/register` endpoint — one\\n`{file_server_id, path, content_hash, status: \\\"registered\\\", size_bytes, name}`\\nrow per file. That endpoint fills BOTH halves of the equation atomically: a\\ncontent-addressed `catalogue_entries` row keyed on the hash AND the physical\\n`file_inventory` copy (promoting the same `(file_server_id, path)` row the\\n`index` step created from `indexed` to `registered`). Because every file now\\ncarries a content hash, `catalogue_inserted` matches the file count — you can\\nno longer register just one side. No bytes move to mekhan; only the references.\\n\\nThe literal `fold.files`, `seed.root`, `start.file_server_id`, and\\n`start.mekhan_url` reads below MUST remain verbatim — the compiler scans this\\nsource for those `<slug>.<field>` references to synthesize the read-arcs that\\nborrow the upstream fields onto this node.\\n\\\"\\\"\\\"\\n\\nimport hashlib\\nimport json\\nimport os\\nimport urllib.request\\n\\nfrom aithericon import log_info, set_output\\n\\nfiles = fold.files or []  # noqa: F821 — borrowed from the `fold` step\\nserver_id = start.file_server_id or \\\"demo-nas\\\"  # noqa: F821 — Start borrow\\n\\n# The crawl emitted user-facing paths relative to the storage root (/tmp). The\\n# seed step's root is /tmp/mekhan-crawl-demo, so the storage root is its parent.\\nseed_root = seed.root or \\\"/tmp/mekhan-crawl-demo\\\"  # noqa: F821 — `seed` borrow\\nstorage_root = os.path.dirname(seed_root.rstrip(\\\"/\\\"))\\n\\n# Target precedence: explicit Start field → executor env → localhost default.\\nbase_url = (start.mekhan_url or \\\"\\\").rstrip(\\\"/\\\")  # noqa: F821 — Start borrow\\nif not base_url:\\n    base_url = os.environ.get(\\\"MEKHAN_SERVICE_URL\\\", \\\"http://localhost:13100\\\").rstrip(\\\"/\\\")\\n\\n\\ndef sha256_of(abs_path):\\n    h = hashlib.sha256()\\n    with open(abs_path, \\\"rb\\\") as fh:\\n        for chunk in iter(lambda: fh.read(65536), b\\\"\\\"):\\n            h.update(chunk)\\n    return h.hexdigest()\\n\\n\\nentries = []\\nfor f in files:\\n    if not isinstance(f, dict) or not f.get(\\\"path\\\"):\\n        continue\\n    rel = f[\\\"path\\\"]\\n    abs_path = os.path.join(storage_root, rel)\\n    digest = sha256_of(abs_path)\\n    size = f.get(\\\"size\\\")\\n    if size is None:\\n        size = os.path.getsize(abs_path)\\n    entries.append(\\n        {\\n            \\\"file_server_id\\\": server_id,\\n            \\\"path\\\": rel,\\n            \\\"content_hash\\\": digest,\\n            \\\"status\\\": \\\"registered\\\",\\n            \\\"size_bytes\\\": int(size),\\n            \\\"name\\\": os.path.basename(rel),\\n        }\\n    )\\n\\nurl = f\\\"{base_url}/api/v1/inventory/register\\\"\\nbody = json.dumps({\\\"entries\\\": entries}).encode()\\nreq = urllib.request.Request(\\n    url, data=body, method=\\\"POST\\\", headers={\\\"Content-Type\\\": \\\"application/json\\\"}\\n)\\nwith urllib.request.urlopen(req, timeout=30) as resp:\\n    result = json.loads(resp.read().decode())\\n\\ninv = int(result.get(\\\"inventory_upserted\\\", 0))\\ncat = int(result.get(\\\"catalogue_inserted\\\", 0))\\nlog_info(\\n    f\\\"registered {len(entries)} hashed files into '{server_id}' via {url} → \\\"\\n    f\\\"inventory_upserted={inv}, catalogue_inserted={cat} (both halves filled)\\\",\\n    files_seen=len(entries),\\n    inventory_upserted=inv,\\n    catalogue_inserted=cat,\\n)\\n\\nset_output(\\\"files_seen\\\", len(entries))\\nset_output(\\\"inventory_upserted\\\", inv)\\nset_output(\\\"catalogue_inserted\\\", cat)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __flat_fold = #{}; for __k in d_fold.keys() { if __k != \"detail\" { __flat_fold[__k] = d_fold[__k]; } } let __h_fold = d_fold; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"detail\"] } else { () }; __h_fold = if type_of(__h_fold) == \"map\" { __h_fold[\"outputs\"] } else { () }; if type_of(__h_fold) == \"map\" { for __k in __h_fold.keys() { __flat_fold[__k] = __h_fold[__k]; } } job_inputs.push(#{ \"name\": \"fold.json\", \"source\": #{ \"type\": \"inline\", \"value\": __flat_fold } }); job_inputs.push(#{ \"name\": \"start.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_start } }); let __flat_seed_nas = #{}; for __k in d_seed_nas.keys() { if __k != \"detail\" { __flat_seed_nas[__k] = d_seed_nas[__k]; } } let __h_seed_nas = d_seed_nas; __h_seed_nas = if type_of(__h_seed_nas) == \"map\" { __h_seed_nas[\"detail\"] } else { () }; __h_seed_nas = if type_of(__h_seed_nas) == \"map\" { __h_seed_nas[\"outputs\"] } else { () }; if type_of(__h_seed_nas) == \"map\" { for __k in __h_seed_nas.keys() { __flat_seed_nas[__k] = __h_seed_nas[__k]; } } job_inputs.push(#{ \"name\": \"seed.json\", \"source\": #{ \"type\": \"inline\", \"value\": __flat_seed_nas } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"number\", \"name\": \"files_seen\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"inventory_upserted\", \"required\": false}, #{\"kind\": \"number\", \"name\": \"catalogue_inserted\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/register/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
-      "name": "Register by reference (inventory) - Prepare",
+      "name": "Probe + register (fills both) - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6376,7 +8273,7 @@
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_29",
       "guard": {
         "source": "f.retries < f.max_retries",
         "type": "rhai"
@@ -6433,7 +8330,7 @@
       ]
     },
     {
-      "group_id": "group_28",
+      "group_id": "group_35",
       "guard": {
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
@@ -6515,7 +8412,7 @@
           "timed_out": "register/sig_timed_out"
         }
       },
-      "group_id": "group_23",
+      "group_id": "group_30",
       "id": "register/submit",
       "input_ports": [
         {
@@ -6599,7 +8496,7 @@
       ]
     },
     {
-      "group_id": "group_24",
+      "group_id": "group_31",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6669,7 +8566,7 @@
       ]
     },
     {
-      "group_id": "group_26",
+      "group_id": "group_33",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6739,7 +8636,7 @@
       ]
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6809,7 +8706,7 @@
       ]
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6879,7 +8776,7 @@
       ]
     },
     {
-      "group_id": "group_24",
+      "group_id": "group_31",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -6949,7 +8846,7 @@
       ]
     },
     {
-      "group_id": "group_24",
+      "group_id": "group_31",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -7019,7 +8916,7 @@
       ]
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -7089,7 +8986,7 @@
       ]
     },
     {
-      "group_id": "group_25",
+      "group_id": "group_32",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
@@ -9130,6 +11027,11 @@
         },
         {
           "cardinality": "single",
+          "name": "d_index",
+          "schema_ref": "#/definitions/Data__index"
+        },
+        {
+          "cardinality": "single",
           "name": "d_register",
           "schema_ref": "#/definitions/Data__register"
         }
@@ -9155,6 +11057,12 @@
           "weight": 1
         },
         {
+          "place": "p_index_data",
+          "port": "d_index",
+          "read": true,
+          "weight": 1
+        },
+        {
           "place": "p_register_data",
           "port": "d_register",
           "read": true,
@@ -9162,7 +11070,7 @@
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_crawl.detail.outputs.count); let __rv1 = (d_crawl.detail.outputs.batches); let __rv2 = (d_register.detail.outputs.inventory_upserted); let __rv3 = (d_register.detail.outputs.catalogue_inserted); let __rv = #{ \"files_crawled\": __rv0, \"batches\": __rv1, \"inventory_upserted\": __rv2, \"catalogue_inserted\": __rv3 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_crawl.detail.outputs.count); let __rv1 = (d_crawl.detail.outputs.batches); let __rv2 = (d_index.detail.outputs.inventory_upserted); let __rv3 = (d_register.detail.outputs.inventory_upserted); let __rv4 = (d_register.detail.outputs.catalogue_inserted); let __rv = #{ \"files_crawled\": __rv0, \"batches\": __rv1, \"inventory_indexed\": __rv2, \"inventory_registered\": __rv3, \"catalogue_inserted\": __rv4 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Done - Result",
@@ -9334,6 +11242,150 @@
       ]
     },
     {
+      "id": "t_index_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'Index by observation (inventory only)' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Index by observation (inventory only) - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_index_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "index/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Index by observation (inventory only) - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_index_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_index_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_index_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Index by observation (inventory only) - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__index"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__index"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_index_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_index_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
       "id": "t_register_to_error_deadend",
       "input_ports": [
         {
@@ -9358,10 +11410,10 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Register by reference (inventory)' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Probe + register (fills both)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Register by reference (inventory) - Dead-letter (no handler — crash net)"
+      "name": "Probe + register (fills both) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_register_to_output",
@@ -9391,7 +11443,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Register by reference (inventory) - To Output",
+      "name": "Probe + register (fills both) - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -9443,7 +11495,7 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Register by reference (inventory) - Yield (park data, forward control)",
+      "name": "Probe + register (fills both) - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -9708,7 +11760,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d._process_name = \"Legacy Crawl + Register\"; #{ output: d }",
+        "source": "let d = input; d._process_name = \"Legacy Crawl + Index + Register\"; #{ output: d }",
         "type": "rhai"
       },
       "name": "Start - Derive Process Name",

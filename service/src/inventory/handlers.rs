@@ -3,7 +3,8 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::inventory::model::{
-    InventoryEntry, InventoryRegisterRequest, InventoryRegisterResponse, InventoryStats,
+    InventoryEntry, InventoryIndexRequest, InventoryIndexResponse, InventoryRegisterRequest,
+    InventoryRegisterResponse, InventoryStats,
 };
 use crate::inventory::reconcile::{self, DuplicateGroup, ObservedItem, OrphanDbRow, ReconcileCounts};
 use crate::inventory::repository::{InventoryRepository, PgInventoryRepository};
@@ -21,18 +22,19 @@ fn repo(state: &AppState) -> PgInventoryRepository {
 
 /// POST /api/v1/inventory/register
 ///
-/// Batched by-reference upsert. For each item with content metadata + a
-/// `content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on
-/// `content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`
-/// row on `(file_server_id, path)`. No bytes are transferred — this is the
-/// online crawl/reconcile path. Returns insert/upsert counts.
+/// Batched by-reference register — **fills both halves of the equation**. Every
+/// item MUST carry a `content_hash`; for each, in one transaction, UPSERTs a
+/// logical `catalogue_entries` row (keyed on `content_hash`, `category =
+/// 'legacy'`) AND the physical `file_inventory` row on `(file_server_id,
+/// path)`. A hashless item is rejected (400) — observe-only goes through
+/// `/index`. No bytes are transferred. Returns insert/upsert counts.
 #[utoipa::path(
     post,
     path = "/api/v1/inventory/register",
     request_body = InventoryRegisterRequest,
     responses(
         (status = 200, description = "Register counts", body = InventoryRegisterResponse),
-        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 400, description = "Missing content_hash, or bad request", body = ErrorResponse),
     ),
     tag = "inventory",
 )]
@@ -42,6 +44,34 @@ pub async fn register(
 ) -> Result<Json<InventoryRegisterResponse>, ApiError> {
     let counts = repo(&state).register(&req).await.map_err(|e| {
         tracing::warn!("inventory register: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    Ok(Json(counts))
+}
+
+/// POST /api/v1/inventory/index
+///
+/// Batched hashless **index** — record physical files observed on a server
+/// without claiming a content identity. Writes `file_inventory` rows only
+/// (status defaults to `indexed`); never touches `catalogue_entries`. This is
+/// where `crawl` output lands; promote to a coupled catalogue row later via
+/// `/register` once a `probe` supplies the hash.
+#[utoipa::path(
+    post,
+    path = "/api/v1/inventory/index",
+    request_body = InventoryIndexRequest,
+    responses(
+        (status = 200, description = "Index counts (inventory only)", body = InventoryIndexResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+    ),
+    tag = "inventory",
+)]
+pub async fn index(
+    State(state): State<AppState>,
+    Json(req): Json<InventoryIndexRequest>,
+) -> Result<Json<InventoryIndexResponse>, ApiError> {
+    let counts = repo(&state).index(&req).await.map_err(|e| {
+        tracing::warn!("inventory index: {e}");
         ApiError::bad_request(e.to_string())
     })?;
     Ok(Json(counts))

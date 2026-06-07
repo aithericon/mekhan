@@ -252,7 +252,15 @@ async fn subworkflow_child_is_registered_and_drillable() {
         let d = db.clone();
         let s = sub_mgr.clone();
         tokio::spawn(async move {
-            start_causality_ingest(n, d, s, LiveBroadcasts::new(), None).await;
+            start_causality_ingest(
+                n,
+                d,
+                s,
+                LiveBroadcasts::new(),
+                None,
+                "mekhan-artifacts".to_string(),
+            )
+            .await;
         });
     }
 

@@ -25,6 +25,11 @@ pub trait InventoryRepository: Send + Sync {
         &self,
         req: &InventoryRegisterRequest,
     ) -> Result<InventoryRegisterResponse, QueryError>;
+
+    async fn index(
+        &self,
+        req: &InventoryIndexRequest,
+    ) -> Result<InventoryIndexResponse, QueryError>;
 }
 
 #[derive(Clone)]
@@ -57,7 +62,14 @@ impl InventoryRepository for PgInventoryRepository {
         &self,
         req: &InventoryRegisterRequest,
     ) -> Result<InventoryRegisterResponse, QueryError> {
-        queries::register(&self.pool, req)
+        queries::register(&self.pool, req).await
+    }
+
+    async fn index(
+        &self,
+        req: &InventoryIndexRequest,
+    ) -> Result<InventoryIndexResponse, QueryError> {
+        queries::index(&self.pool, req)
             .await
             .map_err(QueryError::Database)
     }

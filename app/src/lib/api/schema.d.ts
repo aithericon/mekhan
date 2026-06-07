@@ -1187,6 +1187,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inventory/index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/inventory/index
+         * @description Batched hashless **index** — record physical files observed on a server
+         *     without claiming a content identity. Writes `file_inventory` rows only
+         *     (status defaults to `indexed`); never touches `catalogue_entries`. This is
+         *     where `crawl` output lands; promote to a coupled catalogue row later via
+         *     `/register` once a `probe` supplies the hash.
+         */
+        post: operations["index"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inventory/reconcile-batch": {
         parameters: {
             query?: never;
@@ -1220,11 +1244,12 @@ export interface paths {
         put?: never;
         /**
          * POST /api/v1/inventory/register
-         * @description Batched by-reference upsert. For each item with content metadata + a
-         *     `content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on
-         *     `content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`
-         *     row on `(file_server_id, path)`. No bytes are transferred — this is the
-         *     online crawl/reconcile path. Returns insert/upsert counts.
+         * @description Batched by-reference register — **fills both halves of the equation**. Every
+         *     item MUST carry a `content_hash`; for each, in one transaction, UPSERTs a
+         *     logical `catalogue_entries` row (keyed on `content_hash`, `category =
+         *     'legacy'`) AND the physical `file_inventory` row on `(file_server_id,
+         *     path)`. A hashless item is rejected (400) — observe-only goes through
+         *     `/index`. No bytes are transferred. Returns insert/upsert counts.
          */
         post: operations["register"];
         delete?: never;
@@ -6058,16 +6083,51 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description One item in a batched by-reference register request.
+         * @description One item in a batched **index** request — a hashless physical observation.
          *
-         *     Optional content metadata (`name`/`size_bytes`/`mime_type`) is used to
-         *     UPSERT a logical `catalogue_entries` row keyed on `content_hash`; the
-         *     `file_inventory` row is always upserted on `(file_server_id, path)`. No
-         *     bytes are transferred — this is the online crawl/reconcile path, not the 4M
-         *     offline load (that goes through the importer).
+         *     Index records that a file exists at `path` on a server, WITHOUT a content
+         *     identity. It writes `file_inventory` only (never `catalogue_entries`),
+         *     because we haven't hashed the bytes yet. This is the landing zone for
+         *     `crawl` output; promote to a coupled catalogue row later via `/register`
+         *     once a `probe` supplies the hash. There is deliberately no `content_hash`
+         *     field here — claiming an identity is what `register` is for.
+         */
+        InventoryIndexItem: {
+            path: string;
+            provenance?: unknown;
+            /** @description Physical-observation status — defaults to `indexed`. */
+            status?: string;
+        };
+        /** @description Batched index request body — all items share one `file_server_id`. */
+        InventoryIndexRequest: {
+            file_server_id: string;
+            items: components["schemas"]["InventoryIndexItem"][];
+        };
+        /** @description Result count of a batched index call. */
+        InventoryIndexResponse: {
+            /**
+             * Format: int64
+             * @description `file_inventory` rows inserted or updated. No catalogue rows are written.
+             */
+            inventory_upserted: number;
+        };
+        /**
+         * @description One item in a batched by-reference **register** request.
+         *
+         *     `content_hash` is REQUIRED: register fills both halves of the equation (a
+         *     logical `catalogue_entries` row keyed on the hash AND a physical
+         *     `file_inventory` row on `(file_server_id, path)`), so a row with no content
+         *     identity is rejected (400). To record a file you've *seen* but not yet
+         *     hashed, use [`InventoryIndexItem`] (`POST /api/v1/inventory/index`) instead.
+         *     Optional content metadata (`name`/`size_bytes`/`mime_type`) enriches the
+         *     catalogue row. No bytes are transferred — this is the online crawl/reconcile
+         *     path, not the 4M offline load (that goes through the importer).
          */
         InventoryRegisterItem: {
-            /** @description Bare-hex SHA-256, if known. NULL until a `probe` populates it. */
+            /**
+             * @description Bare-hex SHA-256 of the content. REQUIRED — supplied by a `probe`. An
+             *     item missing this is rejected; observe-only goes through `/index`.
+             */
             content_hash?: string | null;
             file_server_id: string;
             mime_type?: string | null;
@@ -12920,6 +12980,39 @@ export interface operations {
             };
         };
     };
+    index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description Index counts (inventory only) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryIndexResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     reconcile_batch: {
         parameters: {
             query?: never;
@@ -12975,7 +13068,7 @@ export interface operations {
                     "application/json": components["schemas"]["InventoryRegisterResponse"];
                 };
             };
-            /** @description Bad request */
+            /** @description Missing content_hash, or bad request */
             400: {
                 headers: {
                     [name: string]: unknown;
