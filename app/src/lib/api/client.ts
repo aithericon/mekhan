@@ -124,6 +124,12 @@ export type CatalogueNetStats = components['schemas']['NetStats'];
 export type LineageResponse = components['schemas']['LineageResponse'];
 export type LineageStep = components['schemas']['LineageStep'];
 
+// ─── File inventory (content-addressed catalogue companion, docs/32) ─────────
+export type InventoryEntry = components['schemas']['InventoryEntry'];
+export type InventoryStats = components['schemas']['InventoryStats'];
+export type InventoryCount = components['schemas']['InventoryCount'];
+export type PaginatedInventory = components['schemas']['Paginated_InventoryEntry'];
+
 // ─── Provenance ─────────────────────────────────────────────────────────────
 export type ProvenanceResponse = components['schemas']['ProvenanceResponse'];
 export type AncestryNode = components['schemas']['AncestryNode'];
@@ -1014,6 +1020,40 @@ export async function getCatalogueDistinctJsonb(column: string, key: string): Pr
 
 export function catalogueDownloadUrl(storagePath: string): string {
 	return `${API_BASE}/catalogue/download/${storagePath}`;
+}
+
+// ── File inventory (content-addressed catalogue companion, docs/32) ──────────
+
+/**
+ * Paginated physical-copy rows from `file_inventory`. Filters ride the generic
+ * query DSL (`filter[<field>][eq]`), same pattern as `listProcesses` —
+ * `status`, `file_server_id`, `is_canonical` are whitelisted; `search` matches
+ * path or content_hash; `sort` is the DSL form (e.g. `-updated_at`).
+ */
+export async function listInventory(params?: {
+	status?: string;
+	file_server_id?: string;
+	is_canonical?: boolean;
+	search?: string;
+	sort?: string;
+	page?: number;
+	page_size?: number;
+}): Promise<PaginatedInventory> {
+	const qs = new URLSearchParams();
+	if (params?.status) qs.set('filter[status][eq]', params.status);
+	if (params?.file_server_id) qs.set('filter[file_server_id][eq]', params.file_server_id);
+	if (params?.is_canonical !== undefined)
+		qs.set('filter[is_canonical][eq]', String(params.is_canonical));
+	if (params?.search) qs.set('search', params.search);
+	if (params?.sort) qs.set('sort', params.sort);
+	if (params?.page !== undefined) qs.set('page', String(params.page));
+	if (params?.page_size) qs.set('page_size', String(params.page_size));
+	const query = qs.toString();
+	return rawJson(`/inventory${query ? `?${query}` : ''}`);
+}
+
+export async function getInventoryStats(): Promise<InventoryStats> {
+	return unwrap(await client.GET('/api/v1/inventory/stats', {}));
 }
 
 // ── File upload (multipart — direct fetch since openapi-fetch doesn't help here) ─

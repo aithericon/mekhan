@@ -3350,7 +3350,7 @@
         ],
         "summary": "GET /api/v1/inventory",
         "description": "Paginated list with filter/sort over `content_hash`, `file_server_id`,\n`path`, `status`, `is_canonical` (same query DSL as the catalogue list).",
-        "operationId": "list_entries",
+        "operationId": "inventory_list",
         "responses": {
           "200": {
             "description": "Paginated inventory entries",
@@ -3465,7 +3465,7 @@
           "inventory"
         ],
         "summary": "GET /api/v1/inventory/stats — counts grouped by status and by file server.",
-        "operationId": "stats",
+        "operationId": "inventory_stats",
         "responses": {
           "200": {
             "description": "Inventory counts by status + server",

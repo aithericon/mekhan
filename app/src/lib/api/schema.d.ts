@@ -1178,7 +1178,7 @@ export interface paths {
          * @description Paginated list with filter/sort over `content_hash`, `file_server_id`,
          *     `path`, `status`, `is_canonical` (same query DSL as the catalogue list).
          */
-        get: operations["list_entries"];
+        get: operations["inventory_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1241,7 +1241,7 @@ export interface paths {
             cookie?: never;
         };
         /** GET /api/v1/inventory/stats — counts grouped by status and by file server. */
-        get: operations["stats"];
+        get: operations["inventory_stats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12765,7 +12765,7 @@ export interface operations {
             };
         };
     };
-    list_entries: {
+    inventory_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -12860,7 +12860,7 @@ export interface operations {
             };
         };
     };
-    stats: {
+    inventory_stats: {
         parameters: {
             query?: never;
             header?: never;
