@@ -560,3 +560,5 @@ clean:
     cargo clean --manifest-path service/Cargo.toml
     rm -rf app/build app/.svelte-kit
     rm -rf /tmp/mekhan-build-context
+
+
