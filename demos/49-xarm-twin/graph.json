@@ -3,10 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 40,
-        "y": 380
-      },
+      "position": { "x": 0, "y": 153 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -21,10 +18,7 @@
     {
       "id": "split",
       "type": "parallel_split",
-      "position": {
-        "x": 260,
-        "y": 380
-      },
+      "position": { "x": 190, "y": 151 },
       "data": {
         "type": "parallel_split",
         "label": "Fork"
@@ -34,10 +28,7 @@
       "id": "move",
       "type": "automated_step",
       "slug": "move",
-      "position": {
-        "x": 520,
-        "y": 160
-      },
+      "position": { "x": 996, "y": 214 },
       "data": {
         "type": "automated_step",
         "label": "Move (trajectory action)",
@@ -126,10 +117,7 @@
       "id": "twin_stream",
       "type": "automated_step",
       "slug": "twin_stream",
-      "position": {
-        "x": 440,
-        "y": 460
-      },
+      "position": { "x": 430, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Twin joint stream (live UI animation)",
@@ -174,10 +162,7 @@
       "id": "twin_view",
       "type": "automated_step",
       "slug": "twin_view",
-      "position": {
-        "x": 1380,
-        "y": 460
-      },
+      "position": { "x": 996, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Twin view (drain joint stream)",
@@ -221,10 +206,7 @@
     {
       "id": "join",
       "type": "join",
-      "position": {
-        "x": 1640,
-        "y": 360
-      },
+      "position": { "x": 1306, "y": 133 },
       "data": {
         "type": "join",
         "label": "Join",
@@ -235,10 +217,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 1860,
-        "y": 360
-      },
+      "position": { "x": 1546, "y": 123 },
       "data": {
         "type": "end",
         "label": "Done",

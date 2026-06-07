@@ -67,7 +67,7 @@
       "id": "transcribe",
       "type": "automated_step",
       "slug": "transcribe",
-      "position": { "x": 600, "y": 0 },
+      "position": { "x": 856, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Transcribe (faster-whisper)",
@@ -112,7 +112,7 @@
       "id": "collect",
       "type": "automated_step",
       "slug": "collect",
-      "position": { "x": 910, "y": 30 },
+      "position": { "x": 1166, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Collect transcript",
@@ -144,7 +144,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1220, "y": 44 },
+      "position": { "x": 1476, "y": 44 },
       "data": {
         "type": "end",
         "label": "Done",
