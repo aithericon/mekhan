@@ -301,6 +301,28 @@ apply-workflows dir="workflows":
     fi
     echo "✓ Applied all workflow templates under {{dir}}/"
 
+# ── buildx setup: QEMU + docker-container driver (build arm64 images on x86) ─
+#
+# The CI worker is x86 but the runtime images are linux/arm64, and every
+# runtime Dockerfile has `RUN` steps (apk/apt). The DEFAULT buildx "docker"
+# driver CANNOT execute emulated arm64 RUN steps — even with binfmt registered
+# it dies with `exec /bin/sh: exec format error`. The `docker-container`
+# (BuildKit) driver can. So we register QEMU for all arches AND switch to a
+# docker-container builder. Mirrors web-platform's `setup-buildx`.
+#
+# Every publish recipe calls this first. Each CI step is a fresh container
+# (buildx config is ephemeral) sharing the host docker daemon (the buildkit
+# container may persist), so we recreate idempotently under a stable name.
+ensure-buildx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "▶ registering QEMU (binfmt) + docker-container buildx builder"
+    docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null
+    docker buildx rm xbuild >/dev/null 2>&1 || true
+    docker rm -f buildx_buildkit_xbuild0 >/dev/null 2>&1 || true
+    docker buildx create --name xbuild --driver docker-container --use --bootstrap >/dev/null
+    echo "✓ buildx ready (docker-container driver + qemu)"
+
 # ── Package + push (Docker image) ───────────────────────────────────────────
 
 # Stage prebuilt binary + frontend, build the mekhan-service OCI image, and
@@ -312,6 +334,7 @@ apply-workflows dir="workflows":
 publish-backend-service registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     cd ..
+    just ci::ensure-buildx
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
     ctx="/tmp/mekhan-build-context"
@@ -331,20 +354,19 @@ publish-backend-service registry_image commit_sha ref_slug:
     # See deploy/docker/Dockerfile.service.prebuilt for the COPY.
     cp -r demos "$ctx/demos"
 
-    echo "▶ docker buildx build → {{registry_image}}/mekhan-service:$sha_tag"
+    echo "▶ docker buildx build + push → {{registry_image}}/mekhan-service:$sha_tag"
+    # --push (not --load): the docker-container builder builds in an isolated
+    # BuildKit, so push straight to the registry rather than loading an arm64
+    # image into the x86 daemon first.
     docker buildx build \
       --platform {{platform}} \
-      --load \
+      --push \
       -t "{{registry_image}}/mekhan-service:$sha_tag" \
       -t "{{registry_image}}/mekhan-service:$ref_tag" \
       -f deploy/docker/Dockerfile.service.prebuilt \
       "$ctx"
 
     rm -rf "$ctx"
-
-    echo "▶ docker push → {{registry_image}}/mekhan-service:$sha_tag, $ref_tag"
-    docker push "{{registry_image}}/mekhan-service:$sha_tag"
-    docker push "{{registry_image}}/mekhan-service:$ref_tag"
 
 # Build + push the aithericon-executor image.
 #
@@ -360,15 +382,14 @@ publish-backend-executor registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
+    # The executor Dockerfile compiles Rust IN-DOCKER. On the x86 CI worker the
+    # whole --platform arm64 build runs under QEMU (BuildKit/docker-container
+    # driver, set up here). NOTE: emulated compilation of the executor
+    # (kreuzberg/tesseract/ONNX native deps) is SLOW — consider a dedicated arm
+    # builder or cross-compiling if this gets too slow / times out.
+    just ci::ensure-buildx
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
-
-    # The executor Dockerfile compiles Rust IN-DOCKER. On the x86 CI worker,
-    # building --platform linux/arm64 runs that compile under QEMU emulation, so
-    # binfmt must be registered (idempotent). NOTE: emulated compilation of the
-    # executor (kreuzberg/tesseract/ONNX native deps) is SLOW — consider a
-    # dedicated arm builder or cross-compiling if this gets too slow / times out.
-    docker run --rm --privileged tonistiigi/binfmt --install arm64 >/dev/null 2>&1 || true
 
     echo "▶ docker buildx build + push → {{registry_image}}/aithericon-executor:$sha_tag"
     docker buildx build \
@@ -389,13 +410,12 @@ publish-backend-engine registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
+    # Engine also compiles Rust in-docker → emulated arm64 build on the x86 CI
+    # worker (docker-container driver + QEMU, set up here). Engine is pure-Rust/
+    # rustls (no ONNX), so emulation is far lighter than the executor's.
+    just ci::ensure-buildx
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
-
-    # Engine also compiles Rust in-docker → emulated arm64 build on the x86 CI
-    # worker; register binfmt (idempotent). Engine is pure-Rust/rustls (no ONNX),
-    # so emulation is far lighter than the executor's.
-    docker run --rm --privileged tonistiigi/binfmt --install arm64 >/dev/null 2>&1 || true
 
     echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
     docker buildx build \
