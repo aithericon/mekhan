@@ -12,6 +12,7 @@ pub mod db;
 pub mod demos;
 pub mod fleet;
 pub mod handlers;
+pub mod human_presence;
 pub mod inventory;
 pub mod lifecycle;
 /// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic
@@ -127,6 +128,12 @@ pub struct AppState {
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
     pub runner_presence: crate::runners_presence::RunnerPresence,
+    /// Humans-as-a-capacity (docs/33 §7) — shared handle to the human presence
+    /// controller's in-memory map. The same map the subscriber/sweep tasks
+    /// mutate; the human analogue of `runner_presence`. A roster MEMBER's
+    /// availability (not a daemon heartbeat) drives admission into the
+    /// `pool-<capacity_id>` net, reusing the runner pool plumbing verbatim.
+    pub human_presence: crate::human_presence::HumanPresence,
     /// Unified fleet-liveness registry (docs/23 §2; docs/24 S1) — the shared
     /// telemetry plane over BOTH the anonymous worker pool and the advisory
     /// facet of enrolled runners. Workers heartbeat on `worker.*.presence`
@@ -449,6 +456,23 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(
             handlers::runners::get_runner,
             handlers::runners::revoke_runner
+        ))
+        // Roster (docs/33 §7 — humans as a capacity). The human counterpart to
+        // the runner fleet: the set of `workspace_members` enrolled into a human
+        // `capacity` resource backed by a `pool-<capacity_id>` net. The literal
+        // `/roster/me` + `/roster/availability` segments are registered BEFORE
+        // `/roster/{id}` so matchit prefers the literal over the `{id}` wildcard
+        // (same trie-ordering caveat as the runner block).
+        .routes(routes!(
+            handlers::roster::enroll_member,
+            handlers::roster::list_roster
+        ))
+        .routes(routes!(handlers::roster::my_enrollments))
+        .routes(routes!(handlers::roster::set_availability))
+        .routes(routes!(
+            handlers::roster::get_roster_member,
+            handlers::roster::update_roster_member,
+            handlers::roster::revoke_roster_member
         ))
         // Capability types (Phase 4 — typed capability registry). Admin-curated,
         // workspace-scoped vocabulary the enroll path validates runner caps

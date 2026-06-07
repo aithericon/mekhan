@@ -25,11 +25,24 @@ use crate::AppState;
 )]
 pub async fn task_stream(
     State(state): State<AppState>,
+    user: crate::auth::model::AuthUser,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let client = state.nats.client().clone();
 
+    // An open inbox connection is the human's session liveness source: we
+    // core-publish `human.{member}.presence` once on connect and on every ping
+    // tick so the human presence controller (core-subscribed to
+    // `human.*.presence`) renews this member's availability. The controller
+    // reads the member from the SUBJECT — the payload is intentionally empty.
+    let member = user.subject_as_uuid();
+    let presence_subject = format!("human.{member}.presence");
+
     let stream = async_stream::stream! {
         yield Ok(Event::default().event("connected").data("ok"));
+
+        if let Err(e) = client.publish(presence_subject.clone(), Vec::new().into()).await {
+            tracing::warn!("Failed to publish human presence heartbeat: {e}");
+        }
 
         // Use core NATS subscriptions (not JetStream) — we only want live events.
         let mut request_sub = match client.subscribe("human.request.>").await {
@@ -114,6 +127,11 @@ pub async fn task_stream(
                     }
                 }
                 _ = ping_interval.tick() => {
+                    // Renew this member's presence: an open inbox tab keeps the
+                    // human available to the presence controller.
+                    if let Err(e) = client.publish(presence_subject.clone(), Vec::new().into()).await {
+                        tracing::warn!("Failed to publish human presence heartbeat: {e}");
+                    }
                     yield Ok(Event::default().comment("ping"));
                 }
             }

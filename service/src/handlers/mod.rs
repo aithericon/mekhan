@@ -26,6 +26,7 @@ pub mod observability;
 pub mod openapi_bundle;
 pub mod process_live;
 pub mod resources;
+pub mod roster;
 pub mod runners;
 pub mod task_stream;
 pub mod template_tests;

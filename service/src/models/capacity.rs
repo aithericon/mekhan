@@ -363,6 +363,7 @@ impl CapacityAxes {
 /// - `limit`      = seeded             · push  · hold · fixed(1)        · partition → Tokens
 /// - `instrument` = presence           · push  · hold · presence_driven · predicate → Presence
 /// - `self_claim` = presence           · offer · hold · presence_driven · predicate → Presence
+/// - `human`      = presence           · offer · hold · presence_driven · predicate → Presence
 ///
 /// There is no `hpc`/lease preset: lease capacity is the `datacenter` kind (it
 /// dispatches through [`axes_for_resource`]'s locked lease axes), not a
@@ -407,6 +408,21 @@ pub fn presets() -> Vec<CapacityPreset> {
         CapacityPreset {
             name: "self_claim".to_string(),
             display_name: "Self-claim pool".to_string(),
+            axes: CapacityAxes {
+                liveness: Liveness::Presence,
+                dispatch: Dispatch::Offer,
+                exclusivity: Exclusivity::Hold,
+                capacity_amount: CapacityAmount::PresenceDriven,
+                eligibility: Eligibility::Predicate,
+            },
+        },
+        CapacityPreset {
+            // The human-facing relabel of `self_claim`: same offer axes, but a
+            // dedicated entry-point name so the create form reads as a human task
+            // pool. The deploy router keys off `Dispatch::Offer`, not the preset
+            // name, so this routes through the same offer net (docs/33 §3.2).
+            name: "human".to_string(),
+            display_name: "Human task pool".to_string(),
             axes: CapacityAxes {
                 liveness: Liveness::Presence,
                 dispatch: Dispatch::Offer,
@@ -594,6 +610,11 @@ mod tests {
         // presence · offer routes to the same presence backend (backend() keys
         // only off liveness, not dispatch).
         assert_eq!(backend_of("self_claim"), CapacityBackend::Presence);
+        // `human` is the human-facing relabel of `self_claim`: same offer axes,
+        // same presence backend.
+        assert_eq!(backend_of("human"), CapacityBackend::Presence);
+        let human = preset_by_name("human").expect("human preset exists").axes;
+        assert_eq!(human.dispatch, Dispatch::Offer);
     }
 
     /// presence · offer maps to `Presence` — the parked-offer self-claim pool

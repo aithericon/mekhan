@@ -6343,6 +6343,307 @@
         }
       }
     },
+    "/api/v1/roster": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster` — paginated, workspace-scoped (live members only).\nOptionally filtered to a single `capacity_id`.",
+        "operationId": "list_roster",
+        "parameters": [
+          {
+            "name": "capacity_id",
+            "in": "query",
+            "description": "Optional filter: only members enrolled in this human capacity.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of roster members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_RosterMemberSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`POST /api/v1/roster` — enroll a `workspace_member` into a human capacity.\nAdmin (session `AuthUser`); workspace = caller's. Caps are admin-assigned on\nthe trusted row and validated against the workspace's `CapabilityType`s\nBEFORE insert — an unknown capability or a value mismatching its declared\nFieldKind → 400. A repeat enrollment of the same (capacity, member) → 409.",
+        "operationId": "enroll_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Member enrolled into the human capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Caps fail validation against the capability registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Member is already enrolled in this capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/availability": {
+      "post": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`POST /api/v1/roster/availability` — the caller flips their OWN durable\navailability intent on a specific human capacity. Self-service: keyed on\n`member_user_id = subject_as_uuid()`, so a member can only toggle their own\npresence. 404 when the caller is not enrolled in that capacity.",
+        "description": "The durable `available` row is the source of truth; AFTER the commit we\npublish a fire-and-forget CORE NATS message so the presence controller learns\nthe intent edge live (`human.{member}.availability`). A publish failure is\nwarned-and-swallowed — the next reconcile reads the durable row.\n\nMounted BEFORE `/roster/{id}` so matchit routes `availability` to this literal\nhandler.",
+        "operationId": "set_availability",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvailabilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Availability intent recorded"
+          },
+          "404": {
+            "description": "Caller is not enrolled in that capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/me": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster/me` — the caller's OWN live enrollments across the\nworkspace. Self-service read keyed on `member_user_id = subject_as_uuid()`;\nfeeds the availability UI. Returns the full [`RosterMemberDetail`] (caps +\ntyped availability) since a member is trusted to see their own enrollment.",
+        "description": "Mounted BEFORE `/roster/{id}` so matchit routes `me` to this literal handler.",
+        "operationId": "my_enrollments",
+        "responses": {
+          "200": {
+            "description": "The caller's own live roster enrollments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RosterMemberDetail"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/{id}": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster/{id}` — admin view of a single member (workspace-scoped).\n404 when missing or revoked.",
+        "operationId": "get_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Roster member detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`DELETE /api/v1/roster/{id}` — revoke a member (soft delete; sets\n`revoked_at`). Workspace-scoped; 404 when missing or already revoked.",
+        "operationId": "revoke_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Roster member revoked"
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`PATCH /api/v1/roster/{id}` — admin update of a member's caps / concurrency /\navailability. Every field optional; only the supplied ones are written. When\n`caps` is supplied it is re-validated against the workspace's\n`CapabilityType`s (same gate as enroll). 404 when missing or revoked.",
+        "operationId": "update_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRosterMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated roster member detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Caps fail validation against the capability registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners": {
       "get": {
         "tags": [
@@ -11276,6 +11577,54 @@
           }
         }
       },
+      "AvailabilityConfig": {
+        "type": "object",
+        "description": "The availability knobs stored in the `availability` JSONB column. Container-level\n`#[serde(default)]` so an empty `{}` JSONB — or any missing field — falls back to\n[`AvailabilityConfig::default`] (the interactive defaults: `session` liveness, 45 s\nTTL, 15 s grace), NOT each field's type-default (which would zero `ttl_secs`).",
+        "properties": {
+          "grace_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Additional grace before a lapsed presence is reaped.",
+            "default": 15,
+            "minimum": 0
+          },
+          "liveness_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LivenessSource",
+                "description": "What renews presence for this member."
+              }
+            ],
+            "default": "session"
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Expiry window: seconds since the last renewal before presence lapses.",
+            "default": 45,
+            "minimum": 0
+          }
+        }
+      },
+      "AvailabilityRequest": {
+        "type": "object",
+        "description": "Request body for a member's durable availability toggle. The member flips\ntheir own intent on a specific human capacity.",
+        "required": [
+          "capacity_id",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`true` → online (available for offers); `false` → offline."
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id`."
+          }
+        }
+      },
       "BackendCoverageEntry": {
         "type": "object",
         "description": "Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of\n0 means NO live worker serves this backend — steps on it will queue.",
@@ -13975,6 +14324,49 @@
           }
         }
       },
+      "EnrollMemberRequest": {
+        "type": "object",
+        "description": "Request body for enrolling a `workspace_member` into a human capacity.\nCaps are admin-assigned here — the trusted row, never the wire claim.",
+        "required": [
+          "capacity_id",
+          "member_user_id"
+        ],
+        "properties": {
+          "availability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AvailabilityConfig",
+                "description": "Optional availability config; defaults to the interactive preset."
+              }
+            ]
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id` to enroll into."
+          },
+          "caps": {
+            "description": "Admin-assigned capability blob, validated against `CapabilityType`s.\nDefaults to `{}`."
+          },
+          "concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-person `C`. Defaults to `1` when omitted.",
+            "minimum": 0
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `workspace_members.user_id` being enrolled."
+          }
+        }
+      },
       "EnrollRequest": {
         "type": "object",
         "description": "Request body for `POST /api/v1/runners/enroll`. Authenticated by the\n`registration_token` in the body, not by the auth gate.",
@@ -16438,6 +16830,15 @@
           "lease"
         ]
       },
+      "LivenessSource": {
+        "type": "string",
+        "description": "What renews a roster member's presence (docs/33 §7.1). A person has no daemon\nheartbeat, so availability is one parameterised controller, not three code\npaths — this picks the renewal signal.",
+        "enum": [
+          "none",
+          "session",
+          "external"
+        ]
+      },
       "LlmConfig": {
         "type": "object",
         "description": "Configuration for the LLM backend.",
@@ -18439,6 +18840,69 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_RosterMemberSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by the roster list endpoint.",
+              "required": [
+                "id",
+                "capacity_id",
+                "member_user_id",
+                "concurrency",
+                "available",
+                "enrolled_at"
+              ],
+              "properties": {
+                "available": {
+                  "type": "boolean"
+                },
+                "capacity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "concurrency": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "enrolled_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "member_user_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -20707,6 +21171,105 @@
           "send_action_goal"
         ]
       },
+      "RosterMemberDetail": {
+        "type": "object",
+        "description": "Admin view for a single roster member — carries the trusted caps and the\ntyped availability config.",
+        "required": [
+          "id",
+          "capacity_id",
+          "member_user_id",
+          "caps",
+          "concurrency",
+          "availability",
+          "available",
+          "enrolled_by",
+          "enrolled_at"
+        ],
+        "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AvailabilityConfig"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "available_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "caps": {},
+          "concurrency": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enrolled_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "RosterMemberSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by the roster list endpoint.",
+        "required": [
+          "id",
+          "capacity_id",
+          "member_user_id",
+          "concurrency",
+          "available",
+          "enrolled_at"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "concurrency": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "RotateResourceRequest": {
         "type": "object",
         "description": "Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps\nversion. The body carries the new config — the type cannot change at\nrotation time (`resource_type` is immutable for a logical resource).",
@@ -22937,6 +23500,31 @@
           }
         }
       },
+      "UpdateRosterMemberRequest": {
+        "type": "object",
+        "description": "Request body for an admin update of a roster member. Every field optional —\nonly the supplied ones are written.",
+        "properties": {
+          "availability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AvailabilityConfig"
+              }
+            ]
+          },
+          "caps": {},
+          "concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -24776,6 +25364,10 @@
     {
       "name": "runners",
       "description": "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."
+    },
+    {
+      "name": "roster",
+      "description": "Humans as a capacity (docs/33 §7) — the set of `workspace_members` enrolled into a human `capacity` resource backed by a `pool-<capacity_id>` net (the human counterpart to the runner fleet). Admin management (enroll / update / revoke, caps validated against the capability registry) + self-service (`/roster/me`, `/roster/availability` durable toggle). A member's availability drives presence admission, reusing the runner pool plumbing verbatim."
     },
     {
       "name": "workers",

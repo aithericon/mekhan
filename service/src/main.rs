@@ -223,6 +223,22 @@ async fn main() -> anyhow::Result<()> {
         fleet.clone(),
     );
 
+    // Human presence controller (docs/33 §7 — humans as a capacity). The human
+    // analogue of the runner presence controller: a roster MEMBER's availability
+    // (not a daemon heartbeat) drives admission into the `pool-<capacity_id>`
+    // net. Subscribes to BOTH `human.*.availability` (durable intent toggle) and
+    // `human.*.presence` (session/external liveness), and a sweep reaps a
+    // TTL-missing member. The injected pool unit reuses the runner plumbing
+    // verbatim, so no engine HTTP client is needed (pure NATS bridge + signal).
+    // Construct the shared handle ONCE: the controller tasks mutate it and the
+    // AppState read API reads through it.
+    let human_presence = mekhan_service::human_presence::HumanPresence::new();
+    mekhan_service::human_presence::spawn_human_presence_controller(
+        human_presence.clone(),
+        mekhan_nats.clone(),
+        db.clone(),
+    );
+
     // Worker liveness tasks (worker-pool feature). Subscribe to
     // `worker.*.presence` and keep a TTL-swept set of which `ExecutorJob`
     // backends have ≥1 live worker, so publish can WARN (never fail) when a
@@ -406,6 +422,7 @@ async fn main() -> anyhow::Result<()> {
         resource_resolver,
         runner_nats_signer,
         runner_presence,
+        human_presence,
         fleet,
         asset_resolver,
     };

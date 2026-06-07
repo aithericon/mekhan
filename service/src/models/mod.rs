@@ -12,6 +12,7 @@ pub mod model_replicas;
 pub mod node_replicas;
 pub mod resource;
 pub mod responses;
+pub mod roster;
 pub mod runner;
 pub mod template;
 pub mod template_test;

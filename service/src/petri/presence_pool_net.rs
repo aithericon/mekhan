@@ -616,12 +616,12 @@ mod tests {
 
         // Reuses the satisfies() matcher against the offer + unit caps.
         assert!(
-            guard_src(&t).contains("satisfies(offer.requirements, unit.caps)"),
+            guard_src(t).contains("satisfies(offer.requirements, unit.caps)"),
             "t_claim must reuse satisfies(offer.requirements, unit.caps): {}",
-            guard_src(&t)
+            guard_src(t)
         );
 
-        let ins = inputs(&t);
+        let ins = inputs(t);
         assert!(
             ins.contains(&"offers".to_string())
                 && ins.contains(&well_known::POOL_PRESENCE_CLAIM_INBOX.to_string())
@@ -629,7 +629,7 @@ mod tests {
             "t_claim consumes offers + presence_claim + a free pool unit: {ins:?}"
         );
 
-        let outs = outputs(&t);
+        let outs = outputs(t);
         assert!(
             outs.contains(&"grant_outbox".to_string()),
             "t_claim must output the grant on grant_outbox: {outs:?}"
@@ -650,12 +650,12 @@ mod tests {
         let a = offer_air(Uuid::nil());
         let t = transition(&a, "t_post_offer").expect("t_post_offer");
 
-        let ins = inputs(&t);
+        let ins = inputs(t);
         assert!(
             ins.contains(&well_known::POOL_CLAIM_INBOX.to_string()),
             "t_post_offer consumes the claim_inbox: {ins:?}"
         );
-        let outs = outputs(&t);
+        let outs = outputs(t);
         assert!(
             outs.contains(&"offers".to_string()),
             "t_post_offer parks into offers: {outs:?}"
@@ -666,7 +666,7 @@ mod tests {
             "t_post_offer must NOT reset reply routing (preserve grant routing): {t}"
         );
         // Parks the claim color through verbatim (grant_id + requirements).
-        let src = logic_src(&t);
+        let src = logic_src(t);
         assert!(
             src.contains("grant_id: claim.grant_id")
                 && src.contains("requirements: claim.requirements"),
