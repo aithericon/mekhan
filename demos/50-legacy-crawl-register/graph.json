@@ -1,0 +1,192 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 80 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Legacy Crawl + Register",
+        "initial": {
+          "id": "in",
+          "label": "Crawl parameters",
+          "fields": [
+            {
+              "name": "file_server_id",
+              "label": "File server id",
+              "kind": "text",
+              "required": true,
+              "default": "demo-nas"
+            },
+            {
+              "name": "mekhan_url",
+              "label": "mekhan base URL (inventory register target)",
+              "kind": "text",
+              "required": true,
+              "default": "http://localhost:13100"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "seed_nas",
+      "type": "automated_step",
+      "slug": "seed",
+      "position": { "x": 300, "y": 80 },
+      "data": {
+        "type": "automated_step",
+        "label": "Seed a synthetic NAS",
+        "description": "Writes a small, deterministic file tree into /tmp/mekhan-crawl-demo (cleaning any prior run first) so the rest of the workflow has something real to crawl WITHOUT touching a production file server. ~7 files across two subdirectories (datasets/, plots/, logs/). Outputs the root path and the file count.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Seeded",
+          "fields": [
+            { "name": "root", "label": "Root path", "kind": "text" },
+            { "name": "files_created", "label": "Files created", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "crawl",
+      "type": "automated_step",
+      "slug": "crawl",
+      "position": { "x": 620, "y": 80 },
+      "data": {
+        "type": "automated_step",
+        "label": "Crawl the file tree (file-ops crawl)",
+        "description": "The file-ops `crawl` operation: a recursive, streaming, checkpointable directory walk under the `mekhan-crawl-demo/` prefix of the local `/tmp` storage root (i.e. /tmp/mekhan-crawl-demo, the dir seed_nas just wrote). Unlike `list` (which buffers the whole Vec inline), crawl drives the OpenDAL streaming lister and `stat()`s each entry for size+mtime, emitting fixed-size `{path,size,mtime}` batches over the `crawl` control channel (batch_size 3 here, so the ~7 files arrive across several batches). It reads no file bytes — metadata only; integrity hashing is the later `probe` op's job. The scalar outputs (count/last_path/batches) summarize the walk; the per-file rows ride the channel for the consumer to fold.",
+        "channels": [
+          {
+            "name": "crawl",
+            "direction": "out",
+            "plane": "control",
+            "element": { "type": "any" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "file_ops",
+          "config": {
+            "operation": "crawl",
+            "prefix": "mekhan-crawl-demo/",
+            "storage": { "backend": "local", "endpoint": "/tmp" },
+            "batch_size": 3,
+            "stat": true
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Crawl summary",
+          "fields": [
+            { "name": "prefix", "label": "Prefix", "kind": "text" },
+            { "name": "count", "label": "File count", "kind": "number" },
+            { "name": "last_path", "label": "Last path (resume cursor)", "kind": "text" },
+            { "name": "batches", "label": "Batches emitted", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fold",
+      "type": "automated_step",
+      "slug": "fold",
+      "position": { "x": 940, "y": 80 },
+      "data": {
+        "type": "automated_step",
+        "label": "Fold the crawl batches",
+        "description": "Consumes the crawl step's `crawl` control channel with `join: gather`, so the compiler's gather barrier re-orders the emitted batches by index and parks the whole collection as `{output: [<batch>, …]}` — the inbound `input` token. Each batch is a `{items: [{path,size,mtime}, …]}` dict; this step flattens them into one `{path, size}` list and counts the files. This is the consumer-side fold: the producer just emitted a uniform stream, the join discipline lives on the edge.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Flattened listing",
+          "fields": [
+            { "name": "files", "label": "Files (JSON)", "kind": "json" },
+            { "name": "count", "label": "File count", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "register",
+      "type": "automated_step",
+      "slug": "register",
+      "position": { "x": 1260, "y": 80 },
+      "data": {
+        "type": "automated_step",
+        "label": "Register by reference (inventory)",
+        "description": "Builds a batched by-reference register request from the folded listing — one `{file_server_id, path, status: \"indexed\"}` row per crawled file — and POSTs it to mekhan's own `/api/v1/inventory/register` endpoint (stdlib urllib, no deps). No bytes move: this is the online crawl/register path. Each row upserts a `file_inventory` row on `(file_server_id, path)`; because crawl carries no content hash, no catalogue rows are inserted (those appear once a later `probe` populates content_hash). The Start `file_server_id` stamps the rows; `mekhan_url` (falling back to $MEKHAN_SERVICE_URL, then http://localhost:13100) targets the service. The registered rows then appear in the app's Inventory view.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Register result",
+          "fields": [
+            { "name": "files_seen", "label": "Files seen", "kind": "number" },
+            { "name": "inventory_upserted", "label": "Inventory rows upserted", "kind": "number" },
+            { "name": "catalogue_inserted", "label": "Catalogue rows inserted", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1580, "y": 100 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "files_crawled", "expression": "crawl.count" },
+          { "targetField": "batches", "expression": "crawl.batches" },
+          { "targetField": "inventory_upserted", "expression": "register.inventory_upserted" },
+          { "targetField": "catalogue_inserted", "expression": "register.catalogue_inserted" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_seed", "source": "start", "target": "seed_nas", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_seed_crawl", "source": "seed_nas", "target": "crawl", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_crawl_fold", "source": "crawl", "sourceHandle": "crawl", "target": "fold", "targetHandle": "in", "type": "sequence", "join": "gather" },
+    { "id": "e_fold_register", "source": "fold", "target": "register", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_register_end", "source": "register", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

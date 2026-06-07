@@ -1,0 +1,20 @@
+{
+  "name": "Seed a synthetic 7-file NAS, crawl it with the file-ops `crawl` op (streaming `{path,size,mtime}` batches over the `crawl` control channel, batch_size 3), gather-fold the batches, and register each file by reference into file_inventory via POST /api/v1/inventory/register. No bytes move; crawl carries no content hash so catalogue_inserted is 0. The register step reaches mekhan over HTTP — `mekhan_url` defaults to http://localhost:13100 (override per slot, e.g. 20100).",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "file_server_id": "demo-nas",
+        "mekhan_url": "http://localhost:13100"
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.files_crawled", "op": "eq", "value": 7 },
+    { "path": "result.value.batches", "op": "eq", "value": 3 },
+    { "path": "result.value.inventory_upserted", "op": "eq", "value": 7 },
+    { "path": "result.value.catalogue_inserted", "op": "eq", "value": 0 }
+  ]
+}
