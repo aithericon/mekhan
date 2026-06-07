@@ -16,14 +16,10 @@
 	const pathname = $derived(page.url.pathname);
 
 	type TabDef = { href: string; match: string; label: string; icon: typeof Cpu; title: string };
+	// Ordered to follow the operator workflow: discover a model (Catalog) →
+	// curate + run it (Set) → give it capacity (Pools) → watch it live
+	// (Engines) → observe inference (Telemetry).
 	const tabs: TabDef[] = [
-		{
-			href: '/models/engines',
-			match: 'engines',
-			label: 'Engines',
-			icon: Cpu,
-			title: 'Live per-node inventory — load / unload / pull, ready-to-load'
-		},
 		{
 			href: '/models/catalog',
 			match: 'catalog',
@@ -36,7 +32,7 @@
 			match: 'set',
 			label: 'Set',
 			icon: Boxes,
-			title: 'The operator-curated model set + lifecycle'
+			title: 'The operator-curated model set + lifecycle — load / unload / autoscale'
 		},
 		{
 			href: '/models/placement',
@@ -46,11 +42,18 @@
 			title: 'Node pools — engine capacity the autoscaler fills'
 		},
 		{
+			href: '/models/engines',
+			match: 'engines',
+			label: 'Engines',
+			icon: Cpu,
+			title: 'Live per-node engine inventory — what is resident on each runner'
+		},
+		{
 			href: '/models/router',
 			match: 'router',
-			label: 'Router',
+			label: 'Telemetry',
 			icon: Activity,
-			title: 'Inference audit ledger (metering / GDPR)'
+			title: 'Per-model Prometheus metrics + the inference audit ledger (metering / GDPR)'
 		}
 	];
 

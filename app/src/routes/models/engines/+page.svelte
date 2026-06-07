@@ -141,8 +141,11 @@
 		<h2 class="text-base font-semibold tracking-tight text-foreground">Engines</h2>
 		<span class="text-sm text-muted-foreground">live per-node inventory</span>
 		{#if !engines.headroom_from_router}
-			<span class="text-sm text-muted-foreground/70">
-				headroom = full budget (router poll unconfigured)
+			<span
+				class="cursor-help text-sm text-muted-foreground/50"
+				title="The router /metrics poll is unconfigured, so per-engine headroom shows the full concurrency budget rather than live in-flight load."
+			>
+				headroom: full budget
 			</span>
 		{/if}
 		<Button
@@ -185,9 +188,18 @@
 								<span class="truncate font-mono text-sm text-foreground"
 									>{runnerName(node.runner_id)}</span
 								>
-								{#each runnerBackends(node.runner_id) as b (b)}
+								{#each runnerBackends(node.runner_id).slice(0, 3) as b (b)}
 									<Badge variant="secondary" class="shrink-0 font-mono text-xs">{b}</Badge>
 								{/each}
+								{#if runnerBackends(node.runner_id).length > 3}
+									<Badge
+										variant="secondary"
+										class="shrink-0 cursor-help font-mono text-xs"
+										title={runnerBackends(node.runner_id).join(', ')}
+									>
+										+{runnerBackends(node.runner_id).length - 3}
+									</Badge>
+								{/if}
 							</span>
 						{:else}
 							<span class="font-mono text-sm text-muted-foreground"
@@ -206,8 +218,11 @@
 									<span class="flex items-baseline gap-2 truncate">
 										<span class="truncate font-medium text-foreground">{e.base}</span>
 										{#if e.max_num_seqs != null}
-											<span class="shrink-0 text-sm text-muted-foreground">
-												C {e.max_num_seqs} · headroom {e.headroom ?? '–'}
+											<span
+												class="shrink-0 cursor-help text-sm text-muted-foreground"
+												title="C = max concurrent sequences this engine serves (vLLM --max-num-seqs). Headroom = free slots not currently in flight."
+											>
+												{e.max_num_seqs} slots · {e.headroom ?? '–'} free
 											</span>
 										{/if}
 									</span>

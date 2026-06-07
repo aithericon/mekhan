@@ -18,22 +18,26 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
 	import { statusTone } from '$lib/components/fleet/model-pool';
 
 	let pools = $state<ResourceSummary[]>([]);
 	let nodeReplicas = $state<NodeReplicaRow[]>([]);
+	let datacenters = $state<ResourceSummary[]>([]);
 	let error = $state<string | null>(null);
 
 	async function poll() {
 		try {
-			const [pl, nr] = await Promise.all([
+			const [pl, nr, dc] = await Promise.all([
 				listResources({ resource_type: 'node_pool', perPage: 100 }),
-				listNodeReplicas()
+				listNodeReplicas(),
+				listResources({ resource_type: 'datacenter', perPage: 100 })
 			]);
 			pools = pl.items;
 			nodeReplicas = nr;
+			datacenters = dc.items;
 			error = null;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load pools';
@@ -243,8 +247,29 @@
 				<Input bind:value={fName} placeholder="A100 pool" class="text-sm" />
 			</label>
 			<label class="block space-y-1">
-				<span class="text-sm text-muted-foreground">Datacenter (alias)</span>
-				<Input bind:value={fDatacenter} placeholder="dc_nomad" class="text-sm" />
+				<span class="text-sm text-muted-foreground">Datacenter</span>
+				{#if datacenters.length === 0}
+					<Input
+						bind:value={fDatacenter}
+						placeholder="dc_nomad (no datacenter resources found)"
+						class="text-sm"
+					/>
+				{:else}
+					<Select.Root
+						type="single"
+						value={fDatacenter}
+						onValueChange={(v) => (fDatacenter = v ?? '')}
+					>
+						<Select.Trigger class="w-full text-sm" data-testid="pool-datacenter">
+							{fDatacenter || '— select a datacenter —'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each datacenters as d (d.id)}
+								<Select.Item value={d.path} label={d.display_name || d.path} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{/if}
 			</label>
 			<label class="block space-y-1">
 				<span class="text-sm text-muted-foreground">Residency zone</span>

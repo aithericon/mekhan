@@ -289,32 +289,22 @@
 						{/if}
 					</div>
 					<div class="mt-0.5 pl-3.5 text-sm text-muted-foreground">
-						{#if m.base}LoRA of {m.base} · {/if}served by {m.serving_runners} runner{m.serving_runners ===
-						1
-							? ''
-							: 's'} · <span class="text-muted-foreground/70">{m.replicas} replica{m.replicas === 1
-							? ''
-							: 's'}</span>
-						{#if m.note}· {m.note}{/if}
+						{#if m.base}LoRA of <span class="font-mono text-foreground/70">{m.base}</span> · {/if}<span
+							class="text-foreground/80">{m.serving_runners}</span
+						> serving
 					</div>
+					{#if m.note}
+						<div class="mt-0.5 line-clamp-2 pl-3.5 text-sm text-muted-foreground/70" title={m.note}>
+							{m.note}
+						</div>
+					{/if}
 
 					{#if m.state === 'loaded' && m.serving_runners === 0}
 						<div
-							class="mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
+							class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
 							data-testid="loaded-no-runner-hint"
 						>
-							<span class="min-w-0 flex-1"
-								>loaded but no live runner serves it — load it on a runner</span
-							>
-							<Button
-								variant="outline"
-								size="sm"
-								class="h-6 shrink-0 px-2 text-sm"
-								disabled={busy !== null}
-								onclick={() => openLoad(m.model_id)}
-							>
-								Load
-							</Button>
+							Loaded, but no live runner serves it — use <b>Load</b> below to place it on a runner.
 						</div>
 					{/if}
 
@@ -329,7 +319,7 @@
 									desired <b class="text-foreground"
 										>{a.desired_count ?? a.desired_replicas ?? '—'}</b
 									>
-									· loaded <b class="text-foreground">{m.serving_runners}</b> ·
+									· serving <b class="text-foreground">{m.serving_runners}</b> ·
 									<span class="text-foreground/80">{a.mode}</span>
 								</span>
 								{#if a.mode === 'manual'}
