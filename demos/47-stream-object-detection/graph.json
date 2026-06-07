@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 180 },
+      "position": { "x": 0, "y": 74 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "stream",
       "type": "automated_step",
       "slug": "stream",
-      "position": { "x": 340, "y": 180 },
+      "position": { "x": 290, "y": 3 },
       "data": {
         "type": "automated_step",
         "label": "Stream clip as fragmented MP4 (PyAV)",
@@ -68,7 +68,7 @@
       "id": "detector",
       "type": "automated_step",
       "slug": "detector",
-      "position": { "x": 660, "y": 180 },
+      "position": { "x": 600, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Detect objects (YOLO26 + ByteTrack)",
@@ -114,7 +114,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 980, "y": 180 },
+      "position": { "x": 910, "y": 10 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -149,7 +149,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1300, "y": 180 },
+      "position": { "x": 1220, "y": 24 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 120 },
+      "position": { "x": 0, "y": 40 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -18,7 +18,7 @@
     {
       "id": "ask",
       "type": "human_task",
-      "position": { "x": 320, "y": 120 },
+      "position": { "x": 190, "y": 20 },
       "data": {
         "type": "human_task",
         "label": "Ask Operator",
@@ -30,7 +30,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 620, "y": 120 },
+      "position": { "x": 460, "y": 0 },
       "data": {
         "type": "end",
         "label": "Recorded",

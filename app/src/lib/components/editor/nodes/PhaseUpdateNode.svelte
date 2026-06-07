@@ -3,6 +3,7 @@
 	import type { PhaseUpdateNodeData } from '$lib/types/editor';
 	import Flag from '@lucide/svelte/icons/flag';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: PhaseUpdateNodeData; selected?: boolean } =
 		$props();
@@ -15,7 +16,7 @@
 	icon={Flag}
 	label={data.label}
 	{selected}
-	class="min-w-[170px]"
+	width={NODE_WIDTH.phase_update}
 	data-testid="node-phase-update"
 	body={phaseBody}
 />

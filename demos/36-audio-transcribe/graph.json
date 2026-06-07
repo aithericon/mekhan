@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 160 },
+      "position": { "x": 0, "y": 64 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "vad",
       "type": "automated_step",
       "slug": "vad",
-      "position": { "x": 340, "y": 160 },
+      "position": { "x": 290, "y": 3 },
       "data": {
         "type": "automated_step",
         "label": "VAD filter",
@@ -67,7 +67,7 @@
       "id": "transcribe",
       "type": "automated_step",
       "slug": "transcribe",
-      "position": { "x": 660, "y": 160 },
+      "position": { "x": 600, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Transcribe (faster-whisper)",
@@ -112,7 +112,7 @@
       "id": "collect",
       "type": "automated_step",
       "slug": "collect",
-      "position": { "x": 980, "y": 160 },
+      "position": { "x": 910, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Collect transcript",
@@ -144,7 +144,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1300, "y": 160 },
+      "position": { "x": 1220, "y": 44 },
       "data": {
         "type": "end",
         "label": "Done",

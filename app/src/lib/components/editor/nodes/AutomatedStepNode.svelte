@@ -3,6 +3,7 @@
 	import type { AutomatedStepNodeData } from '$lib/types/editor';
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: AutomatedStepNodeData; selected?: boolean } = $props();
 
@@ -81,7 +82,7 @@
 	icon={Cpu}
 	label={data.label}
 	{selected}
-	class="min-w-[200px]"
+	width={NODE_WIDTH.automated_step}
 	data-testid="node-automated-step"
 	body={automatedBody}
 />

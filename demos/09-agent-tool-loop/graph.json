@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 200 },
+      "position": { "x": 10, "y": 108 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -26,9 +26,7 @@
     {
       "id": "agent",
       "type": "agent",
-      "position": { "x": 320, "y": 80 },
-      "width": 440,
-      "height": 360,
+      "position": { "x": 310, "y": 0 },
       "data": {
         "type": "agent",
         "label": "Triage Agent",
@@ -48,7 +46,7 @@
     {
       "id": "lookup_order",
       "type": "sub_workflow",
-      "position": { "x": 820, "y": 460 },
+      "position": { "x": 0, "y": 240 },
       "data": {
         "type": "sub_workflow",
         "label": "lookup_order",
@@ -69,7 +67,7 @@
     {
       "id": "collect_feedback",
       "type": "sub_workflow",
-      "position": { "x": 820, "y": 60 },
+      "position": { "x": 0, "y": 420 },
       "data": {
         "type": "sub_workflow",
         "label": "collect_feedback",
@@ -89,7 +87,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1300, "y": 200 },
+      "position": { "x": 640, "y": 98 },
       "data": {
         "type": "end",
         "label": "Done",

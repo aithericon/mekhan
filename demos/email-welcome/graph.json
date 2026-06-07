@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 120 },
+      "position": { "x": 0, "y": 74 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -19,7 +19,7 @@
       "id": "intake",
       "type": "human_task",
       "slug": "intake",
-      "position": { "x": 280, "y": 120 },
+      "position": { "x": 190, "y": 44 },
       "data": {
         "type": "human_task",
         "label": "Intake",
@@ -58,7 +58,7 @@
       "id": "send",
       "type": "automated_step",
       "slug": "send",
-      "position": { "x": 560, "y": 120 },
+      "position": { "x": 460, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Send Welcome",
@@ -107,7 +107,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 840, "y": 120 },
+      "position": { "x": 770, "y": 34 },
       "data": {
         "type": "end",
         "label": "Done",

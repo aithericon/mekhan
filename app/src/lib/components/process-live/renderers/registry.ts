@@ -16,6 +16,8 @@ import type { LiveArtifactEntry } from '$lib/api/client';
 
 import GpPosteriorRenderer from './GpPosteriorRenderer.svelte';
 import ImageRenderer from './ImageRenderer.svelte';
+import VideoRenderer from './VideoRenderer.svelte';
+import AudioRenderer from './AudioRenderer.svelte';
 import TextRenderer from './TextRenderer.svelte';
 import JsonRenderer from './JsonRenderer.svelte';
 
@@ -32,6 +34,8 @@ export const HINT_RENDERERS: Record<string, Component<RendererProps>> = {
 /** MIME-prefix regex → component. Fallback for declared MIME types. */
 export const MIME_RENDERERS: [RegExp, Component<RendererProps>][] = [
 	[/^image\//, ImageRenderer as unknown as Component<RendererProps>],
+	[/^video\//, VideoRenderer as unknown as Component<RendererProps>],
+	[/^audio\//, AudioRenderer as unknown as Component<RendererProps>],
 	[/^text\//, TextRenderer as unknown as Component<RendererProps>],
 	[/^application\/json/, JsonRenderer as unknown as Component<RendererProps>]
 ];
@@ -63,6 +67,7 @@ export function groupKey(entry: LiveArtifactEntry): string {
 	const mime = entry.mime_type ?? '';
 	if (mime.startsWith('image/')) return 'mime:image';
 	if (mime.startsWith('video/')) return 'mime:video';
+	if (mime.startsWith('audio/')) return 'mime:audio';
 	if (mime.startsWith('text/')) return 'mime:text';
 	if (mime.startsWith('application/json')) return 'mime:json';
 	return `category:${entry.category}`;
