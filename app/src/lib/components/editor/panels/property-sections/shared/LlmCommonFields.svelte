@@ -97,7 +97,13 @@
 		type="single"
 		value={provider}
 		onValueChange={(v) => {
-			if (v) patch({ provider: v });
+			if (!v) return;
+			// Switching to the internal pool clears any per-step apiKey/baseUrl:
+			// the endpoint comes from the bound internal_llm resource and those
+			// inputs are hidden for `internal`, so a leftover value would be an
+			// invisible override (the compiler strips it anyway). Clear it up front.
+			if (v === 'internal') patch({ provider: v, apiKey: undefined, baseUrl: undefined });
+			else patch({ provider: v });
 		}}
 		disabled={readonly}
 	>

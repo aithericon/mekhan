@@ -2322,6 +2322,7 @@ pub fn agent_to_llm_config(
     // path synthesizes an `AutomatedStep(Llm)` that hits `validate`, and the
     // agent loop path round-trips this same config through `validate_and_transform`'s
     // LLM arm during the foundation/borrow pass.
+    let is_internal = model.provider == crate::backends::llm::INTERNAL_PROVIDER;
     config.insert(
         "provider".to_string(),
         Value::String(
@@ -2329,11 +2330,19 @@ pub fn agent_to_llm_config(
         ),
     );
     config.insert("model".to_string(), Value::String(model.model.clone()));
-    if let Some(k) = &model.api_key {
-        config.insert("api_key".to_string(), Value::String(k.clone()));
-    }
-    if let Some(b) = &model.base_url {
-        config.insert("base_url".to_string(), Value::String(b.clone()));
+    // Off-router lock: an internal binding's endpoint + credentials come solely
+    // from the bound internal_llm resource overlay, so never emit a per-step
+    // base_url/api_key (any value is vestigial — the editor hides those inputs
+    // for `internal`). Mirrors `strip_internal_overrides` on the validator seam;
+    // this path remaps provider→openai above, so the validator won't see
+    // `internal` and can't strip for us.
+    if !is_internal {
+        if let Some(k) = &model.api_key {
+            config.insert("api_key".to_string(), Value::String(k.clone()));
+        }
+        if let Some(b) = &model.base_url {
+            config.insert("base_url".to_string(), Value::String(b.clone()));
+        }
     }
     if let Some(a) = &model.resource_alias {
         config.insert("resource_alias".to_string(), Value::String(a.clone()));
@@ -3473,11 +3482,14 @@ mod tests {
     /// `resource_alias` that overlays the in-cluster router endpoint.
     #[test]
     fn agent_internal_emits_openai_with_alias() {
+        // Carry STALE per-step overrides (e.g. left over from a prior provider
+        // before the author switched the node to the internal pool). The off-router
+        // lock must STRIP them — they must never reach the wire.
         let model = ModelRef {
             provider: "internal".to_string(),
             model: "llama3.2:1b".to_string(),
-            api_key: None,
-            base_url: None,
+            api_key: Some("sk-leak".to_string()),
+            base_url: Some("https://evil.example.com/v1".to_string()),
             resource_alias: Some("internal_pool_router".to_string()),
             temperature: Some(0.0),
             max_tokens: None,
@@ -3492,6 +3504,14 @@ mod tests {
             cfg.get("resource_alias").and_then(|v| v.as_str()),
             Some("internal_pool_router"),
             "resource_alias must survive the remap (it carries the router endpoint)"
+        );
+        assert!(
+            cfg.get("base_url").is_none(),
+            "stale per-step base_url must be stripped from an internal agent binding"
+        );
+        assert!(
+            cfg.get("api_key").is_none(),
+            "stale per-step api_key must be stripped from an internal agent binding"
         );
         // A non-internal provider passes through unchanged.
         let anthropic_model = ModelRef {

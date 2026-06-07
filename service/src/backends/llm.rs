@@ -92,20 +92,26 @@ pub fn remap_internal_provider(provider: &str) -> &str {
 
 /// Enforce the internal-binding contract on a raw provider + its binding
 /// fields. Shared between the plain-LLM AutomatedStep validator and the agent
-/// lowering paths so the GDPR off-router lock cannot drift.
+/// lowering paths so the rule cannot drift.
 ///
-/// No-op when `provider` is not `internal`. When it is:
-/// - (a) `resource_alias` MUST be present + non-empty (the in-cluster router
-///   endpoint lives only in the bound `internal_llm` resource overlay), else
-///   [`CompileError::Validation`];
-/// - (b) `base_url` / `api_key` MUST be absent (a per-step override could let
-///   the model escape the in-cluster router off to an external host), else
-///   [`CompileError::Validation`].
+/// No-op when `provider` is not `internal`. When it is, `resource_alias` MUST
+/// be present + non-empty — the in-cluster router endpoint lives only in the
+/// bound `internal_llm` resource overlay — else [`CompileError::Validation`].
+///
+/// The GDPR off-router lock (no per-step `base_url`/`api_key` reaching the wire)
+/// is NOT enforced here by rejection: a per-step `base_url`/`api_key` on an
+/// internal binding is almost always vestigial (the editor hides those inputs
+/// for `internal`, so any value is leftover from a prior provider) and erroring
+/// on an *invisible* field is a dead-end for the author. Instead every emission
+/// seam STRIPS `base_url`/`api_key` for an internal binding (see
+/// [`strip_internal_overrides`]) so they never reach the executor wire — which
+/// also satisfies the lock, because the executor overlay only fills `base_url`
+/// from the resource when the config's own `base_url` is absent.
 pub fn check_internal_binding(
     provider: &str,
     resource_alias: Option<&str>,
-    base_url: Option<&str>,
-    api_key: Option<&str>,
+    _base_url: Option<&str>,
+    _api_key: Option<&str>,
 ) -> Result<(), CompileError> {
     if provider != INTERNAL_PROVIDER {
         return Ok(());
@@ -119,15 +125,20 @@ pub fn check_internal_binding(
                 .into(),
         ));
     }
-    if present(base_url) || present(api_key) {
-        return Err(CompileError::Validation(
-            "llm config: provider \"internal\" forbids a per-step base_url or api_key \
-             (GDPR off-router lock — the endpoint comes from the bound internal_llm \
-             resource overlay; a per-step override could escape the in-cluster router)"
-                .into(),
-        ));
-    }
     Ok(())
+}
+
+/// Drop any per-step `base_url`/`api_key` from an internal binding's config
+/// object. For `provider: "internal"` the endpoint + credentials come solely
+/// from the bound `internal_llm` resource overlay, so a per-step value is both
+/// vestigial AND unsafe (it would win over the overlay and could escape the
+/// in-cluster router). Stripping it here is the off-router lock. No-op for any
+/// other provider, where `base_url`/`api_key` are legitimate authoring fields.
+pub fn strip_internal_overrides(config: &mut serde_json::Map<String, Value>) {
+    if config.get("provider").and_then(|v| v.as_str()) == Some(INTERNAL_PROVIDER) {
+        config.remove("base_url");
+        config.remove("api_key");
+    }
 }
 
 pub static LLM_DECL: BackendDecl = BackendDecl {
@@ -181,18 +192,22 @@ fn validate(
         .unwrap_or_default();
     let config = if provider == INTERNAL_PROVIDER {
         let str_field = |k: &str| config.get(k).and_then(|v| v.as_str());
-        // (a)+(b): enforce the off-router lock (alias required, base_url/api_key
-        // forbidden) before serde parsing.
+        // (a) alias required (the router endpoint lives only in the bound
+        //     internal_llm resource overlay).
         check_internal_binding(
             provider,
             str_field("resource_alias"),
             str_field("base_url"),
             str_field("api_key"),
         )?;
-        // (c) Rewrite the wire provider to `openai` and validate THAT
-        // normalized config, so the emitted wire carries `openai`.
         let mut normalized = config.clone();
         if let Some(obj) = normalized.as_object_mut() {
+            // (b) off-router lock: strip any vestigial per-step base_url/api_key
+            //     BEFORE the provider rewrite (strip keys off `internal`), so they
+            //     never reach the wire and the overlay's router base_url is used.
+            strip_internal_overrides(obj);
+            // (c) rewrite the wire provider to `openai` and validate THAT
+            //     normalized config, so the emitted wire carries `openai`.
             obj.insert(
                 "provider".to_string(),
                 Value::String(remap_internal_provider(INTERNAL_PROVIDER).to_string()),
@@ -662,28 +677,38 @@ mod tests {
     }
 
     #[test]
-    fn internal_forbids_per_step_base_url_and_api_key() {
-        let base = json!({
+    fn internal_strips_per_step_base_url_and_api_key() {
+        // Off-router lock: a per-step base_url/api_key on an internal binding is
+        // vestigial (the editor hides those inputs for `internal`). Validation
+        // must SUCCEED and STRIP them from the wire — never let them reach the
+        // executor (where a per-step base_url would win over the resource overlay
+        // and could escape the in-cluster router).
+        let cfg = json!({
             "provider": "internal",
             "model": "llama3.2:1b",
             "prompt": "hi",
             "resource_alias": "internal_pool_router",
+            "base_url": "https://evil.example.com/v1",
+            "api_key": "sk-leak",
         });
-
-        let mut with_base_url = base.clone();
-        with_base_url["base_url"] = json!("https://evil.example.com/v1");
-        let err = validate_cfg(&with_base_url).expect_err("per-step base_url must error");
-        assert!(
-            format!("{err:?}").contains("base_url"),
-            "error should mention base_url"
+        let (wire, _inputs) = validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
+        assert_eq!(
+            wire.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal must remap to openai"
         );
-
-        let mut with_api_key = base.clone();
-        with_api_key["api_key"] = json!("sk-leak");
-        let err = validate_cfg(&with_api_key).expect_err("per-step api_key must error");
         assert!(
-            format!("{err:?}").contains("api_key"),
-            "error should mention api_key"
+            wire.get("base_url").is_none(),
+            "per-step base_url must be stripped from the internal wire config"
+        );
+        assert!(
+            wire.get("api_key").is_none(),
+            "per-step api_key must be stripped from the internal wire config"
+        );
+        assert_eq!(
+            wire.get("resource_alias").and_then(|v| v.as_str()),
+            Some("internal_pool_router"),
+            "the internal_llm binding must be preserved"
         );
     }
 }
