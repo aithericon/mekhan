@@ -154,9 +154,29 @@ export type BuilderRawNode = {
 
 /** A named property in an object node. */
 export type BuilderField = {
+	/**
+	 * Stable, UI-only identity for this field. Used as a keyed-list identity in
+	 * the builder UI so editing a field's name doesn't remount its subtree.
+	 * Never serialized to JSON Schema (see `builderNodeToSchema`, which reads
+	 * only `name`/`node`).
+	 */
+	id: string;
 	name: string;
 	node: BuilderNode;
 };
+
+// ── UI-only field id generator ────────────────────────────────────────────────
+
+let __fieldIdSeq = 0;
+
+/**
+ * Allocate a fresh UI-only field id. Deterministic, monotonic counter — no
+ * clock reads, no randomness. Never serialized to JSON Schema.
+ */
+export function nextFieldId(): string {
+	__fieldIdSeq += 1;
+	return `bf${__fieldIdSeq}`;
+}
 
 // ── Detection helpers ─────────────────────────────────────────────────────────
 
@@ -350,7 +370,7 @@ export function schemaToBuilderNode(schema: unknown): BuilderNode {
 		if (rawProps) {
 			for (const [name, propSchema] of Object.entries(rawProps)) {
 				const childNode = schemaToBuilderNode(propSchema);
-				fields.push({ name, node: childNode });
+				fields.push({ id: nextFieldId(), name, node: childNode });
 			}
 		}
 

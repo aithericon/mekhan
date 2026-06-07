@@ -10,6 +10,13 @@ export default defineConfig({
 		setupFiles: ['./vitest-setup.ts']
 	},
 	resolve: {
+		// Resolve Svelte (and any browser-conditioned exports) to their client
+		// build so component tests can actually `mount`/`render` under jsdom.
+		// Without this, vite picks Svelte's server export and
+		// `@testing-library/svelte`'s render throws `mount is not available on
+		// the server`. Verified: the full existing unit suite still passes with
+		// this condition set.
+		conditions: ['browser'],
 		alias: {
 			$lib: new URL('./src/lib', import.meta.url).pathname,
 			// SvelteKit's `$app/environment` is a virtual module the unit lane
