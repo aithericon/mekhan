@@ -107,7 +107,14 @@ fi
 # port→URL mapping in one place.
 MEKHAN_SERVICE_URL="http://localhost:${MEKHAN_SERVICE_PORT}"
 MEKHAN_ENGINE_URL="http://localhost:${MEKHAN_ENGINE_PORT}"
-MEKHAN_ROUTER_URL="http://localhost:${MEKHAN_ROUTER_PORT}"
+# Router URL is IPv4-explicit (127.0.0.1, not localhost) on purpose: the
+# inference-router binds IPv4, but `localhost` resolves IPv6 (::1) first on
+# macOS. If any other process holds [::1]:<router-port> (e.g. a sibling
+# worktree's Vite that auto-incremented onto this port), the OpenAI-compatible
+# adapter's happy-eyeballs would connect to THAT instead of the router and an
+# internal-pool inference call would silently hit the wrong server. Pinning
+# 127.0.0.1 makes the router endpoint deterministic.
+MEKHAN_ROUTER_URL="http://127.0.0.1:${MEKHAN_ROUTER_PORT}"
 MEKHAN_NATS_URL="nats://localhost:${MEKHAN_NATS_PORT}"
 MEKHAN_NATS_MON_URL="http://localhost:${MEKHAN_NATS_MON_PORT}"
 MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:${MEKHAN_PG_PORT}/mekhan"
