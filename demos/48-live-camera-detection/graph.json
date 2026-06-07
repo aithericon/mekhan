@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 180 },
+      "position": { "x": 0, "y": 185 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -38,7 +38,7 @@
       "id": "camera",
       "type": "automated_step",
       "slug": "camera",
-      "position": { "x": 340, "y": 180 },
+      "position": { "x": 290, "y": 124 },
       "data": {
         "type": "automated_step",
         "label": "Capture live camera (cv2 → MJPEG)",
@@ -81,7 +81,7 @@
       "id": "detector",
       "type": "automated_step",
       "slug": "detector",
-      "position": { "x": 660, "y": 180 },
+      "position": { "x": 600, "y": 118 },
       "data": {
         "type": "automated_step",
         "label": "Detect + annotate (YOLO26 + ByteTrack)",
@@ -135,7 +135,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 980, "y": 180 },
+      "position": { "x": 910, "y": 274 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -171,7 +171,7 @@
       "id": "recorder",
       "type": "automated_step",
       "slug": "recorder",
-      "position": { "x": 980, "y": 380 },
+      "position": { "x": 910, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Record annotated feed → file catalogue",
@@ -212,7 +212,7 @@
     {
       "id": "converge",
       "type": "join",
-      "position": { "x": 1300, "y": 260 },
+      "position": { "x": 1220, "y": 215 },
       "data": {
         "type": "join",
         "label": "Await report + recording",
@@ -224,7 +224,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1620, "y": 260 },
+      "position": { "x": 1460, "y": 135 },
       "data": {
         "type": "end",
         "label": "Done",

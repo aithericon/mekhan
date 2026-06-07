@@ -3,10 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 40,
-        "y": 120
-      },
+      "position": { "x": 0, "y": 84 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -21,10 +18,7 @@
     {
       "id": "ask",
       "type": "agent",
-      "position": {
-        "x": 320,
-        "y": 120
-      },
+      "position": { "x": 190, "y": 0 },
       "data": {
         "type": "agent",
         "label": "Ask LLM",
@@ -43,10 +37,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 620,
-        "y": 120
-      },
+      "position": { "x": 520, "y": 54 },
       "data": {
         "type": "end",
         "label": "Done",

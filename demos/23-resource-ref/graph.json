@@ -1,15 +1,15 @@
 {
   "nodes": [
-    { "id": "start", "type": "start", "position": { "x": 40, "y": 120 },
+    { "id": "start", "type": "start", "position": { "x": 0, "y": 66 },
       "data": { "type": "start", "label": "Start", "processName": "Resource ref demo",
         "initial": { "id": "in", "label": "Trigger", "fields": [ { "name": "note", "label": "Note", "kind": "text", "required": false } ] } } },
-    { "id": "route", "type": "decision", "position": { "x": 320, "y": 120 },
+    { "id": "route", "type": "decision", "position": { "x": 290, "y": 58 },
       "data": { "type": "decision", "label": "By Port", "description": "Route on the demo_pg resource's public port field (constant-inlined at publish).",
         "conditions": [ { "edgeId": "branch-dev", "label": "Dev port (==15439)", "guard": "demo_pg.port == 15439" } ],
         "defaultBranch": "default" } },
-    { "id": "end-dev", "type": "end", "position": { "x": 620, "y": 40 },
+    { "id": "end-dev", "type": "end", "position": { "x": 600, "y": 132 },
       "data": { "type": "end", "label": "Dev", "resultMapping": [ { "targetField": "port_class", "expression": "\"dev\"" } ] } },
-    { "id": "end-other", "type": "end", "position": { "x": 620, "y": 220 },
+    { "id": "end-other", "type": "end", "position": { "x": 600, "y": 0 },
       "data": { "type": "end", "label": "Other", "resultMapping": [ { "targetField": "port_class", "expression": "\"other\"" } ] } }
   ],
   "edges": [

@@ -3,6 +3,7 @@
 	import type { TriggerNodeData } from '$lib/types/editor';
 	import Zap from '@lucide/svelte/icons/zap';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: TriggerNodeData; selected?: boolean } = $props();
 
@@ -27,7 +28,8 @@
 	icon={Zap}
 	label={data.label}
 	{selected}
-	class={enabled ? 'min-w-[160px]' : 'min-w-[160px] opacity-60'}
+	width={NODE_WIDTH.trigger}
+	class={enabled ? undefined : 'opacity-60'}
 	data-testid="node-trigger"
 	body={triggerBody}
 />

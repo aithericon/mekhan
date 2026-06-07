@@ -3,6 +3,7 @@
 	import type { ProgressUpdateNodeData } from '$lib/types/editor';
 	import Gauge from '@lucide/svelte/icons/gauge';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: ProgressUpdateNodeData; selected?: boolean } =
 		$props();
@@ -22,7 +23,7 @@
 	icon={Gauge}
 	label={data.label}
 	{selected}
-	class="min-w-[170px]"
+	width={NODE_WIDTH.progress_update}
 	data-testid="node-progress-update"
 	body={progressBody}
 />

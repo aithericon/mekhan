@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 40, "y": 160 },
+      "position": { "x": 0, "y": 14 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -20,7 +20,7 @@
     {
       "id": "call_greet",
       "type": "sub_workflow",
-      "position": { "x": 320, "y": 160 },
+      "position": { "x": 290, "y": 0 },
       "data": {
         "type": "sub_workflow",
         "label": "Call Hello-World",
@@ -42,7 +42,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 640, "y": 160 },
+      "position": { "x": 600, "y": 14 },
       "data": {
         "type": "end",
         "label": "Done",

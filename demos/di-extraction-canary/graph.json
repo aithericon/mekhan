@@ -3,10 +3,7 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": {
-        "x": 52,
-        "y": 60
-      },
+      "position": { "x": 0, "y": 94 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -31,10 +28,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 52,
-        "y": 330
-      },
+      "position": { "x": 250, "y": 74 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -63,10 +57,7 @@
     {
       "id": "extract",
       "type": "agent",
-      "position": {
-        "x": 396,
-        "y": 330
-      },
+      "position": { "x": 540, "y": 30 },
       "data": {
         "type": "agent",
         "label": "Extract (vision-only, single call)",
@@ -97,10 +88,7 @@
     {
       "id": "validate",
       "type": "automated_step",
-      "position": {
-        "x": 740,
-        "y": 330
-      },
+      "position": { "x": 870, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Validate (shape coerce)",
@@ -176,10 +164,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": {
-        "x": 1084,
-        "y": 330
-      },
+      "position": { "x": 1180, "y": 14 },
       "data": {
         "type": "end",
         "label": "Done",

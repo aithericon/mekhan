@@ -3,6 +3,7 @@
 	import type { StartNodeData } from '$lib/types/editor';
 	import Play from '@lucide/svelte/icons/play';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
+	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
 
 	let { id, data, selected }: { id: string; data: StartNodeData; selected?: boolean } = $props();
 
@@ -46,7 +47,7 @@
 		icon={Play}
 		label={data.label}
 		{selected}
-		class="min-w-[200px]"
+		width={NODE_WIDTH.start}
 		data-testid="node-start"
 		body={portBody}
 	/>
