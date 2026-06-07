@@ -96,7 +96,8 @@ steps:
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
       - just ci::publish-backend-executor "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: [build-backend-service]
+
+    depends_on: [publish-backend-service]
 
   # Builds the aithericon-engine OCI image. Same shape as the executor step
   # (in-Docker Rust compile, monorepo as context for ../executor/../shared
@@ -118,4 +119,4 @@ steps:
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
       - just ci::publish-backend-engine "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: [build-backend-service]
+    depends_on: [publish-backend-executor]
