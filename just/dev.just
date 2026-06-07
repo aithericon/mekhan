@@ -1001,6 +1001,7 @@ up-model-runner:
     vllm_url          = "http://localhost:{{ollama_port}}"
     served_base_model = "{{ollama_model}}"
     max_num_seqs      = 4
+    residency_zone    = "eu-dev"
 
     [storage]
     backend  = "s3"

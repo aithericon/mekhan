@@ -30,6 +30,10 @@ pub mod status {
     pub const DRAINING: &str = "draining";
     pub const STOPPED: &str = "stopped";
     pub const FAILED: &str = "failed";
+    /// Idle-evicted (vLLM `/sleep`): still tracked, holds NO live `C` slot, wakes
+    /// on the next routed request. Written by the placement controller's
+    /// idle-eviction pass; cleared back to `ACTIVE` by the next demand-driven wake.
+    pub const SLEEPING: &str = "sleeping";
 }
 
 /// One `model_replicas` row — the durable reconciliation target + Control-Plane
@@ -159,6 +163,7 @@ mod tests {
             node_pool: "dev-pool".to_string(),
             base: None,
             dedicated: None,
+            idle_evict: None,
         }
     }
 

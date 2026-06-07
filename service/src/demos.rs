@@ -2344,6 +2344,50 @@ mod tests {
         );
     }
 
+    /// GAP F: `37-internal-pool-agent` authors `provider: "internal"` in the
+    /// graph (so the editor round-trips it as an internal-router binding), but
+    /// the compiled WIRE config the executor receives must carry `openai` (its
+    /// `Provider` enum rejects `internal`). The degenerate agent path
+    /// synthesizes an `AutomatedStep(Llm)` and the LLM validator remaps the
+    /// provider; this pins that the parked config emits `openai` while keeping
+    /// the `internal_pool_router` resource_alias that overlays the router.
+    #[test]
+    fn internal_pool_agent_demo_compiles_to_openai_wire() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/37-internal-pool-agent"))
+            .expect("37-internal-pool-agent must load");
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("37-internal-pool-agent must compile");
+
+        let agent_cfg = node_configs
+            .get("agent")
+            .expect("agent config must be parked");
+        assert_eq!(
+            agent_cfg.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal provider must compile to the openai wire shape: {agent_cfg}"
+        );
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("internal_pool_router"),
+            "the router-binding alias must survive the remap: {agent_cfg}"
+        );
+    }
+
     /// `output-safety-gate` is a SubWorkflow-shaped composable critic:
     /// a low-temperature LLM critic step (with a strict `CriticFlags` `$ref`
     /// response_format) followed by two Python steps (`verify`, `decide`)

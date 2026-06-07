@@ -38,9 +38,9 @@
       "data": {
         "type": "agent",
         "label": "Internal Pool Agent",
-        "description": "A single-shot (degenerate, no-tools, maxTurns 1) Agent bound to a self-hosted model served through the in-cluster inference router. The wire `provider` is `openai` (OpenAI-compatible router path), `model` is the loaded model id curated in the `internal_pool_registry`, and `resourceAlias` binds the `internal_pool_router` (`internal_llm`) resource whose `base_url` overlays the router endpoint at fire time \u2014 so the inference HTTP call goes base_url\u2192router and is NEVER net-admitted. In the editor this surfaces as provider `internal` with a loaded-set Model picker and locked base_url/api_key overrides (GDPR \u2014 an internal binding cannot silently escape off-router).",
+        "description": "A single-shot (degenerate, no-tools, maxTurns 1) Agent bound to a self-hosted model served through the in-cluster inference router. The editor surfaces `provider` as `internal` (a loaded-set Model picker with locked base_url/api_key overrides \u2014 GDPR: an internal binding cannot silently escape off-router); the compiler remaps it and emits the `openai` (OpenAI-compatible router path) WIRE shape. `model` is the loaded model id curated in the `internal_pool_registry`, and `resourceAlias` binds the `internal_pool_router` (`internal_llm`) resource whose `base_url` overlays the router endpoint at fire time \u2014 so the inference HTTP call goes base_url\u2192router and is NEVER net-admitted.",
         "model": {
-          "provider": "openai",
+          "provider": "internal",
           "model": "llama3.2:1b",
           "resourceAlias": "internal_pool_router",
           "temperature": 0

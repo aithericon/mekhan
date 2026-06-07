@@ -50,6 +50,7 @@
 	let policyZone = $state<string>('');
 	let policyCooldown = $state<string>('');
 	let policyDedicated = $state(false);
+	let policyIdleEvict = $state(false);
 	let policyScaleUp = $state<string>('');
 	let policyScaleDown = $state<string>('');
 	let policySaving = $state(false);
@@ -104,6 +105,7 @@
 		policyZone = a?.residency_zone ?? '';
 		policyCooldown = a?.cooldown_secs != null ? String(a.cooldown_secs) : '';
 		policyDedicated = a?.dedicated ?? false;
+		policyIdleEvict = a?.idle_evict ?? false;
 		policyScaleUp = a?.scale_up_threshold != null ? String(a.scale_up_threshold) : '';
 		policyScaleDown = a?.scale_down_threshold != null ? String(a.scale_down_threshold) : '';
 	}
@@ -125,6 +127,7 @@
 			residency_zone: policyZone.trim() || null,
 			cooldown_secs: numOrNull(policyCooldown),
 			dedicated: policyDedicated,
+			idle_evict: policyIdleEvict,
 			scale_up_threshold: policyMode === 'manual' ? null : numOrNull(policyScaleUp),
 			scale_down_threshold: policyMode === 'manual' ? null : numOrNull(policyScaleDown)
 		};
@@ -270,7 +273,20 @@
 							title={m.available ? 'available (loaded + a live runner serves it)' : 'not available'}
 						></span>
 						<span class="truncate font-medium text-foreground">{m.model_id}</span>
-						<span class="ml-auto text-sm {statusTone(String(m.state))}">{m.state}</span>
+						{#if m.autoscale?.status === 'sleeping'}
+							<span
+								class="ml-auto rounded bg-indigo-50 px-1.5 py-0.5 text-sm {statusTone(
+									'sleeping'
+								)} dark:bg-indigo-950/40"
+								data-testid="model-sleeping-badge"
+								title="idle — base evicted on zero demand"
+							>
+								sleeping
+							</span>
+							<span class="text-sm {statusTone(String(m.state))}">{m.state}</span>
+						{:else}
+							<span class="ml-auto text-sm {statusTone(String(m.state))}">{m.state}</span>
+						{/if}
 					</div>
 					<div class="mt-0.5 pl-3.5 text-sm text-muted-foreground">
 						{#if m.base}LoRA of {m.base} · {/if}served by {m.serving_runners} runner{m.serving_runners ===
@@ -667,6 +683,13 @@
 			<label class="flex items-center gap-2 text-sm">
 				<input type="checkbox" bind:checked={policyDedicated} data-testid="autoscale-dedicated" />
 				<span class="text-muted-foreground">Dedicated single-model job</span>
+			</label>
+
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={policyIdleEvict} data-testid="autoscale-idle-evict" />
+				<span class="text-muted-foreground"
+					>Idle-evict the resident base on zero demand (sleep past cooldown)</span
+				>
 			</label>
 		</div>
 		<Dialog.Footer>

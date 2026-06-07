@@ -187,6 +187,81 @@ pub(crate) async fn serving_runner_pulled(
         .collect()
 }
 
+/// The PUBLIC, all-workspace model-serving inventory (docs/29 GAP A) — the
+/// inference router's live-replica source. Unlike [`serving_runner_inventory`]
+/// (workspace-scoped, returns per-node `ModelEntry`s for the operator views),
+/// this scans EVERY workspace's `runner_interfaces` row and emits one flat
+/// [`ModelServingRunner`] per PRESENT runner whose catalog carries a `base_url`
+/// (a node that advertises no inference endpoint is not routable, so it is
+/// skipped). `concurrency_c` = the first base entry's `max_num_seqs` (default 1);
+/// `model_ids` = every base + LoRA id the runner serves. Fail-soft: a DB error
+/// yields an empty list, an unparseable catalog row is dropped.
+///
+/// Public-by-design: the router has no session cookie and this leaks only the
+/// in-cluster data-plane facts (base_urls + model ids) it already holds to route.
+pub(crate) async fn model_serving_runners(
+    db: &sqlx::PgPool,
+    runner_presence: &crate::runners_presence::RunnerPresence,
+) -> Vec<crate::models::runner::ModelServingRunner> {
+    let present: HashSet<Uuid> = runner_presence
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| s.present)
+        .map(|s| s.runner_id)
+        .collect();
+
+    // NO workspace filter — the router routes across the whole cluster.
+    let catalogs: Vec<(Uuid, serde_json::Value)> =
+        sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces")
+            .fetch_all(db)
+            .await
+            .unwrap_or_default();
+
+    present_catalogs(&present, catalogs)
+        .into_iter()
+        .filter_map(|(runner_id, catalog)| {
+            let base_url = catalog.base_url.clone()?;
+            let concurrency_c = catalog
+                .models
+                .iter()
+                .find(|m| matches!(m.kind, crate::models::runner::ModelInterfaceKind::Base))
+                .and_then(|m| m.max_num_seqs)
+                .unwrap_or(1);
+            let model_ids = catalog.models.iter().map(|m| m.model_id.clone()).collect();
+            Some(crate::models::runner::ModelServingRunner {
+                runner_id,
+                base_url,
+                residency_zone: catalog.residency_zone.clone(),
+                model_ids,
+                concurrency_c,
+            })
+        })
+        .collect()
+}
+
+/// `GET /api/v1/runners/model-serving` — the inference router's live-replica
+/// inventory (docs/29 GAP A).
+///
+/// PUBLIC by design (mounted in `build_public_openapi_router` alongside
+/// `/healthz`, OUTSIDE the auth gate): the inference router is an in-cluster
+/// control-plane peer with no session cookie, and this returns only the
+/// in-cluster runner `base_url`s + `model_ids` the router already holds to route.
+/// It carries no control-plane credential and no workspace attribution.
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners/model-serving",
+    responses(
+        (status = 200, description = "All-workspace live model-serving runners for the inference router", body = Vec<crate::models::runner::ModelServingRunner>),
+    ),
+    tag = "runners",
+)]
+pub async fn list_model_serving_runners(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::models::runner::ModelServingRunner>> {
+    Json(model_serving_runners(&state.db, &state.runner_presence).await)
+}
+
 /// Read-time reconcile: fold the LIVE observed serving count back into the
 /// operator-curated lifecycle state via [`reconcile_observed_state`]. When a
 /// transition is implied (`loading`→`loaded` once a runner serves it,
@@ -756,7 +831,7 @@ pub async fn set_model_policy(
         "UPDATE model_states SET \
             autoscale_mode = $3, desired_replicas = $4, scale_up_threshold = $5, \
             scale_down_threshold = $6, cooldown_secs = $7, node_pool = $8, \
-            residency_zone = $9, dedicated = $10 \
+            residency_zone = $9, dedicated = $10, idle_evict = $11 \
          WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)
@@ -769,6 +844,7 @@ pub async fn set_model_policy(
     .bind(&req.node_pool)
     .bind(&req.residency_zone)
     .bind(req.dedicated.unwrap_or(false))
+    .bind(req.idle_evict.unwrap_or(false))
     .execute(&state.db)
     .await
     .map_err(|e| ApiError::internal(format!("model_states policy write: {e}")))?;
@@ -805,7 +881,7 @@ pub async fn clear_model_policy(
         "UPDATE model_states SET \
             autoscale_mode = NULL, desired_replicas = NULL, scale_up_threshold = NULL, \
             scale_down_threshold = NULL, cooldown_secs = NULL, node_pool = NULL, \
-            residency_zone = NULL, dedicated = FALSE \
+            residency_zone = NULL, dedicated = FALSE, idle_evict = FALSE \
          WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)

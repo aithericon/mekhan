@@ -2312,9 +2312,21 @@ pub fn agent_to_llm_config(
 ) -> serde_json::Value {
     use serde_json::{Number, Value};
     let mut config = serde_json::Map::new();
+    // Remap the editor-only `internal` provider to the OpenAI-compatible wire
+    // provider (GAP F keystone). Shares `remap_internal_provider` with the
+    // plain-LLM AutomatedStep validator so the two emission seams cannot drift
+    // — an internal agent binding emits `openai` on the wire while the bound
+    // `internal_llm` resource's base_url overlays the in-cluster router. The
+    // internal-binding REJECTION rules (require resource_alias, forbid per-step
+    // base_url/api_key) flow through the LLM validator: the degenerate agent
+    // path synthesizes an `AutomatedStep(Llm)` that hits `validate`, and the
+    // agent loop path round-trips this same config through `validate_and_transform`'s
+    // LLM arm during the foundation/borrow pass.
     config.insert(
         "provider".to_string(),
-        Value::String(model.provider.clone()),
+        Value::String(
+            crate::backends::llm::remap_internal_provider(&model.provider).to_string(),
+        ),
     );
     config.insert("model".to_string(), Value::String(model.model.clone()));
     if let Some(k) = &model.api_key {
@@ -3454,6 +3466,43 @@ mod tests {
             description: None,
             accept: None,
         }
+    }
+
+    /// GAP F: an agent bound to `provider: "internal"` must emit `openai` on
+    /// the wire (shared `remap_internal_provider`) while preserving the
+    /// `resource_alias` that overlays the in-cluster router endpoint.
+    #[test]
+    fn agent_internal_emits_openai_with_alias() {
+        let model = ModelRef {
+            provider: "internal".to_string(),
+            model: "llama3.2:1b".to_string(),
+            api_key: None,
+            base_url: None,
+            resource_alias: Some("internal_pool_router".to_string()),
+            temperature: Some(0.0),
+            max_tokens: None,
+        };
+        let cfg = agent_to_llm_config(&model, None, "{{ start.question }}", None, &[], &[]);
+        assert_eq!(
+            cfg.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal agent must emit openai wire provider"
+        );
+        assert_eq!(
+            cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("internal_pool_router"),
+            "resource_alias must survive the remap (it carries the router endpoint)"
+        );
+        // A non-internal provider passes through unchanged.
+        let anthropic_model = ModelRef {
+            provider: "anthropic".to_string(),
+            ..model
+        };
+        let cfg = agent_to_llm_config(&anthropic_model, None, "p", None, &[], &[]);
+        assert_eq!(
+            cfg.get("provider").and_then(|v| v.as_str()),
+            Some("anthropic")
+        );
     }
 
     // ── TaskFieldKind / TaskFieldConfig type-parity tests ─────────────

@@ -6172,6 +6172,31 @@
         }
       }
     },
+    "/api/v1/runners/model-serving": {
+      "get": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`GET /api/v1/runners/model-serving` — the inference router's live-replica\ninventory (docs/29 GAP A).",
+        "description": "PUBLIC by design (mounted in `build_public_openapi_router` alongside\n`/healthz`, OUTSIDE the auth gate): the inference router is an in-cluster\ncontrol-plane peer with no session cookie, and this returns only the\nin-cluster runner `base_url`s + `model_ids` the router already holds to route.\nIt carries no control-plane credential and no workspace attribution.",
+        "operationId": "list_model_serving_runners",
+        "responses": {
+          "200": {
+            "description": "All-workspace live model-serving runners for the inference router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelServingRunner"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners/presence": {
       "get": {
         "tags": [
@@ -10847,6 +10872,13 @@
             "description": "Demand-slot ceiling / manual seed.",
             "minimum": 0
           },
+          "idle_evict": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Idle-eviction opt-in: allow the placement controller to sleep this model's\nresident base on zero demand past the cooldown. Defaults to `false`."
+          },
           "mode": {
             "type": "string",
             "description": "One of `manual` | `scale_to_zero` | `keep_warm`."
@@ -10885,7 +10917,8 @@
         "description": "The folded-in per-model autoscale policy, projected onto [`ModelSetView`]. The\npolicy used to be its own `model_policy` resource; it now lives as nullable\ncolumns on `model_states` (the config half) joined with the per-model\n`model_replicas` reconciliation row (the live half — `desired_count` / `status`\n/ `last_error`).",
         "required": [
           "mode",
-          "dedicated"
+          "dedicated",
+          "idle_evict"
         ],
         "properties": {
           "cooldown_secs": {
@@ -10915,6 +10948,10 @@
             ],
             "format": "int32",
             "description": "Demand-slot ceiling / manual seed."
+          },
+          "idle_evict": {
+            "type": "boolean",
+            "description": "When `true`, the placement controller may idle-EVICT (vLLM `/sleep`) the\nresident base once demand drops to zero past the cooldown."
           },
           "last_error": {
             "type": [
@@ -16587,6 +16624,47 @@
           }
         }
       },
+      "ModelServingRunner": {
+        "type": "object",
+        "description": "One self-hosted model-serving runner, flattened for the inference router's\nlive-inventory poll (`GET /api/v1/runners/model-serving`, docs/29 GAP A). The\nrouter has no session cookie, so this is a PUBLIC, all-workspace projection of\nthe `presence ∩ runner_interfaces` join: it carries only the in-cluster\ndata-plane facts the router already needs to route — the node's `base_url`,\nits residency zone, the model ids it serves, and its per-engine concurrency\nbudget `C`. It deliberately omits any control-plane credential or workspace\nattribution.",
+        "required": [
+          "runner_id",
+          "base_url",
+          "model_ids",
+          "concurrency_c"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "description": "The OpenAI-compatible inference endpoint to route to."
+          },
+          "concurrency_c": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The per-engine concurrency budget `C` (vLLM `--max-num-seqs`) — the first\nbase entry's `max_num_seqs`, defaulting to `1` when unreported. The router\nsizes its admission semaphore from this.",
+            "minimum": 0
+          },
+          "model_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every model id this runner serves — base models plus loaded LoRA adapters."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The runner's GDPR residency zone, or `None` when zone-agnostic."
+          },
+          "runner_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The runner row id (the router formats its replica id off this)."
+          }
+        }
+      },
       "ModelSetView": {
         "type": "object",
         "description": "One row of the loaded-set projection (`GET /api/v1/models` and\n`GET /api/v1/models/{model_id}`).\n\n`state` is the operator-curated `model_states` position; `available` is the\nAND-gate — `true` only when `state == Loaded` AND at least one LIVE runner's\ninterface catalog advertises `model_id`. `serving_runners` is the count of\nlive runners advertising it (the live half), surfaced so an operator can see\na `loaded`-but-unserved model.",
@@ -19728,6 +19806,13 @@
               "$ref": "#/components/schemas/InterfaceEntry"
             }
           },
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This node's INFERENCE endpoint — the OpenAI-compatible base URL the\nrouter routes requests to (the runner's `vllm_url`). Distinct from the\nrunner's control-plane credential: it is the data-plane address. Additive\nJSONB; `None` for non-model runners. The public model-serving aggregator\nemits one `ModelServingRunner` per present runner that carries this."
+          },
           "models": {
             "type": "array",
             "items": {
@@ -19741,6 +19826,13 @@
               "type": "string"
             },
             "description": "Model ids **provisioned to disk** on this runner (the Ollama `/api/tags`\nsuperset; loadable WITHOUT a re-download). A SUPERSET that includes the\nresident `models` ids — the model-pool read excludes already-resident bases\nso the operator sees \"provisioned, ready to load\" distinctly from\n\"serving\". Additive JSONB field; empty for non-model runners."
+          },
+          "residency_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GDPR residency zone this node serves inference from (e.g. `\"eu-dev\"`).\nThe router fails closed on a residency mismatch. Additive JSONB; `None`\nwhen zone-agnostic."
           },
           "services": {
             "type": "array",

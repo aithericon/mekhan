@@ -2063,6 +2063,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/model-serving": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/runners/model-serving` — the inference router's live-replica
+         *     inventory (docs/29 GAP A).
+         * @description PUBLIC by design (mounted in `build_public_openapi_router` alongside
+         *     `/healthz`, OUTSIDE the auth gate): the inference router is an in-cluster
+         *     control-plane peer with no session cookie, and this returns only the
+         *     in-cluster runner `base_url`s + `model_ids` the router already holds to route.
+         *     It carries no control-plane credential and no workspace attribution.
+         */
+        get: operations["list_model_serving_runners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/presence": {
         parameters: {
             query?: never;
@@ -3787,6 +3812,11 @@ export interface components {
              * @description Demand-slot ceiling / manual seed.
              */
             desired_replicas?: number | null;
+            /**
+             * @description Idle-eviction opt-in: allow the placement controller to sleep this model's
+             *     resident base on zero demand past the cooldown. Defaults to `false`.
+             */
+            idle_evict?: boolean | null;
             /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
             mode: string;
             /**
@@ -3833,6 +3863,11 @@ export interface components {
              * @description Demand-slot ceiling / manual seed.
              */
             desired_replicas?: number | null;
+            /**
+             * @description When `true`, the placement controller may idle-EVICT (vLLM `/sleep`) the
+             *     resident base once demand drops to zero past the cooldown.
+             */
+            idle_evict: boolean;
             /** @description The reconciliation row's last error (`None` when none / no row). */
             last_error?: string | null;
             /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
@@ -6413,6 +6448,36 @@ export interface components {
             desired_replicas: number;
         };
         /**
+         * @description One self-hosted model-serving runner, flattened for the inference router's
+         *     live-inventory poll (`GET /api/v1/runners/model-serving`, docs/29 GAP A). The
+         *     router has no session cookie, so this is a PUBLIC, all-workspace projection of
+         *     the `presence ∩ runner_interfaces` join: it carries only the in-cluster
+         *     data-plane facts the router already needs to route — the node's `base_url`,
+         *     its residency zone, the model ids it serves, and its per-engine concurrency
+         *     budget `C`. It deliberately omits any control-plane credential or workspace
+         *     attribution.
+         */
+        ModelServingRunner: {
+            /** @description The OpenAI-compatible inference endpoint to route to. */
+            base_url: string;
+            /**
+             * Format: int32
+             * @description The per-engine concurrency budget `C` (vLLM `--max-num-seqs`) — the first
+             *     base entry's `max_num_seqs`, defaulting to `1` when unreported. The router
+             *     sizes its admission semaphore from this.
+             */
+            concurrency_c: number;
+            /** @description Every model id this runner serves — base models plus loaded LoRA adapters. */
+            model_ids: string[];
+            /** @description The runner's GDPR residency zone, or `None` when zone-agnostic. */
+            residency_zone?: string | null;
+            /**
+             * Format: uuid
+             * @description The runner row id (the router formats its replica id off this).
+             */
+            runner_id: string;
+        };
+        /**
          * @description One row of the loaded-set projection (`GET /api/v1/models` and
          *     `GET /api/v1/models/{model_id}`).
          *
@@ -7919,6 +7984,14 @@ export interface components {
         RunnerInterfaceCatalog: {
             actions?: components["schemas"]["InterfaceEntry"][];
             /**
+             * @description This node's INFERENCE endpoint — the OpenAI-compatible base URL the
+             *     router routes requests to (the runner's `vllm_url`). Distinct from the
+             *     runner's control-plane credential: it is the data-plane address. Additive
+             *     JSONB; `None` for non-model runners. The public model-serving aggregator
+             *     emits one `ModelServingRunner` per present runner that carries this.
+             */
+            base_url?: string | null;
+            /**
              * @description Self-hosted LLM models this runner's node-agent currently serves (docs/29).
              *     The live half of the loaded-set AND-gate. Additive JSONB field — a runner
              *     that serves no models simply reports an empty list.
@@ -7932,6 +8005,12 @@ export interface components {
              *     "serving". Additive JSONB field; empty for non-model runners.
              */
             pulled?: string[];
+            /**
+             * @description The GDPR residency zone this node serves inference from (e.g. `"eu-dev"`).
+             *     The router fails closed on a residency mismatch. Additive JSONB; `None`
+             *     when zone-agnostic.
+             */
+            residency_zone?: string | null;
             services?: components["schemas"]["InterfaceEntry"][];
             topics?: components["schemas"]["InterfaceEntry"][];
         };
@@ -14205,6 +14284,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_model_serving_runners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All-workspace live model-serving runners for the inference router */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelServingRunner"][];
                 };
             };
         };

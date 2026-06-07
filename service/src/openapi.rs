@@ -244,6 +244,11 @@ use utoipa::OpenApi;
             crate::models::model_pool::LoadModelRequest,
             crate::models::runner::ModelEntry,
             crate::models::runner::ModelInterfaceKind,
+            // Model-pool P4 GAP A — the inference router's public live-replica
+            // inventory shape. Reached only through `Vec<_>` in the
+            // `GET /api/v1/runners/model-serving` response, so register it for
+            // frontend codegen + the OpenAPI contract.
+            crate::models::runner::ModelServingRunner,
             // Model-pool reconciliation (docs/31 Phase 0) — per-node engine
             // inventory read. The nested per-node / per-engine / per-adapter
             // shapes are reached only through `Vec<_>` in the

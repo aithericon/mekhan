@@ -184,7 +184,13 @@ async fn probe_and_publish(
         }
     };
 
-    let catalog = build_catalog(&loaded, ma.max_num_seqs, &pulled);
+    let catalog = build_catalog(
+        &loaded,
+        ma.max_num_seqs,
+        &pulled,
+        &ma.vllm_url,
+        ma.residency_zone.as_deref(),
+    );
     let concurrency = concurrency_of(&catalog);
     let model_ids = model_ids_of(&catalog);
     models.set(concurrency, model_ids);
@@ -324,7 +330,18 @@ async fn apply_command(adapter: &ModelBackend, cmd: &ModelCommand) {
 /// provisioned to disk (loadable without a re-download). It is the SUPERSET that
 /// includes the resident `models`; mekhan's read excludes already-resident bases
 /// so the operator sees "ready to load" distinctly from "serving".
-fn build_catalog(loaded: &[LoadedModel], c: Option<u32>, pulled: &[String]) -> Value {
+///
+/// `base_url` is this node's INFERENCE endpoint (the `vllm_url` the agent drives)
+/// and `residency_zone` its GDPR zone — both additive top-level `catalog` fields
+/// the router's live-inventory poll reads (via mekhan's public aggregator) to
+/// build its replica table. They are opaque JSON to the engine.
+fn build_catalog(
+    loaded: &[LoadedModel],
+    c: Option<u32>,
+    pulled: &[String],
+    base_url: &str,
+    residency_zone: Option<&str>,
+) -> Value {
     let models: Vec<Value> = loaded
         .iter()
         .map(|m| match m {
@@ -340,7 +357,12 @@ fn build_catalog(loaded: &[LoadedModel], c: Option<u32>, pulled: &[String]) -> V
             }),
         })
         .collect();
-    json!({ "models": models, "pulled": pulled })
+    json!({
+        "models": models,
+        "pulled": pulled,
+        "base_url": base_url,
+        "residency_zone": residency_zone,
+    })
 }
 
 /// C reported on presence = the first base entry's `max_num_seqs`. There is one
@@ -386,12 +408,23 @@ mod tests {
                 base: "meta-llama/Llama-3-8B".into(),
             },
         ];
-        let catalog = build_catalog(&loaded, Some(256), &["meta-llama/Llama-3-8B".into()]);
+        let catalog = build_catalog(
+            &loaded,
+            Some(256),
+            &["meta-llama/Llama-3-8B".into()],
+            "http://localhost:8000",
+            Some("eu-dev"),
+        );
         let models = catalog["models"].as_array().unwrap();
         assert_eq!(models.len(), 3);
 
         // `pulled` carries the on-disk superset verbatim.
         assert_eq!(catalog["pulled"], json!(["meta-llama/Llama-3-8B"]));
+
+        // The inference endpoint + residency zone ride the top-level catalog so
+        // the router's live-inventory poll can build its replica table.
+        assert_eq!(catalog["base_url"], "http://localhost:8000");
+        assert_eq!(catalog["residency_zone"], "eu-dev");
 
         // Base: kind=base, C present, no base back-pointer.
         assert_eq!(models[0]["model_id"], "meta-llama/Llama-3-8B");
@@ -415,8 +448,11 @@ mod tests {
             model_id: "b".into(),
             max_num_seqs: None,
         }];
-        let catalog = build_catalog(&loaded, None, &[]);
+        let catalog = build_catalog(&loaded, None, &[], "http://localhost:8000", None);
         assert!(catalog["models"][0]["max_num_seqs"].is_null());
+        // A zone-agnostic node emits a null `residency_zone`.
+        assert!(catalog["residency_zone"].is_null());
+        assert_eq!(catalog["base_url"], "http://localhost:8000");
     }
 
     #[test]
@@ -431,14 +467,14 @@ mod tests {
                 base: "base".into(),
             },
         ];
-        let catalog = build_catalog(&loaded, Some(128), &[]);
+        let catalog = build_catalog(&loaded, Some(128), &[], "http://localhost:8000", None);
         assert_eq!(concurrency_of(&catalog), Some(128));
         assert_eq!(model_ids_of(&catalog), vec!["base", "lora"]);
     }
 
     #[test]
     fn empty_probe_yields_empty_catalog() {
-        let catalog = build_catalog(&[], Some(64), &[]);
+        let catalog = build_catalog(&[], Some(64), &[], "http://localhost:8000", None);
         assert_eq!(catalog["models"].as_array().unwrap().len(), 0);
         assert_eq!(concurrency_of(&catalog), None);
         assert!(model_ids_of(&catalog).is_empty());

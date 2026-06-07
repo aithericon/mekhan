@@ -18,11 +18,27 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         stop_when,
         context_strategy,
         deployment_model,
+        model,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_agent on non-Agent node")
     };
+
+    // Internal-binding off-router lock (GAP F keystone). `agent_to_llm_config`
+    // remaps `provider: "internal"` → `openai` on the wire BEFORE either lowering
+    // path reaches the LLM validator (the degenerate path's synthesized
+    // `AutomatedStep(Llm)` would otherwise see the already-remapped `openai`),
+    // so the validator's internal-binding rejection can't fire for agents.
+    // Enforce the same contract here, sharing `check_internal_binding` with the
+    // plain-LLM validator so the rule cannot drift: an internal agent binding
+    // MUST carry a resource_alias and MUST NOT pin a per-step base_url/api_key.
+    crate::backends::llm::check_internal_binding(
+        &model.provider,
+        model.resource_alias.as_deref(),
+        model.base_url.as_deref(),
+        model.api_key.as_deref(),
+    )?;
 
     // Tool detection: nodes the agent reaches via outgoing edges keyed by
     // `source_handle == "tools"` (orchestrator pre-indexes these into
