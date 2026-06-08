@@ -15,7 +15,17 @@
 //! builder — the typed port is the single source of truth, so the editor's
 //! variable picker, the runtime contract, and this document cannot drift.
 //!
-//! Surface emitted, per ENABLED trigger on a PUBLISHED (`is_latest`) template:
+//! Surface emitted, per PUBLISHED (`is_latest`) template in the subtree:
+//!   - **Run** → every template gets a generic launch op `POST /api/v1/instances`
+//!     (keyed `/api/v1/instances#tpl=<id>` to disambiguate per template — the
+//!     fragment is stripped on the wire). The body is `CreateInstanceRequest`
+//!     specialized to the template: `template_id` pinned, one `start_tokens`
+//!     entry per Start block typed from that block's `initial` port. This is
+//!     what makes a folder of trigger-less templates (the common case — most
+//!     templates are run ad-hoc from their Start block, with no trigger node)
+//!     still produce a useful, non-empty bundle.
+//!
+//! Surface emitted additionally, per ENABLED trigger node on such a template:
 //!   - **Manual** → a concrete path *pair* with the real node id substituted:
 //!       - `POST /api/v1/triggers/{node_id}/fire`   (async, 202 `{instance_id}`)
 //!       - `POST /api/v1/triggers/{node_id}/invoke` (sync, 200 success envelope
@@ -147,6 +157,20 @@ pub async fn folder_openapi_bundle(
         let output_port = derive_output_port_typed(&graph);
         let output_schema = output_port.json_schema();
 
+        // Every published template is callable via the generic run endpoint
+        // (`POST /api/v1/instances`), regardless of whether it carries a
+        // Manual/Webhook trigger node. Emit that contract first so a folder
+        // full of trigger-less templates (the common case — most templates are
+        // run ad-hoc from their Start block) still produces a non-empty bundle.
+        emit_template_run(
+            &graph,
+            template_id,
+            template_name,
+            *version,
+            &mut paths,
+            &mut schemas,
+        );
+
         for node in &graph.nodes {
             let WorkflowNodeData::Trigger {
                 label,
@@ -195,10 +219,12 @@ pub async fn folder_openapi_bundle(
     }
 
     // Session cookie + machine PAT (bearer) both authenticate the protected
-    // `/fire` + `/invoke` routes (RFC 7662 introspection in
-    // `require_auth_middleware`). Advertise both whenever a manual op exists.
-    let manual_present = paths.keys().any(|p| p.starts_with("/api/v1/triggers/"));
-    if manual_present {
+    // `/fire` + `/invoke` + `/instances` routes (RFC 7662 introspection in
+    // `require_auth_middleware`). Advertise both whenever a secured op exists.
+    let secured_present = paths
+        .keys()
+        .any(|p| p.starts_with("/api/v1/triggers/") || p.starts_with("/api/v1/instances"));
+    if secured_present {
         security_schemes.insert(
             "sessionCookie".to_string(),
             json!({
@@ -317,6 +343,162 @@ fn request_content(port: &Port) -> Value {
     }
 
     content
+}
+
+/// Emit the generic "run this template" operation. Covers EVERY published
+/// template — both trigger-less ones (run ad-hoc from their Start block) and
+/// those that also carry a Manual/Webhook trigger (which get their own named
+/// entrypoints in addition).
+///
+/// The real callable endpoint is the shared `POST /api/v1/instances`. OpenAPI
+/// keys operations by `path` + method, so we disambiguate the per-template
+/// operation with a URL-fragment path key (`/api/v1/instances#tpl=<id>`): the
+/// fragment is not sent on the wire, so a generated client still POSTs to
+/// `/api/v1/instances`. The request body is `CreateInstanceRequest` specialized
+/// to this template — `template_id` pinned via `enum`, and one `start_tokens`
+/// entry per Start block typed from that block's `initial` port.
+fn emit_template_run(
+    graph: &WorkflowGraph,
+    template_id: &Uuid,
+    template_name: &str,
+    template_version: i32,
+    paths: &mut BTreeMap<String, Value>,
+    schemas: &mut BTreeMap<String, Value>,
+) {
+    // Collect Start blocks (id + typed initial port). A template with no Start
+    // block can't be launched standalone — nothing to document.
+    let starts: Vec<(&str, &Port)> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.data {
+            WorkflowNodeData::Start { initial, .. } => Some((n.id.as_str(), initial)),
+            _ => None,
+        })
+        .collect();
+    if starts.is_empty() {
+        return;
+    }
+
+    let safe = sanitize_for_ref(&template_id.to_string());
+
+    // One object schema per Start block: { start_block_id: <const>, token: <initial port> }.
+    let start_item = |id: &str, port: &Port| -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "start_block_id": { "type": "string", "enum": [id] },
+                "token": port.json_schema(),
+            },
+            "required": ["start_block_id", "token"],
+            "additionalProperties": false,
+        })
+    };
+
+    // Single Start → a lone item schema; multiple → a `oneOf`. A Start whose
+    // `initial` port has fields is mandatory, so `minItems` counts those.
+    let required_starts = starts.iter().filter(|(_, p)| !p.fields.is_empty()).count();
+    let items = if starts.len() == 1 {
+        start_item(starts[0].0, starts[0].1)
+    } else {
+        json!({
+            "oneOf": starts.iter().map(|(id, p)| start_item(id, p)).collect::<Vec<_>>(),
+        })
+    };
+
+    let mut request_schema = json!({
+        "type": "object",
+        "description": format!("Run the `{template_name}` template (v{template_version})."),
+        "properties": {
+            "template_id": {
+                "type": "string",
+                "format": "uuid",
+                "enum": [template_id.to_string()],
+            },
+            "start_tokens": {
+                "type": "array",
+                "description": "One typed seed per Start block in the template.",
+                "items": items,
+                "minItems": required_starts,
+                "maxItems": starts.len(),
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["live", "draft"],
+                "description": "Run mode (default `live`). `test_run` is reserved for the test runner.",
+            },
+            "metadata": {
+                "type": "object",
+                "description": "Free-form audit metadata stored on the instance row.",
+                "additionalProperties": true,
+            },
+        },
+        "additionalProperties": false,
+    });
+    // `start_tokens` is required only when some Start has a non-empty port.
+    let mut required = vec![json!("template_id")];
+    if required_starts > 0 {
+        required.push(json!("start_tokens"));
+    }
+    request_schema["required"] = json!(required);
+
+    let request_ref = format!("RunTemplate_{safe}_Request");
+    schemas.insert(request_ref.clone(), request_schema);
+
+    let security = json!([
+        { "sessionCookie": [] },
+        { "bearerAuth": [] },
+    ]);
+    let mut tags = vec!["templates".to_string()];
+    if !template_name.is_empty() {
+        tags.push(template_name.to_string());
+    }
+
+    let mut op = json!({
+        "tags": tags,
+        "summary": format!("Run {template_name}"),
+        "operationId": format!("run_template_{safe}"),
+        "description": "Launch a new instance of this template. The real endpoint is `POST /api/v1/instances`; the `#tpl=` fragment only disambiguates this operation and is stripped on the wire.",
+        "security": security,
+        "requestBody": {
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": format!("#/components/schemas/{request_ref}") }
+                }
+            }
+        },
+        "responses": {
+            "201": {
+                "description": "Instance created and deployed to the engine.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "format": "uuid" },
+                                "template_id": { "type": "string", "format": "uuid" },
+                                "status": { "type": "string" }
+                            },
+                            "required": ["id"]
+                        }
+                    }
+                }
+            },
+            "400": { "description": "Template not published, or start_tokens don't match the Start ports." },
+            "401": { "description": "Unauthenticated." },
+            "404": { "description": "Template not found." },
+        },
+    });
+    op["x-mekhan-template-id"] = json!(template_id.to_string());
+    op["x-mekhan-template-version"] = json!(template_version);
+    op["x-mekhan-run-template"] = json!(true);
+
+    insert_op(
+        paths,
+        &format!("/api/v1/instances#tpl={template_id}"),
+        "post",
+        op,
+    );
 }
 
 /// Emit the `/fire` + `/invoke` path pair for one Manual trigger.
@@ -783,6 +965,91 @@ mod tests {
         let sec = fire["security"].as_array().unwrap();
         assert!(sec.iter().any(|s| s.get("sessionCookie").is_some()));
         assert!(sec.iter().any(|s| s.get("bearerAuth").is_some()));
+    }
+
+    #[test]
+    fn template_run_emits_typed_start_token_contract() {
+        // A trigger-less template (only a Start block) still gets a callable
+        // run op, with start_tokens typed from the Start's initial port.
+        let graph = WorkflowGraph {
+            nodes: vec![start_node(
+                "start_main",
+                vec![
+                    port_field("subject", FieldKind::Text, true),
+                    port_field("count", FieldKind::Number, false),
+                ],
+            )],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+        let tid = Uuid::from_u128(0x42);
+        let mut paths = BTreeMap::new();
+        let mut schemas = BTreeMap::new();
+        emit_template_run(&graph, &tid, "Hello World", 3, &mut paths, &mut schemas);
+
+        // Keyed by the fragment path; real method POST.
+        let key = format!("/api/v1/instances#tpl={tid}");
+        let op = &paths[&key]["post"];
+        assert_eq!(op["x-mekhan-run-template"], json!(true));
+        assert_eq!(op["x-mekhan-template-id"], json!(tid.to_string()));
+        assert!(op["responses"].get("201").is_some());
+
+        let safe = sanitize_for_ref(&tid.to_string());
+        let req = &schemas[&format!("RunTemplate_{safe}_Request")];
+        // template_id pinned to this template.
+        assert_eq!(req["properties"]["template_id"]["enum"], json!([tid.to_string()]));
+        // Single Start → item schema (not oneOf); token carries the typed port.
+        let item = &req["properties"]["start_tokens"]["items"];
+        assert_eq!(item["properties"]["start_block_id"]["enum"], json!(["start_main"]));
+        assert_eq!(item["properties"]["token"]["properties"]["subject"]["type"], json!("string"));
+        assert_eq!(item["properties"]["token"]["properties"]["count"]["type"], json!("number"));
+        // Non-empty Start port → start_tokens required, minItems 1.
+        assert_eq!(req["properties"]["start_tokens"]["minItems"], json!(1));
+        assert_eq!(req["required"], json!(["template_id", "start_tokens"]));
+    }
+
+    #[test]
+    fn template_run_empty_start_makes_start_tokens_optional() {
+        let graph = WorkflowGraph {
+            nodes: vec![start_node("s", vec![])],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+        let mut paths = BTreeMap::new();
+        let mut schemas = BTreeMap::new();
+        emit_template_run(&graph, &Uuid::nil(), "Empty", 1, &mut paths, &mut schemas);
+        let safe = sanitize_for_ref(&Uuid::nil().to_string());
+        let req = &schemas[&format!("RunTemplate_{safe}_Request")];
+        assert_eq!(req["properties"]["start_tokens"]["minItems"], json!(0));
+        assert_eq!(req["required"], json!(["template_id"]));
+    }
+
+    #[test]
+    fn template_run_skipped_without_start_block() {
+        // No Start block → not launchable standalone → no run op.
+        let graph = WorkflowGraph {
+            nodes: vec![trigger_node(
+                "t",
+                TriggerSource::Manual(ManualTrigger { form: vec![] }),
+                true,
+            )],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+        let mut paths = BTreeMap::new();
+        let mut schemas = BTreeMap::new();
+        emit_template_run(&graph, &Uuid::nil(), "T", 1, &mut paths, &mut schemas);
+        assert!(paths.is_empty());
+        assert!(schemas.is_empty());
     }
 
     #[test]
