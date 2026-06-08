@@ -1,0 +1,34 @@
+{
+  "asset_type": {
+    "name": "transfer_jobs",
+    "display_name": "Transfer Jobs",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "sample_id", "label": "Sample ID", "kind": "text", "required": true },
+      { "name": "from_loc", "label": "From Location", "kind": "text", "required": true },
+      { "name": "to_loc", "label": "To Location", "kind": "text", "required": true },
+      {
+        "name": "op",
+        "label": "Operation",
+        "kind": "select",
+        "required": true,
+        "options": [
+          { "value": "pick", "label": "Pick" },
+          { "value": "place", "label": "Place" }
+        ]
+      }
+    ]
+  },
+  "ref_key": "transfer_jobs",
+  "display_name": "Transfer Jobs",
+  "records": [
+    { "sample_id": "S1", "from_loc": "A1", "to_loc": "P1", "op": "pick" },
+    { "sample_id": "S1", "from_loc": "A1", "to_loc": "P1", "op": "place" },
+    { "sample_id": "S1", "from_loc": "P1", "to_loc": "A1", "op": "pick" },
+    { "sample_id": "S1", "from_loc": "P1", "to_loc": "A1", "op": "place" },
+    { "sample_id": "S3", "from_loc": "A3", "to_loc": "P1", "op": "pick" },
+    { "sample_id": "S3", "from_loc": "A3", "to_loc": "P1", "op": "place" },
+    { "sample_id": "S3", "from_loc": "P1", "to_loc": "A3", "op": "pick" },
+    { "sample_id": "S3", "from_loc": "P1", "to_loc": "A3", "op": "place" }
+  ]
+}

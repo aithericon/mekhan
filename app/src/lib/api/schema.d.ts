@@ -8819,6 +8819,16 @@ export interface components {
             operation?: components["schemas"]["RosOperation"];
             /**
              * Format: int64
+             * @description How long a `monitor_scene` op keeps polling `/get_planning_scene` (in
+             *     milliseconds) before it closes its data channel. Decouples the
+             *     planning-scene twin from any single motion: a monitor sized to outlast
+             *     the run streams the WHOLE multi-step session (arm picking/placing several
+             *     samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
+             *     (so it always terminates). Ignored by the non-monitor operations.
+             */
+            scene_duration_ms?: number | null;
+            /**
+             * Format: int64
              * @description When set on a `send_action_goal` node that declares a DATA `out` channel,
              *     the action ALSO polls move_group's `/get_planning_scene` every this-many
              *     milliseconds during the motion and streams each scene snapshot (slim
@@ -8839,11 +8849,14 @@ export interface components {
          *     `PublishTopic` (the default) publishes a single message to a topic.
          *     `CallService` performs a request/response service call. `AwaitTopic`
          *     blocks for the next message on a topic. `SendActionGoal` dispatches a
-         *     goal to an action server. This is the source of truth for which rosbridge
-         *     op the backend issues.
+         *     goal to an action server. `MonitorScene` polls move_group's
+         *     `/get_planning_scene` on a cadence for a bounded duration and streams each
+         *     snapshot onto a DATA channel — a live planning-scene twin DECOUPLED from
+         *     any single motion, so one monitor can watch a whole multi-step run. This is
+         *     the source of truth for which rosbridge op the backend issues.
          * @enum {string}
          */
-        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal";
+        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal" | "monitor_scene";
         /**
          * @description Admin view for a single roster member — carries the trusted caps and the
          *     typed availability config.
