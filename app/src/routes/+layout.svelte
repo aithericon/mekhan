@@ -17,8 +17,7 @@
 
 	// Data/asset views grouped out of the primary nav.
 	const libraryItems: NavMenuItem[] = [
-		{ href: '/catalogue', label: 'Catalogue', testid: 'nav-catalogue', desc: 'Published outputs & artifacts' },
-		{ href: '/inventory', label: 'Inventory', testid: 'nav-inventory', desc: 'Physical file copies across servers' },
+		{ href: '/data', label: 'Data', testid: 'nav-data', desc: 'Catalogued content, physical copies & file servers' },
 		{ href: '/resources', label: 'Resources', testid: 'nav-resources', desc: 'Typed credentials & secrets' },
 		{ href: '/assets', label: 'Assets', testid: 'nav-assets', desc: 'Curated record collections' }
 	];
