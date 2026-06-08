@@ -398,6 +398,28 @@ pub struct S3Resource {
     pub force_path_style: Option<bool>,
 }
 
+/// SFTP / SSH file-server credentials (docs/32 §4.1). Paired with a
+/// `file_server` of `kind = "sftp"`, which carries the NON-secret connection
+/// coordinates (host / port / base_path) — this resource holds only the
+/// authentication material. Keeping storage creds in their own kind (rather
+/// than overloading `datacenter`'s scheduler SSH fields) keeps the two concerns
+/// decoupled. `private_key` is an inline PEM (NOT a path); the executor writes a
+/// 0600 temp file at use, mirroring `Datacenter::Slurm.ssh_key`.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "sftp", display_name = "SFTP", icon = "lucide-folder-tree")]
+pub struct Sftp {
+    /// SSH username.
+    pub username: String,
+    /// Inline PEM private key. Vault-stored; written to a 0600 temp file at use.
+    #[resource(secret)]
+    pub private_key: String,
+    /// Known-hosts policy: `strict` | `accept` | `add`. Absent → the executor
+    /// defaults to `accept` (pragmatic for a curated NAS; `strict` needs a
+    /// known_hosts file we don't ship).
+    #[serde(default)]
+    pub known_hosts: Option<String>,
+}
+
 /// Google OAuth token bundle. Created and refreshed by the OAuth handler
 /// (B.11), not by the standard CRUD flow. The presence of an
 /// `oauth_provider` attribute steers the picker to render a "Connect Google"

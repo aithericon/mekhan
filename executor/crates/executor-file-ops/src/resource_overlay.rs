@@ -88,6 +88,15 @@ fn overlay_storage(
         &mut storage.credentials.secret_key,
     );
 
+    // `sftp` resource (docs/32 §4.1): username → access_key, inline PEM
+    // private_key → secret_key, known_hosts policy → region (the field the
+    // Sftp operator-builder reads as its known_hosts strategy). These keys are
+    // absent from an `s3` envelope and vice-versa, so the two mappings coexist
+    // on one overlay without a per-kind branch.
+    fill_string_if_empty(obj, "username", &mut storage.credentials.access_key);
+    fill_string_if_empty(obj, "private_key", &mut storage.credentials.secret_key);
+    fill_opt_string_if_none(obj, "known_hosts", &mut storage.region);
+
     Ok(())
 }
 
@@ -251,6 +260,44 @@ mod tests {
         // Resource fills the empties
         assert_eq!(s.bucket, "from-resource");
         assert_eq!(s.credentials.secret_key, "FROM-RESOURCE");
+    }
+
+    #[test]
+    fn sftp_resource_fills_username_key_and_known_hosts() {
+        let td = TempDir::new().unwrap();
+        let ctx = ctx_with_inputs_dir(&td);
+        write_envelope(
+            &td,
+            "lab_nas",
+            r#"{
+                "username": "svc",
+                "private_key": "-----BEGIN KEY-----\nPEM\n-----END KEY-----\n",
+                "known_hosts": "Add"
+            }"#,
+        );
+        // host/base_path live on the file_server → already set inline on endpoint.
+        let mut s = StorageConfig {
+            backend: StorageBackend::Sftp,
+            endpoint: "ssh://nas.lab:22".into(),
+            bucket: String::new(),
+            region: None,
+            prefix: "legacy/".into(),
+            credentials: StorageCredentials::default(),
+            retry: Default::default(),
+            resource_alias: Some("lab_nas".into()),
+        };
+        overlay_storage(&mut s, &ctx).unwrap();
+        assert_eq!(s.endpoint, "ssh://nas.lab:22", "inline host preserved");
+        assert_eq!(s.credentials.access_key, "svc", "username → access_key");
+        assert!(
+            s.credentials.secret_key.contains("BEGIN KEY"),
+            "private_key → secret_key"
+        );
+        assert_eq!(
+            s.region.as_deref(),
+            Some("Add"),
+            "known_hosts → region (sftp known_hosts strategy)"
+        );
     }
 
     #[test]

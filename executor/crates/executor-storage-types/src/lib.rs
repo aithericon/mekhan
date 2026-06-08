@@ -14,6 +14,11 @@ pub enum StorageBackend {
     /// Azure Blob Storage.
     #[serde(alias = "azure")]
     AzBlob,
+    /// SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint
+    /// (`ssh://host:port`); `credentials.access_key` is the username and
+    /// `credentials.secret_key` is the inline PEM private key (written to a
+    /// 0600 temp file at operator-build). `prefix` carries the base path.
+    Sftp,
 }
 
 /// Credentials for accessing a storage backend.

@@ -105,7 +105,59 @@ pub fn build_operator(config: &StorageConfig) -> Result<Operator, StorageError> 
                 .layer(retry_layer(config))
                 .finish())
         }
+        #[cfg(feature = "opendal-sftp")]
+        StorageBackend::Sftp => {
+            // opendal's Sftp wants a key *path*, not inline PEM — materialize the
+            // secret to a 0600 temp file (content-addressed so concurrent builds
+            // reuse one file). Mirrors `Datacenter::Slurm`'s "0600 temp file at
+            // use". `endpoint` is the SSH endpoint, `access_key` the username,
+            // `secret_key` the PEM; `prefix` carries the base path so root is "/".
+            let key_path = write_sftp_key(&config.credentials.secret_key)
+                .map_err(|e| StorageError::Other(format!("sftp key materialize: {e}")))?;
+            let strategy = config
+                .region
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Accept");
+            let builder = opendal::services::Sftp::default()
+                .endpoint(&config.endpoint)
+                .user(&config.credentials.access_key)
+                .key(&key_path)
+                .root("/")
+                .known_hosts_strategy(strategy);
+            Ok(Operator::new(builder)
+                .map_err(|e| StorageError::Other(format!("Sftp operator init: {e}")))?
+                .layer(retry_layer(config))
+                .finish())
+        }
+        #[cfg(not(feature = "opendal-sftp"))]
+        StorageBackend::Sftp => Err(StorageError::Other(
+            "SFTP backend requires the 'opendal-sftp' feature".into(),
+        )),
     }
+}
+
+/// Write an inline PEM private key to a 0600, content-addressed temp file and
+/// return its path. Idempotent: reuses an existing file with identical bytes,
+/// so concurrent operator builds never race on distinct paths. opendal's Sftp
+/// `key()` takes a filesystem path, not inline content — this bridges that.
+#[cfg(feature = "opendal-sftp")]
+fn write_sftp_key(pem: &str) -> std::io::Result<String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut h = DefaultHasher::new();
+    pem.hash(&mut h);
+    let path = std::env::temp_dir().join(format!("aithericon-sftp-key-{:016x}.pem", h.finish()));
+    if !path.exists() {
+        std::fs::write(&path, pem)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Build an OpenDAL `Operator` and prefix from a `StorageConfig`.
@@ -373,6 +425,41 @@ mod tests {
         let builder = opendal::services::Memory::default();
         let op = Operator::new(builder).unwrap().finish();
         OpenDalArtifactStore::new(op, String::new())
+    }
+
+    /// The SFTP transport (docs/32 §4.1) builds an `Operator` from a
+    /// `StorageConfig` — endpoint/user/inline-PEM-key/prefix — WITHOUT
+    /// connecting (opendal connects lazily on first op), so this exercises the
+    /// builder + the 0600 key-file materialization off the live-NAS path.
+    #[cfg(feature = "opendal-sftp")]
+    #[test]
+    fn build_sftp_operator_without_connecting() {
+        use crate::config::{StorageBackend, StorageCredentials};
+        let config = StorageConfig {
+            backend: StorageBackend::Sftp,
+            endpoint: "ssh://nas.example:22".into(),
+            bucket: String::new(),
+            region: Some("Accept".into()),
+            prefix: "legacy/".into(),
+            credentials: StorageCredentials {
+                access_key: "svc".into(),
+                secret_key: "-----BEGIN OPENSSH PRIVATE KEY-----\nDUMMY\n-----END OPENSSH PRIVATE KEY-----\n".into(),
+            },
+            retry: Default::default(),
+            resource_alias: None,
+        };
+        let op = build_operator(&config).expect("sftp operator builds");
+        assert_eq!(op.info().scheme().to_string(), "sftp");
+
+        // The inline PEM was materialized to a 0600 file.
+        let key_path = write_sftp_key(&config.credentials.secret_key).unwrap();
+        let meta = std::fs::metadata(&key_path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        }
+        let _ = meta;
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@ opendal = ["aithericon-executor-storage/opendal", "aithericon-executor-worker/op
 livekit = ["aithericon-executor-worker/livekit"]
 url-inputs = ["aithericon-executor-worker/url-inputs"]
 opendal-s3 = ["opendal", "aithericon-executor-storage/opendal-s3"]
+opendal-sftp = ["opendal", "aithericon-executor-storage/opendal-sftp"]
 opendal-gcs = ["opendal", "aithericon-executor-storage/opendal-gcs"]
 opendal-azblob = ["opendal", "aithericon-executor-storage/opendal-azblob"]
 docker = ["dep:aithericon-executor-docker", "aithericon-executor-test-harness/docker"]

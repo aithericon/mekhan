@@ -230,7 +230,8 @@ fn validate_storage(config: &StorageConfig, field: &str) -> Result<(), String> {
                 ));
             }
         }
-        StorageBackend::Local => {}
+        // Local + Sftp address by path under `endpoint` (no bucket).
+        StorageBackend::Local | StorageBackend::Sftp => {}
     }
     Ok(())
 }
