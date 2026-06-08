@@ -97,8 +97,10 @@ impl SeedModel {
 }
 
 /// How to seed one model-serving runner. `Default` gives an empty, zoneless,
-/// base_url-less runner in the nil workspace named `model-runner`.
-#[derive(Clone, Debug, Default)]
+/// base_url-less runner in the nil workspace named `model-runner`, enrolled into
+/// the `model_serving` group (so the model-pool reads — which gate on group
+/// membership — identify it as a pool replica).
+#[derive(Clone, Debug)]
 pub struct SeedRunnerSpec {
     /// Workspace the runner + its catalog land in. The placement loop scans per
     /// workspace, so this MUST match the policy's workspace ([`seed_model_policy`]).
@@ -106,6 +108,11 @@ pub struct SeedRunnerSpec {
     pub workspace_id: Uuid,
     /// Operator-facing runner name.
     pub name: Option<String>,
+    /// The runner's group alias (its `runner_group`, mirrored onto presence as the
+    /// `pool_alias`). Defaults to `Some("model_serving")` so the runner is a
+    /// first-class member of the LLM pool. Set to `None` (or another alias) to
+    /// assert a present-but-NOT-in-the-pool runner is excluded.
+    pub group: Option<String>,
     /// Models RESIDENT on the runner (its `catalog.models`).
     pub models: Vec<SeedModel>,
     /// Model ids PROVISIONED TO DISK (the `catalog.pulled` superset — loadable
@@ -119,6 +126,22 @@ pub struct SeedRunnerSpec {
     /// routable by the inference router. `None` ⇒ not routable (still a placement
     /// candidate).
     pub base_url: Option<String>,
+}
+
+impl Default for SeedRunnerSpec {
+    fn default() -> Self {
+        Self {
+            workspace_id: Uuid::nil(),
+            name: None,
+            // Pool membership is the first-class identity now — default seeded
+            // runners INTO the model-serving group so the reads see them.
+            group: Some(mekhan_service::model_serving_group::MODEL_SERVING_GROUP_PATH.to_string()),
+            models: Vec::new(),
+            pulled: Vec::new(),
+            residency_zone: None,
+            base_url: None,
+        }
+    }
 }
 
 impl SeedRunnerSpec {
@@ -218,8 +241,12 @@ pub async fn seed_model_runner(
     .await
     .expect("insert seeded runner_interfaces row");
 
-    // (3) mark it present so the placement loop's presence gate admits it.
-    presence.inject_present_for_test(runner_id, true).await;
+    // (3) mark it present AND stamp its group alias so the model-pool reads —
+    //     which gate on `model_serving` group membership — admit it. A spec with
+    //     `group = None` is present but NOT a pool member (excluded by design).
+    presence
+        .inject_present_in_group_for_test(runner_id, spec.group.as_deref(), true)
+        .await;
 
     SeededRunner {
         runner_id,

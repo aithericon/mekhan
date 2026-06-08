@@ -419,6 +419,13 @@ async fn main() -> anyhow::Result<()> {
     // (a migration also backfills it, for installs that never reboot here).
     mekhan_service::worker_groups::ensure_default_worker_group_all_workspaces(&state).await;
 
+    // Model pool: every workspace owns a presence-backed `model_serving` runner
+    // group (a `capacity` resource, `instrument` preset) so self-hosted LLM
+    // serving nodes have a first-class pool to enrol into — group membership, not
+    // a `base_url` sniff, is what identifies a runner as part of the LLM pool.
+    // Idempotent + best-effort, same posture as the worker-group seeder.
+    mekhan_service::model_serving_group::ensure_model_serving_group_all_workspaces(&state).await;
+
     // Seed built-in demos before the listener accepts requests. Idempotent
     // by stable template id (see `mekhan_service::demos`); best-effort —
     // a failure to seed logs a warning and is otherwise transparent. Gated

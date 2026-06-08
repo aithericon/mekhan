@@ -25,6 +25,7 @@ pub mod lifecycle;
 /// clap wrapper over this module; the integration test calls it directly.
 #[cfg(feature = "migration-driver")]
 pub mod migration_driver;
+pub mod model_serving_group;
 pub mod models;
 pub mod nats;
 pub mod nodes;

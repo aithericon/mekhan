@@ -69,6 +69,23 @@ pub enum ExecutionBackendType {
     Ros,
 }
 
+/// The advertised-capability wire tag for a self-hosted LLM **serving** node — a
+/// runner that HOSTS an OpenAI-compatible inference engine (vLLM / Ollama) the
+/// inference router routes to.
+///
+/// Deliberately NOT an [`ExecutionBackendType`] variant: that enum is the
+/// workflow-**step** taxonomy (every variant is something an `AutomatedStep`
+/// node can be, with a queue namespace + compiler lowering). A serving node is a
+/// data-plane *role*, not a step type — you never author an "llm-server" node —
+/// so it lives in the runner's advertised `backends` capability list (the
+/// presence dimension rendered on the Fleet Live board), distinct from
+/// [`ExecutionBackendType::Llm`] which means "this executor can run LLM-step
+/// *jobs*" (a queue consumer). The model agent appends this tag to its presence
+/// heartbeat; mekhan uses the first-class `model-serving` runner group (not this
+/// tag) as the authoritative pool-membership gate, and surfaces the tag for
+/// fleet visibility.
+pub const LLM_SERVER_WIRE: &str = "llm-server";
+
 /// The NATS namespace prefix for the worker executor-job stream FAMILY. Every
 /// `AutomatedStep` whose backend dispatches an executor job routes through a
 /// GROUP partition on the parallel `executor-<wire>-grp` stream (see

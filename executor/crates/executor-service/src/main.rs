@@ -388,7 +388,16 @@ async fn run_nats_daemon(
     };
 
     if let Some(runner_id) = config.runner_id.clone() {
-        let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        let mut backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        // A model-serving node (the `[model_agent]` is active → `model_state` set)
+        // advertises the first-class `llm-server` CAPABILITY alongside its executor
+        // job wires. This is the data-plane SERVING role (hosts an inference engine
+        // the router routes to), distinct from the `llm` job-executor backend; it
+        // surfaces on the Fleet Live board and documents why this runner enrols into
+        // the `model-serving` group (the authoritative pool-membership gate).
+        if model_state.is_some() {
+            backends.push(aithericon_backends::LLM_SERVER_WIRE.to_string());
+        }
         // Probe the host/hardware fingerprint ONCE at startup (subprocess calls
         // to nvidia-smi/sysctl/etc. are too costly per-heartbeat, and the host is
         // static for the daemon's lifetime). Attached to every heartbeat for

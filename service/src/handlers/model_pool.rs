@@ -42,6 +42,30 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
 }
 
+/// Present runners that are MEMBERS of the `model_serving` runner group — the
+/// first-class identity for "this runner is part of the LLM pool". Replaces the
+/// legacy `base_url.is_some()` sniff: membership is the runner's `runner_group`
+/// alias (mirrored onto the live presence map as each entry's `pool_alias`), so a
+/// node is a pool replica because it ENROLLED into the model-serving group, not
+/// because its catalog happens to carry an endpoint. The catalog's
+/// `base_url`/`models`/`residency_zone` remain the data-plane payload.
+///
+/// `pool_membership()` already filters to PRESENT runners, so the returned set is
+/// exactly the live ∩ in-group runners the catalog reads gate on. Cross-workspace
+/// safe: a runner UUID belongs to one workspace, and each workspace's
+/// model-serving group shares the same `model_serving` alias.
+async fn model_serving_members(
+    runner_presence: &crate::runners_presence::RunnerPresence,
+) -> HashSet<Uuid> {
+    runner_presence
+        .pool_membership()
+        .await
+        .into_iter()
+        .filter(|(_, alias)| alias == crate::model_serving_group::MODEL_SERVING_GROUP_PATH)
+        .map(|(id, _)| id)
+        .collect()
+}
+
 /// The live half of the loaded-set AND-gate: a map `model_id → count of LIVE
 /// runners advertising it`. Built by scanning every runner's interface catalog
 /// in the workspace, parsing its `models` list, and counting ONLY runners that
@@ -59,13 +83,10 @@ pub(crate) async fn serving_runner_counts(
 ) -> HashMap<String, u32> {
     // Live runners: the in-memory presence snapshot (the actual pool-capacity
     // signal). Restrict the catalog join to those that are present.
-    let present: HashSet<Uuid> = runner_presence
-        .snapshot()
-        .await
-        .into_iter()
-        .filter(|s| s.present)
-        .map(|s| s.runner_id)
-        .collect();
+    // Identity = membership in the `model_serving` runner group (∩ present), not
+    // a `base_url` sniff. A runner that advertises an endpoint but never enrolled
+    // into the pool is deliberately NOT a replica.
+    let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
     let catalogs: Vec<(Uuid, serde_json::Value)> =
         sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
@@ -139,13 +160,10 @@ pub(crate) async fn serving_runner_inventory(
     runner_presence: &crate::runners_presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> HashMap<Uuid, Vec<crate::models::runner::ModelEntry>> {
-    let present: HashSet<Uuid> = runner_presence
-        .snapshot()
-        .await
-        .into_iter()
-        .filter(|s| s.present)
-        .map(|s| s.runner_id)
-        .collect();
+    // Identity = membership in the `model_serving` runner group (∩ present), not
+    // a `base_url` sniff. A runner that advertises an endpoint but never enrolled
+    // into the pool is deliberately NOT a replica.
+    let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
     let catalogs: Vec<(Uuid, serde_json::Value)> =
         sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
@@ -166,13 +184,10 @@ pub(crate) async fn serving_runner_pulled(
     runner_presence: &crate::runners_presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> HashMap<Uuid, Vec<String>> {
-    let present: HashSet<Uuid> = runner_presence
-        .snapshot()
-        .await
-        .into_iter()
-        .filter(|s| s.present)
-        .map(|s| s.runner_id)
-        .collect();
+    // Identity = membership in the `model_serving` runner group (∩ present), not
+    // a `base_url` sniff. A runner that advertises an endpoint but never enrolled
+    // into the pool is deliberately NOT a replica.
+    let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
     let catalogs: Vec<(Uuid, serde_json::Value)> =
         sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
@@ -200,13 +215,10 @@ pub(crate) async fn serving_runner_catalogs(
     runner_presence: &crate::runners_presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> Vec<(Uuid, RunnerInterfaceCatalog)> {
-    let present: HashSet<Uuid> = runner_presence
-        .snapshot()
-        .await
-        .into_iter()
-        .filter(|s| s.present)
-        .map(|s| s.runner_id)
-        .collect();
+    // Identity = membership in the `model_serving` runner group (∩ present), not
+    // a `base_url` sniff. A runner that advertises an endpoint but never enrolled
+    // into the pool is deliberately NOT a replica.
+    let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
     let catalogs: Vec<(Uuid, serde_json::Value)> =
         sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
@@ -222,9 +234,11 @@ pub(crate) async fn serving_runner_catalogs(
 /// inference router's live-replica source. Unlike [`serving_runner_inventory`]
 /// (workspace-scoped, returns per-node `ModelEntry`s for the operator views),
 /// this scans EVERY workspace's `runner_interfaces` row and emits one flat
-/// [`ModelServingRunner`] per PRESENT runner whose catalog carries a `base_url`
-/// (a node that advertises no inference endpoint is not routable, so it is
-/// skipped). `concurrency_c` = the first base entry's `max_num_seqs` (default 1);
+/// [`ModelServingRunner`] per PRESENT runner that is a MEMBER of its workspace's
+/// `model_serving` group (the first-class pool identity). A group member whose
+/// catalog carries no `base_url` is not routable — it is skipped with a warning
+/// (a misconfigured serving node), rather than silently defining membership as
+/// the older `base_url`-sniff did. `concurrency_c` = the first base entry's `max_num_seqs` (default 1);
 /// `model_ids` = every base + LoRA id the runner serves. Fail-soft: a DB error
 /// yields an empty list, an unparseable catalog row is dropped.
 ///
@@ -234,13 +248,10 @@ pub(crate) async fn model_serving_runners(
     db: &sqlx::PgPool,
     runner_presence: &crate::runners_presence::RunnerPresence,
 ) -> Vec<crate::models::runner::ModelServingRunner> {
-    let present: HashSet<Uuid> = runner_presence
-        .snapshot()
-        .await
-        .into_iter()
-        .filter(|s| s.present)
-        .map(|s| s.runner_id)
-        .collect();
+    // Identity = membership in the `model_serving` runner group (∩ present), not
+    // a `base_url` sniff. A runner that advertises an endpoint but never enrolled
+    // into the pool is deliberately NOT a replica.
+    let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
     // NO workspace filter — the router routes across the whole cluster.
     let catalogs: Vec<(Uuid, serde_json::Value)> =
@@ -252,7 +263,17 @@ pub(crate) async fn model_serving_runners(
     present_catalogs(&present, catalogs)
         .into_iter()
         .filter_map(|(runner_id, catalog)| {
-            let base_url = catalog.base_url.clone()?;
+            // Group membership (not base_url) is the identity gate now; base_url is
+            // the data-plane endpoint. A member that advertises none is not
+            // routable — surface it rather than silently dropping it.
+            let Some(base_url) = catalog.base_url.clone() else {
+                tracing::warn!(
+                    %runner_id,
+                    "model_serving group member advertises no inference base_url — \
+                     not routable, skipping (misconfigured serving node?)"
+                );
+                return None;
+            };
             let concurrency_c = catalog
                 .models
                 .iter()

@@ -1094,9 +1094,9 @@ up-model-runner n="1":
 
     if [ -z "$reuse" ]; then
       rm -rf "$runner_base/runner"
-      echo "▶ minting registration token (ungrouped)…"
+      echo "▶ minting registration token (group=model_serving)…"
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{}' | jq -r '.token')
+          -H 'content-type: application/json' -d '{"group":"model_serving"}' | jq -r '.token')
       if [ -z "$rt" ] || [ "$rt" = "null" ]; then
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1

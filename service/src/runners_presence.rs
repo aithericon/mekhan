@@ -259,6 +259,22 @@ impl RunnerPresence {
     /// no-op risk rather than a correctness hazard, but it must never be wired into
     /// a request path.
     pub async fn inject_present_for_test(&self, runner_id: Uuid, present: bool) {
+        self.inject_present_in_group_for_test(runner_id, None, present)
+            .await;
+    }
+
+    /// Like [`Self::inject_present_for_test`] but also stamps the runner's `group`
+    /// alias (the `pool_alias`), so `pool_membership()` — and therefore the
+    /// model-pool reads that gate on `model_serving` group membership — see the
+    /// seeded runner as a pool member. Pass `Some("model_serving")` to make a
+    /// seeded runner a model-pool replica, or `None` for a group-less present
+    /// runner (e.g. to assert it is EXCLUDED from the pool). Test-support only.
+    pub async fn inject_present_in_group_for_test(
+        &self,
+        runner_id: Uuid,
+        group: Option<&str>,
+        present: bool,
+    ) {
         let mut map = self.0.lock().await;
         map.insert(
             runner_id,
@@ -266,7 +282,7 @@ impl RunnerPresence {
                 last_seen: Instant::now(),
                 concurrency: 0,
                 pool_net_id: String::new(),
-                pool_alias: None,
+                pool_alias: group.map(|g| g.to_string()),
                 backends: Vec::new(),
                 host: None,
                 present,

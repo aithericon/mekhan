@@ -36,5 +36,5 @@ pub use registry::{
 };
 pub use types::{
     executor_pool_namespace, executor_pool_namespace_for_group, DispatchMode, ExecutionBackendType,
-    ResourceChannel, EXECUTOR_NS_PREFIX,
+    ResourceChannel, EXECUTOR_NS_PREFIX, LLM_SERVER_WIRE,
 };
