@@ -128,12 +128,30 @@
 		}
 	}
 
+	/** Remove every mounted arm from sceneRoot (keep the persistent worldGroup),
+	 *  disposing its meshes. Without this, re-running the load effect or losing the
+	 *  model leaves prior arms in the scene frozen at past poses — the ghost fan. */
+	function clearArms() {
+		for (const child of [...sceneRoot.children]) {
+			if (child === worldGroup) continue;
+			sceneRoot.remove(child);
+			child.traverse((o) => {
+				const m = o as Mesh;
+				m.geometry?.dispose?.();
+				const mat = m.material;
+				if (Array.isArray(mat)) mat.forEach((x) => x.dispose?.());
+				else mat?.dispose?.();
+			});
+		}
+	}
+
 	// (Re)load the URDF whenever the robot model changes. Once built we reparent it
 	// under `sceneRoot` (which carries the Z-up→Y-up rotation) and zero the robot's
 	// own rotation so it isn't rotated twice.
 	$effect(() => {
 		const model = robotModel;
 		if (!model) {
+			clearArms();
 			robot = null;
 			error = null;
 			return;
@@ -154,6 +172,11 @@
 				// The common parent now carries that rotation; clear the robot's own so
 				// the world objects (also under sceneRoot) share its exact frame.
 				r.rotation.set(0, 0, 0);
+				// Remove any arm already mounted before adding the new one — otherwise a
+				// re-run of this effect (robotModel re-eval / null↔model flicker) STACKS
+				// arms: the old one stays in sceneRoot frozen at its last joint pose while
+				// the new one renders live, fanning out as ghost arms.
+				clearArms();
 				sceneRoot.add(r);
 				robot = r;
 				error = null;
