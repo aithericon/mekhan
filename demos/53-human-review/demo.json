@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000530",
+  "folder": "pools",
+  "name": "53 · Human Review (offer dispatch)",
+  "description": "A HumanTask bound to a `capacity` resource with the `human` preset (presence · offer dispatch). Instead of today's unpooled task, the End-of-step review is OFFERED to every available member enrolled in the `reviewers` capacity; the first to claim it binds the task and fills the form (first-claim-wins, the rest implicitly rescinded). Try it: open Inbox, toggle yourself Available, Claim the offered review, then complete the form. The matching `reviewers` capacity + your enrollment are seeded automatically alongside this demo (see `mekhan_service::demos::ensure_human_review_capacity`). Docs: `docs/33-human-capacity-roster.md`."
+}

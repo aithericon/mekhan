@@ -1,0 +1,8 @@
+{
+  "capacity": "reviewers",
+  "member_user_id": "3bb26085-29f3-5fbf-8a8c-a2e485a1f55b",
+  "caps": {},
+  "concurrency": 1,
+  "availability": { "liveness_source": "none", "ttl_secs": 0, "grace_secs": 0 },
+  "available": false
+}

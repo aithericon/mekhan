@@ -957,6 +957,121 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
     }
 }
 
+/// One `demos/roster/*.json` enrollment fixture: enrols a (dev) member into a
+/// seeded `human`-preset `capacity` so a HumanTask-on-offer demo (docs/33) has
+/// an eligible roster the moment it boots. `capacity` is the workspace path of
+/// the capacity resource the fixture's task binds (resolved to its row id);
+/// `member_user_id` is the enrolee (in `dev_noop` the fixed dev user). `caps`
+/// are advertised capabilities matched against a task's `requirements` by the
+/// offer pool's `t_claim` guard; `availability`/`available` mirror the durable
+/// `roster_members` knobs (a `none` liveness source = admitted on the toggle
+/// alone, no heartbeat — see [`crate::models::roster::LivenessSource`]).
+#[derive(serde::Deserialize)]
+struct RosterFixture {
+    /// Workspace `path` of the `capacity` resource to enrol into.
+    capacity: String,
+    member_user_id: uuid::Uuid,
+    #[serde(default = "empty_caps")]
+    caps: serde_json::Value,
+    #[serde(default = "one_concurrency")]
+    concurrency: i32,
+    #[serde(default = "empty_caps")]
+    availability: serde_json::Value,
+    #[serde(default)]
+    available: bool,
+}
+
+fn empty_caps() -> serde_json::Value {
+    serde_json::json!({})
+}
+fn one_concurrency() -> i32 {
+    1
+}
+
+/// Seed human-capacity roster enrolments from `demos/roster/*.json` into the
+/// demo workspace. Mirrors [`seed_demo_resources`]: runs (from [`seed_all`])
+/// AFTER it, so each fixture's `capacity` path resolves to a real row. The
+/// enrolment is idempotent on the `(workspace_id, capacity_id, member_user_id)`
+/// unique key (`DO NOTHING` — a hand-toggled `available` survives reboots).
+/// Best-effort: a missing capacity or insert error is logged, never fatal.
+async fn seed_demo_roster(state: &crate::AppState, root: &Path) {
+    let dir = root.join("roster");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no roster fixtures — nothing to enrol
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo roster: read failed");
+                continue;
+            }
+        };
+        let fx: RosterFixture = match serde_json::from_str(&raw) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo roster: parse failed");
+                continue;
+            }
+        };
+        let capacity_id: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM resources \
+             WHERE workspace_id = $1 AND path = $2 \
+               AND resource_type = 'capacity' AND deleted_at IS NULL",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(&fx.capacity)
+        .fetch_optional(&state.db)
+        .await;
+        let capacity_id = match capacity_id {
+            Ok(Some((id,))) => id,
+            Ok(None) => {
+                tracing::warn!(
+                    capacity = %fx.capacity,
+                    "demo roster: capacity not found — skipping enrolment (is its resource fixture seeded?)"
+                );
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(capacity = %fx.capacity, error = %e, "demo roster: capacity lookup failed");
+                continue;
+            }
+        };
+        let res = sqlx::query(
+            "INSERT INTO roster_members \
+             (workspace_id, capacity_id, member_user_id, caps, concurrency, availability, available, enrolled_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (workspace_id, capacity_id, member_user_id) DO NOTHING",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(capacity_id)
+        .bind(fx.member_user_id)
+        .bind(&fx.caps)
+        .bind(fx.concurrency)
+        .bind(&fx.availability)
+        .bind(fx.available)
+        .bind(DEMO_SEEDER_AUTHOR_ID)
+        .execute(&state.db)
+        .await;
+        match res {
+            Ok(_) => tracing::info!(
+                capacity = %fx.capacity,
+                member = %fx.member_user_id,
+                "demo roster member enrolled"
+            ),
+            Err(e) => {
+                tracing::warn!(capacity = %fx.capacity, error = %e, "demo roster enrol failed")
+            }
+        }
+    }
+}
+
 /// One `model_states` seed fixture (`demos/model_states/*.json`): pins a
 /// curated model into the loaded-state machine so `GET /api/v1/models` reports
 /// it `loaded` after a fresh seed (model-pool P1, docs/29 §3). `state` is the
@@ -1328,6 +1443,13 @@ pub async fn seed_all(
         tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
     }
     seed_demo_resources(state, root).await;
+    // After resources: enroll the seeded human-capacity roster (docs/33). A
+    // `human`-preset capacity (e.g. `reviewers`) only OFFERS work to members
+    // enrolled in it, so a HumanTask-on-offer demo needs its dev member on the
+    // roster before that task can ever surface in an inbox. Each fixture's
+    // capacity is resolved by path against the rows `seed_demo_resources` just
+    // wrote, so this MUST run after it.
+    seed_demo_roster(state, root).await;
     // After resources: the model_states projection's `registry_resource_id`
     // resolves a `model_registry` resource alias to its row id (model-pool P1).
     seed_model_states(state, root).await;

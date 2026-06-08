@@ -1,0 +1,6 @@
+{
+  "path": "reviewers",
+  "resource_type": "capacity",
+  "display_name": "Reviewers (dev)",
+  "config": { "preset": "human" }
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "id": "step-decision",
+    "title": "Approve / Reject",
+    "blocks": [
+      {
+        "type": "input",
+        "field": {
+          "name": "approved",
+          "label": "Approve this document",
+          "kind": "checkbox",
+          "required": true
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "comment",
+          "label": "Comment",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Optional notes for the record"
+        }
+      }
+    ]
+  }
+]

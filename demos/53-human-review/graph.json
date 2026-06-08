@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 40 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Document Review",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": [
+            {
+              "name": "document_id",
+              "label": "Document ID",
+              "kind": "text",
+              "required": true,
+              "placeholder": "e.g. DOC-1042"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "review",
+      "type": "human_task",
+      "slug": "review",
+      "position": { "x": 220, "y": 20 },
+      "data": {
+        "type": "human_task",
+        "label": "Reviewer Decision",
+        "taskTitle": "Review {{ start.document_id }}",
+        "instructionsMdsvex": "This review is **offered** to everyone available in the `reviewers` capacity. Claim it to take it on — first claim wins. Approve or reject the document and leave a comment.",
+        "steps": [],
+        "capacity": { "alias": "reviewers" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 480, "y": 0 },
+      "data": {
+        "type": "end",
+        "label": "Reviewed",
+        "resultMapping": [
+          { "targetField": "document_id", "expression": "start.document_id" },
+          { "targetField": "approved", "expression": "review.approved" },
+          { "targetField": "comment", "expression": "review.comment" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_review", "source": "start", "target": "review", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_review_end", "source": "review", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

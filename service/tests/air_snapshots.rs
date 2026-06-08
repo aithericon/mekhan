@@ -535,6 +535,23 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // ref-key (`;model=`), none resolvable by bare `compile_to_air` (empty
         // KnownResources/KnownGlobals). Live-only (Threlte scene render + MoveIt).
         "51-scene-twin",
+        // 52-sample-swap-twin (full pick/place cycle under one live twin) —
+        // same class as 51: ros AutomatedSteps target the `xarm_fleet`
+        // runner_group via `deploymentModel.capacity.alias`, carry a `ros`
+        // capability Requirement, and reference a `robot_description` asset by
+        // ref-key, none resolvable by bare `compile_to_air`. Live-only (MoveIt
+        // pick/place + Threlte scene twin). (Merged from main alongside 53; main
+        // had added the demo dir without registering it here.)
+        "52-sample-swap-twin",
+        // 53-human-review (human-capacity offer dispatch, docs/33) — its
+        // HumanTask binds the `reviewers` `capacity` resource via
+        // `data.capacity.alias`, lowered as the pooled offer claim/acquire/
+        // register/release scaffold. The alias resolves to `pool-<capacity_id>`
+        // only at publish time against a live `resources` row (seeded by
+        // `seed_demo_resources` + enrolled by `seed_demo_roster`); bare
+        // `compile_to_air` has an empty KnownResources. Same class as the
+        // runner-group demos above. Proven live via the Inbox claim flow.
+        "53-human-review",
     ]
     .into_iter()
     .collect();
