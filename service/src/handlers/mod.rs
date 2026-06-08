@@ -21,7 +21,6 @@ pub mod model_catalog;
 pub mod model_commands;
 pub mod model_pool;
 pub mod model_replicas;
-pub mod node_replicas;
 pub mod node_types;
 pub mod observability;
 pub mod openapi_bundle;

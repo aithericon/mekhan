@@ -204,14 +204,10 @@ impl RunnerPresence {
 
     /// Map every currently-PRESENT runner's UUID → its pool alias (`resources.path`
     /// of its `runner_group`). Runners with no pool (`pool_alias == None`) and
-    /// absent runners are omitted.
-    ///
-    /// The node-fleet scaler (docs/31 Phase 2, Loop 1) uses this to resolve pool
-    /// membership for the C-weighted observed-capacity aggregate
-    /// ([`crate::autoscaler::observe::pool_serving_capacity`]): the FLeetLiveness
-    /// snapshot carries each runner's concurrency `C` but NOT its pool tag, so the
-    /// two registries are joined on the runner UUID. They are mirrored on every
-    /// heartbeat, so a momentary drift just under/over-counts one node for one tick.
+    /// absent runners are omitted. The presence snapshot carries each runner's
+    /// concurrency `C` but NOT its pool tag, so the two registries are joined on the
+    /// runner UUID; mirrored on every heartbeat, a momentary drift just
+    /// under/over-counts one node for one tick.
     pub async fn pool_membership(&self) -> std::collections::HashMap<Uuid, String> {
         let map = self.0.lock().await;
         map.iter()

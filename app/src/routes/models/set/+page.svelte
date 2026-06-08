@@ -27,18 +27,15 @@
 		setModelPolicy,
 		clearModelPolicy,
 		scaleModel,
-		listNodePools,
 		apiErrorMessage,
 		type ModelSetView,
 		type AutoscalePolicyInput
 	} from '$lib/api/models';
-	import type { ResourceSummary } from '$lib/api/resources';
 	import RunnerTargetPicker from '$lib/components/fleet/RunnerTargetPicker.svelte';
 	import { statusTone } from '$lib/components/fleet/model-pool';
 
 	let models = $state<ModelSetView[]>([]);
 	let busy = $state<string | null>(null);
-	let nodePools = $state<ResourceSummary[]>([]);
 
 	type AutoscaleMode = 'manual' | 'scale_to_zero' | 'keep_warm';
 
@@ -46,10 +43,8 @@
 	let policyFor = $state<string | null>(null);
 	let policyMode = $state<AutoscaleMode>('manual');
 	let policyDesired = $state<string>('');
-	let policyNodePool = $state<string>('');
 	let policyZone = $state<string>('');
 	let policyCooldown = $state<string>('');
-	let policyDedicated = $state(false);
 	let policyIdleEvict = $state(false);
 	let policyScaleUp = $state<string>('');
 	let policyScaleDown = $state<string>('');
@@ -80,31 +75,19 @@
 		}
 	}
 
-	async function loadPools() {
-		try {
-			nodePools = await listNodePools();
-		} catch {
-			// non-fatal — the editor falls back to its empty-state hint.
-		}
-	}
-
 	$effect(() => {
 		void poll();
-		void loadPools();
 		const t = setInterval(() => void poll(), 5000);
 		return () => clearInterval(t);
 	});
 
 	function openPolicy(m: ModelSetView) {
-		void loadPools();
 		policyFor = m.model_id;
 		const a = m.autoscale;
 		policyMode = (a?.mode as AutoscaleMode) ?? 'manual';
 		policyDesired = a?.desired_replicas != null ? String(a.desired_replicas) : '';
-		policyNodePool = a?.node_pool ?? '';
 		policyZone = a?.residency_zone ?? '';
 		policyCooldown = a?.cooldown_secs != null ? String(a.cooldown_secs) : '';
-		policyDedicated = a?.dedicated ?? false;
 		policyIdleEvict = a?.idle_evict ?? false;
 		policyScaleUp = a?.scale_up_threshold != null ? String(a.scale_up_threshold) : '';
 		policyScaleDown = a?.scale_down_threshold != null ? String(a.scale_down_threshold) : '';
@@ -118,15 +101,13 @@
 	}
 
 	async function savePolicy() {
-		if (!policyFor || !policyNodePool.trim()) return;
+		if (!policyFor) return;
 		const modelId = policyFor;
 		const body: AutoscalePolicyInput = {
 			mode: policyMode,
-			node_pool: policyNodePool.trim(),
 			desired_replicas: numOrNull(policyDesired),
 			residency_zone: policyZone.trim() || null,
 			cooldown_secs: numOrNull(policyCooldown),
-			dedicated: policyDedicated,
 			idle_evict: policyIdleEvict,
 			scale_up_threshold: policyMode === 'manual' ? null : numOrNull(policyScaleUp),
 			scale_down_threshold: policyMode === 'manual' ? null : numOrNull(policyScaleDown)
@@ -350,16 +331,9 @@
 								{#if a.status}<span class="{statusTone(a.status)} text-sm">{a.status}</span>{/if}
 							</div>
 							<div class="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-								{#if a.node_pool}<span
-										class="rounded bg-muted px-1.5 py-0.5 text-muted-foreground/80"
-										>pool {a.node_pool}</span
-									>{/if}
 								{#if a.residency_zone}<span
 										class="rounded bg-muted px-1.5 py-0.5 text-muted-foreground/80"
 										>zone {a.residency_zone}</span
-									>{/if}
-								{#if a.dedicated}<span
-										class="rounded bg-muted px-1.5 py-0.5 text-muted-foreground/80">dedicated</span
 									>{/if}
 							</div>
 							{#if a.last_error}
@@ -589,44 +563,19 @@
 
 			<label class="block space-y-1">
 				<span class="text-sm text-muted-foreground"
-					>Desired / ceiling <span class="text-muted-foreground/60">(replicas)</span></span
+					>Spread across <span class="text-muted-foreground/60">(runners)</span></span
 				>
 				<Input
 					type="number"
-					min="0"
+					min="1"
 					bind:value={policyDesired}
 					placeholder="1"
 					class="text-sm"
 					data-testid="autoscale-desired"
 				/>
-			</label>
-
-			<label class="block space-y-1">
-				<span class="text-sm text-muted-foreground">Node pool <span class="text-red-500">*</span></span>
-				{#if nodePools.length === 0}
-					<p class="text-sm text-muted-foreground/70">
-						No node pools yet. Create one on the <a
-							href="/models/placement"
-							class="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-							>Pools tab</a
-						> first.
-					</p>
-				{:else}
-					<Select.Root
-						type="single"
-						value={policyNodePool}
-						onValueChange={(v) => (policyNodePool = v ?? '')}
-					>
-						<Select.Trigger class="w-full text-sm" data-testid="autoscale-pool">
-							{policyNodePool || '— select a pool —'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each nodePools as p (p.id)}
-								<Select.Item value={p.path} label={p.display_name || p.path} />
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				{/if}
+				<p class="text-sm text-muted-foreground/60">
+					How many registered runners to load this model onto.
+				</p>
 			</label>
 
 			{#if policyMode !== 'manual'}
@@ -671,11 +620,6 @@
 			</label>
 
 			<label class="flex items-center gap-2 text-sm">
-				<input type="checkbox" bind:checked={policyDedicated} data-testid="autoscale-dedicated" />
-				<span class="text-muted-foreground">Dedicated single-model job</span>
-			</label>
-
-			<label class="flex items-center gap-2 text-sm">
 				<input type="checkbox" bind:checked={policyIdleEvict} data-testid="autoscale-idle-evict" />
 				<span class="text-muted-foreground"
 					>Idle-evict the resident base on zero demand (sleep past cooldown)</span
@@ -687,7 +631,7 @@
 			<Button
 				size="sm"
 				class="text-sm"
-				disabled={policySaving || !policyNodePool.trim()}
+				disabled={policySaving}
 				data-testid="autoscale-save"
 				onclick={savePolicy}
 			>

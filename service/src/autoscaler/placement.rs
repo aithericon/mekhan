@@ -1,74 +1,71 @@
-//! Loop 2 — the model PLACEMENT controller (docs/31 Phase 3, the keystone).
+//! The model PLACEMENT controller — the only autoscaler.
 //!
-//! A second pass in the SAME `run_autoscaler` tick AFTER the node-fleet scaler
-//! (Loop 1). Where Loop 1 owns COUNT (how many generic engine nodes exist), Loop
-//! 2 owns BINDING (which model lands on which engine). For each `model_policy`
-//! with demand the controller walks a CHEAPEST-FIRST mechanism cascade against the
-//! Phase-0 engine-inventory read model
-//! ([`crate::handlers::model_pool::serving_runner_inventory`]), short-circuiting at
-//! the first satisfiable mechanism (OQ-5):
+//! Each tick, for every model with an autoscale policy folded onto its
+//! `model_states` row, the controller decides WHICH already-registered runners
+//! serve the model and publishes NATS load/unload to reach that state. There is no
+//! node provisioning: placement targets enrolled runners (the live engine
+//! inventory, [`crate::handlers::model_pool::serving_runner_catalogs`]), never
+//! Nomad allocations.
 //!
-//!   (a) ADAPTER LOAD — a LoRA whose base is resident on a live IN-ZONE node with
-//!       headroom → publish `Load{Lora}` on `runner.{id}.load`. **ms, no process.**
-//!       Reacts every tick, idempotent, NOT cooldown-gated.
-//!   (b) SLEEP/WAKE — a live node whose resident base IS the wanted base → publish
-//!       `Load{Base}` (wake). **seconds**, gated strictly on base-identity match.
-//!   (c) RAISE NODE DEMAND — no in-zone base with headroom → leave the row
-//!       `pending`; Loop 1 already sees this model's demand via
-//!       `aggregate_pool_demand` and provisions a node next tick. **minutes**,
-//!       cooldown-gated (must not flap the status).
-//!   (d) FALLBACK DEDICATED JOB — only when `policy.dedicated == true` → call the
-//!       existing [`crate::autoscaler::actuate::actuate_replica`] (the doc-29
-//!       per-model Nomad job, DEMOTED from default to last resort). Cooldown-gated.
+//! Per model:
+//!   - `manual` mode places by `desired_replicas` (the runner-count target),
+//!     ignoring demand.
+//!   - `scale_to_zero` / `keep_warm` are demand-gated: with demand they spread to
+//!     `desired_replicas` runners, at zero demand they idle-evict (if opted in)
+//!     and are otherwise left alone (HARD-BLOCKED on the router `/metrics` in L1).
 //!
-//! ## Residency fail-closed BEFORE any publish (OQ-4, DERIVED-A)
+//! The cheapest-first leg per runner:
+//!   (a) ADAPTER LOAD — a LoRA whose base is resident on an in-zone runner with
+//!       headroom → publish `Load{Lora}`. **ms, idempotent.**
+//!   (b) BASE LOAD/WAKE — a base resident (wake, idempotent / 404-tolerant) or
+//!       pulled-to-disk (load) on an in-zone runner → publish `Load{Base}`.
+//!   Neither satisfiable in zone → terminal `NoEligibleRunner` (status note,
+//!       nothing published — enrol a runner or pull the model).
 //!
-//! Single-zone-per-pool, strict equality. The referenced `node_pool`'s
-//! `residency_zone` is the single zone source; a non-empty `model_policy`
-//! residency requirement that is NOT strictly equal to the pool's zone → the row
-//! is marked `failed` with a `last_error` and NO command is published. Reuses the
-//! `actuate.rs:187` fail-closed shape and the router `routing.rs:88` zone-equality
-//! filter (equal-or-reject, never relax) so the two enforcement points cannot
-//! drift.
+//! ## Residency fail-closed
+//!
+//! Each runner advertises its zone in its interface catalog
+//! (`RunnerInterfaceCatalog.residency_zone`). A zoned model places ONLY on a
+//! runner whose zone is strictly equal (an unknown-zone runner is EXCLUDED for a
+//! zoned model — fail-closed); a zoneless model places on any runner. The zone
+//! filter is applied while building the candidate set, so a wrong-zone runner is
+//! never even a candidate.
 //!
 //! ## Sleep detection (a known gap)
 //!
-//! The runner catalog has no "asleep" flag, so mechanism (b) cannot distinguish a
+//! The runner catalog has no "asleep" flag, so the base leg cannot distinguish a
 //! resident-but-slept base from a resident-and-awake one. We therefore publish a
-//! WAKE (`Load{Base}`) whenever the wanted base is resident in-zone for a
-//! base-policy model — `wake_up` is idempotent / 404-tolerant on the agent, so
-//! re-issuing each tick is safe (placement is desired-state). Targeting a SPECIFIC
-//! base for sleep/wake on a multi-base node is a deferred vLLM-contract gap.
+//! WAKE (`Load{Base}`) whenever the wanted base is resident in-zone — `wake_up` is
+//! idempotent / 404-tolerant on the agent, so re-issuing each tick is safe
+//! (placement is desired-state).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use aithericon_resources::types::{ModelAutoscalePolicy, NodePoolPolicy};
+use aithericon_resources::types::ModelAutoscalePolicy;
 
-use crate::handlers::model_pool::serving_runner_inventory;
-use crate::models::model_replicas::{in_cooldown, status, ModelReplicaRow};
-use crate::models::runner::{ModelEntry, ModelInterfaceKind};
+use crate::handlers::model_pool::{serving_runner_catalogs, serving_runner_counts};
+use crate::models::model_replicas::{in_cooldown, status};
+use crate::models::runner::{ModelInterfaceKind, RunnerInterfaceCatalog};
 use crate::nats::MekhanNats;
-use crate::petri::client::PetriClient;
 use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
 use crate::runners_presence::RunnerPresence;
 
-use super::actuate;
 use super::demand::DemandSource;
 
-/// One base engine live on one in-zone node, with its computed headroom + the
-/// adapters already loaded on it. The cascade input — derived from the Phase-0
-/// inventory ∩ the in-zone runner set, headroom layered from the router gauge.
+/// One base engine resident on one in-zone runner, with its computed headroom +
+/// the adapters already loaded on it. Derived from the runner catalog ∩ the
+/// in-zone filter, headroom layered from the router in-flight gauge.
 #[derive(Debug, Clone)]
 pub struct EngineSlot {
     pub runner_id: Uuid,
     pub base: String,
     /// Free slots = `C − Σ(base + adapters in-flight)`. `None` = unknown budget
     /// (no `max_num_seqs` advertised, or the router poll is unconfigured) → the
-    /// cascade treats unknown headroom as AVAILABLE (fail-soft, like the rest of
-    /// the model-pool reads).
+    /// cascade treats unknown headroom as AVAILABLE (fail-soft).
     pub headroom: Option<u32>,
     /// adapter model ids already resident on this base engine.
     pub adapters: Vec<String>,
@@ -82,110 +79,165 @@ impl EngineSlot {
     }
 }
 
-/// The cheapest satisfiable placement mechanism for one model. The pure cascade
-/// ([`plan_placement`]) returns this; the IO layer publishes / actuates / records.
+/// The in-zone candidate surface for one model: the resident base engines (with
+/// headroom + loaded adapters) and the pulled-to-disk model ids per in-zone
+/// runner. The pure [`plan_placements`] reads exactly this.
+#[derive(Debug, Clone, Default)]
+pub struct ZoneInventory {
+    pub slots: Vec<EngineSlot>,
+    /// `runner_id → [model id pulled to disk]` for the in-zone runners (loadable
+    /// without a download even when not currently resident).
+    pub pulled: HashMap<Uuid, Vec<String>>,
+}
+
+/// One publish the placement plan resolves to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlacementOutcome {
-    /// (a) Load this LoRA adapter onto the base engine on `runner_id`.
-    AdapterLoad {
+pub enum PlacementAction {
+    /// Load this LoRA adapter onto the base engine on `runner_id`.
+    LoadAdapter {
         runner_id: Uuid,
         adapter_id: String,
         base: String,
         source_uri: Option<String>,
     },
-    /// (b) Wake/ensure the base engine on `runner_id` is awake.
-    Wake { runner_id: Uuid, base: String },
-    /// Already satisfied — the wanted base/adapter is resident in-zone. No publish.
-    AlreadyPlaced,
-    /// (c) No in-zone headroom — leave `pending`; Loop 1 provisions next tick.
-    RaiseNodeDemand,
-    /// (d) No headroom AND `dedicated == true` — fall back to a dedicated job.
-    DedicatedFallback,
-    /// OQ-4 fail-closed: the model's residency requirement ≠ the pool's zone.
-    ResidencyMismatch { wanted: String, pool_zone: String },
+    /// Load/wake the base engine on `runner_id` (idempotent — `Load{Base}` both
+    /// wakes a slept base and loads a pulled one).
+    LoadBase { runner_id: Uuid, base: String },
 }
 
-/// The PURE cheapest-first cascade (OQ-5). No IO — `in_zone_slots` is the Phase-0
-/// inventory already filtered to nodes in pools whose zone satisfies the model's
-/// residency requirement (the residency equality check runs in [`reconcile_placement`]
-/// before this is called, and is re-asserted here for the mismatch outcome).
+/// The placement decision for one model: the set of loads to publish to reach the
+/// desired runner spread, or a terminal "nothing in zone can serve it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlacementPlan {
+    /// Publish each action (may be empty when already spread to the target count).
+    Place { actions: Vec<PlacementAction> },
+    /// No in-zone runner serves / can host the base — enrol a runner or pull the
+    /// model. Nothing published; the row is marked with a note.
+    NoEligibleRunner,
+}
+
+/// The PURE spread-to-N placement decision. Loads the model onto up to
+/// `desired_n` distinct in-zone runners, cheapest-first:
 ///
-/// `wanted_base` is `policy.base` for a LoRA, else `policy.model_id` (a base model
-/// IS its own base). `is_lora` selects the adapter-load vs wake leg.
-pub fn plan_placement(
+/// - **LoRA** (`policy.base.is_some()`): a runner is a candidate if the base is
+///   resident with headroom; already-serving runners count toward the target and
+///   the shortfall is filled by the least-loaded candidates. No in-zone base ⇒
+///   `NoEligibleRunner`.
+/// - **Base**: a runner is a candidate if the base is resident (wake, idempotent)
+///   or pulled-to-disk (load). Resident runners are preferred (least-loaded
+///   first), then pulled runners. None of either ⇒ `NoEligibleRunner`.
+pub fn plan_placements(
     policy: &ModelAutoscalePolicy,
-    pool: &NodePoolPolicy,
-    in_zone_slots: &[EngineSlot],
-) -> PlacementOutcome {
-    // Residency equality (OQ-4) — re-asserted as the first cascade gate. A zoneless
-    // model places on any pool; a zoned model only on a strictly-equal pool zone.
-    let wanted_zone = policy.residency_zone.trim();
-    if !wanted_zone.is_empty() && wanted_zone != pool.residency_zone.trim() {
-        return PlacementOutcome::ResidencyMismatch {
-            wanted: wanted_zone.to_string(),
-            pool_zone: pool.residency_zone.trim().to_string(),
-        };
-    }
+    slots: &[EngineSlot],
+    pulled: &HashMap<Uuid, Vec<String>>,
+    desired_n: u32,
+) -> PlacementPlan {
+    let n = desired_n.max(1) as usize;
+    let wanted_base = policy.base.clone().unwrap_or_else(|| policy.model_id.clone());
 
-    let is_lora = policy.base.is_some();
-    let wanted_base = policy
-        .base
-        .clone()
-        .unwrap_or_else(|| policy.model_id.clone());
-
-    if is_lora {
-        // (a) ADAPTER LOAD. Already-loaded anywhere in-zone ⇒ satisfied.
-        let already = in_zone_slots
+    if policy.base.is_some() {
+        // ── (a) LoRA adapter ──────────────────────────────────────────────────
+        let adapter = &policy.model_id;
+        let serving: HashSet<Uuid> = slots
             .iter()
-            .any(|s| s.base == wanted_base && s.adapters.iter().any(|a| a == &policy.model_id));
-        if already {
-            return PlacementOutcome::AlreadyPlaced;
-        }
-        // Cheapest base engine for this base WITH headroom.
-        if let Some(slot) = in_zone_slots
-            .iter()
-            .filter(|s| s.base == wanted_base && s.has_headroom())
-            .max_by_key(|s| s.headroom.unwrap_or(u32::MAX))
-        {
-            return PlacementOutcome::AdapterLoad {
-                runner_id: slot.runner_id,
-                adapter_id: policy.model_id.clone(),
-                base: wanted_base,
-                source_uri: None,
-            };
-        }
-    } else {
-        // (b) SLEEP/WAKE — the base is resident in-zone (idempotent wake).
-        if let Some(slot) = in_zone_slots.iter().find(|s| s.base == wanted_base) {
-            return PlacementOutcome::Wake {
-                runner_id: slot.runner_id,
-                base: wanted_base,
-            };
-        }
-    }
+            .filter(|s| s.base == wanted_base && s.adapters.iter().any(|a| a == adapter))
+            .map(|s| s.runner_id)
+            .collect();
 
-    // (c)/(d) — no in-zone base with headroom. Dedicated opt-out → fallback; else
-    // raise node demand (Loop 1 provisions next tick).
-    if policy.dedicated == Some(true) {
-        PlacementOutcome::DedicatedFallback
+        // Candidate base engines: right base, has headroom, adapter not yet loaded,
+        // runner not already serving. Least-loaded (most headroom) first.
+        let mut loadable: Vec<&EngineSlot> = slots
+            .iter()
+            .filter(|s| {
+                s.base == wanted_base
+                    && s.has_headroom()
+                    && !s.adapters.iter().any(|a| a == adapter)
+                    && !serving.contains(&s.runner_id)
+            })
+            .collect();
+        loadable.sort_by_key(|s| std::cmp::Reverse(s.headroom.unwrap_or(u32::MAX)));
+
+        let need = n.saturating_sub(serving.len());
+        let mut seen = serving.clone();
+        let mut actions = Vec::new();
+        for s in loadable {
+            if actions.len() >= need {
+                break;
+            }
+            if seen.insert(s.runner_id) {
+                actions.push(PlacementAction::LoadAdapter {
+                    runner_id: s.runner_id,
+                    adapter_id: adapter.clone(),
+                    base: wanted_base.clone(),
+                    source_uri: None,
+                });
+            }
+        }
+
+        if serving.is_empty() && actions.is_empty() {
+            return PlacementPlan::NoEligibleRunner;
+        }
+        PlacementPlan::Place { actions }
     } else {
-        PlacementOutcome::RaiseNodeDemand
+        // ── (b) Base model ────────────────────────────────────────────────────
+        // Resident runners (wake, idempotent — covers slept), least-loaded first.
+        let mut resident: Vec<&EngineSlot> =
+            slots.iter().filter(|s| s.base == wanted_base).collect();
+        resident.sort_by_key(|s| std::cmp::Reverse(s.headroom.unwrap_or(u32::MAX)));
+        let resident_ids: HashSet<Uuid> = resident.iter().map(|s| s.runner_id).collect();
+
+        // Loadable runners: have the base pulled to disk, not currently resident.
+        let mut loadable_ids: Vec<Uuid> = pulled
+            .iter()
+            .filter(|(rid, ids)| {
+                !resident_ids.contains(rid) && ids.iter().any(|m| m == &wanted_base)
+            })
+            .map(|(rid, _)| *rid)
+            .collect();
+        loadable_ids.sort(); // deterministic ordering
+
+        let mut seen = HashSet::new();
+        let mut actions = Vec::new();
+        for s in &resident {
+            if actions.len() >= n {
+                break;
+            }
+            if seen.insert(s.runner_id) {
+                actions.push(PlacementAction::LoadBase {
+                    runner_id: s.runner_id,
+                    base: wanted_base.clone(),
+                });
+            }
+        }
+        for rid in loadable_ids {
+            if actions.len() >= n {
+                break;
+            }
+            if seen.insert(rid) {
+                actions.push(PlacementAction::LoadBase {
+                    runner_id: rid,
+                    base: wanted_base.clone(),
+                });
+            }
+        }
+
+        if actions.is_empty() {
+            return PlacementPlan::NoEligibleRunner;
+        }
+        PlacementPlan::Place { actions }
     }
 }
 
-/// The PURE idle-eviction decision (GAP B). Returns `Some((runner_id, base))` to
-/// SLEEP a resident base model — exactly when ALL hold:
+/// The PURE idle-eviction decision (vLLM sleep). Returns `Some((runner_id, base))`
+/// to SLEEP a resident base model — exactly when ALL hold:
 ///
 /// - the policy OPTED IN (`idle_evict == Some(true)`),
 /// - demand has dropped to zero (`demand_zero`),
 /// - the actuation cooldown is NOT active (`!in_cooldown` — the flap guard),
 /// - the wanted base IS resident on an in-zone slot (nothing to sleep otherwise).
 ///
-/// Mirrors the demand>0 [`plan_placement`] wake leg in reverse: a base IS its own
-/// base, so the runner carrying the wanted base is the sleep target. LoRA policies
-/// never idle-evict here (the base engine owns the GPU residency — sleeping a base
-/// out from under loaded adapters is a deferred vLLM-contract gap), so a policy
-/// with a `base` back-pointer returns `None`.
+/// LoRA policies never idle-evict here (the base engine owns the GPU residency), so
+/// a policy with a `base` back-pointer returns `None`.
 pub fn plan_idle_eviction(
     policy: &ModelAutoscalePolicy,
     in_zone_slots: &[EngineSlot],
@@ -195,7 +247,6 @@ pub fn plan_idle_eviction(
     if policy.idle_evict != Some(true) || !demand_zero || in_cooldown {
         return None;
     }
-    // Only a base model (no LoRA back-pointer) is eligible to sleep.
     if policy.base.is_some() {
         return None;
     }
@@ -206,24 +257,15 @@ pub fn plan_idle_eviction(
         .map(|s| (s.runner_id, wanted_base))
 }
 
-/// One reconcile pass over every `model_policy` with demand (docs/31 Loop 2). Runs
-/// AFTER the node pass. Per-policy failures fail-soft (recorded on the row + carry
-/// on); a setup `sqlx::Error` (the policy-list fetch) kills the tick.
-///
-/// `pool_zones` maps each `node_pool` alias → its `(NodePoolPolicy, datacenter
-/// uuid)` (resolved once by the node pass / here), used for the residency-equality
-/// check and the dedicated-fallback engine spec.
+/// One reconcile pass over every `model_states` policy. Per-policy failures
+/// fail-soft (recorded on the row + carry on); a setup `sqlx::Error` (the
+/// policy-list fetch) kills the tick.
 pub async fn reconcile_placement(
     db: &PgPool,
-    petri: &PetriClient,
     nats: &MekhanNats,
     runner_presence: &RunnerPresence,
     demand: Option<&dyn DemandSource>,
 ) -> Result<(), sqlx::Error> {
-    // The autoscale policy is folded onto `model_states` (no longer a resource).
-    // Scan every model in every workspace that has a policy set
-    // (`autoscale_mode IS NOT NULL AND node_pool IS NOT NULL`); the per-model KEY is
-    // now (workspace_id, model_id).
     #[derive(sqlx::FromRow)]
     struct PolicyScanRow {
         workspace_id: Uuid,
@@ -232,257 +274,115 @@ pub async fn reconcile_placement(
     }
     let policies: Vec<PolicyScanRow> = sqlx::query_as(
         "SELECT workspace_id, model_id, base, autoscale_mode, desired_replicas, \
-                scale_up_threshold, scale_down_threshold, cooldown_secs, node_pool, \
-                residency_zone, dedicated, idle_evict \
+                scale_up_threshold, scale_down_threshold, cooldown_secs, \
+                residency_zone, idle_evict \
          FROM model_states \
-         WHERE autoscale_mode IS NOT NULL AND node_pool IS NOT NULL",
+         WHERE autoscale_mode IS NOT NULL",
     )
     .fetch_all(db)
     .await?;
 
-    // Per-workspace inventory + pool caches (one scan per workspace per tick).
-    let mut inventory_by_ws: HashMap<Uuid, HashMap<Uuid, Vec<ModelEntry>>> = HashMap::new();
-    let mut membership_by_ws: HashMap<Uuid, HashMap<Uuid, String>> = HashMap::new();
-    let mut pools_by_ws: HashMap<Uuid, HashMap<String, NodePoolPolicy>> = HashMap::new();
+    // Per-workspace caches (one scan per workspace per tick).
+    let mut catalogs_by_ws: HashMap<Uuid, Vec<(Uuid, RunnerInterfaceCatalog)>> = HashMap::new();
+    let mut counts_by_ws: HashMap<Uuid, HashMap<String, u32>> = HashMap::new();
 
     for scan in policies {
         let workspace_id = scan.workspace_id;
         let policy: ModelAutoscalePolicy = scan.policy.into_policy();
         let model_id = policy.model_id.clone();
 
-        // Demand gate: only models with demand > 0 are PLACED (L1 demand=None ⇒
-        // demand 0 — nothing to place; Loop 1 floors capacity at min_nodes). A
-        // zero-demand model still gets the idle-EVICTION pass below WHEN it opted
-        // into `idle_evict`; without the opt-in, skip it entirely.
         let model_demand = match demand {
             Some(src) => src.demand_for(&policy.model_id).await.unwrap_or(0.0),
             None => 0.0,
         };
         let demand_zero = model_demand <= 0.0;
-        if demand_zero && policy.idle_evict != Some(true) {
-            continue;
-        }
+        let reactive = policy.mode != "manual";
 
-        // Resolve the referenced node_pool (config) — cached per workspace.
-        let pools = match pools_by_ws.entry(workspace_id) {
+        let catalogs = match catalogs_by_ws.entry(workspace_id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(load_pools(db, workspace_id).await)
+                e.insert(serving_runner_catalogs(db, runner_presence, workspace_id).await)
             }
         };
-        let Some(pool) = pools.get(&policy.node_pool).cloned() else {
-            let msg = format!("node_pool alias '{}' not found", policy.node_pool);
-            tracing::warn!(%workspace_id, %model_id, "placement: {msg}");
-            mark_placement_failed(db, workspace_id, &model_id, &msg).await;
-            continue;
-        };
+        let inv = build_zone_inventory(catalogs, &policy, demand).await;
 
-        // Inventory + pool membership for this workspace (cached).
-        let inventory = match inventory_by_ws.entry(workspace_id) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => e.insert(
-                serving_runner_inventory(db, runner_presence, workspace_id).await,
-            ),
-        };
-        let membership = match membership_by_ws.entry(workspace_id) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(runner_presence.pool_membership().await)
-            }
-        };
-
-        // Build the in-zone engine slots: every node whose pool zone satisfies this
-        // model's residency requirement, with per-base headroom. Headroom is read
-        // from the router in-flight gauge (fail-soft: unknown → available).
-        let slots = build_in_zone_slots(inventory, membership, pools, &policy, demand).await;
-
-        if demand_zero {
-            // GAP B — idle eviction (vLLM sleep). Demand has dropped to zero and the
-            // policy opted in: sleep the resident base, gated on the durable
-            // cooldown anchored on `model_replicas.last_actuated_at` (the flap
-            // guard — the SAME anchor the placement / node passes use).
-            if let Err(e) = apply_idle_eviction(db, nats, workspace_id, &model_id, &policy, &slots)
-                .await
-            {
-                tracing::warn!(%workspace_id, %model_id, "idle-eviction failed: {e}");
-                mark_placement_failed(db, workspace_id, &model_id, &e).await;
+        // Reactive modes at zero demand: idle-evict (if opted in), else leave alone.
+        if reactive && demand_zero {
+            if policy.idle_evict == Some(true) {
+                if let Err(e) =
+                    apply_idle_eviction(db, nats, workspace_id, &model_id, &policy, &inv.slots).await
+                {
+                    tracing::warn!(%workspace_id, %model_id, "idle-eviction failed: {e}");
+                    mark_placement_failed(db, workspace_id, &model_id, &policy, &e).await;
+                }
             }
             continue;
         }
 
-        let outcome = plan_placement(&policy, &pool, &slots);
+        // Place onto up to `desired_replicas` in-zone runners (default 1).
+        let desired_n = policy.desired_replicas.unwrap_or(1).max(1);
+        let plan = plan_placements(&policy, &inv.slots, &inv.pulled, desired_n);
 
-        if let Err(e) = apply_outcome(
-            db,
-            petri,
-            nats,
-            workspace_id,
-            &model_id,
-            &policy,
-            &pool,
-            outcome,
-        )
-        .await
+        let counts = match counts_by_ws.entry(workspace_id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(serving_runner_counts(db, runner_presence, workspace_id).await)
+            }
+        };
+        let observed = counts.get(&model_id).copied().unwrap_or(0);
+
+        if let Err(e) =
+            apply_plan(db, nats, workspace_id, &model_id, &policy, plan, desired_n, observed).await
         {
             tracing::warn!(%workspace_id, %model_id, "placement apply failed: {e}");
-            mark_placement_failed(db, workspace_id, &model_id, &e).await;
+            mark_placement_failed(db, workspace_id, &model_id, &policy, &e).await;
         }
     }
     Ok(())
 }
 
-/// Carry out the GAP B idle-eviction decision (vLLM sleep) for one zero-demand,
-/// opted-in model. Loads the `model_replicas.last_actuated_at` cooldown anchor,
-/// computes `in_cooldown`, runs the pure [`plan_idle_eviction`], and on `Some`
-/// publishes an `Unload{Base}` (→ vLLM `/sleep`) + stamps the row `sleeping` with a
-/// fresh `last_actuated_at` (the flap guard). On `None` it is a no-op (still hot,
-/// in cooldown, not opted in, or the base isn't resident). Returns `Err` only on a
-/// hard publish failure the caller records.
-async fn apply_idle_eviction(
-    db: &PgPool,
-    nats: &MekhanNats,
-    workspace_id: Uuid,
-    model_id: &str,
-    policy: &ModelAutoscalePolicy,
-    slots: &[EngineSlot],
-) -> Result<(), String> {
-    use chrono::Utc;
-
-    // The durable reconciliation row carries the cooldown anchor (survives a
-    // restart). No row yet ⇒ never actuated ⇒ never in cooldown.
-    let last_actuated: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT last_actuated_at FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(model_id)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| format!("load model_replicas last_actuated_at: {e}"))?
-    .flatten();
-
-    let now = Utc::now();
-    let cooled = in_cooldown(last_actuated, policy.cooldown_secs, now);
-
-    let Some((runner_id, base)) = plan_idle_eviction(policy, slots, true, cooled) else {
-        // Not eligible this tick (still hot, in cooldown, not opted in, or the base
-        // isn't resident in-zone) — no-op.
-        return Ok(());
-    };
-
-    let cmd = ModelCommand::Unload {
-        target: LoadTarget::Base { model_id: base },
-    };
-    publish_model_command(nats, runner_id, &cmd)
-        .await
-        .map_err(|e| format!("publish idle-eviction sleep: {e}"))?;
-
-    // Mark `sleeping` + stamp `last_actuated_at` (the flap guard — gates a re-sleep
-    // / immediate-wake oscillation through the cooldown window).
-    let _ = sqlx::query(
-        "UPDATE model_replicas \
-         SET status = $3, last_actuated_at = $4, last_error = NULL, updated_at = NOW() \
-         WHERE workspace_id = $1 AND model_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(model_id)
-    .bind(status::SLEEPING)
-    .bind(now)
-    .execute(db)
-    .await;
-
-    Ok(())
-}
-
-/// Load every `node_pool` in the workspace as `alias → NodePoolPolicy`.
-async fn load_pools(db: &PgPool, workspace_id: Uuid) -> HashMap<String, NodePoolPolicy> {
-    let rows: Vec<(String, serde_json::Value)> = match sqlx::query_as(
-        "SELECT r.path, rv.public_config \
-         FROM resources r \
-         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.resource_type = 'node_pool' AND r.workspace_id = $1 AND r.deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .fetch_all(db)
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(%workspace_id, "placement: node_pool load failed: {e}");
-            return HashMap::new();
-        }
-    };
-    rows.into_iter()
-        .filter_map(|(alias, cfg)| serde_json::from_value(cfg).ok().map(|p| (alias, p)))
-        .collect()
-}
-
-/// Resolve a datacenter alias (`resources.path`) → resource uuid in a workspace.
-async fn resolve_datacenter_uuid(
-    db: &PgPool,
-    workspace_id: Uuid,
-    alias: &str,
-) -> Result<Uuid, String> {
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM resources \
-         WHERE workspace_id = $1 AND resource_type = 'datacenter' AND path = $2 AND deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(alias)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| format!("resolve datacenter alias: {e}"))?;
-    row.map(|(id,)| id)
-        .ok_or_else(|| format!("datacenter alias '{alias}' not found"))
-}
-
-/// Collapse the raw `runner_id → [ModelEntry]` inventory for the in-zone nodes
-/// into [`EngineSlot`]s (base engines + their adapters + headroom). A node is
-/// "in zone" when the pool it is tagged to (via `membership`) has a `residency_zone`
-/// that satisfies the model's requirement (zoneless model ⇒ any pool).
-async fn build_in_zone_slots(
-    inventory: &HashMap<Uuid, Vec<ModelEntry>>,
-    membership: &HashMap<Uuid, String>,
-    pools: &HashMap<String, NodePoolPolicy>,
+/// Build the in-zone candidate inventory for one model from the workspace's
+/// present-runner catalogs: every runner whose advertised zone satisfies the
+/// model's residency requirement, with its resident base engines (headroom layered
+/// from the router gauge) and its pulled-to-disk set. A zoned model takes ONLY
+/// runners with a strictly-equal KNOWN zone (fail-closed); a zoneless model takes
+/// all present runners.
+async fn build_zone_inventory(
+    catalogs: &[(Uuid, RunnerInterfaceCatalog)],
     policy: &ModelAutoscalePolicy,
     demand: Option<&dyn DemandSource>,
-) -> Vec<EngineSlot> {
+) -> ZoneInventory {
     let wanted_zone = policy.residency_zone.trim();
-    let mut slots: Vec<EngineSlot> = Vec::new();
+    let mut inv = ZoneInventory::default();
 
-    for (runner_id, entries) in inventory {
-        // Resolve the node's pool zone via its pool-membership alias. A node with
-        // no pool tag, or whose pool is unknown, is conservatively EXCLUDED for a
-        // zoned model (fail-closed) but INCLUDED for a zoneless one.
-        let node_zone = membership
-            .get(runner_id)
-            .and_then(|alias| pools.get(alias))
-            .map(|p| p.residency_zone.trim().to_string());
-
+    for (runner_id, catalog) in catalogs {
+        // Zone gate: a zoned model needs the runner to advertise a strictly-equal
+        // zone (unknown zone ⇒ excluded, fail-closed); a zoneless model takes any.
         if !wanted_zone.is_empty() {
-            // Zoned model: strict equality with a KNOWN node zone.
-            match node_zone.as_deref() {
-                Some(z) if z == wanted_zone => {}
+            match catalog.residency_zone.as_deref() {
+                Some(z) if z.trim() == wanted_zone => {}
                 _ => continue,
             }
         }
 
-        // Base engines on this node (with their advertised C).
+        inv.pulled.insert(*runner_id, catalog.pulled.clone());
+
+        // Base engines on this runner (with their advertised C).
         let mut bases: HashMap<String, Option<u32>> = HashMap::new();
-        for e in entries {
+        for e in &catalog.models {
             if e.kind == ModelInterfaceKind::Base {
                 bases.insert(e.model_id.clone(), e.max_num_seqs);
             }
         }
         // Adapters grouped by base back-pointer.
         let mut adapters_by_base: HashMap<String, Vec<String>> = HashMap::new();
-        for e in entries {
+        for e in &catalog.models {
             if e.kind == ModelInterfaceKind::Lora {
                 if let Some(base) = &e.base {
                     adapters_by_base
                         .entry(base.clone())
                         .or_default()
                         .push(e.model_id.clone());
-                    // Ensure a slot exists even if the base entry wasn't advertised.
                     bases.entry(base.clone()).or_insert(None);
                 }
             }
@@ -490,8 +390,6 @@ async fn build_in_zone_slots(
 
         for (base, c) in bases {
             let adapters = adapters_by_base.get(&base).cloned().unwrap_or_default();
-            // Headroom = C − Σ(base + adapters in-flight). Fail-soft: unknown C ⇒
-            // None (available); router unconfigured ⇒ full budget (= C).
             let headroom = match c {
                 None => None,
                 Some(cap) => {
@@ -509,7 +407,7 @@ async fn build_in_zone_slots(
                     Some(cap.saturating_sub(used.max(0.0).round() as u32))
                 }
             };
-            slots.push(EngineSlot {
+            inv.slots.push(EngineSlot {
                 runner_id: *runner_id,
                 base,
                 headroom,
@@ -517,248 +415,216 @@ async fn build_in_zone_slots(
             });
         }
     }
-    slots
+    inv
 }
 
-/// Carry out the cascade decision: publish (a/b), record `pending` (c), actuate the
-/// dedicated fallback (d), or fail-closed on a residency mismatch. Returns `Err`
-/// only on a hard failure the caller should record on the row.
+/// Carry out the placement plan: publish each load + record the row `active` with
+/// the live observed count, or mark `provisioning` with a note when nothing in
+/// zone can serve the model.
 #[allow(clippy::too_many_arguments)]
-async fn apply_outcome(
+async fn apply_plan(
     db: &PgPool,
-    petri: &PetriClient,
     nats: &MekhanNats,
     workspace_id: Uuid,
     model_id: &str,
     policy: &ModelAutoscalePolicy,
-    pool: &NodePoolPolicy,
-    outcome: PlacementOutcome,
+    plan: PlacementPlan,
+    desired_n: u32,
+    observed: u32,
 ) -> Result<(), String> {
-    match outcome {
-        PlacementOutcome::ResidencyMismatch { wanted, pool_zone } => {
+    match plan {
+        PlacementPlan::NoEligibleRunner => {
             let msg = format!(
-                "GDPR fail-closed: model residency_zone '{wanted}' ≠ node_pool zone '{pool_zone}' \
-                 — refusing to place (single-zone-per-pool, strict equality)"
+                "no registered in-zone runner serves '{}' — enrol a runner or load/pull the model",
+                policy.base.as_deref().unwrap_or(model_id)
             );
-            mark_placement_failed(db, workspace_id, model_id, &msg).await;
+            upsert_status(
+                db,
+                workspace_id,
+                model_id,
+                policy,
+                None,
+                Some(observed),
+                status::PROVISIONING,
+                None,
+                Some(&msg),
+            )
+            .await;
             Ok(())
         }
-        PlacementOutcome::AdapterLoad {
-            runner_id,
-            adapter_id,
-            base,
-            source_uri,
-        } => {
-            let cmd = ModelCommand::Load {
-                target: LoadTarget::Lora {
-                    adapter_id,
-                    base,
-                    source_uri,
-                },
-            };
-            publish_model_command(nats, runner_id, &cmd)
-                .await
-                .map_err(|e| format!("publish adapter-load: {e}"))?;
-            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
+        PlacementPlan::Place { actions } => {
+            for action in actions {
+                let (runner_id, cmd) = match action {
+                    PlacementAction::LoadAdapter {
+                        runner_id,
+                        adapter_id,
+                        base,
+                        source_uri,
+                    } => (
+                        runner_id,
+                        ModelCommand::Load {
+                            target: LoadTarget::Lora {
+                                adapter_id,
+                                base,
+                                source_uri,
+                            },
+                        },
+                    ),
+                    PlacementAction::LoadBase { runner_id, base } => (
+                        runner_id,
+                        ModelCommand::Load {
+                            target: LoadTarget::Base { model_id: base },
+                        },
+                    ),
+                };
+                publish_model_command(nats, runner_id, &cmd)
+                    .await
+                    .map_err(|e| format!("publish load: {e}"))?;
+            }
+            upsert_status(
+                db,
+                workspace_id,
+                model_id,
+                policy,
+                Some(desired_n),
+                Some(observed),
+                status::ACTIVE,
+                None,
+                None,
+            )
+            .await;
             Ok(())
-        }
-        PlacementOutcome::Wake { runner_id, base } => {
-            let cmd = ModelCommand::Load {
-                target: LoadTarget::Base { model_id: base },
-            };
-            publish_model_command(nats, runner_id, &cmd)
-                .await
-                .map_err(|e| format!("publish wake: {e}"))?;
-            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
-            Ok(())
-        }
-        PlacementOutcome::AlreadyPlaced => {
-            set_placement_status(db, workspace_id, model_id, status::ACTIVE, None).await;
-            Ok(())
-        }
-        PlacementOutcome::RaiseNodeDemand => {
-            // Loop 1 already sees this model's demand via aggregate_pool_demand and
-            // will provision a node next tick; just mark pending + retry. Cooldown
-            // gates the status flap (no actuation happens here, so this is purely a
-            // status hygiene — re-marking pending each tick is harmless).
-            set_placement_status(db, workspace_id, model_id, status::PROVISIONING, None).await;
-            Ok(())
-        }
-        PlacementOutcome::DedicatedFallback => {
-            dedicated_fallback(db, petri, workspace_id, model_id, policy, pool).await
         }
     }
 }
 
-/// (d) The demoted dedicated-job fallback. Cooldown-gated like the old default
-/// model pass: resolve the pool's datacenter, gen-key the actuation, drive
-/// [`actuate::actuate_replica`] sourcing the engine spec from the pool's
-/// `engine_spec` stamped with this model's id.
-async fn dedicated_fallback(
+/// Carry out the idle-eviction decision (vLLM sleep) for one zero-demand, opted-in
+/// model. Loads the durable cooldown anchor, runs the pure [`plan_idle_eviction`],
+/// and on `Some` publishes an `Unload{Base}` (→ vLLM `/sleep`) + marks the row
+/// `sleeping` with a fresh `last_actuated_at` (the flap guard). On `None` it is a
+/// no-op (still hot, in cooldown, not opted in, or the base isn't resident).
+async fn apply_idle_eviction(
     db: &PgPool,
-    petri: &PetriClient,
+    nats: &MekhanNats,
     workspace_id: Uuid,
     model_id: &str,
     policy: &ModelAutoscalePolicy,
-    pool: &NodePoolPolicy,
+    slots: &[EngineSlot],
 ) -> Result<(), String> {
-    use chrono::Utc;
-
-    // Resolve the pool's datacenter (the model policy no longer carries one).
-    let dc_uuid = resolve_datacenter_uuid(db, workspace_id, &pool.datacenter_resource_id).await?;
-
-    // The durable reconciliation row (per (workspace, model)). Cooldown-gate the
-    // dedicated leg.
-    let existing: Option<ModelReplicaRow> = sqlx::query_as(
-        "SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
+    let last_actuated: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT last_actuated_at FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)
     .bind(model_id)
     .fetch_optional(db)
     .await
-    .map_err(|e| format!("load model_replicas row: {e}"))?;
+    .map_err(|e| format!("load model_replicas last_actuated_at: {e}"))?
+    .flatten();
 
     let now = Utc::now();
-    let prev_actuated = existing.as_ref().and_then(|r| r.last_actuated_at);
-    if in_cooldown(prev_actuated, policy.cooldown_secs, now) {
-        // Inside the cooldown window: don't re-actuate, keep the row as-is.
+    let cooled = in_cooldown(last_actuated, policy.cooldown_secs, now);
+
+    let Some((runner_id, base)) = plan_idle_eviction(policy, slots, true, cooled) else {
         return Ok(());
-    }
+    };
 
-    // Desired COUNT for the dedicated job = the demand-slot ceiling (default 1 — a
-    // dedicated fallback exists precisely because packing failed, so serve ≥1).
-    let target = policy.desired_replicas.unwrap_or(1).max(1);
+    let cmd = ModelCommand::Unload {
+        target: LoadTarget::Base { model_id: base },
+    };
+    publish_model_command(nats, runner_id, &cmd)
+        .await
+        .map_err(|e| format!("publish idle-eviction sleep: {e}"))?;
 
-    // Ensure a row exists + stamp last_actuated_at (the generation source).
-    let row = upsert_dedicated_row(
+    upsert_status(
         db,
         workspace_id,
+        model_id,
         policy,
-        dc_uuid,
-        target,
-        status::PROVISIONING,
-        now,
+        None,
+        None,
+        status::SLEEPING,
+        Some(now),
+        None,
     )
-    .await
-    .map_err(|e| format!("upsert model_replicas row: {e}"))?;
-
-    let generation = now.timestamp_millis();
-    let prev_generation = prev_actuated.map(|t| t.timestamp_millis());
-
-    match actuate::actuate_replica(
-        db,
-        petri,
-        workspace_id,
-        row.id,
-        generation,
-        prev_generation,
-        policy,
-        pool,
-        dc_uuid,
-        target,
-    )
-    .await
-    {
-        Ok(slug) => {
-            let _ = sqlx::query(
-                "UPDATE model_replicas SET replica_slug = $2, last_error = NULL, updated_at = NOW() \
-                 WHERE id = $1",
-            )
-            .bind(row.id)
-            .bind(&slug)
-            .execute(db)
-            .await;
-            Ok(())
-        }
-        Err(e) => Err(format!("dedicated actuation failed: {e}")),
-    }
+    .await;
+    Ok(())
 }
 
-/// Upsert a `model_replicas` row for the dedicated fallback, stamping
-/// `last_actuated_at` (the generation source) + `desired_count`.
-async fn upsert_dedicated_row(
-    db: &PgPool,
-    workspace_id: Uuid,
-    policy: &ModelAutoscalePolicy,
-    dc_uuid: Uuid,
-    desired: u32,
-    status: &str,
-    last_actuated_at: chrono::DateTime<chrono::Utc>,
-) -> Result<ModelReplicaRow, sqlx::Error> {
-    let residency =
-        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
-    sqlx::query_as::<_, ModelReplicaRow>(
-        "INSERT INTO model_replicas \
-            (workspace_id, model_id, datacenter_resource_id, \
-             desired_count, observed_count, status, residency_zone, last_actuated_at) \
-         VALUES ($1, $2, $3, $4, 0, $5, $6, $7) \
-         ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
-            datacenter_resource_id = EXCLUDED.datacenter_resource_id, \
-            desired_count = EXCLUDED.desired_count, \
-            status = EXCLUDED.status, \
-            residency_zone = EXCLUDED.residency_zone, \
-            last_actuated_at = EXCLUDED.last_actuated_at, \
-            updated_at = NOW() \
-         RETURNING *",
-    )
-    .bind(workspace_id)
-    .bind(&policy.model_id)
-    .bind(dc_uuid)
-    .bind(desired as i32)
-    .bind(status)
-    .bind(residency)
-    .bind(last_actuated_at)
-    .fetch_one(db)
-    .await
-}
-
-/// Set the placement status on the policy's `model_replicas` row WITHOUT touching
-/// observed/desired/last_actuated (a publish is not an actuation). Best-effort: a
-/// row may not exist yet for a packed (non-dedicated) model — in that case the
-/// status is informational only and the upsert is skipped (no-op on 0 rows).
-async fn set_placement_status(
+/// Upsert the model's `model_replicas` row to the given placement status. Best-
+/// effort (the row is a Control-Plane read + the idle-evict cooldown anchor; a
+/// failure to write it never blocks the publish). `desired`/`observed` are written
+/// only when `Some`; `last_actuated` is written only when `Some` (an active
+/// placement is not an actuation, so it leaves the cooldown anchor untouched).
+#[allow(clippy::too_many_arguments)]
+async fn upsert_status(
     db: &PgPool,
     workspace_id: Uuid,
     model_id: &str,
+    policy: &ModelAutoscalePolicy,
+    desired: Option<u32>,
+    observed: Option<u32>,
     status: &str,
+    last_actuated: Option<chrono::DateTime<Utc>>,
     last_error: Option<&str>,
 ) {
+    let residency =
+        (!policy.residency_zone.trim().is_empty()).then(|| policy.residency_zone.clone());
+    // COALESCE keeps a column unchanged on conflict when the bound value is NULL,
+    // so the single upsert serves active / sleeping / no-eligible-runner without
+    // clobbering counts or the cooldown anchor it shouldn't touch.
     let _ = sqlx::query(
-        "UPDATE model_replicas SET status = $3, last_error = $4, updated_at = NOW() \
-         WHERE workspace_id = $1 AND model_id = $2",
+        "INSERT INTO model_replicas \
+            (workspace_id, model_id, desired_count, observed_count, status, \
+             residency_zone, last_actuated_at, last_error) \
+         VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, 0), $5, $6, $7, $8) \
+         ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
+            desired_count = COALESCE($3, model_replicas.desired_count), \
+            observed_count = COALESCE($4, model_replicas.observed_count), \
+            status = EXCLUDED.status, \
+            residency_zone = EXCLUDED.residency_zone, \
+            last_actuated_at = COALESCE($7, model_replicas.last_actuated_at), \
+            last_error = $8, \
+            updated_at = NOW()",
     )
     .bind(workspace_id)
     .bind(model_id)
+    .bind(desired.map(|v| v as i32))
+    .bind(observed.map(|v| v as i32))
     .bind(status)
+    .bind(residency)
+    .bind(last_actuated)
     .bind(last_error)
     .execute(db)
     .await;
 }
 
-/// Record a placement failure on the model's row (best-effort, like `mark_failed`).
-async fn mark_placement_failed(db: &PgPool, workspace_id: Uuid, model_id: &str, error: &str) {
-    set_placement_status(db, workspace_id, model_id, status::FAILED, Some(error)).await;
+/// Record a placement failure on the model's row (best-effort).
+async fn mark_placement_failed(
+    db: &PgPool,
+    workspace_id: Uuid,
+    model_id: &str,
+    policy: &ModelAutoscalePolicy,
+    error: &str,
+) {
+    upsert_status(
+        db,
+        workspace_id,
+        model_id,
+        policy,
+        None,
+        None,
+        status::FAILED,
+        None,
+        Some(error),
+    )
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn pool(zone: &str) -> NodePoolPolicy {
-        NodePoolPolicy {
-            datacenter_resource_id: "dev-nomad".into(),
-            residency_zone: zone.into(),
-            gpu_class: "a100".into(),
-            max_num_seqs: 8,
-            engine_spec: json!({}),
-            min_nodes: 0,
-            max_nodes: 4,
-            cooldown_secs: None,
-        }
-    }
-
-    fn lora_policy(zone: &str, base: &str, dedicated: bool) -> ModelAutoscalePolicy {
+    fn lora_policy(zone: &str, base: &str) -> ModelAutoscalePolicy {
         ModelAutoscalePolicy {
             model_id: "my-lora".into(),
             residency_zone: zone.into(),
@@ -767,9 +633,7 @@ mod tests {
             scale_up_threshold: None,
             scale_down_threshold: None,
             cooldown_secs: None,
-            node_pool: "p".into(),
             base: Some(base.into()),
-            dedicated: Some(dedicated),
             idle_evict: None,
         }
     }
@@ -783,9 +647,7 @@ mod tests {
             scale_up_threshold: None,
             scale_down_threshold: None,
             cooldown_secs: None,
-            node_pool: "p".into(),
             base: None,
-            dedicated: None,
             idle_evict: None,
         }
     }
@@ -799,104 +661,160 @@ mod tests {
         }
     }
 
+    fn no_pulled() -> HashMap<Uuid, Vec<String>> {
+        HashMap::new()
+    }
+
     #[test]
-    fn adapter_load_when_base_resident_with_headroom() {
+    fn adapter_loads_when_base_resident_with_headroom() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(4), &[])];
-        let out = plan_placement(&lora_policy("eu", "llama", false), &pool("eu"), &slots);
+        let plan = plan_placements(&lora_policy("eu", "llama"), &slots, &no_pulled(), 1);
         assert_eq!(
-            out,
-            PlacementOutcome::AdapterLoad {
-                runner_id: r,
-                adapter_id: "my-lora".into(),
-                base: "llama".into(),
-                source_uri: None,
+            plan,
+            PlacementPlan::Place {
+                actions: vec![PlacementAction::LoadAdapter {
+                    runner_id: r,
+                    adapter_id: "my-lora".into(),
+                    base: "llama".into(),
+                    source_uri: None,
+                }]
             }
         );
     }
 
     #[test]
-    fn adapter_already_loaded_is_already_placed() {
+    fn adapter_already_loaded_is_a_noop_place() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(4), &["my-lora"])];
-        let out = plan_placement(&lora_policy("eu", "llama", false), &pool("eu"), &slots);
-        assert_eq!(out, PlacementOutcome::AlreadyPlaced);
+        // Already serving on the only runner, target 1 → no further actions.
+        let plan = plan_placements(&lora_policy("eu", "llama"), &slots, &no_pulled(), 1);
+        assert_eq!(plan, PlacementPlan::Place { actions: vec![] });
+    }
+
+    #[test]
+    fn adapter_no_base_in_zone_is_no_eligible_runner() {
+        // No base resident anywhere → nowhere to host the adapter.
+        let plan = plan_placements(&lora_policy("eu", "llama"), &[], &no_pulled(), 1);
+        assert_eq!(plan, PlacementPlan::NoEligibleRunner);
+    }
+
+    #[test]
+    fn adapter_no_headroom_is_no_eligible_runner() {
+        let r = Uuid::new_v4();
+        // Base resident but zero headroom, adapter not loaded → cannot place.
+        let slots = vec![slot(r, "llama", Some(0), &[])];
+        let plan = plan_placements(&lora_policy("eu", "llama"), &slots, &no_pulled(), 1);
+        assert_eq!(plan, PlacementPlan::NoEligibleRunner);
     }
 
     #[test]
     fn base_resident_wakes() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(0), &[])];
-        let out = plan_placement(&base_policy("eu"), &pool("eu"), &slots);
+        let plan = plan_placements(&base_policy("eu"), &slots, &no_pulled(), 1);
         assert_eq!(
-            out,
-            PlacementOutcome::Wake {
-                runner_id: r,
+            plan,
+            PlacementPlan::Place {
+                actions: vec![PlacementAction::LoadBase {
+                    runner_id: r,
+                    base: "llama".into()
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn base_loads_from_pulled_when_not_resident() {
+        let r = Uuid::new_v4();
+        let mut pulled = HashMap::new();
+        pulled.insert(r, vec!["llama".to_string()]);
+        // Nothing resident, but the runner has it pulled → Load{Base}.
+        let plan = plan_placements(&base_policy("eu"), &[], &pulled, 1);
+        assert_eq!(
+            plan,
+            PlacementPlan::Place {
+                actions: vec![PlacementAction::LoadBase {
+                    runner_id: r,
+                    base: "llama".into()
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn base_no_resident_no_pulled_is_no_eligible_runner() {
+        let plan = plan_placements(&base_policy("eu"), &[], &no_pulled(), 1);
+        assert_eq!(plan, PlacementPlan::NoEligibleRunner);
+    }
+
+    #[test]
+    fn base_spreads_to_n_runners_resident_first_then_pulled() {
+        let r1 = Uuid::new_v4();
+        let r2 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        // r1 resident, r2+r3 have it pulled; target 2 → r1 (resident) + one pulled.
+        let slots = vec![slot(r1, "llama", Some(8), &[])];
+        let mut pulled = HashMap::new();
+        pulled.insert(r2, vec!["llama".to_string()]);
+        pulled.insert(r3, vec!["llama".to_string()]);
+        let mut p = base_policy("eu");
+        p.desired_replicas = Some(2);
+        let plan = plan_placements(&p, &slots, &pulled, 2);
+        let PlacementPlan::Place { actions } = plan else {
+            panic!("expected Place, got {plan:?}");
+        };
+        assert_eq!(actions.len(), 2);
+        // r1 (resident) is first; the second is one of the pulled runners.
+        assert_eq!(
+            actions[0],
+            PlacementAction::LoadBase {
+                runner_id: r1,
                 base: "llama".into()
             }
         );
+        assert!(matches!(
+            actions[1],
+            PlacementAction::LoadBase { runner_id, .. } if runner_id == r2 || runner_id == r3
+        ));
     }
 
     #[test]
-    fn no_headroom_raises_node_demand_when_not_dedicated() {
-        let r = Uuid::new_v4();
-        // Base resident but zero headroom for a LoRA → can't adapter-load.
-        let slots = vec![slot(r, "llama", Some(0), &[])];
-        let out = plan_placement(&lora_policy("eu", "llama", false), &pool("eu"), &slots);
-        assert_eq!(out, PlacementOutcome::RaiseNodeDemand);
-    }
-
-    #[test]
-    fn no_headroom_falls_back_to_dedicated_when_opted_in() {
-        let r = Uuid::new_v4();
-        let slots = vec![slot(r, "llama", Some(0), &[])];
-        let out = plan_placement(&lora_policy("eu", "llama", true), &pool("eu"), &slots);
-        assert_eq!(out, PlacementOutcome::DedicatedFallback);
-    }
-
-    #[test]
-    fn no_in_zone_node_raises_node_demand() {
-        // Empty in-zone slots ⇒ nothing resident ⇒ raise node demand.
-        let out = plan_placement(&base_policy("eu"), &pool("eu"), &[]);
-        assert_eq!(out, PlacementOutcome::RaiseNodeDemand);
-    }
-
-    #[test]
-    fn residency_mismatch_fails_closed_before_publish() {
-        let r = Uuid::new_v4();
-        let slots = vec![slot(r, "llama", Some(8), &[])];
-        // Model wants eu, pool is us → fail-closed, no placement.
-        let out = plan_placement(&lora_policy("eu", "llama", false), &pool("us"), &slots);
+    fn adapter_spreads_to_n_filling_shortfall() {
+        let r1 = Uuid::new_v4();
+        let r2 = Uuid::new_v4();
+        // r1 already serves the adapter, r2 has the base with headroom; target 2 →
+        // one new load onto r2 (r1 counts toward the target).
+        let slots = vec![
+            slot(r1, "llama", Some(4), &["my-lora"]),
+            slot(r2, "llama", Some(4), &[]),
+        ];
+        let mut p = lora_policy("eu", "llama");
+        p.desired_replicas = Some(2);
+        let plan = plan_placements(&p, &slots, &no_pulled(), 2);
         assert_eq!(
-            out,
-            PlacementOutcome::ResidencyMismatch {
-                wanted: "eu".into(),
-                pool_zone: "us".into()
+            plan,
+            PlacementPlan::Place {
+                actions: vec![PlacementAction::LoadAdapter {
+                    runner_id: r2,
+                    adapter_id: "my-lora".into(),
+                    base: "llama".into(),
+                    source_uri: None,
+                }]
             }
         );
-    }
-
-    #[test]
-    fn zoneless_model_places_on_any_pool() {
-        let r = Uuid::new_v4();
-        let slots = vec![slot(r, "llama", Some(4), &[])];
-        // No residency requirement → eu pool is fine.
-        let out = plan_placement(&lora_policy("", "llama", false), &pool("eu"), &slots);
-        assert!(matches!(out, PlacementOutcome::AdapterLoad { .. }));
     }
 
     #[test]
     fn unknown_headroom_is_treated_as_available() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", None, &[])];
-        let out = plan_placement(&lora_policy("eu", "llama", false), &pool("eu"), &slots);
-        assert!(matches!(out, PlacementOutcome::AdapterLoad { .. }));
+        let plan = plan_placements(&lora_policy("eu", "llama"), &slots, &no_pulled(), 1);
+        assert!(matches!(plan, PlacementPlan::Place { .. }));
     }
 
-    // ── GAP B: idle-eviction (vLLM sleep) decision ────────────────────────────
+    // ── idle-eviction (vLLM sleep) decision ───────────────────────────────────
 
-    /// A base policy with `idle_evict` toggled on (the `base_policy` helper serves
-    /// `"llama"` as a base model).
     fn evictable_base_policy(zone: &str, idle_evict: bool) -> ModelAutoscalePolicy {
         ModelAutoscalePolicy {
             idle_evict: Some(idle_evict),
@@ -907,7 +825,6 @@ mod tests {
     #[test]
     fn idle_evict_sleeps_resident_base_at_zero_demand() {
         let r = Uuid::new_v4();
-        // The base `"llama"` is resident in-zone, opted in, demand zero, not cooled.
         let slots = vec![slot(r, "llama", Some(8), &[])];
         let out = plan_idle_eviction(&evictable_base_policy("eu", true), &slots, true, false);
         assert_eq!(out, Some((r, "llama".to_string())));
@@ -917,12 +834,10 @@ mod tests {
     fn idle_evict_noop_when_not_opted_in() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(8), &[])];
-        // Opt-out (the default) → never sleep, even with zero demand + resident base.
         assert_eq!(
             plan_idle_eviction(&evictable_base_policy("eu", false), &slots, true, false),
             None
         );
-        // `None` (unset) is also opt-out.
         assert_eq!(
             plan_idle_eviction(&base_policy("eu"), &slots, true, false),
             None
@@ -933,7 +848,6 @@ mod tests {
     fn idle_evict_noop_within_cooldown() {
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(8), &[])];
-        // Opted in + zero demand + resident, but inside the cooldown window → defer.
         assert_eq!(
             plan_idle_eviction(&evictable_base_policy("eu", true), &slots, true, true),
             None
@@ -942,13 +856,10 @@ mod tests {
 
     #[test]
     fn idle_evict_noop_when_base_not_resident() {
-        // Opted in + zero demand + not cooled, but nothing resident in-zone →
-        // nothing to sleep.
         assert_eq!(
             plan_idle_eviction(&evictable_base_policy("eu", true), &[], true, false),
             None
         );
-        // A different base resident (not the wanted one) is also a no-op.
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "other-model", Some(8), &[])];
         assert_eq!(
@@ -959,9 +870,6 @@ mod tests {
 
     #[test]
     fn idle_evict_noop_when_demand_nonzero() {
-        // Even opted in + resident + not cooled, a non-zero demand never sleeps
-        // (the reconcile loop only calls this on the zero-demand branch, but the
-        // pure fn defends the gate too).
         let r = Uuid::new_v4();
         let slots = vec![slot(r, "llama", Some(8), &[])];
         assert_eq!(

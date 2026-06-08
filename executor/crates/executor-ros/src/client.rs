@@ -335,6 +335,43 @@ impl RosbridgeClient {
         result
     }
 
+    /// Subscribe to `topic` of ROS `type_name` and return a receiver that yields
+    /// each inbound message — a NON-consuming counterpart to [`await_first`] for
+    /// a long-lived subscription the caller polls in its own loop. The caller
+    /// MUST [`unsubscribe`](Self::unsubscribe) when done (the route lingers
+    /// otherwise). Used by the scene monitor to watch a stop-signal topic
+    /// alongside its poll loop.
+    pub async fn subscribe(
+        &self,
+        topic: &str,
+        type_name: &str,
+    ) -> Result<mpsc::UnboundedReceiver<Value>, RosbridgeError> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.routes
+            .lock()
+            .await
+            .subscriptions
+            .insert(topic.to_string(), tx);
+
+        self.send(json!({
+            "op": "subscribe",
+            "topic": topic,
+            "type": type_name,
+        }))
+        .await?;
+
+        Ok(rx)
+    }
+
+    /// Drop a subscription created by [`subscribe`](Self::subscribe): remove the
+    /// route and send the rosbridge `unsubscribe` op. Best-effort.
+    pub async fn unsubscribe(&self, topic: &str) {
+        self.routes.lock().await.subscriptions.remove(topic);
+        let _ = self
+            .send(json!({ "op": "unsubscribe", "topic": topic }))
+            .await;
+    }
+
     /// Dispatch an action goal to `action` (the action NAME) of type
     /// `action_type`, with `goal_args` as the goal message body. Registers the
     /// per-goal feedback + result routes, mints a correlation `id` (echoed on
