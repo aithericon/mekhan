@@ -257,6 +257,113 @@
       }
     },
     {
+      "id": "add_table",
+      "type": "automated_step",
+      "slug": "add_table",
+      "parentId": "lease",
+      "position": {
+        "x": 470,
+        "y": 600
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Work Surface to Scene",
+        "description": "Cell-build step — seeds the BENCH the samples rest on as a persistent world collision object, right after the clear and before homing. ROS `call_service` to `/add_object`: a solid `box` `[0.45, 0.50, 0.24]` centred at `(0.325, 0, 0.12)` in `link_base`, so its top face sits at `z=0.24` — 1 cm under the sample bottoms (`z=0.25`), giving the gripper grasp clearance while the samples read as resting on it. move_group now plans AROUND the surface (the arm never dives under it), and the planning-scene twin renders it as an amber slab beneath the rack. Plain `executor`: rides the held lease. Runs ONCE, before seeding samples.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "work_surface",
+              "primitive": "box",
+              "dimensions": [
+                0.45,
+                0.5,
+                0.24
+              ],
+              "pose": {
+                "header": {
+                  "frame_id": "link_base"
+                },
+                "pose": {
+                  "position": {
+                    "x": 0.325,
+                    "y": 0.0,
+                    "z": 0.12
+                  },
+                  "orientation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0,
+                    "w": 1.0
+                  }
+                }
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": [
+                  "object_id",
+                  "primitive",
+                  "dimensions",
+                  "pose"
+                ],
+                "fieldtypes": [
+                  "string",
+                  "string",
+                  "float64",
+                  "geometry_msgs/PoseStamped"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1,
+                  0,
+                  -1
+                ]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": [
+                  "success",
+                  "error_message"
+                ],
+                "fieldtypes": [
+                  "boolean",
+                  "string"
+                ],
+                "fieldarraylen": [
+                  -1,
+                  -1
+                ]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "seeded",
+              "label": "Seeded",
+              "kind": "bool",
+              "required": true
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
       "id": "home_arm",
       "type": "automated_step",
       "slug": "home_arm",
@@ -268,7 +375,7 @@
       "data": {
         "type": "automated_step",
         "label": "Home Arm (reference config)",
-        "description": "Cell-reset tail — brings the arm to the xArm6 all-zeros home `[0,0,0,0,0,0]` so every run's motion planning starts from the SAME deterministic, collision-free state (the upright home clears the table-level rack samples seeded below; a forward-leaning ready pose intersects a sample box and MoveIt rejects the first pick with an in-collision START). ROS `send_action_goal` to the FollowJointTrajectory controller. Plain `executor`: rides the held lease.",
+        "description": "Cell-reset tail — brings the arm to a RAISED ready pose `[0,-1.1,-0.9,0,1.0,0]` (gripper hovering ~26 cm above the rack, every link above the bench top at `z=0.24`) so every run's planning starts from the SAME deterministic, collision-free state ABOVE the work surface and samples — the arm parks over the cell between moves instead of folding down under it. (The old all-zeros config folded the wrist to `z≈-0.06`, diving beneath the sample plane between steps.) ROS `send_action_goal` to the FollowJointTrajectory controller. Plain `executor`: rides the held lease.",
         "deploymentModel": {
           "mode": "executor"
         },
@@ -292,10 +399,10 @@
                   {
                     "positions": [
                       0.0,
+                      -1.1,
+                      -0.9,
                       0.0,
-                      0.0,
-                      0.0,
-                      0.0,
+                      1.0,
                       0.0
                     ],
                     "time_from_start": {
@@ -561,7 +668,7 @@
       "data": {
         "type": "automated_step",
         "label": "Home Arm (per-job reset)",
-        "description": "Loop body head — the cascade-breaker. Before every job, ROS `send_action_goal` drives the arm to the xArm6 all-zeros home `[0,0,0,0,0,0]` via FollowJointTrajectory, which BYPASSES move_group planning (it just executes joint angles), so it ALWAYS succeeds regardless of planner load. Two reasons: (1) it guarantees each job starts from a COLLISION-FREE pose — without it, a single failed retreat (move_group hiccup under load) leaves the arm low/in-collision and EVERY subsequent plan fails with START_STATE_IN_COLLISION (error 99999), cascading the whole run to a stall; (2) it gives the next `plan_to_pose`'s `/compute_ik` an IDENTICAL clean seed every time (a dirty current-state seed is the classic source of flaky NO_IK). Any sample attached from the prior pick rides to home (arm-up, clear of the table) and on to the port. Plain `executor`: rides the held lease.",
+        "description": "Loop body head — the cascade-breaker. Before every job, ROS `send_action_goal` drives the arm to the RAISED ready pose `[0,-1.1,-0.9,0,1.0,0]` via FollowJointTrajectory, which BYPASSES move_group planning (it just executes joint angles), so it ALWAYS succeeds regardless of planner load. Two reasons: (1) it guarantees each job starts from a COLLISION-FREE pose ABOVE the bench and samples — without it, a single failed retreat (move_group hiccup under load) leaves the arm low/in-collision and EVERY subsequent plan fails with START_STATE_IN_COLLISION (error 99999), cascading the run to a stall; (2) it gives the next `plan_to_pose`'s `/compute_ik` an IDENTICAL clean seed every time (a dirty current-state seed is the classic source of flaky NO_IK). Any sample attached from the prior pick rides up to the ready pose (clear of the bench) and on to the port. Plain `executor`: rides the held lease.",
         "deploymentModel": {
           "mode": "executor"
         },
@@ -585,10 +692,10 @@
                   {
                     "positions": [
                       0.0,
+                      -1.1,
+                      -0.9,
                       0.0,
-                      0.0,
-                      0.0,
-                      0.0,
+                      1.0,
                       0.0
                     ],
                     "time_from_start": {
@@ -1017,8 +1124,15 @@
       "type": "sequence"
     },
     {
-      "id": "e_reset_home",
+      "id": "e_reset_table",
       "source": "reset_scene",
+      "target": "add_table",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_table_home",
+      "source": "add_table",
       "target": "home_arm",
       "targetHandle": "in",
       "type": "sequence"
@@ -1146,7 +1260,8 @@
       "source": "stop_monitor",
       "target": "join",
       "sourceHandle": null,
-      "targetHandle": "in"
+      "targetHandle": "in",
+      "type": "sequence"
     }
   ]
 }
