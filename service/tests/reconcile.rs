@@ -335,7 +335,7 @@ async fn reconcile_classifies_every_class() {
     let leftover: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM file_inventory WHERE file_server_id = ANY($1)",
     )
-    .bind(&cleanup_servers.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    .bind(cleanup_servers.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     .fetch_one(&pool)
     .await
     .unwrap();

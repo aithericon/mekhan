@@ -126,7 +126,7 @@ pub async fn list(pool: &PgPool, workspace_id: Uuid) -> Result<FileServersRespon
             total_size_bytes: *size,
         })
         .collect();
-    unregistered.sort_by(|a, b| b.file_count.cmp(&a.file_count));
+    unregistered.sort_by_key(|u| std::cmp::Reverse(u.file_count));
 
     Ok(FileServersResponse {
         servers,

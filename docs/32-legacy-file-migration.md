@@ -63,6 +63,44 @@ Three design refinements from planning (reflected in §4 below):
   node_id, owner_id, created, modified, raw JSONB`; index on `hash`, `(file_server_id,path)`.
 - `legacy_delete_queue` (97k honored deletions): `key PK, hash, size, modified`.
 
+### 4.1 File servers as first-class entities (`file_servers`)
+Until this landed, `file_inventory.file_server_id` was a bare `TEXT` string the
+control plane only knew by the name echoed back in inventory rows. `file_servers`
+(`20240159000000_file_servers.sql`) makes each storage backend a real, manageable
+entity — a **hybrid** model:
+- The **entity** owns *identity + topology + lifecycle*: `key` (== the inventory
+  `file_server_id`, **soft join, no FK** — preserves crawl-before-register and lets
+  an unknown server still render with an "adopt" affordance), `display_name`, a
+  transport `kind` (`object_store | s3 | sftp`; `nfs/local` reserved), optional
+  `base_path`, `status`, `config`. Workspace-scoped (`UNIQUE(workspace_id, key)`).
+- **Secrets never live on the entity.** `resource_ref` points at a workspace
+  `resource` (by its `path`) holding the connection + credentials in Vault — an
+  `s3` resource for `kind=s3`, the new `sftp` resource (username + inline-PEM
+  `private_key` + `known_hosts`) for `kind=sftp`. The built-in `object_store`
+  (the platform S3 bucket) auto-seeds at startup with no `resource_ref` (uses
+  platform config), so every `log_artifact` copy lands on a tracked server.
+- **Rollups are derived, never stored**: file count / summed size (via
+  `catalogue_entries.size_bytes` joined on `content_hash`) / per-status breakdown
+  are computed from `file_inventory` by `key` at read time.
+
+HTTP: `GET/POST/PUT/DELETE /api/v1/file-servers`, `GET …/{key}`, and
+`POST …/adopt` (promote an inventory key into an entity). The compiler is
+unchanged — a node's file-server selection is resolved in the editor into the
+existing `StorageConfig` (`backend` from `kind`, `resource_alias = resource_ref`,
+`base_path` → prefix), so crawl/migrate connect via the existing
+`resource_overlay → opendal` path. SFTP is wired end-to-end (`StorageBackend::Sftp`
++ opendal `services-sftp`; the inline PEM is materialized to a 0600 temp file at
+operator-build).
+
+### 4.2 Unified Data browser (`app` + `GET /api/v1/data/entries`)
+The catalogue (logical) and inventory (physical) were split-world pages bridged
+only by an un-navigable `content_hash`. `GET /api/v1/data/entries` joins them —
+paginated catalogued entries (reusing the catalogue filter/sort DSL), each with
+its physical `copies` (file-server names resolved) plus a peek + count of
+uncatalogued (index-only) files. The `/data` page renders this as one browser
+with **Entries** and **Servers** tabs; Catalogue + Inventory are dropped from the
+nav (their lineage/provenance deep routes remain reachable).
+
 ### Bulk-register HTTP API (`service`)
 New `service/src/inventory/` module (mirrors `catalogue/`: `mod/model/queries/repository/handlers`)
 + routes in `service/src/lib.rs`, `#[utoipa::path]` + `ToSchema` DTOs, then `just dev::openapi`:
