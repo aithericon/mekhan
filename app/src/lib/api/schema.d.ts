@@ -778,6 +778,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/data/entries
+         * @description Paginated catalogued entries (same filter/sort DSL as `/api/v1/catalogue`),
+         *     each with its physical `copies` (joined by `content_hash`, server names
+         *     resolved), plus a capped `uncatalogued` peek + total `uncatalogued_count`.
+         */
+        get: operations["data_entries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
         parameters: {
             query?: never;
@@ -5486,6 +5508,55 @@ export interface components {
              */
             file: string;
         };
+        /** @description One physical copy of an entry's content, with its file server resolved. */
+        DataCopy: {
+            file_server_id: string;
+            is_canonical: boolean;
+            path: string;
+            /** @description Display name of the backing `file_servers` row, if the key is registered. */
+            server_display_name?: string | null;
+            /** @description Transport kind of the backing server (`object_store`/`s3`/`sftp`/…). */
+            server_kind?: string | null;
+            status: string;
+        };
+        /**
+         * @description Response of `GET /api/v1/data/entries`: a page of catalogued entries (each
+         *     with copies), plus a capped peek at uncatalogued (index-only) files and the
+         *     total uncatalogued count.
+         */
+        DataEntriesResponse: components["schemas"]["Paginated_DataEntry"] & {
+            /** @description Index-only files with no logical catalogue identity yet (capped peek). */
+            uncatalogued: components["schemas"]["DataEntry"][];
+            /**
+             * Format: int64
+             * @description Total number of uncatalogued physical copies (not just the peek).
+             */
+            uncatalogued_count: number;
+        };
+        /**
+         * @description A unified Data-browser row: the logical entry (catalogued content) plus its
+         *     physical copies. The bridge `content_hash` is surfaced navigably here — the
+         *     whole point of consolidating the catalogue + inventory split worlds.
+         */
+        DataEntry: {
+            /** @description True when backed by a `catalogue_entries` row (logical identity exists). */
+            catalogued: boolean;
+            category: string;
+            content_hash?: string | null;
+            /** @description Physical copies (from `file_inventory`, joined by `content_hash`). */
+            copies: components["schemas"]["DataCopy"][];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Catalogue surrogate id; `None` for an uncatalogued (index-only) row.
+             */
+            entry_id?: string | null;
+            mime_type?: string | null;
+            name: string;
+            /** Format: int64 */
+            size_bytes?: number | null;
+        };
         DeleteConfig: {
             ignore_missing?: boolean;
             path: string;
@@ -7958,6 +8029,38 @@ export interface components {
             total_pages: number;
         };
         /** @description Paginated response wrapper. */
+        Paginated_DataEntry: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                /** @description True when backed by a `catalogue_entries` row (logical identity exists). */
+                catalogued: boolean;
+                category: string;
+                content_hash?: string | null;
+                /** @description Physical copies (from `file_inventory`, joined by `content_hash`). */
+                copies: components["schemas"]["DataCopy"][];
+                /** Format: date-time */
+                created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Catalogue surrogate id; `None` for an uncatalogued (index-only) row.
+                 */
+                entry_id?: string | null;
+                mime_type?: string | null;
+                name: string;
+                /** Format: int64 */
+                size_bytes?: number | null;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
         Paginated_DuplicateGroup: {
             has_next: boolean;
             has_previous: boolean;
@@ -9578,7 +9681,7 @@ export interface components {
          * @description Which storage backend to use.
          * @enum {string}
          */
-        StorageBackend: "local" | "s3" | "gcs" | "azblob";
+        StorageBackend: "local" | "s3" | "gcs" | "azblob" | "sftp";
         /**
          * @description Configuration for a storage backend.
          *
@@ -12788,6 +12891,35 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    data_entries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Catalogued entries with copies + uncatalogued peek */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataEntriesResponse"];
+                };
+            };
+            /** @description Invalid query DSL */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

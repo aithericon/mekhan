@@ -8,6 +8,7 @@ pub mod causality;
 pub mod compiler;
 
 pub mod config;
+pub mod data;
 pub mod db;
 pub mod demos;
 pub mod file_servers;
@@ -397,6 +398,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             file_servers::handlers::update,
             file_servers::handlers::delete
         ))
+        // Unified Data browser read-model — catalogued entries + nested physical
+        // copies (server names resolved) + uncatalogued peek.
+        .routes(routes!(data::handlers::entries))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

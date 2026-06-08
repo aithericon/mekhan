@@ -2258,6 +2258,38 @@
         }
       }
     },
+    "/api/v1/data/entries": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "GET /api/v1/data/entries",
+        "description": "Paginated catalogued entries (same filter/sort DSL as `/api/v1/catalogue`),\neach with its physical `copies` (joined by `content_hash`, server names\nresolved), plus a capped `uncatalogued` peek + total `uncatalogued_count`.",
+        "operationId": "data_entries",
+        "responses": {
+          "200": {
+            "description": "Catalogued entries with copies + uncatalogued peek",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataEntriesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
       "get": {
         "tags": [
@@ -14434,6 +14466,134 @@
           }
         }
       },
+      "DataCopy": {
+        "type": "object",
+        "description": "One physical copy of an entry's content, with its file server resolved.",
+        "required": [
+          "file_server_id",
+          "path",
+          "status",
+          "is_canonical"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": "string"
+          },
+          "is_canonical": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "server_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name of the backing `file_servers` row, if the key is registered."
+          },
+          "server_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Transport kind of the backing server (`object_store`/`s3`/`sftp`/…)."
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "DataEntriesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Paginated_DataEntry"
+          },
+          {
+            "type": "object",
+            "required": [
+              "uncatalogued",
+              "uncatalogued_count"
+            ],
+            "properties": {
+              "uncatalogued": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DataEntry"
+                },
+                "description": "Index-only files with no logical catalogue identity yet (capped peek)."
+              },
+              "uncatalogued_count": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Total number of uncatalogued physical copies (not just the peek)."
+              }
+            }
+          }
+        ],
+        "description": "Response of `GET /api/v1/data/entries`: a page of catalogued entries (each\nwith copies), plus a capped peek at uncatalogued (index-only) files and the\ntotal uncatalogued count."
+      },
+      "DataEntry": {
+        "type": "object",
+        "description": "A unified Data-browser row: the logical entry (catalogued content) plus its\nphysical copies. The bridge `content_hash` is surfaced navigably here — the\nwhole point of consolidating the catalogue + inventory split worlds.",
+        "required": [
+          "name",
+          "category",
+          "created_at",
+          "catalogued",
+          "copies"
+        ],
+        "properties": {
+          "catalogued": {
+            "type": "boolean",
+            "description": "True when backed by a `catalogue_entries` row (logical identity exists)."
+          },
+          "category": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "copies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataCopy"
+            },
+            "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Catalogue surrogate id; `None` for an uncatalogued (index-only) row."
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "DeleteConfig": {
         "type": "object",
         "required": [
@@ -20085,6 +20245,107 @@
           }
         }
       },
+      "Paginated_DataEntry": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A unified Data-browser row: the logical entry (catalogued content) plus its\nphysical copies. The bridge `content_hash` is surfaced navigably here — the\nwhole point of consolidating the catalogue + inventory split worlds.",
+              "required": [
+                "name",
+                "category",
+                "created_at",
+                "catalogued",
+                "copies"
+              ],
+              "properties": {
+                "catalogued": {
+                  "type": "boolean",
+                  "description": "True when backed by a `catalogue_entries` row (logical identity exists)."
+                },
+                "category": {
+                  "type": "string"
+                },
+                "content_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "copies": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DataCopy"
+                  },
+                  "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "entry_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Catalogue surrogate id; `None` for an uncatalogued (index-only) row."
+                },
+                "mime_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "Paginated_DuplicateGroup": {
         "type": "object",
         "description": "Paginated response wrapper.",
@@ -23062,7 +23323,8 @@
           "local",
           "s3",
           "gcs",
-          "azblob"
+          "azblob",
+          "sftp"
         ]
       },
       "StorageConfig": {
@@ -26378,6 +26640,10 @@
     {
       "name": "file_servers",
       "description": "First-class storage backends (docs/32 §4.1) — the entities the platform tracks files on. Hybrid: identity + transport `kind` + derived rollups here; connection + secrets in the referenced workspace `resource`."
+    },
+    {
+      "name": "data",
+      "description": "Unified Data browser read-model — catalogued logical entries with their physical copies (inventory joined by `content_hash`, file-server names resolved) plus uncatalogued (index-only) files. Consolidates the catalogue + inventory views."
     },
     {
       "name": "provenance",
