@@ -280,7 +280,7 @@
 				onToggle={() => toggleInspect(key)}
 				onSchemaClick={(digest) => { schemaFilter = digest; resetPage(); }}
 				onNetClick={(net) => { sourceNetFilter = net; resetPage(); }}
-				onViewServer={() => onViewServer()}
+				onViewServer={(key) => onViewServer(key)}
 			/>
 		{/each}
 	</div>
