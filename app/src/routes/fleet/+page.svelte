@@ -1,15 +1,21 @@
 <script lang="ts">
-	// The unified Control Plane. Its top-level sections ARE the four dispatch
-	// backends — PRESENCE (runner groups), QUEUE (worker pools), TOKENS
-	// (concurrency limits), SCHEDULER (clusters/datacenters) — mirroring
-	// `CapacityAxes::backend()` 1:1. Each capacity is a compact card under its
-	// backend with live numbers, read off `GET /api/v1/capacities` (polled ~5s).
+	// The unified Control Plane — RUNNER-FIRST. The default lens is the Runners
+	// roster (the actual enrolled machines, identity-rich: name · host · role ·
+	// resident model engines), because that's what an operator means by "what do I
+	// have." The four dispatch BACKENDS — PRESENCE (runner groups), QUEUE (worker
+	// pools), TOKENS (concurrency limits), SCHEDULER (clusters) — are the *backing*
+	// for that capacity and live one tab over under "Capacities" (mirroring
+	// `CapacityAxes::backend()` 1:1, read off `GET /api/v1/capacities`, polled ~5s).
 	//
-	// Page-level actions wire to the dedicated Control-Plane flows:
+	// `?tab=capacities` / `?role=engines` deep-link in — the Engines lens
+	// (/models/engines) links here as the roster filtered to model servers.
+	//
+	// Page-level capacity actions (Capacities tab only):
 	//   "New capacity"  → NewCapacityModal (kind switcher: runner group / limit /
 	//                      worker / cluster).
-	//   "Enroll runner" → EnrollSheet, no fixed group (global flow w/ group picker).
-	//   card "Enroll here" → EnrollSheet, fixed to that presence group's path.
+	//   card "Enroll here" → EnrollSheet, fixed to that group's path.
+	import { page } from '$app/state';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Server from '@lucide/svelte/icons/server';
@@ -20,6 +26,7 @@
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
 	import { deleteResource } from '$lib/api/resources';
 	import { reconnectCluster, drainCluster } from '$lib/api/clusters';
+	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
 	import CapacitySection from '$lib/components/fleet/CapacitySection.svelte';
 	import HumanCapacitySection from '$lib/components/fleet/HumanCapacitySection.svelte';
 	import BoardHeader from '$lib/components/fleet/BoardHeader.svelte';
@@ -31,6 +38,14 @@
 	let capacities = $state<CapacitySummary[]>([]);
 	let error = $state<string | null>(null);
 	let lastUpdated = $state<Date | null>(null);
+
+	// Runner-first: the roster is the default lens; the capacity board is one tab
+	// over. Deep-linked via `?tab=` / `?role=` (the Engines lens lands here).
+	let activeTab = $state<'runners' | 'capacities'>(
+		page.url.searchParams.get('tab') === 'capacities' ? 'capacities' : 'runners'
+	);
+	const roleParam: 'all' | 'engines' =
+		page.url.searchParams.get('role') === 'engines' ? 'engines' : 'all';
 
 	// "New capacity" → the dedicated kind-switcher modal. `editing` non-null ⇒ the
 	// same modal in edit mode (kind + name locked, fields prefilled).
@@ -169,35 +184,55 @@
 			<div>
 				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Control Plane</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Every capacity the platform can dispatch work to, grouped by backend: presence-driven
-					runner groups, pull worker pools, seeded concurrency limits, and scheduler clusters.
+					The runners (the actual nodes) that pick up work, and the dispatch capacities that back
+					them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and
+					scheduler clusters.
 				</p>
 			</div>
-			<Button
-				variant="default"
-				size="sm"
-				class="shrink-0 gap-1.5"
-				onclick={openCreate}
-				data-testid="new-capacity-button"
-			>
-				<Plus class="size-4" />
-				New capacity
-			</Button>
+			{#if activeTab === 'capacities'}
+				<Button
+					variant="default"
+					size="sm"
+					class="shrink-0 gap-1.5"
+					onclick={openCreate}
+					data-testid="new-capacity-button"
+				>
+					<Plus class="size-4" />
+					New capacity
+				</Button>
+			{/if}
 		</div>
 
-		<div class="mb-6">
-			<BoardHeader title="Capacities" {summary} updated={lastUpdated} />
-		</div>
+		<Tabs.Root
+			value={activeTab}
+			onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
+			class="mb-6"
+		>
+			<Tabs.List>
+				<Tabs.Trigger value="runners" data-testid="cp-tab-runners">Runners</Tabs.Trigger>
+				<Tabs.Trigger value="capacities" data-testid="cp-tab-capacities">Capacities</Tabs.Trigger>
+			</Tabs.List>
+		</Tabs.Root>
 
-		{#if error}
-			<div
-				class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
-			>
-				{error}
+		{#if activeTab === 'runners'}
+			<!-- The runner roster IS the unified machine view; Engines is this list
+				 filtered to model servers (role=engines). RunnerList owns its own
+				 enroll + token management. -->
+			<RunnerList role={roleParam} />
+		{:else}
+			<div class="mb-6">
+				<BoardHeader title="Capacities" {summary} updated={lastUpdated} />
 			</div>
-		{/if}
 
-		<div class="space-y-10">
+			{#if error}
+				<div
+					class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
+				>
+					{error}
+				</div>
+			{/if}
+
+			<div class="space-y-10">
 			<!-- PRESENCE — runner groups -->
 			<CapacitySection
 				title="Presence"
@@ -283,7 +318,8 @@
 			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
 				 placement, router/inference-audit) now lives on its own page at
 				 /models — see the "Models" top-nav entry. -->
-		</div>
+			</div>
+		{/if}
 	</div>
 </div>
 

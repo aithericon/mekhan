@@ -9,6 +9,7 @@
 	// so the enroll dialog only lets you pick an EXISTING group (or create one
 	// inline first). A runner group is a `capacity` resource created from the
 	// `instrument` preset (liveness=presence).
+	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -40,8 +41,10 @@
 		type RegistrationTokenSummary
 	} from '$lib/api/runners';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { listFleetEngines } from '$lib/api/models';
 	import { capacityTarget } from '$lib/editor/deployment-run-target';
 	import { groupFleet, filterFleetByGroup, type FleetSection } from './grouping';
+	import { accelLabel, hostSummary, runnerRole, isStale } from './runner-identity';
 	import { fmtMsAgo, fmtDate } from './format';
 	import StatusDot from './StatusDot.svelte';
 	import BackendChips from './BackendChips.svelte';
@@ -49,6 +52,7 @@
 	import CoverageStrip from './CoverageStrip.svelte';
 	import FleetEmpty from './FleetEmpty.svelte';
 	import EnrollSheet from './EnrollSheet.svelte';
+	import Cpu from '@lucide/svelte/icons/cpu';
 
 	type Props = {
 		/** When set, scope the list to this group alias (the capacity `path`):
@@ -63,8 +67,11 @@
 		/** Roster-mode enroll handler — invoked instead of the in-component sheet so
 		 *  the page header's "Enroll here" is the one and only enroll affordance. */
 		onenroll?: () => void;
+		/** Initial role filter. 'engines' scopes the roster to model-serving runners
+		 *  (the Engines facet); the operator can still flip it back to 'all'. */
+		role?: 'all' | 'engines';
 	};
-	let { group = null, roster = false, onenroll }: Props = $props();
+	let { group = null, roster = false, onenroll, role = 'all' }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +85,14 @@
 
 	// Filters
 	let onlineFilter = $state<'all' | 'online'>('all');
+	// Seed the (operator-toggleable) role filter from the prop's INITIAL value
+	// only — `untrack` documents that intent and keeps it out of the reactive read.
+	let roleFilter = $state<'all' | 'engines'>(untrack(() => role));
+
+	// runner_id → resident model engine base ids (the model-serving facet, joined
+	// from GET /api/v1/fleet/engines). Fail-soft: an engines fetch error leaves
+	// this empty and the roster simply shows no model chips.
+	let enginesByRunner = $state<Record<string, string[]>>({});
 
 	// Revoke
 	let revoking = $state<string | null>(null);
@@ -97,25 +112,23 @@
 	/** Fast lookup: runner_id → presence snapshot */
 	const presenceById = $derived(Object.fromEntries(presence.map((p) => [p.runner_id, p])));
 
-	/** Compact accelerator label for the host fingerprint, e.g.
-	 *  "CUDA ×2 · 80 GB · cc9.0", "Metal · 128 GB unified", or "CPU". */
-	function accelLabel(h: NonNullable<RunnerPresenceSnapshot['host']>): string {
-		const accel = (h.accelerator ?? '').toLowerCase();
-		if (accel === 'cuda' || accel === 'rocm') {
-			let head = accel.toUpperCase();
-			if (h.gpu_count) head += ` ×${h.gpu_count}`;
-			const parts = [head];
-			if (h.vram_gb) parts.push(`${h.vram_gb} GB`);
-			if (h.compute_capability) parts.push(`cc${h.compute_capability}`);
-			return parts.join(' · ');
-		}
-		if (accel === 'metal') return `Metal${h.vram_gb ? ` · ${h.vram_gb} GB unified` : ''}`;
-		if (accel === 'cpu') return 'CPU';
-		return h.accelerator ?? '—';
-	}
-
 	/** The fleet split into ordered sections (backed → unbacked → ungrouped). */
 	const sections = $derived(groupFleet(runners, presenceById, groups));
+
+	/** Runner ids that are real dispatch targets — i.e. in a BACKED group (their
+	 *  group has a presence `capacity` resource, so their unit is admitted into a
+	 *  pool with C slots). A runner NOT in this set is "pool-less": it heartbeats
+	 *  and advertises backends, but `runners_presence` admits it to no pool
+	 *  (`concurrency = 0`), so it dispatches NOTHING. A model server is the common
+	 *  case — it's intentionally ungrouped because inference goes over HTTP, not
+	 *  presence dispatch. Surfacing this stops the roster implying a pool-less node
+	 *  serves the (inert) backends its fat executor binary happens to advertise. */
+	const dispatchTargetIds = $derived(
+		new Set(
+			sections.filter((s) => s.kind === 'backed').flatMap((s) => s.runners.map((r) => r.id))
+		)
+	);
+	const isPoolLess = (id: string): boolean => !dispatchTargetIds.has(id);
 
 	/** The backing group resource (for the pool-net deep-link), roster mode only. */
 	const groupResource = $derived<ResourceSummary | null>(groups[0] ?? null);
@@ -140,10 +153,22 @@
 		return snap?.present ? (snap.backends ?? []) : [];
 	}
 
-	/** Apply the online-only filter to a section's runners for display. */
+	/** Resident model engine base ids for a runner (empty unless it serves models). */
+	function residentModels(id: string): string[] {
+		return enginesByRunner[id] ?? [];
+	}
+
+	/** Whether a runner serves model engines — the Engines facet membership. */
+	function isModelServer(id: string): boolean {
+		return (enginesByRunner[id]?.length ?? 0) > 0;
+	}
+
+	/** Apply the online + role filters to a section's runners for display. */
 	function shown(section: FleetSection): RunnerSummary[] {
-		if (onlineFilter !== 'online') return section.runners;
-		return section.runners.filter((r) => presenceById[r.id]?.present);
+		let rows = section.runners;
+		if (onlineFilter === 'online') rows = rows.filter((r) => presenceById[r.id]?.present);
+		if (roleFilter === 'engines') rows = rows.filter((r) => isModelServer(r.id));
+		return rows;
 	}
 
 	// ── Load ───────────────────────────────────────────────────────────────────
@@ -152,13 +177,19 @@
 		if (!silent) loading = true;
 		error = null;
 		try {
-			const [rPage, pSnaps, gPage, tPage] = await Promise.all([
+			const [rPage, pSnaps, gPage, tPage, engResult] = await Promise.all([
 				listRunners({ perPage: 200 }),
 				getRunnerPresence(),
 				listResources({ resource_type: 'capacity', perPage: 200 }),
-				listRegistrationTokens({ perPage: 200 })
+				listRegistrationTokens({ perPage: 200 }),
+				// Fail-soft: the engines join only adds model chips — never let it wipe
+				// the roster, so swallow its error into an empty inventory.
+				listFleetEngines().catch(() => ({ headroom_from_router: false, nodes: [] }))
 			]);
 			presence = pSnaps;
+			enginesByRunner = Object.fromEntries(
+				engResult.nodes.map((n) => [n.runner_id, n.engines.map((e) => e.base)])
+			);
 			// A runner group is a presence `capacity` (the instrument preset);
 			// other capacity flavours (seeded limits, worker queues) are not groups.
 			const allGroups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
@@ -288,6 +319,25 @@
 		</div>
 	{/snippet}
 
+	{#snippet roleSelect()}
+		<div class="flex items-center gap-2">
+			<span class="text-sm font-medium text-muted-foreground">Role</span>
+			<Select.Root
+				type="single"
+				value={roleFilter}
+				onValueChange={(v) => (roleFilter = (v as 'all' | 'engines') ?? 'all')}
+			>
+				<Select.Trigger class="h-9 min-w-[140px]" data-testid="role-filter">
+					{roleFilter === 'engines' ? 'Model servers' : 'All roles'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="all" label="All roles" />
+					<Select.Item value="engines" label="Model servers" />
+				</Select.Content>
+			</Select.Root>
+		</div>
+	{/snippet}
+
 	{#if roster}
 		<!-- Info band: per-group backend coverage + poll freshness (the group name /
 			 online count already live in the page header). -->
@@ -337,6 +387,7 @@
 	{:else}
 		<div class="flex flex-wrap items-center gap-3">
 			{@render statusFilter()}
+			{@render roleSelect()}
 			<Button
 				variant="default"
 				size="sm"
@@ -393,6 +444,12 @@
 							{#each rows as runner (runner.id)}
 								{@const snap = presenceById[runner.id]}
 								{@const online = snap?.present ?? false}
+								{@const role = runnerRole(
+									runner.capabilities as Record<string, unknown>,
+									isModelServer(runner.id)
+								)}
+								{@const caps = capsSummary(runner.capabilities as Record<string, unknown>)}
+								{@const poolLess = isPoolLess(runner.id)}
 								<div
 									class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/40"
 									data-testid="runner-item-{runner.id}"
@@ -418,21 +475,73 @@
 										<div class="min-w-0 flex-1">
 											<div class="flex flex-wrap items-center gap-2">
 												<span class="text-sm font-medium text-foreground">{runner.name}</span>
+												{#if role.key !== 'generic'}
+													<Badge variant="secondary" class="text-sm">{role.label}</Badge>
+												{/if}
 												<Badge variant="outline" class="text-sm">{runner.status}</Badge>
+												{#if isStale(snap)}
+													<Badge
+														variant="outline"
+														class="border-amber-500/50 text-xs text-amber-700 dark:text-amber-400"
+														title="Online but reporting no host — restart this runner on a current build to de-anonymise it."
+													>
+														stale build
+													</Badge>
+												{/if}
 											</div>
-											<p class="mt-1 truncate font-mono text-sm text-muted-foreground">
-												{runner.id}
-											</p>
-											{#if online && liveBackends(runner.id).length > 0}
+
+											<!-- Host fingerprint one-liner (accelerator · hostname · IP); falls
+												 back to the short id when the runner reports no host. -->
+											{#if hostSummary(snap?.host)}
+												<p class="mt-1 truncate font-mono text-sm text-muted-foreground">
+													{hostSummary(snap?.host)}
+												</p>
+											{:else}
+												<p class="mt-1 truncate font-mono text-sm text-muted-foreground/70">
+													{runner.id}
+												</p>
+											{/if}
+
+											<!-- Dispatch backends — only meaningful for a real dispatch target
+												 (a runner admitted into a backed pool). A pool-less runner
+												 advertises these but admits to no pool, so showing them would
+												 imply a capability it doesn't actually serve. -->
+											{#if online && !poolLess && liveBackends(runner.id).length > 0}
 												<div class="mt-1.5">
 													<BackendChips backends={liveBackends(runner.id)} />
 												</div>
 											{/if}
-											<p class="mt-0.5 truncate text-sm text-muted-foreground">
-												Caps: <span class="font-mono"
-													>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
+
+											<!-- Resident model engines — the model-serving facet (Engines lens).
+												 Inference is served over HTTP, so this is live regardless of pool. -->
+											{#if residentModels(runner.id).length > 0}
+												<p
+													class="mt-1 flex items-center gap-1.5 truncate text-sm text-muted-foreground"
 												>
-											</p>
+													<Cpu class="size-3.5 shrink-0" />
+													<span class="font-mono">{residentModels(runner.id).join(' · ')}</span>
+												</p>
+											{/if}
+
+											<!-- Honesty line for a pool-less runner: it dispatches nothing. A
+												 model server serves inference over HTTP (the router calls it
+												 directly); a plain ungrouped runner is just dangling. -->
+											{#if poolLess && online}
+												<p class="mt-1 text-sm text-muted-foreground/80">
+													{#if role.key === 'model'}
+														Serves inference over HTTP · not a dispatch target (no pool)
+													{:else}
+														Advertises backends but admitted to no pool · not a dispatch
+														target
+													{/if}
+												</p>
+											{/if}
+
+											{#if caps !== '—'}
+												<p class="mt-0.5 truncate text-sm text-muted-foreground">
+													Caps: <span class="font-mono">{caps}</span>
+												</p>
+											{/if}
 											<p class="mt-0.5 truncate text-sm text-muted-foreground">
 												Enrolled {fmtDate(runner.enrolled_at)}
 											</p>
@@ -574,11 +683,18 @@
 					</dd>
 
 					<dt class="text-muted-foreground">Backends</dt>
-					<dd class="col-span-2">
+					<dd class="col-span-2 space-y-1">
 						<BackendChips
 							backends={snap?.present ? (snap.backends ?? []) : []}
 							empty={snap?.present ? '—' : 'offline (advertised on connect)'}
 						/>
+						{#if isPoolLess(detail.id)}
+							<p class="text-xs text-muted-foreground/80">
+								Advertised, but this runner is admitted to no pool — these dispatch to
+								nothing.{#if isModelServer(detail.id)}
+									It serves model inference over HTTP instead.{/if}
+							</p>
+						{/if}
 					</dd>
 
 					<dt class="text-muted-foreground">Last seen</dt>

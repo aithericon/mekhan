@@ -52,6 +52,7 @@ service_url  := env_var_or_default("MEKHAN_SERVICE_URL", "http://localhost:13100
 engine_url   := env_var_or_default("MEKHAN_ENGINE_URL", "http://localhost:13030")
 router_url   := env_var_or_default("MEKHAN_ROUTER_URL", "http://localhost:13200")
 router_port  := env_var_or_default("MEKHAN_ROUTER_PORT", "13200")
+prometheus_port := env_var_or_default("MEKHAN_PROMETHEUS_PORT", "19090")
 ollama_port  := env_var_or_default("OLLAMA_PORT", "11434")
 ollama_model := env_var_or_default("OLLAMA_MODEL", "qwen3.5:9b")
 # The small/fast model the internal-pool demos test against (fits the 60s
@@ -304,7 +305,7 @@ _infra-wipe:
     set -euo pipefail
     project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
     echo "▶ wiping infra data volumes (postgres + nats + rustfs)…"
-    for vol in mekhan-pgdata mekhan-natsdata mekhan-rustfs-data mekhan-rustfs-logs; do
+    for vol in mekhan-pgdata mekhan-natsdata mekhan-rustfs-data mekhan-rustfs-logs mekhan-prometheus-data; do
       if docker volume rm "${project}_${vol}" >/dev/null 2>&1; then
         echo "  ✓ removed ${project}_${vol}"
       else
@@ -945,6 +946,34 @@ up-router:
 
 down-router:
     @just dev::_kill router
+
+# ── Prometheus (optional OPS layer) ───────────────────────────────────────────
+#
+# Brings up a real Prometheus that scrapes the inference-router's /metrics. NOT
+# part of `just dev` — it sits behind the compose `ops` profile. The product
+# /models Router page does NOT need this: it reads real data straight from
+# mekhan (TimescaleDB ledger timeseries + a live router /metrics proxy). This is
+# for Grafana dashboards + giving the `prometheus` executor backend a live dev
+# target. Renders the per-slot scrape config (the router host:port is
+# slot-dependent and Prometheus can't expand env vars in scrape configs), then
+# starts the profiled service by name (naming it activates the profile).
+up-prometheus:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    mkdir -p .dev
+    # On macOS/Windows Docker Desktop, host.docker.internal resolves natively;
+    # on Linux the compose `extra_hosts: host-gateway` maps it. The router binds
+    # 0.0.0.0:{{router_port}} on the host either way.
+    sed "s/__ROUTER_TARGET__/host.docker.internal:{{router_port}}/" \
+      deploy/docker/prometheus.yml.tmpl > .dev/prometheus.yml
+    echo "▶ prometheus up (scraping router at host.docker.internal:{{router_port}})…"
+    docker compose up -d prometheus
+    echo "  ✓ prometheus  http://localhost:{{prometheus_port}}  (targets: /targets, expr browser: /graph)"
+
+down-prometheus:
+    @echo "▶ prometheus down…"
+    @docker compose rm -sf prometheus >/dev/null 2>&1 || true
 
 # ── Model-pool node (the self-hosted LLM pool, docs 28-31) ────────────────────
 #
