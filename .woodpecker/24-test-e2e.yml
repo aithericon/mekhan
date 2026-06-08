@@ -35,7 +35,7 @@ depends_on:
 
 labels:
   role: test
-  host: worker-hetzner
+  host: worker-stateful-arm
 
 steps:
   - name: test-e2e

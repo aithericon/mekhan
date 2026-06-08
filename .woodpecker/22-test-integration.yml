@@ -30,7 +30,7 @@ when:
 
 labels:
   role: test
-  host: worker-hetzner
+  host: worker-stateful-arm
 
 steps:
   - name: test-integration
