@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { HumanTask, TaskStep } from '$lib/hpi/types';
-	import { BlockRenderer, FieldDisplay, ProcessBanner } from '$lib/hpi';
+	import { BlockRenderer, FieldDisplay } from '$lib/hpi';
 	import type { ProcessState } from '$lib/hpi/types';
 	import { Badge } from '$lib/components/ui/badge';
 	import Clock from '@lucide/svelte/icons/clock';
@@ -92,11 +92,6 @@
 			</a>
 		{/if}
 	</div>
-
-	<!-- Process banner -->
-	{#if process}
-		<ProcessBanner {process} {task} />
-	{/if}
 
 	<!-- Task content (display blocks) -->
 	{#each task.steps ?? [] as step (step.id)}

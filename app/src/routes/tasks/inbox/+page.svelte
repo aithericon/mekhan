@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { listTaskInbox, claimTask } from '$lib/api/client';
 	import { getMyEnrollments, setAvailability, type RosterMemberDetail } from '$lib/api/roster';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
@@ -78,8 +79,16 @@
 		claiming = new Set(claiming).add(task.task_id);
 		try {
 			await claimTask(task.task_id);
-			// 202 — the `claimed` flip arrives via projection; poll a bit sooner.
-			await refresh();
+			// 202 — the authoritative `claimed` flip arrives via the pool-net
+			// projection. Poll until the row leaves `offered`, then take the user
+			// straight into the task so they can start working on it.
+			for (let i = 0; i < 8; i++) {
+				await new Promise((r) => setTimeout(r, 500));
+				await refresh();
+				const mine = tasks.find((t) => t.task_id === task.task_id);
+				if (mine && mine.status !== 'offered') break;
+			}
+			await goto(`/tasks/${task.task_id}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			const s = new Set(claiming);
@@ -207,7 +216,7 @@
 					<div class="space-y-2">
 						{#each offered as task (task.task_id)}
 							<div
-								class="flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/40 p-4"
+								class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
 							>
 								<div class="min-w-0 flex-1">
 									<div class="truncate text-sm font-semibold leading-snug text-foreground">
