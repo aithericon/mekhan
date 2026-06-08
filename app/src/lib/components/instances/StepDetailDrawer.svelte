@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetClose } from '$lib/components/ui/sheet';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from 'bits-ui';
@@ -240,6 +241,19 @@
 		if (!inputs || typeof inputs !== 'object') return [];
 		return Object.entries(inputs as Record<string, unknown>);
 	}
+
+	// Inputs (the parked envelopes of upstream producers) are usually the bulkier
+	// of the two and most of the time not what you're looking at, so the I/O view
+	// is a tab pair defaulting to Outputs. The picker resets to Outputs whenever a
+	// different step is selected.
+	const inputCount = $derived(inputEntries(step?.inputs).length);
+	const hasOutputs = $derived(step?.outputs !== null && step?.outputs !== undefined);
+	let ioTab = $state<'outputs' | 'inputs'>('outputs');
+	$effect(() => {
+		// Re-key on the selected step+iteration so switching steps lands on Outputs.
+		void `${step?.node_id}:${step?.iteration_index}`;
+		ioTab = 'outputs';
+	});
 </script>
 
 <!-- Cluster-lease section: lifecycle + typed placement detail, read from the
@@ -539,75 +553,91 @@
 				{/if}
 
 				<section>
-					<h3 class="text-sm font-semibold text-foreground mb-2">
-						Inputs
-						{#if inputEntries(step.inputs).length === 0}
-							<span class="ml-1 text-sm font-normal text-muted-foreground">— none</span>
-						{/if}
-					</h3>
-					{#if inputEntries(step.inputs).length > 0}
-						<div class="space-y-3">
-							{#each inputEntries(step.inputs) as [producerNode, envelope] (producerNode)}
-								{@const reads = borrowedAttrsFor(producerNode)}
-								<div>
-									<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
-										<span class="font-mono text-muted-foreground">from</span>
-										<span class="font-mono text-foreground">{producerNode}</span>
-										{#if reads.length > 0}
-											<!-- Compiler-derived borrow surface: the field
-											     attrs this step's author actually referenced
-											     off `<producerNode>`. Narrows the full
-											     envelope below to "what was read". -->
-											<span class="text-muted-foreground">·</span>
-											<span class="text-muted-foreground">reads</span>
-											{#each reads as attr (attr)}
-												<Badge variant="outline" class="font-mono text-sm font-normal">
-													{producerNode}.{attr}
-												</Badge>
-											{/each}
-										{/if}
-									</div>
-									<!-- nodeKind is left undefined: `producerNode` is a slug,
-									     not a kind. The registry's shape predicates are specific
-									     enough to dispatch on shape alone. -->
-									<SmartValue
-										value={envelope}
-										ctx={{
-											position: 'input',
-											instanceId,
-											stepStartedAt: step.started_at ?? undefined,
-											stepCompletedAt: step.completed_at ?? undefined
-										}}
-									/>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</section>
+					<!-- Inputs (upstream parked envelopes) and Outputs share one tab
+					     pair. Inputs are usually bulkier and rarely what you're after,
+					     so Outputs is the default; the picker resets per selected step. -->
+					<Tabs.Root bind:value={ioTab}>
+						<Tabs.List class="mb-3">
+							<Tabs.Trigger value="outputs">
+								Outputs
+								{#if !hasOutputs}
+									<span class="ml-1 text-sm font-normal text-muted-foreground/70">none</span>
+								{/if}
+							</Tabs.Trigger>
+							<Tabs.Trigger value="inputs">
+								Inputs
+								{#if inputCount > 0}
+									<span class="ml-1 font-mono text-sm font-normal text-muted-foreground/80">{inputCount}</span>
+								{:else}
+									<span class="ml-1 text-sm font-normal text-muted-foreground/70">none</span>
+								{/if}
+							</Tabs.Trigger>
+						</Tabs.List>
 
-				<section>
-					<h3 class="text-sm font-semibold text-foreground mb-2">
-						Outputs
-						{#if step.outputs === null || step.outputs === undefined}
-							<span class="ml-1 text-sm font-normal text-muted-foreground">— none</span>
-						{/if}
-					</h3>
-					{#if step.outputs !== null && step.outputs !== undefined}
-						<SmartValue
-							value={step.outputs}
-							ctx={{
-								position: 'output',
-								nodeKind: step.node_kind,
-								instanceId,
-								stepStartedAt: step.started_at ?? undefined,
-								stepCompletedAt: step.completed_at ?? undefined,
-								// The drawer renders its own first-class Logs section
-								// above; tell the envelope not to also show its inline
-								// logs block (same execution → same lines).
-								suppressLogs: showStepLogs
-							}}
-						/>
-					{/if}
+						<Tabs.Content value="outputs">
+							{#if hasOutputs}
+								<SmartValue
+									value={step.outputs}
+									ctx={{
+										position: 'output',
+										nodeKind: step.node_kind,
+										instanceId,
+										stepStartedAt: step.started_at ?? undefined,
+										stepCompletedAt: step.completed_at ?? undefined,
+										// The drawer renders its own first-class Logs section
+										// above; tell the envelope not to also show its inline
+										// logs block (same execution → same lines).
+										suppressLogs: showStepLogs
+									}}
+								/>
+							{:else}
+								<p class="text-sm text-muted-foreground italic">This step produced no outputs.</p>
+							{/if}
+						</Tabs.Content>
+
+						<Tabs.Content value="inputs">
+							{#if inputCount > 0}
+								<div class="space-y-3">
+									{#each inputEntries(step.inputs) as [producerNode, envelope] (producerNode)}
+										{@const reads = borrowedAttrsFor(producerNode)}
+										<div>
+											<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+												<span class="font-mono text-muted-foreground">from</span>
+												<span class="font-mono text-foreground">{producerNode}</span>
+												{#if reads.length > 0}
+													<!-- Compiler-derived borrow surface: the field
+													     attrs this step's author actually referenced
+													     off `<producerNode>`. Narrows the full
+													     envelope below to "what was read". -->
+													<span class="text-muted-foreground">·</span>
+													<span class="text-muted-foreground">reads</span>
+													{#each reads as attr (attr)}
+														<Badge variant="outline" class="font-mono text-sm font-normal">
+															{producerNode}.{attr}
+														</Badge>
+													{/each}
+												{/if}
+											</div>
+											<!-- nodeKind is left undefined: `producerNode` is a slug,
+											     not a kind. The registry's shape predicates are specific
+											     enough to dispatch on shape alone. -->
+											<SmartValue
+												value={envelope}
+												ctx={{
+													position: 'input',
+													instanceId,
+													stepStartedAt: step.started_at ?? undefined,
+													stepCompletedAt: step.completed_at ?? undefined
+												}}
+											/>
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<p class="text-sm text-muted-foreground italic">This step read no upstream inputs.</p>
+							{/if}
+						</Tabs.Content>
+					</Tabs.Root>
 				</section>
 
 				{#if stepArtifacts.length > 0}
