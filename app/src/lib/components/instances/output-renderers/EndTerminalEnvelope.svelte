@@ -43,6 +43,18 @@
 	// Bare-result extras must exclude the `ok`/`value`/`error` keys we already
 	// surfaced, otherwise the "Extra" panel would duplicate the headline result.
 	const BARE_RESULT_KEYS: ReadonlySet<string> = new Set(['ok', 'value', 'error']);
+	// Process-rooted system metadata (`_*`, stamped by Start) rides along on the
+	// terminal token but is pure plumbing — already surfaced in the page header
+	// and the INPUTS section's "Process metadata" disclosure. Keep it out of the
+	// always-visible "Extra" panel; tuck it behind a matching disclosure here too.
+	const PROCESS_META_KEYS: ReadonlySet<string> = new Set([
+		'_created_at',
+		'_created_by',
+		'_instance_id',
+		'_process_name',
+		'_template_id',
+		'_template_version'
+	]);
 
 	let { value, ctx }: RendererProps = $props();
 	const env = $derived(value as Terminal);
@@ -83,18 +95,27 @@
 
 	// Anything carried on the terminal token beyond the canonical workflow
 	// metadata is rare but possible (process bridge variants, custom forwarders).
-	// Preserve it under "Extra" so nothing is silently dropped from the UI.
+	// Preserve it so nothing is silently dropped, but split system process
+	// metadata (`_*`) out of the prominent "Extra" panel and into its own
+	// collapsed disclosure — mirroring the INPUTS-side ProcessTokenEnvelope.
 	// In bare-result mode the headline `{ok, value, error}` keys are surfaced
 	// above already, so exclude them here.
-	const extras = $derived.by<Record<string, unknown>>(() => {
+	type ExtraPartition = { extras: Record<string, unknown>; processMeta: Record<string, unknown> };
+	const partitioned = $derived.by<ExtraPartition>(() => {
 		const excluded = isBareResult ? BARE_RESULT_KEYS : KNOWN_META_KEYS;
-		const out: Record<string, unknown> = {};
+		const extras: Record<string, unknown> = {};
+		const processMeta: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(env)) {
-			if (!excluded.has(k)) out[k] = v;
+			if (excluded.has(k)) continue;
+			if (PROCESS_META_KEYS.has(k) || k.startsWith('_')) processMeta[k] = v;
+			else extras[k] = v;
 		}
-		return out;
+		return { extras, processMeta };
 	});
+	const extras = $derived(partitioned.extras);
+	const processMeta = $derived(partitioned.processMeta);
 	const hasExtras = $derived(Object.keys(extras).length > 0);
+	const hasProcessMeta = $derived(Object.keys(processMeta).length > 0);
 
 	const metadata = $derived<Record<string, unknown>>({
 		...(env.name !== undefined ? { name: env.name } : {}),
@@ -104,6 +125,7 @@
 	});
 
 	let metadataOpen = $state(false);
+	let processMetaOpen = $state(false);
 </script>
 
 <div class="space-y-3">
@@ -167,6 +189,29 @@
 		<div>
 			<div class="mb-1.5 text-sm font-semibold text-muted-foreground">Extra</div>
 			<KeyValueList value={extras} {ctx} />
+		</div>
+	{/if}
+
+	{#if hasProcessMeta}
+		<div>
+			<button
+				type="button"
+				class="flex w-full items-center gap-1 text-left text-sm font-semibold text-muted-foreground hover:text-foreground"
+				onclick={() => (processMetaOpen = !processMetaOpen)}
+			>
+				{#if processMetaOpen}
+					<ChevronDown class="size-3.5" />
+				{:else}
+					<ChevronRight class="size-3.5" />
+				{/if}
+				Process metadata
+				<span class="ml-1 font-normal">({Object.keys(processMeta).length})</span>
+			</button>
+			{#if processMetaOpen}
+				<div class="mt-2">
+					<KeyValueList value={processMeta} {ctx} />
+				</div>
+			{/if}
 		</div>
 	{/if}
 
