@@ -9,6 +9,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import RadioTower from '@lucide/svelte/icons/radio-tower';
+	import Cpu from '@lucide/svelte/icons/cpu';
 	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import BackendChips from './BackendChips.svelte';
 	import type { FleetSection } from './grouping';
@@ -30,6 +31,33 @@
 			<code class="font-mono">capacity</code> resource backs this alias.
 		</span>
 		{#if action}<div class="ml-auto">{@render action()}</div>{/if}
+	</div>
+{:else if section.kind === 'model'}
+	<!-- Model servers: the self-hosted model pool / LLM engines. Ungrouped BY
+	     DESIGN (inference is HTTP, not presence-dispatched), so framed as a
+	     first-class role, not "ungrouped". -->
+	<div class="mb-2 flex flex-wrap items-center gap-2 border-b border-border pb-1.5">
+		<Cpu class="size-4 shrink-0 text-indigo-500 dark:text-indigo-400" />
+		<span class="text-sm font-semibold text-foreground">Model servers</span>
+		<Badge
+			variant="outline"
+			class="border-indigo-500/40 text-sm text-indigo-600 dark:text-indigo-400">model pool · serves over HTTP</Badge
+		>
+		<span class="text-sm text-muted-foreground tabular-nums">
+			{section.onlineCount}/{section.runners.length} online
+		</span>
+		<span class="text-sm text-muted-foreground">· inference bypasses presence dispatch</span>
+		<div class="ml-auto flex items-center gap-2">
+			<a
+				href="/models"
+				class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground hover:underline"
+				data-testid="view-model-pool"
+			>
+				Open model pool
+				<ArrowUpRight class="size-3.5" />
+			</a>
+			{#if action}{@render action()}{/if}
+		</div>
 	</div>
 {:else if section.kind === 'ungrouped'}
 	<div class="mb-2 flex items-center gap-2 border-b border-border pb-1.5">

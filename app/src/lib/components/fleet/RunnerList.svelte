@@ -93,6 +93,8 @@
 	// from GET /api/v1/fleet/engines). Fail-soft: an engines fetch error leaves
 	// this empty and the roster simply shows no model chips.
 	let enginesByRunner = $state<Record<string, string[]>>({});
+	let pulledByRunner = $state<Record<string, string[]>>({});
+	let modelServingIds = $state<Set<string>>(new Set());
 
 	// Revoke
 	let revoking = $state<string | null>(null);
@@ -112,8 +114,9 @@
 	/** Fast lookup: runner_id → presence snapshot */
 	const presenceById = $derived(Object.fromEntries(presence.map((p) => [p.runner_id, p])));
 
-	/** The fleet split into ordered sections (backed → unbacked → ungrouped). */
-	const sections = $derived(groupFleet(runners, presenceById, groups));
+	/** The fleet split into ordered sections (backed → model → unbacked → ungrouped).
+	 *  `modelServingIds` lifts ungrouped model servers into their own section. */
+	const sections = $derived(groupFleet(runners, presenceById, groups, modelServingIds));
 
 	/** Runner ids that are real dispatch targets — i.e. in a BACKED group (their
 	 *  group has a presence `capacity` resource, so their unit is admitted into a
@@ -153,14 +156,20 @@
 		return snap?.present ? (snap.backends ?? []) : [];
 	}
 
-	/** Resident model engine base ids for a runner (empty unless it serves models). */
+	/** Resident (currently-loaded) model engine base ids for a runner. */
 	function residentModels(id: string): string[] {
 		return enginesByRunner[id] ?? [];
 	}
 
-	/** Whether a runner serves model engines — the Engines facet membership. */
+	/** Provisioned-but-not-loaded models on a runner ("ready to load"). */
+	function readyModels(id: string): string[] {
+		return pulledByRunner[id] ?? [];
+	}
+
+	/** Whether a runner is a model server — serves OR has provisioned a model. The
+	 *  Engines facet membership; true even when nothing is resident right now. */
 	function isModelServer(id: string): boolean {
-		return (enginesByRunner[id]?.length ?? 0) > 0;
+		return modelServingIds.has(id);
 	}
 
 	/** Apply the online + role filters to a section's runners for display. */
@@ -187,8 +196,23 @@
 				listFleetEngines().catch(() => ({ headroom_from_router: false, nodes: [] }))
 			]);
 			presence = pSnaps;
+			// Resident (currently-loaded) engines drive the per-card model chips…
 			enginesByRunner = Object.fromEntries(
 				engResult.nodes.map((n) => [n.runner_id, n.engines.map((e) => e.base)])
+			);
+			// …while provisioned-but-not-loaded models are "ready to load".
+			pulledByRunner = Object.fromEntries(
+				engResult.nodes.map((n) => [n.runner_id, n.pulled ?? []])
+			);
+			// A runner is a MODEL SERVER if it serves OR has provisioned any model —
+			// independent of whether one is resident right now (a sleeping/empty model
+			// server is still a model server, not an "ungrouped" leftover). Runners that
+			// merely appear in the inventory join with nothing (engines:[]·pulled:[]) do
+			// not qualify.
+			modelServingIds = new Set(
+				engResult.nodes
+					.filter((n) => n.engines.length > 0 || (n.pulled?.length ?? 0) > 0)
+					.map((n) => n.runner_id)
 			);
 			// A runner group is a presence `capacity` (the instrument preset);
 			// other capacity flavours (seeded limits, worker queues) are not groups.
@@ -425,7 +449,7 @@
 		<div class="space-y-6">
 			{#each sections as section (section.kind + ':' + (section.alias ?? '∅'))}
 				{@const rows = shown(section)}
-				<section data-testid="group-section-{section.alias ?? 'ungrouped'}">
+				<section data-testid="group-section-{section.alias ?? section.kind}">
 					{#if !roster}
 						<GroupSectionHeader {section} />
 					{/if}
@@ -512,14 +536,24 @@
 												</div>
 											{/if}
 
-											<!-- Resident model engines — the model-serving facet (Engines lens).
-												 Inference is served over HTTP, so this is live regardless of pool. -->
+											<!-- Model-serving facet (Engines lens). Inference is served over
+												 HTTP, so this is live regardless of pool. Resident = loaded now;
+												 if none resident, surface what's provisioned + ready to load so a
+												 model server is never a bare card. -->
 											{#if residentModels(runner.id).length > 0}
 												<p
 													class="mt-1 flex items-center gap-1.5 truncate text-sm text-muted-foreground"
 												>
 													<Cpu class="size-3.5 shrink-0" />
 													<span class="font-mono">{residentModels(runner.id).join(' · ')}</span>
+												</p>
+											{:else if readyModels(runner.id).length > 0}
+												<p
+													class="mt-1 flex items-center gap-1.5 truncate text-sm text-muted-foreground/80"
+												>
+													<Cpu class="size-3.5 shrink-0" />
+													<span class="font-mono">{readyModels(runner.id).join(' · ')}</span>
+													<span class="shrink-0 text-muted-foreground/60">· ready to load</span>
 												</p>
 											{/if}
 

@@ -9,19 +9,25 @@
 //
 //   1. backed     — one per presence `capacity` resource (shown even with 0 members,
 //                    so a created-but-empty group is visible), sorted by alias.
-//   2. unbacked    — a group alias some runner carries that resolves to NO
+//   2. model       — runners that carry NO group but serve model engines. These
+//                    are the self-hosted model pool / LLM engines: ungrouped BY
+//                    DESIGN (inference goes over HTTP, not presence dispatch), so
+//                    they're a first-class role, NOT uncategorized leftovers.
+//                    Split out so the model pool reads as itself, not "ungrouped".
+//   3. unbacked    — a group alias some runner carries that resolves to NO
 //                    resource → NO pool net → those runners heartbeat but are
 //                    admitted to nothing. Surfaced loudly; should be unreachable
 //                    via the UI now that token-mint requires a backing group,
 //                    but legacy rows (or a deleted group resource) land here.
-//   3. ungrouped   — runners with no group at all (last).
+//   4. ungrouped   — runners with no group AND no model role: the genuine
+//                    leftovers (last).
 //
 // Backend-coverage + online counts are computed from the live presence snapshot
 // (only a PRESENT runner advertises backends / counts as online).
 import type { RunnerSummary, RunnerPresenceSnapshot } from '$lib/api/runners';
 import type { ResourceSummary } from '$lib/api/resources';
 
-export type FleetSectionKind = 'backed' | 'unbacked' | 'ungrouped';
+export type FleetSectionKind = 'backed' | 'model' | 'unbacked' | 'ungrouped';
 
 export interface FleetSection {
 	kind: FleetSectionKind;
@@ -67,10 +73,19 @@ export function filterFleetByGroup<R extends { group?: string | null }>(
 	};
 }
 
+/**
+ * @param modelServerIds runner ids that serve model engines (the Engines facet).
+ *        An UNGROUPED runner in this set is surfaced as a first-class "Model
+ *        servers" section rather than dumped in "ungrouped". A grouped runner
+ *        stays in its (backed/unbacked) group — there it IS a dispatch target.
+ *        Defaults to empty (callers that don't know the engine facet, e.g. the
+ *        Live board, keep the plain backed/unbacked/ungrouped split).
+ */
 export function groupFleet(
 	runners: RunnerSummary[],
 	presenceById: PresenceById,
-	groupResources: ResourceSummary[]
+	groupResources: ResourceSummary[],
+	modelServerIds: Set<string> = new Set()
 ): FleetSection[] {
 	// alias → backing resource (a presence `capacity` resource's `path` is its alias).
 	const resourceByAlias = new Map<string, ResourceSummary>();
@@ -130,8 +145,27 @@ export function groupFleet(
 		});
 	}
 
-	// Ungrouped (last) — only when some runner carries no group.
-	const ungroupedRunners = byAlias.get(null) ?? [];
+	// The group-less runners split two ways: model servers (a first-class role —
+	// ungrouped by design because inference is HTTP, not presence-dispatched) and
+	// the genuine leftovers.
+	const groupless = byAlias.get(null) ?? [];
+	const modelRunners = groupless.filter((r) => modelServerIds.has(r.id));
+	const ungroupedRunners = groupless.filter((r) => !modelServerIds.has(r.id));
+
+	const model: FleetSection[] =
+		modelRunners.length > 0
+			? [
+					{
+						kind: 'model',
+						alias: null,
+						resource: null,
+						runners: modelRunners,
+						onlineCount: onlineOf(modelRunners),
+						backends: backendsOf(modelRunners)
+					}
+				]
+			: [];
+
 	const ungrouped: FleetSection[] =
 		ungroupedRunners.length > 0
 			? [
@@ -146,5 +180,6 @@ export function groupFleet(
 				]
 			: [];
 
-	return [...backed, ...unbacked, ...ungrouped];
+	// Order: real groups, then the model pool, then anomalies, then leftovers.
+	return [...backed, ...model, ...unbacked, ...ungrouped];
 }
