@@ -33,7 +33,7 @@ depends_on:
 
 labels:
   role: deploy
-  host: worker-hetzner
+  host: worker-stateful-arm
 
 steps:
   - name: deploy-dev

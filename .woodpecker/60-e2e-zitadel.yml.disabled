@@ -26,7 +26,7 @@ steps:
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      CARGO_HOME: /woodpecker/cache/cargo
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     commands:

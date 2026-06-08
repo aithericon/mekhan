@@ -27,7 +27,7 @@ steps:
   - name: rust-fmt-clippy
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     environment:
-      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      CARGO_HOME: /woodpecker/cache/cargo
     commands:
       - just ci::quality-rust
     depends_on: []

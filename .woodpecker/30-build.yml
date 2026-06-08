@@ -22,22 +22,17 @@ when:
 
 labels:
   role: build
-  host: worker-hetzner
+  host: worker-stateful-arm
 
 steps:
   - name: build-backend-service
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      # Persist target/ outside the (per-run) workspace so dependency
-      # compilation is reused. Same path is reused by test-rust + the
-      # publish step's cp, so they all see incremental builds.
-      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
-    volumes:
-      # Host bind on cax21 — survives across CI runs, gives real cargo
-      # caching. First run creates the dir; subsequent runs reuse it.
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+      CARGO_HOME: /woodpecker/cache/cargo
+
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan
+ 
     commands:
       - just ci::build-backend-service
     depends_on: []
@@ -46,9 +41,7 @@ steps:
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
-    volumes:
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+      NPM_CONFIG_CACHE: /woodpecker/cache/npm
     commands:
       - just ci::build-frontend
     depends_on: []
@@ -64,10 +57,9 @@ steps:
       VAULT_TOKEN:
         from_secret: vault_token
 
-      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
@@ -96,7 +88,8 @@ steps:
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
       - just ci::publish-backend-executor "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: [build-backend-service]
+
+    depends_on: [publish-backend-service]
 
   # Builds the aithericon-engine OCI image. Same shape as the executor step
   # (in-Docker Rust compile, monorepo as context for ../executor/../shared
@@ -118,4 +111,4 @@ steps:
       - FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token   secret/docker/registry)
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
       - just ci::publish-backend-engine "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
-    depends_on: [build-backend-service]
+    depends_on: [publish-backend-executor]

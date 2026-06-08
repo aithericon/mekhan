@@ -63,6 +63,12 @@ resource "vault_policy" "mekhan_nats_read" {
   path "secret/metadata/${local.nats_user_kv_path}" {
     capabilities = ["read"]
   }
+
+  # Worker-pool enrollment token (executor self-enroll). Reusable `wt_` token,
+  # rendered into EXECUTOR_WORKER_REG_TOKEN by executor.nomad.hcl.tpl.
+  path "secret/data/services/mekhan/dev/executor" {
+    capabilities = ["read"]
+  }
   EOT
 }
 
