@@ -67,11 +67,32 @@ job "executor" {
 EOH
       }
 
+      # Worker-pool enrollment secret. The executor self-enrolls on boot
+      # (POST EXECUTOR_MEKHAN_URL/api/v1/workers/enroll, authed by this `wt_`
+      # token) to get its routing_partition + worker bearer. Reusable token,
+      # minted in mekhan + stored in Vault (read via the mekhan-nats-read
+      # policy, see vault.tf). env=true injects it as EXECUTOR_WORKER_REG_TOKEN.
+      template {
+        destination = "secrets/reg-token.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "secret/data/services/mekhan/dev/executor" -}}
+EXECUTOR_WORKER_REG_TOKEN={{ .Data.data.worker_reg_token }}
+{{- end -}}
+EOH
+      }
+
       env {
         # Executor reads EXECUTOR_* (not MEKHAN__*) — see Dockerfile.executor
         # lines 175-185.
         EXECUTOR_NATS_URL       = "${nats_url}"
         EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
+
+        # Boot-time worker enrollment endpoint — mekhan-service's stable
+        # in-cluster address (static port). Paired with EXECUTOR_WORKER_REG_TOKEN
+        # (rendered from Vault above).
+        EXECUTOR_MEKHAN_URL     = "http://mekhan-service.service.consul:${service_port}"
 
         EXECUTOR_NAMESPACE      = "executor"
         EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
