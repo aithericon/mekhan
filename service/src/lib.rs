@@ -365,6 +365,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // matchit prefers them (no `{id}` collision here, but keep the
         // convention). Content-addressed to the catalogue via `content_hash`.
         .routes(routes!(inventory::handlers::register))
+        .routes(routes!(inventory::handlers::index))
         .routes(routes!(inventory::handlers::stats))
         .routes(routes!(inventory::handlers::list_entries))
         // Reconcile (docs/32 §4/§5) — classify crawl-observed copies against the

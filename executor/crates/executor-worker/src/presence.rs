@@ -108,6 +108,7 @@ pub fn spawn_presence_task(
     runner_id: String,
     backends: Vec<String>,
     models: Option<LiveModelState>,
+    host: Option<serde_json::Value>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
@@ -144,6 +145,12 @@ pub fn spawn_presence_task(
                         let (concurrency, model_ids) = state.snapshot();
                         body["concurrency"] = serde_json::json!(concurrency);
                         body["models"] = serde_json::json!(model_ids);
+                    }
+                    // Static host/hardware fingerprint (probed once at startup);
+                    // attach it for fleet visibility. Omitted when `None` (legacy
+                    // shape) — mekhan ignores unknown/absent fields.
+                    if let Some(h) = &host {
+                        body["host"] = h.clone();
                     }
                     let payload: Vec<u8> =
                         serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
@@ -282,6 +289,49 @@ mod tests {
         let legacy: Legacy = serde_json::from_value(body).unwrap();
         assert_eq!(legacy.runner_id, "rnr-abc");
         assert_eq!(legacy.backends, vec!["python", "vllm"]);
+    }
+
+    /// The optional `host` fingerprint rides the SAME additive contract: when
+    /// supplied it appears under `host`; when absent the legacy
+    /// `{runner_id, backends}` shape still parses (extra fields ignored).
+    #[test]
+    fn runner_presence_payload_carries_host_when_supplied() {
+        let host = serde_json::json!({
+            "hostname": "gpu-box-3",
+            "accelerator": "cuda",
+            "gpu_count": 2,
+            "ips": ["10.0.0.7"],
+        });
+
+        let mut body = serde_json::json!({
+            "runner_id": "rnr-abc",
+            "backends": ["python", "vllm"],
+        });
+        if let Some(h) = &Some(host.clone()) {
+            body["host"] = h.clone();
+        }
+
+        assert_eq!(body["host"]["hostname"], "gpu-box-3");
+        assert_eq!(body["host"]["accelerator"], "cuda");
+        assert_eq!(body["host"]["gpu_count"], 2);
+
+        // Legacy {runner_id, backends} parse still holds (host is an extra).
+        #[derive(serde::Deserialize)]
+        struct Legacy {
+            runner_id: String,
+            backends: Vec<String>,
+        }
+        let legacy: Legacy = serde_json::from_value(body).unwrap();
+        assert_eq!(legacy.runner_id, "rnr-abc");
+        assert_eq!(legacy.backends, vec!["python", "vllm"]);
+
+        // And with no host, the field is simply absent.
+        let host_none: Option<serde_json::Value> = None;
+        let mut body2 = serde_json::json!({ "runner_id": "rnr-abc", "backends": [] });
+        if let Some(h) = &host_none {
+            body2["host"] = h.clone();
+        }
+        assert!(body2.get("host").is_none());
     }
 
     /// With no live model state the payload omits `{concurrency, models}` —

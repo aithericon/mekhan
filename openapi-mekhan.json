@@ -3375,6 +3375,48 @@
         }
       }
     },
+    "/api/v1/inventory/index": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/inventory/index",
+        "description": "Batched hashless **index** — record physical files observed on a server\nwithout claiming a content identity. Writes `file_inventory` rows only\n(status defaults to `indexed`); never touches `catalogue_entries`. This is\nwhere `crawl` output lands; promote to a coupled catalogue row later via\n`/register` once a `probe` supplies the hash.",
+        "operationId": "index",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Index counts (inventory only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryIndexResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inventory/reconcile-batch": {
       "post": {
         "tags": [
@@ -3423,7 +3465,7 @@
           "inventory"
         ],
         "summary": "POST /api/v1/inventory/register",
-        "description": "Batched by-reference upsert. For each item with content metadata + a\n`content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on\n`content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`\nrow on `(file_server_id, path)`. No bytes are transferred — this is the\nonline crawl/reconcile path. Returns insert/upsert counts.",
+        "description": "Batched by-reference register — **fills both halves of the equation**. Every\nitem MUST carry a `content_hash`; for each, in one transaction, UPSERTs a\nlogical `catalogue_entries` row (keyed on `content_hash`, `category =\n'legacy'`) AND the physical `file_inventory` row on `(file_server_id,\npath)`. A hashless item is rejected (400) — observe-only goes through\n`/index`. No bytes are transferred. Returns insert/upsert counts.",
         "operationId": "register",
         "requestBody": {
           "content": {
@@ -3447,7 +3489,7 @@
             }
           },
           "400": {
-            "description": "Bad request",
+            "description": "Missing content_hash, or bad request",
             "content": {
               "application/json": {
                 "schema": {
@@ -15403,6 +15445,90 @@
           }
         }
       },
+      "HostInfo": {
+        "type": "object",
+        "description": "Best-effort host / hardware fingerprint a runner self-reports in its presence\nheartbeat — surfaced purely for FLEET VISIBILITY (which machine, what\naccelerator, which IP), never to gate placement. Every field is optional: a\nprobe that can't run (no `nvidia-smi`, a locked-down sandbox) omits it, and an\nolder runner that predates the probe sends no `host` block at all. Like\n`backends`/`concurrency` this is advisory wire-truth from the UNTRUSTED\npresence payload — caps/namespace stay DB-authoritative.",
+        "properties": {
+          "accelerator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Accelerator kind the runner probed: `cuda`, `rocm`, `metal`, or `cpu`."
+          },
+          "arch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CPU architecture (`std::env::consts::ARCH`): `x86_64`, `aarch64`, …."
+          },
+          "compute_capability": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CUDA compute capability (e.g. `8.9`) when probed — the closest the CLI\nprobe gets to a driver/GPU fingerprint; `None` otherwise."
+          },
+          "cpu_cores": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Physical CPU core count.",
+            "minimum": 0
+          },
+          "gpu_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of discrete GPUs (CUDA/ROCm); omitted for Metal/CPU.",
+            "minimum": 0
+          },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reported hostname (`hostname`), e.g. `gpu-box-3`."
+          },
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Advertised non-loopback IP(s) — the runner's primary outbound address(es)."
+          },
+          "mem_gb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Total system memory in GB (rounded down).",
+            "minimum": 0
+          },
+          "os": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OS family (`std::env::consts::OS`): `linux`, `macos`, …."
+          },
+          "vram_gb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "VRAM (CUDA/ROCm) or unified memory (Metal) in GB.",
+            "minimum": 0
+          }
+        }
+      },
       "HpiLog": {
         "type": "object",
         "required": [
@@ -16289,9 +16415,59 @@
           }
         }
       },
+      "InventoryIndexItem": {
+        "type": "object",
+        "description": "One item in a batched **index** request — a hashless physical observation.\n\nIndex records that a file exists at `path` on a server, WITHOUT a content\nidentity. It writes `file_inventory` only (never `catalogue_entries`),\nbecause we haven't hashed the bytes yet. This is the landing zone for\n`crawl` output; promote to a coupled catalogue row later via `/register`\nonce a `probe` supplies the hash. There is deliberately no `content_hash`\nfield here — claiming an identity is what `register` is for.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "status": {
+            "type": "string",
+            "description": "Physical-observation status — defaults to `indexed`."
+          }
+        }
+      },
+      "InventoryIndexRequest": {
+        "type": "object",
+        "description": "Batched index request body — all items share one `file_server_id`.",
+        "required": [
+          "file_server_id",
+          "items"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryIndexItem"
+            }
+          }
+        }
+      },
+      "InventoryIndexResponse": {
+        "type": "object",
+        "description": "Result count of a batched index call.",
+        "required": [
+          "inventory_upserted"
+        ],
+        "properties": {
+          "inventory_upserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`file_inventory` rows inserted or updated. No catalogue rows are written."
+          }
+        }
+      },
       "InventoryRegisterItem": {
         "type": "object",
-        "description": "One item in a batched by-reference register request.\n\nOptional content metadata (`name`/`size_bytes`/`mime_type`) is used to\nUPSERT a logical `catalogue_entries` row keyed on `content_hash`; the\n`file_inventory` row is always upserted on `(file_server_id, path)`. No\nbytes are transferred — this is the online crawl/reconcile path, not the 4M\noffline load (that goes through the importer).",
+        "description": "One item in a batched by-reference **register** request.\n\n`content_hash` is REQUIRED: register fills both halves of the equation (a\nlogical `catalogue_entries` row keyed on the hash AND a physical\n`file_inventory` row on `(file_server_id, path)`), so a row with no content\nidentity is rejected (400). To record a file you've *seen* but not yet\nhashed, use [`InventoryIndexItem`] (`POST /api/v1/inventory/index`) instead.\nOptional content metadata (`name`/`size_bytes`/`mime_type`) enriches the\ncatalogue row. No bytes are transferred — this is the online crawl/reconcile\npath, not the 4M offline load (that goes through the importer).",
         "required": [
           "file_server_id",
           "path",
@@ -16303,7 +16479,7 @@
               "string",
               "null"
             ],
-            "description": "Bare-hex SHA-256, if known. NULL until a `probe` populates it."
+            "description": "Bare-hex SHA-256 of the content. REQUIRED — supplied by a `probe`. An\nitem missing this is rejected; observe-only goes through `/index`."
           },
           "file_server_id": {
             "type": "string"
@@ -21233,6 +21409,15 @@
             "$ref": "#/components/schemas/RosOperation",
             "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
           },
+          "scene_stream_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When set on a `send_action_goal` node that declares a DATA `out` channel,\nthe action ALSO polls move_group's `/get_planning_scene` every this-many\nmilliseconds during the motion and streams each scene snapshot (slim\nNDJSON: joints + collision objects + attached objects) onto the data\nchannel — driving a live planning-scene digital twin. `None`/absent ⇒ the\ndata channel carries the default per-feedback joint-state stream instead.",
+            "minimum": 0
+          },
           "timeout_ms": {
             "type": "integer",
             "format": "int64",
@@ -21567,6 +21752,17 @@
               "type": "string"
             },
             "description": "The runner's self-reported executor `backends` (wire-names, e.g.\n`[\"python\"]`) — the set-membership dimension it advertises in its\npresence heartbeat, ORTHOGONAL to its typed `capabilities`. Surfaced for\nfleet visibility so an operator can see which execution backends a live\nrunner actually serves (a presence-pool step on an uncovered backend will\nqueue until a covering runner checks in)."
+          },
+          "host": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostInfo",
+                "description": "Best-effort host / hardware fingerprint the runner self-reports (hostname,\naccelerator, VRAM, IP). `None` for an older runner that predates the probe\nor a sandbox where probing failed. Advisory wire-truth (see [`HostInfo`])."
+              }
+            ]
           },
           "last_seen_ms_ago": {
             "type": "integer",

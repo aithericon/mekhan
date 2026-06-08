@@ -75,6 +75,26 @@ describe('planLiveRender — presentation-side content_type dispatch', () => {
 		).toBe('urdf');
 	});
 
+	it('routes a planning-scene NDJSON data channel to the scene renderer (no MSE probe needed)', () => {
+		// A full planning-scene snapshot stream drives a 3D twin of the arm + objects.
+		expect(
+			planLiveRender('application/vnd.aithericon.planning-scene+x-ndjson', supportsNone)
+		).toEqual<LiveRenderPlan>({
+			kind: 'scene',
+			mediaKind: '3d',
+			mime: 'application/vnd.aithericon.planning-scene+x-ndjson'
+		});
+	});
+
+	it('ignores params/casing when classifying planning-scene NDJSON as scene', () => {
+		expect(
+			planLiveRender(
+				'APPLICATION/VND.AITHERICON.PLANNING-SCENE+X-NDJSON; model=xarm6',
+				supportsAll
+			)?.kind
+		).toBe('scene');
+	});
+
 	it('does NOT treat other image/* as mjpeg (the EOI split is JPEG-specific)', () => {
 		// image/png has different framing; no live image-sequence path for it.
 		expect(planLiveRender('image/png', supportsAll)).toBeNull();

@@ -81,6 +81,36 @@ pub trait EventStream: Send + Sync {
     /// barrier knows the episode is complete. `episode_uid` must match the uid
     /// the items were emitted under. Default no-op.
     async fn close(&self, _channel: String, _episode_uid: String, _count: u64) {}
+
+    /// Open a DATA-plane streaming channel (docs/25 §6) — the in-process
+    /// equivalent of the Python SDK's `open_output(name)`. Emits the data
+    /// `open` control bracket carrying the transport DESCRIPTOR `{transport,
+    /// subject, content_type}` so the consumer can start draining the
+    /// out-of-band byte stream while the producer still produces. MUST precede
+    /// any `data_chunk`/`data_close` on the same channel.
+    ///
+    /// Ordering contract: `data_open` → N×`data_chunk` → `data_close`. Default
+    /// no-op so non-streaming in-process backends are unaffected; the ROS action
+    /// backend calls this when its node declares a Data `out` channel, then
+    /// frames each action-feedback message as a binary envelope on the channel's
+    /// transport (NOT into the net).
+    async fn data_open(&self, _channel: String, _content_type: String) {}
+
+    /// Write one DATA-plane binary envelope (docs/25 §6) onto the channel's
+    /// transport subject — the in-process equivalent of the Python SDK's
+    /// `writer.write(bytes)`. `seq` is the 0-based, monotonically-increasing
+    /// element index (ordering/dedup); the bytes never touch the net (only the
+    /// `open`/`close` brackets do). Must come after `data_open` and before
+    /// `data_close`. Default no-op.
+    async fn data_chunk(&self, _channel: String, _seq: u64, _content_type: String, _bytes: Vec<u8>) {
+    }
+
+    /// Close a DATA-plane streaming channel (docs/25 §6) — the in-process
+    /// equivalent of the Python SDK's writer context-exit. Publishes the in-band
+    /// EOF sentinel (`final_seq`) on the transport so the consumer's read loop
+    /// terminates, then emits the data `close` control bracket carrying `{count,
+    /// status}`. MUST follow every `data_chunk`. Default no-op.
+    async fn data_close(&self, _channel: String, _final_seq: u64, _count: u64) {}
 }
 
 /// Trait for execution backends. Each backend knows how to execute

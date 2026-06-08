@@ -110,7 +110,15 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
     let causality = tokio::spawn(async move {
-        start_causality_ingest(c_nats, c_db, c_sub, c_live, None).await;
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+        .await;
     });
 
     let l_nats = nats.clone();

@@ -25,16 +25,20 @@ pub struct InventoryEntry {
     pub updated_at: DateTime<Utc>,
 }
 
-/// One item in a batched by-reference register request.
+/// One item in a batched by-reference **register** request.
 ///
-/// Optional content metadata (`name`/`size_bytes`/`mime_type`) is used to
-/// UPSERT a logical `catalogue_entries` row keyed on `content_hash`; the
-/// `file_inventory` row is always upserted on `(file_server_id, path)`. No
-/// bytes are transferred — this is the online crawl/reconcile path, not the 4M
-/// offline load (that goes through the importer).
+/// `content_hash` is REQUIRED: register fills both halves of the equation (a
+/// logical `catalogue_entries` row keyed on the hash AND a physical
+/// `file_inventory` row on `(file_server_id, path)`), so a row with no content
+/// identity is rejected (400). To record a file you've *seen* but not yet
+/// hashed, use [`InventoryIndexItem`] (`POST /api/v1/inventory/index`) instead.
+/// Optional content metadata (`name`/`size_bytes`/`mime_type`) enriches the
+/// catalogue row. No bytes are transferred — this is the online crawl/reconcile
+/// path, not the 4M offline load (that goes through the importer).
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct InventoryRegisterItem {
-    /// Bare-hex SHA-256, if known. NULL until a `probe` populates it.
+    /// Bare-hex SHA-256 of the content. REQUIRED — supplied by a `probe`. An
+    /// item missing this is rejected; observe-only goes through `/index`.
     #[serde(default)]
     pub content_hash: Option<String>,
     pub file_server_id: String,
@@ -42,7 +46,7 @@ pub struct InventoryRegisterItem {
     pub status: String,
     #[serde(default = "default_provenance")]
     pub provenance: serde_json::Value,
-    // Optional catalogue upsert fields — only used when `content_hash` is set.
+    // Optional catalogue-enrichment fields.
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -53,6 +57,10 @@ pub struct InventoryRegisterItem {
 
 fn default_provenance() -> serde_json::Value {
     serde_json::json!({})
+}
+
+fn default_indexed_status() -> String {
+    "indexed".to_string()
 }
 
 /// Batched register request body.
@@ -69,6 +77,38 @@ pub struct InventoryRegisterResponse {
     /// `catalogue_entries` logical rows newly inserted (ON CONFLICT skips
     /// pre-existing hashes).
     pub catalogue_inserted: i64,
+}
+
+/// One item in a batched **index** request — a hashless physical observation.
+///
+/// Index records that a file exists at `path` on a server, WITHOUT a content
+/// identity. It writes `file_inventory` only (never `catalogue_entries`),
+/// because we haven't hashed the bytes yet. This is the landing zone for
+/// `crawl` output; promote to a coupled catalogue row later via `/register`
+/// once a `probe` supplies the hash. There is deliberately no `content_hash`
+/// field here — claiming an identity is what `register` is for.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct InventoryIndexItem {
+    pub path: String,
+    /// Physical-observation status — defaults to `indexed`.
+    #[serde(default = "default_indexed_status")]
+    pub status: String,
+    #[serde(default = "default_provenance")]
+    pub provenance: serde_json::Value,
+}
+
+/// Batched index request body — all items share one `file_server_id`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct InventoryIndexRequest {
+    pub file_server_id: String,
+    pub items: Vec<InventoryIndexItem>,
+}
+
+/// Result count of a batched index call.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct InventoryIndexResponse {
+    /// `file_inventory` rows inserted or updated. No catalogue rows are written.
+    pub inventory_upserted: i64,
 }
 
 /// Per-status / per-server inventory counts.

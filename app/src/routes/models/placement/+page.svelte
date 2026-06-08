@@ -18,22 +18,26 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
 	import { statusTone } from '$lib/components/fleet/model-pool';
 
 	let pools = $state<ResourceSummary[]>([]);
 	let nodeReplicas = $state<NodeReplicaRow[]>([]);
+	let datacenters = $state<ResourceSummary[]>([]);
 	let error = $state<string | null>(null);
 
 	async function poll() {
 		try {
-			const [pl, nr] = await Promise.all([
+			const [pl, nr, dc] = await Promise.all([
 				listResources({ resource_type: 'node_pool', perPage: 100 }),
-				listNodeReplicas()
+				listNodeReplicas(),
+				listResources({ resource_type: 'datacenter', perPage: 100 })
 			]);
 			pools = pl.items;
 			nodeReplicas = nr;
+			datacenters = dc.items;
 			error = null;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load pools';
@@ -156,7 +160,9 @@
 <div class="space-y-6" data-testid="models-pools">
 	<div class="flex items-baseline gap-3">
 		<h2 class="text-base font-semibold tracking-tight text-foreground">Pools</h2>
-		<span class="text-sm text-muted-foreground">engine capacity — generic vLLM node fleets</span>
+		<span class="text-sm text-muted-foreground"
+			>optional — autoscaler-provisioned GPU node fleets</span
+		>
 		<Button
 			variant="outline"
 			size="sm"
@@ -178,8 +184,14 @@
 	{/if}
 
 	{#if pools.length === 0}
-		<p class="text-sm text-muted-foreground/70">
-			No node pools. Use <b>New pool</b> to declare engine capacity for the autoscaler to fill.
+		<p class="max-w-2xl text-sm text-muted-foreground/70">
+			No node pools — and you don't need one. Pools let the <b>autoscaler provision new GPU nodes</b>
+			(via Nomad) on demand. To serve models without a pool, just enrol a runner with a
+			<code class="rounded bg-muted px-1 py-px font-mono">[model_agent]</code> backend — it shows up under
+			<a
+				href="/models/engines"
+				class="font-medium text-foreground underline underline-offset-2 hover:text-primary">Engines</a
+			>. Use <b>New pool</b> only to add autoscaler-managed capacity.
 		</p>
 	{:else}
 		<div class="grid gap-2 sm:grid-cols-2">
@@ -243,8 +255,29 @@
 				<Input bind:value={fName} placeholder="A100 pool" class="text-sm" />
 			</label>
 			<label class="block space-y-1">
-				<span class="text-sm text-muted-foreground">Datacenter (alias)</span>
-				<Input bind:value={fDatacenter} placeholder="dc_nomad" class="text-sm" />
+				<span class="text-sm text-muted-foreground">Datacenter</span>
+				{#if datacenters.length === 0}
+					<Input
+						bind:value={fDatacenter}
+						placeholder="dc_nomad (no datacenter resources found)"
+						class="text-sm"
+					/>
+				{:else}
+					<Select.Root
+						type="single"
+						value={fDatacenter}
+						onValueChange={(v) => (fDatacenter = v ?? '')}
+					>
+						<Select.Trigger class="w-full text-sm" data-testid="pool-datacenter">
+							{fDatacenter || '— select a datacenter —'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each datacenters as d (d.id)}
+								<Select.Item value={d.path} label={d.display_name || d.path} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{/if}
 			</label>
 			<label class="block space-y-1">
 				<span class="text-sm text-muted-foreground">Residency zone</span>

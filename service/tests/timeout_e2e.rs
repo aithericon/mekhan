@@ -109,7 +109,15 @@ async fn spawn_consumers(
     // table this test polls. Without it the body task is invisible to the
     // test even though the engine has created it.
     let causality = tokio::spawn(async move {
-        start_causality_ingest(c_nats, c_db, c_sub, c_live, None).await;
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+        .await;
     });
 
     // Cancel listener — consumes engine-fired `human.cancel.>` and flips

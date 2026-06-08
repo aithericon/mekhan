@@ -233,6 +233,48 @@ pub struct RegistrationTokenSummary {
     pub created_at: DateTime<Utc>,
 }
 
+/// Best-effort host / hardware fingerprint a runner self-reports in its presence
+/// heartbeat — surfaced purely for FLEET VISIBILITY (which machine, what
+/// accelerator, which IP), never to gate placement. Every field is optional: a
+/// probe that can't run (no `nvidia-smi`, a locked-down sandbox) omits it, and an
+/// older runner that predates the probe sends no `host` block at all. Like
+/// `backends`/`concurrency` this is advisory wire-truth from the UNTRUSTED
+/// presence payload — caps/namespace stay DB-authoritative.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HostInfo {
+    /// Reported hostname (`hostname`), e.g. `gpu-box-3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// OS family (`std::env::consts::OS`): `linux`, `macos`, ….
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    /// CPU architecture (`std::env::consts::ARCH`): `x86_64`, `aarch64`, ….
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// Physical CPU core count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_cores: Option<u32>,
+    /// Total system memory in GB (rounded down).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_gb: Option<u32>,
+    /// Accelerator kind the runner probed: `cuda`, `rocm`, `metal`, or `cpu`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accelerator: Option<String>,
+    /// Number of discrete GPUs (CUDA/ROCm); omitted for Metal/CPU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_count: Option<u32>,
+    /// VRAM (CUDA/ROCm) or unified memory (Metal) in GB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram_gb: Option<u32>,
+    /// CUDA compute capability (e.g. `8.9`) when probed — the closest the CLI
+    /// probe gets to a driver/GPU fingerprint; `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_capability: Option<String>,
+    /// Advertised non-loopback IP(s) — the runner's primary outbound address(es).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ips: Vec<String>,
+}
+
 /// Phase 5 — one row of the live in-memory presence snapshot returned by
 /// `GET /api/v1/runners/presence`. This reflects the presence-controller's
 /// in-memory `PresenceMap` (the actual pool-capacity signal), NOT the
@@ -253,6 +295,11 @@ pub struct RunnerPresenceSnapshot {
     /// queue until a covering runner checks in).
     #[serde(default)]
     pub backends: Vec<String>,
+    /// Best-effort host / hardware fingerprint the runner self-reports (hostname,
+    /// accelerator, VRAM, IP). `None` for an older runner that predates the probe
+    /// or a sandbox where probing failed. Advisory wire-truth (see [`HostInfo`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostInfo>,
 }
 
 impl From<RunnerRegistrationTokenRow> for RegistrationTokenSummary {

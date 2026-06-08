@@ -25,13 +25,18 @@
 		type RunnerPresenceSnapshot
 	} from '$lib/api/models';
 	import { shortId } from '$lib/components/fleet/model-pool';
+	import { listRunners, type RunnerSummary } from '$lib/api/runners';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 
 	let engines = $state<FleetEnginesResponse>({ headroom_from_router: false, nodes: [] });
-	// Per-poll presence cache, keyed by runner_id, so we can decorate each engine
-	// card with a friendly "{name} · [{backends}]" label instead of the opaque
-	// short id. Fail-soft: a presence fetch error leaves the map empty and we fall
-	// back to the short id.
+	// Per-poll presence cache, keyed by runner_id — carries the LIVE facets
+	// (backends + host fingerprint). Fail-soft: a presence fetch error leaves the
+	// map empty and we fall back to the short id.
 	let presence = $state<Record<string, RunnerPresenceSnapshot>>({});
+	// The enrolled-runner RECORD, keyed by id — the static identity (display name,
+	// group) the presence snapshot lacks. An engine IS a fleet runner, so we join
+	// it here to de-anonymise the card (real name + group + a link into the fleet).
+	let runnerById = $state<Record<string, RunnerSummary>>({});
 	let error = $state<string | null>(null);
 	let busy = $state<string | null>(null);
 	let loadInputs = $state<Record<string, string>>({});
@@ -41,9 +46,13 @@
 	let unloadTarget = $state<{ runnerId: string; base: string; runnerLabel: string } | null>(null);
 
 	async function poll() {
-		// Fetch presence alongside the inventory; presence failing must NOT wipe the
-		// engine board, so it's caught independently and folded fail-soft.
-		const [inv, pres] = await Promise.allSettled([listFleetEngines(), listRunnerPresence()]);
+		// Fetch presence + the runner records alongside the inventory; neither
+		// must wipe the engine board, so each is folded fail-soft independently.
+		const [inv, pres, runs] = await Promise.allSettled([
+			listFleetEngines(),
+			listRunnerPresence(),
+			listRunners({ perPage: 100 })
+		]);
 		if (inv.status === 'fulfilled') {
 			engines = inv.value;
 			error = null;
@@ -54,6 +63,9 @@
 		if (pres.status === 'fulfilled') {
 			presence = Object.fromEntries(pres.value.map((r) => [r.runner_id, r]));
 		}
+		if (runs.status === 'fulfilled') {
+			runnerById = Object.fromEntries(runs.value.items.map((r) => [r.id, r]));
+		}
 	}
 
 	$effect(() => {
@@ -63,21 +75,44 @@
 	});
 
 	/**
-	 * Human-readable label for a runner: its presence-advertised short id +
-	 * backends. Presence carries no display name, so the short id stands in as the
-	 * name; backends render as a compact `[a, b]`. Falls back to the bare short id
-	 * when presence has no row for this runner.
+	 * Human-readable label for a runner: its enrolled display NAME (joined from
+	 * the runner record), falling back to the short id when the record hasn't
+	 * loaded. An engine is a fleet runner, so this is the same name the fleet
+	 * board shows.
 	 */
 	function runnerName(runnerId: string): string {
-		return shortId(runnerId);
+		return runnerById[runnerId]?.name ?? shortId(runnerId);
+	}
+
+	/** The runner's capacity group alias, when enrolled into one. */
+	function runnerGroup(runnerId: string): string | null {
+		return runnerById[runnerId]?.group ?? null;
 	}
 
 	function runnerBackends(runnerId: string): string[] {
 		return presence[runnerId]?.backends ?? [];
 	}
 
-	function hasPresence(runnerId: string): boolean {
-		return presence[runnerId] !== undefined;
+	/** Compact one-line host summary from the presence fingerprint, e.g.
+	 *  "CUDA ×2 · 80 GB · gpu-box-3 · 10.0.0.7". Empty string when no host. */
+	function hostSummary(runnerId: string): string {
+		const h = presence[runnerId]?.host;
+		if (!h) return '';
+		const parts: string[] = [];
+		const accel = (h.accelerator ?? '').toLowerCase();
+		if (accel === 'cuda' || accel === 'rocm') {
+			let head = accel.toUpperCase();
+			if (h.gpu_count) head += ` ×${h.gpu_count}`;
+			if (h.vram_gb) head += ` · ${h.vram_gb} GB`;
+			parts.push(head);
+		} else if (accel === 'metal') {
+			parts.push(`Metal${h.vram_gb ? ` · ${h.vram_gb} GB` : ''}`);
+		} else if (accel === 'cpu') {
+			parts.push(h.cpu_cores ? `CPU · ${h.cpu_cores} cores` : 'CPU');
+		}
+		if (h.hostname) parts.push(h.hostname);
+		if (h.ips && h.ips.length > 0) parts.push(h.ips[0]);
+		return parts.join(' · ');
 	}
 
 	// ── Actions ────────────────────────────────────────────────────────────────
@@ -140,11 +175,6 @@
 	<div class="flex items-baseline gap-3">
 		<h2 class="text-base font-semibold tracking-tight text-foreground">Engines</h2>
 		<span class="text-sm text-muted-foreground">live per-node inventory</span>
-		{#if !engines.headroom_from_router}
-			<span class="text-sm text-muted-foreground/70">
-				headroom = full budget (router poll unconfigured)
-			</span>
-		{/if}
 		<Button
 			variant="outline"
 			size="sm"
@@ -179,23 +209,52 @@
 		<div class="grid gap-3 sm:grid-cols-2">
 			{#each engines.nodes as node (node.runner_id)}
 				<div class="rounded-lg border border-border/60 bg-card p-3" data-testid="engine-card">
-					<div class="mb-2 flex items-center justify-between gap-2">
-						{#if hasPresence(node.runner_id)}
-							<span class="flex min-w-0 items-center gap-1.5">
-								<span class="truncate font-mono text-sm text-foreground"
-									>{runnerName(node.runner_id)}</span
-								>
-								{#each runnerBackends(node.runner_id) as b (b)}
-									<Badge variant="secondary" class="shrink-0 font-mono text-xs">{b}</Badge>
-								{/each}
-							</span>
-						{:else}
-							<span class="font-mono text-sm text-muted-foreground"
-								>runner {shortId(node.runner_id)}</span
+					<div class="mb-1 flex items-center justify-between gap-2">
+						<span class="flex min-w-0 items-center gap-1.5">
+							<span class="truncate text-sm font-medium text-foreground"
+								>{runnerName(node.runner_id)}</span
 							>
-						{/if}
-						<span class="shrink-0 text-sm text-muted-foreground">{node.engines.length} engine(s)</span>
+							{#if runnerGroup(node.runner_id)}
+								<Badge variant="secondary" class="shrink-0 text-xs"
+									>{runnerGroup(node.runner_id)}</Badge
+								>
+							{/if}
+							{#each runnerBackends(node.runner_id).slice(0, 2) as b (b)}
+								<Badge variant="secondary" class="shrink-0 font-mono text-xs">{b}</Badge>
+							{/each}
+							{#if runnerBackends(node.runner_id).length > 2}
+								<Badge
+									variant="secondary"
+									class="shrink-0 cursor-help font-mono text-xs"
+									title={runnerBackends(node.runner_id).join(', ')}
+								>
+									+{runnerBackends(node.runner_id).length - 2}
+								</Badge>
+							{/if}
+						</span>
+						<span class="flex shrink-0 items-center gap-2">
+							<span class="text-sm text-muted-foreground">{node.engines.length} engine(s)</span>
+							<a
+								href="/fleet"
+								class="inline-flex items-center gap-0.5 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+								title="Open this runner in the fleet board (full host record + capabilities)"
+							>
+								fleet <ArrowUpRight class="size-3" />
+							</a>
+						</span>
 					</div>
+
+					<!-- Host fingerprint (accelerator · hostname · IP) joined from presence;
+						 the full record lives in the fleet detail drawer. -->
+					{#if hostSummary(node.runner_id)}
+						<div class="mb-2 truncate font-mono text-xs text-muted-foreground/80">
+							{hostSummary(node.runner_id)}
+						</div>
+					{:else}
+						<div class="mb-2 font-mono text-xs text-muted-foreground/50">
+							{shortId(node.runner_id)}
+						</div>
+					{/if}
 
 					{#if node.engines.length === 0}
 						<p class="text-sm text-muted-foreground/70">no models resident</p>
@@ -206,8 +265,14 @@
 									<span class="flex items-baseline gap-2 truncate">
 										<span class="truncate font-medium text-foreground">{e.base}</span>
 										{#if e.max_num_seqs != null}
-											<span class="shrink-0 text-sm text-muted-foreground">
-												C {e.max_num_seqs} · headroom {e.headroom ?? '–'}
+											<span
+												class="shrink-0 cursor-help text-sm text-muted-foreground"
+												title={engines.headroom_from_router
+													? 'Max concurrent sequences this engine serves (vLLM --max-num-seqs); free = slots not currently in flight (live from the router).'
+													: 'Max concurrent sequences this engine serves (vLLM --max-num-seqs). Live in-flight load is unknown (the router /metrics poll is not configured), so only the slot count is shown.'}
+											>
+												{e.max_num_seqs} slots{#if engines.headroom_from_router} · {e.headroom ??
+														'–'} free{/if}
 											</span>
 										{/if}
 									</span>

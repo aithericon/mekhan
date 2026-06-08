@@ -53,7 +53,7 @@ use futures::StreamExt;
 
 use crate::compiler::well_known;
 use crate::fleet::FleetLiveness;
-use crate::models::runner::RunnerRow;
+use crate::models::runner::{HostInfo, RunnerRow};
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
 
@@ -118,6 +118,12 @@ pub(crate) struct PresenceEntry {
     /// publish-time coverage warning, NEVER to gate the engine `t_grant` guard
     /// (caps remain authoritative there).
     backends: Vec<String>,
+    /// The runner's self-reported host / hardware fingerprint (hostname,
+    /// accelerator, IP) from the presence PAYLOAD — refreshed on every heartbeat
+    /// alongside `backends`. Advisory wire-truth, surfaced for fleet visibility
+    /// only (never gates placement). `None` until a heartbeat carries a `host`
+    /// block (older runner / probe failure).
+    host: Option<HostInfo>,
     /// Whether mekhan currently considers the runner PRESENT (a `presence_acquire`
     /// has been injected and no expire has been injected since). Drives the
     /// absent→present acquire edge + the present→absent expire edge.
@@ -168,6 +174,7 @@ impl RunnerPresence {
                     present: entry.present,
                     last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
                     backends: entry.backends.clone(),
+                    host: entry.host.clone(),
                 },
             )
             .collect()
@@ -230,6 +237,7 @@ impl RunnerPresence {
                 pool_net_id: String::new(),
                 pool_alias: Some(pool_alias.to_string()),
                 backends: Vec::new(),
+                host: None,
                 present,
             },
         );
@@ -447,6 +455,7 @@ async fn handle_presence(
     runner_id: Uuid,
     backends: Vec<String>,
     concurrency: u32,
+    host: Option<HostInfo>,
 ) {
     // Mirror the runner's advisory facet (its self-reported backends +
     // concurrency) into the shared fleet-liveness registry on EVERY heartbeat —
@@ -480,6 +489,9 @@ async fn handle_presence(
             // it keeps coverage current if a daemon's feature set changes without
             // a full re-acquire (caps still come from the DB, untouched here).
             entry.backends = backends.clone();
+            // Refresh the host fingerprint too (cheap, keeps fleet visibility
+            // current if a runner moves host / changes GPU between heartbeats).
+            entry.host = host.clone();
             if entry.present {
                 // Compute the grow delta. SHRINK is lazy (just lower the target);
                 // GROW eagerly injects the new slots below. A pool-less
@@ -550,6 +562,7 @@ async fn handle_presence(
                     pool_net_id: String::new(),
                     pool_alias: runner.group.clone(),
                     backends: backends.clone(),
+                    host: host.clone(),
                     // No pool to admit into → no slots applied. The sweep injects
                     // 0 expires for a liveness-only entry (its empty pool_net_id
                     // already short-circuits the engine reap).
@@ -605,6 +618,7 @@ async fn handle_presence(
                 pool_net_id: pool_net_id.clone(),
                 pool_alias: runner.group.clone(),
                 backends: backends.clone(),
+                host: host.clone(),
                 concurrency,
                 present: true,
             },
@@ -654,20 +668,25 @@ fn parse_runner_subject(subject: &str) -> Option<Uuid> {
 // TODO(P3 §6 residual): clamp against the group `capacity` resource's
 // `public_config` per-runner ceiling once that field is specified, rather than
 // the global `MAX_RUNNER_CONCURRENCY` constant.
-fn parse_presence(payload: &[u8]) -> (Vec<String>, u32) {
+fn parse_presence(payload: &[u8]) -> (Vec<String>, u32, Option<HostInfo>) {
     #[derive(serde::Deserialize)]
     struct PresencePayload {
         #[serde(default)]
         backends: Vec<String>,
         #[serde(default)]
         concurrency: Option<u32>,
+        /// Best-effort host/hardware fingerprint (additive; older runners omit
+        /// it). Parsed leniently — a malformed `host` block leaves it `None`
+        /// without dropping the whole heartbeat.
+        #[serde(default)]
+        host: Option<HostInfo>,
     }
     match serde_json::from_slice::<PresencePayload>(payload) {
         Ok(p) => {
             let c = p.concurrency.filter(|&c| c > 0).unwrap_or(1);
-            (p.backends, c.min(MAX_RUNNER_CONCURRENCY))
+            (p.backends, c.min(MAX_RUNNER_CONCURRENCY), p.host)
         }
-        Err(_) => (Vec::new(), 1),
+        Err(_) => (Vec::new(), 1, None),
     }
 }
 
@@ -718,7 +737,7 @@ pub(crate) async fn start_presence_subscriber(
             tracing::debug!(subject = %msg.subject, "ignoring non-presence subject");
             continue;
         };
-        let (backends, concurrency) = parse_presence(&msg.payload);
+        let (backends, concurrency, host) = parse_presence(&msg.payload);
         handle_presence(
             &db,
             &nats,
@@ -727,6 +746,7 @@ pub(crate) async fn start_presence_subscriber(
             runner_id,
             backends,
             concurrency,
+            host,
         )
         .await;
     }
@@ -877,6 +897,7 @@ mod tests {
                     pool_net_id: "pool-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
+                    host: None,
                     concurrency: 1,
                     present: true,
                 },
@@ -908,31 +929,49 @@ mod tests {
     #[test]
     fn parse_presence_reads_backends_and_concurrency() {
         // Backends + an explicit C.
-        let (b, c) =
+        let (b, c, _h) =
             parse_presence(br#"{"runner_id":"x","backends":["python","docker"],"concurrency":4}"#);
         assert_eq!(b, vec!["python".to_string(), "docker".to_string()]);
         assert_eq!(c, 4);
 
         // Missing concurrency → default 1 (pre-P3 behaviour: one slot).
-        let (b, c) = parse_presence(br#"{"runner_id":"x","backends":["python"]}"#);
+        let (b, c, _h) = parse_presence(br#"{"runner_id":"x","backends":["python"]}"#);
         assert_eq!(b, vec!["python".to_string()]);
         assert_eq!(c, 1);
 
         // Missing/malformed backends → empty (still tracked present); C defaults.
-        let (b, c) = parse_presence(br#"{"runner_id":"x"}"#);
+        let (b, c, _h) = parse_presence(br#"{"runner_id":"x"}"#);
         assert!(b.is_empty());
         assert_eq!(c, 1);
-        let (b, c) = parse_presence(b"not json");
+        let (b, c, _h) = parse_presence(b"not json");
         assert!(b.is_empty());
         assert_eq!(c, 1);
 
         // Zero concurrency is coerced to 1 (a present runner always gets ≥1 slot).
-        let (_b, c) = parse_presence(br#"{"concurrency":0}"#);
+        let (_b, c, _h) = parse_presence(br#"{"concurrency":0}"#);
         assert_eq!(c, 1);
 
         // A lying runner is clamped to the conservative ceiling.
-        let (_b, c) = parse_presence(br#"{"concurrency":100000}"#);
+        let (_b, c, _h) = parse_presence(br#"{"concurrency":100000}"#);
         assert_eq!(c, MAX_RUNNER_CONCURRENCY);
+    }
+
+    #[test]
+    fn parse_presence_reads_host_fingerprint() {
+        // A heartbeat carrying a host block surfaces it; older runners omit it.
+        let (_b, _c, host) = parse_presence(
+            br#"{"backends":["python"],"host":{"hostname":"gpu-box-3","os":"linux","arch":"x86_64","cpu_cores":32,"mem_gb":256,"accelerator":"cuda","gpu_count":2,"vram_gb":80,"compute_capability":"9.0","ips":["10.0.0.7"]}}"#,
+        );
+        let host = host.expect("host block present");
+        assert_eq!(host.hostname.as_deref(), Some("gpu-box-3"));
+        assert_eq!(host.accelerator.as_deref(), Some("cuda"));
+        assert_eq!(host.gpu_count, Some(2));
+        assert_eq!(host.vram_gb, Some(80));
+        assert_eq!(host.ips, vec!["10.0.0.7".to_string()]);
+
+        // No host block → None (legacy runner), heartbeat still parses.
+        let (_b, _c, host) = parse_presence(br#"{"backends":["python"]}"#);
+        assert!(host.is_none());
     }
 
     #[test]
@@ -988,6 +1027,7 @@ mod tests {
                     pool_net_id: "pool-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
+                    host: None,
                     concurrency: 1,
                     present: true,
                 },

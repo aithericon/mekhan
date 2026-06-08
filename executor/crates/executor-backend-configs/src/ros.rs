@@ -63,6 +63,15 @@ pub struct RosConfig {
     /// Per-request timeout in milliseconds. Defaults to 30000.
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+
+    /// When set on a `send_action_goal` node that declares a DATA `out` channel,
+    /// the action ALSO polls move_group's `/get_planning_scene` every this-many
+    /// milliseconds during the motion and streams each scene snapshot (slim
+    /// NDJSON: joints + collision objects + attached objects) onto the data
+    /// channel — driving a live planning-scene digital twin. `None`/absent ⇒ the
+    /// data channel carries the default per-feedback joint-state stream instead.
+    #[serde(default)]
+    pub scene_stream_ms: Option<u64>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -81,6 +90,7 @@ mod tests {
             interface_type: "geometry_msgs/Twist".into(),
             fields: serde_json::json!({ "linear": { "x": 1.0 } }),
             timeout_ms: 15_000,
+            scene_stream_ms: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let de: RosConfig = serde_json::from_str(&json).unwrap();
@@ -112,5 +122,27 @@ mod tests {
         }"#;
         let cfg: RosConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.operation, RosOperation::CallService);
+    }
+
+    #[test]
+    fn scene_stream_ms_parses() {
+        // Present → Some(ms).
+        let json = r#"{
+            "operation": "send_action_goal",
+            "interface_name": "/x",
+            "interface_type": "y",
+            "scene_stream_ms": 200
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.scene_stream_ms, Some(200));
+
+        // Omitted → None (additive, deserialize-tolerant).
+        let json = r#"{
+            "operation": "send_action_goal",
+            "interface_name": "/x",
+            "interface_type": "y"
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.scene_stream_ms, None);
     }
 }
