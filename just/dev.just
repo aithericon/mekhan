@@ -121,6 +121,8 @@ up-auth:
 down:
     @just dev::down-app      || true
     @just dev::_kill model-runner || true
+    @# Reap any extra scale-test model runners (up-model-runner N, N≥2).
+    @for pf in {{pid_dir}}/model-runner-*.pid; do [ -e "$pf" ] || continue; just dev::_kill "$(basename "$pf" .pid)" || true; done
     @just dev::_kill router  || true
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
@@ -155,12 +157,14 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in ollama executor runner model-runner engine nomad router mekhan app; do
+    extra=""
+    for pf in {{pid_dir}}/model-runner-*.pid; do [ -e "$pf" ] || continue; extra="$extra $(basename "$pf" .pid)"; done
+    for name in ollama executor runner model-runner $extra engine nomad router mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
-        printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
+        printf "  %-14s up  (pid %s)\n" "$name" "$(cat "$pf")"
       else
-        printf "  %-10s down\n" "$name"
+        printf "  %-14s down\n" "$name"
       fi
     done
 
@@ -977,7 +981,7 @@ down-prometheus:
 
 # ── Model-pool node (the self-hosted LLM pool, docs 28-31) ────────────────────
 #
-# Enrolls + starts ONE dev model-server runner so the pool works OUT OF THE BOX:
+# Enrolls + starts a dev model-server runner so the pool works OUT OF THE BOX:
 # it appears on the /models Engines tab, and the shared Ollama's default model
 # shows under "ready to load" (provisioned-to-disk, one click to make resident).
 # A dedicated daemon — the faithful dev shape of a model-server NODE, kept
@@ -987,10 +991,36 @@ down-prometheus:
 # (backend=ollama; the dev executor binary now carries the `vllm` feature that
 # gates the agent). Re-runnable with a STABLE identity (same reuse logic as
 # up-runner). Soft-skips if mekhan never comes up.
-up-model-runner:
+#
+# PARAMETERIZED for multi-instance scale smoke tests: `up-model-runner N`
+# stands up the Nth model runner (N defaults to 1 — the zero-arg form is
+# unchanged). N=1 keeps the historical identity/paths (name `dev-model-server`,
+# base `.dev/work/model-runner`, pidfile/log `model-runner.{pid,log}`) so
+# `just dev` and every other recipe that references it keep working byte-for-byte.
+# N≥2 gets a distinct suffix everywhere (`dev-model-server-N`,
+# `.dev/work/model-runner-N`, `model-runner-N.{pid,log}`) so two runners can
+# coexist for a 2-instance placement/router scenario. Both share the one local
+# Ollama backend (a single daemon serves both runners' agents) but enroll as
+# SEPARATE runner rows → the router sees two live replicas of the same model.
+#
+# Overridable per-instance via env (read at recipe time):
+#   MODEL_RUNNER_ZONE  — residency_zone (default `eu-dev`); set a distinct zone
+#                        per N to exercise zone fail-closed placement.
+#   OLLAMA_MODEL       — the served_base_model + first warmed model
+#                        (default {{ollama_model}}); e.g. `OLLAMA_MODEL=qwen2.5:0.5b
+#                        just dev up-model-runner 2` to serve a different tiny model.
+up-model-runner n="1":
     #!/usr/bin/env bash
     set -euo pipefail
     just dev::_dirs
+    n="{{n}}"
+    # Instance suffix: N=1 keeps the historical bare names; N≥2 gets `-N`.
+    if [ "$n" = "1" ]; then suffix=""; else suffix="-$n"; fi
+    tag="model-runner${suffix}"
+    runner_name="dev-model-server${suffix}"
+    zone="${MODEL_RUNNER_ZONE:-eu-dev}"
+    served_model="${OLLAMA_MODEL:-{{ollama_model}}}"
+
     echo "▶ waiting for mekhan…"
     ready=""
     for _ in $(seq 1 60); do
@@ -998,7 +1028,7 @@ up-model-runner:
       sleep 1
     done
     if [ -z "$ready" ]; then
-      echo "  ⚠ mekhan not ready after 60s — skipping model-pool runner" >&2
+      echo "  ⚠ mekhan not ready after 60s — skipping model-pool runner $n" >&2
       echo "    (the /models pool stays empty until 'just dev up-model-runner')" >&2
       exit 0
     fi
@@ -1009,18 +1039,18 @@ up-model-runner:
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
     fi
-    if [ -s "{{pid_dir}}/model-runner.pid" ] && kill -0 "$(cat {{pid_dir}}/model-runner.pid)" 2>/dev/null; then
-      echo "  stopping previous model runner (pid $(cat {{pid_dir}}/model-runner.pid))"
-      just dev::_kill model-runner || true
+    if [ -s "{{pid_dir}}/$tag.pid" ] && kill -0 "$(cat {{pid_dir}}/$tag.pid)" 2>/dev/null; then
+      echo "  stopping previous model runner $n (pid $(cat {{pid_dir}}/$tag.pid))"
+      just dev::_kill "$tag" || true
     fi
 
-    runner_base="$PWD/{{work_dir}}/model-runner"
+    runner_base="$PWD/{{work_dir}}/$tag"
     mkdir -p "$runner_base"
     # Model-server runner config. UNGROUPED (no [pool]); [model_agent] drives the
     # shared Ollama's admin surface (probe /api/ps + /api/tags, load/unload/pull).
     # `vllm_url` is the endpoint for whichever backend — here the shared Ollama.
     cat > "$runner_base/executor.toml" <<EOF
-    name        = "dev-model-server"
+    name        = "$runner_name"
     nats_url    = "{{nats_url}}"
     base_dir    = "$runner_base"
     concurrency = 2
@@ -1031,9 +1061,9 @@ up-model-runner:
     [model_agent]
     backend           = "ollama"
     vllm_url          = "http://localhost:{{ollama_port}}"
-    served_base_model = "{{ollama_model}}"
+    served_base_model = "$served_model"
     max_num_seqs      = 4
-    residency_zone    = "eu-dev"
+    residency_zone    = "$zone"
 
     [storage]
     backend  = "s3"
@@ -1071,19 +1101,19 @@ up-model-runner:
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1
       fi
-      name="dev-model-$(date +%s)"
-      echo "▶ enrolling model runner '$name' (ungrouped, backend=ollama)…"
+      name="$runner_name-$(date +%s)"
+      echo "▶ enrolling model runner '$name' (ungrouped, backend=ollama, zone=$zone)…"
       ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
           --token "$rt" --name "$name" )
     fi
 
-    echo "▶ starting model-pool runner daemon…"
-    pid=$(just/scripts/spawn-daemon.sh model-runner "{{pid_dir}}/model-runner.pid" "{{log_dir}}/model-runner.log" \
+    echo "▶ starting model-pool runner $n daemon…"
+    pid=$(just/scripts/spawn-daemon.sh "$tag" "{{pid_dir}}/$tag.pid" "{{log_dir}}/$tag.log" \
       -- env RUST_LOG="info,aithericon_executor=debug" \
         VAULT_ADDR="{{vault_addr}}" \
         bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
-    echo "  ✓ model-pool runner (pid $pid)  log: {{log_dir}}/model-runner.log"
-    echo "  /models Engines now shows this node; '{{ollama_model}}' is ready to load."
+    echo "  ✓ model-pool runner $n (pid $pid)  log: {{log_dir}}/$tag.log"
+    echo "  /models Engines now shows '$runner_name' (zone=$zone); '$served_model' is ready to load."
 
     # Warm the curated served model so the live-runner AND-gate flips
     # available=true (GET /api/v1/models) — the editor's internal-pool picker +
@@ -1099,10 +1129,10 @@ up-model-runner:
         curl -fsS "{{service_url}}/api/v1/runners/$rid/interfaces" >/dev/null 2>&1 && break
         sleep 1
       done
-      # Load BOTH curated models so each is advertised → available=true: the
-      # default {{ollama_model}} AND the small {{ollama_small_model}} the
+      # Load BOTH curated models so each is advertised → available=true: this
+      # instance's $served_model AND the small {{ollama_small_model}} the
       # internal-pool demos test against (fits the 60s budget).
-      for m in "{{ollama_model}}" "{{ollama_small_model}}"; do
+      for m in "$served_model" "{{ollama_small_model}}"; do
         if curl -fsS -X POST "{{service_url}}/api/v1/runners/$rid/model-commands" \
             -H 'content-type: application/json' \
             -d "{\"kind\":\"load\",\"target\":{\"Base\":{\"model_id\":\"$m\"}}}" >/dev/null 2>&1; then
@@ -1113,8 +1143,11 @@ up-model-runner:
       done
     fi
 
-down-model-runner:
-    @just dev::_kill model-runner
+# Stop the Nth model runner (N defaults to 1 — the historical bare daemon).
+down-model-runner n="1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{n}}" = "1" ]; then just dev::_kill model-runner; else just dev::_kill "model-runner-{{n}}"; fi
 
 # ── ROS turtle fleet (turtlesim + rosbridge container + ros runner) ──────────
 #

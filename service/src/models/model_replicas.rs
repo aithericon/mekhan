@@ -53,6 +53,13 @@ pub struct ModelReplicaRow {
     pub last_error: Option<String>,
     /// Anchors the durable cooldown gate (survives a mekhan restart).
     pub last_actuated_at: Option<DateTime<Utc>>,
+    /// Cold-load instrumentation. `load_started_at` is stamped when the controller
+    /// publishes a COLD `LoadBase` (base not yet resident on the target runner) and
+    /// CLEARED once the base is observed resident; `load_finished_at` +
+    /// `last_load_duration_ms` capture the most recent completed cold load.
+    pub load_started_at: Option<DateTime<Utc>>,
+    pub load_finished_at: Option<DateTime<Utc>>,
+    pub last_load_duration_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

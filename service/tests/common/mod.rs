@@ -11,7 +11,10 @@ use axum::Router;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 
+pub mod fake_upstream;
 pub mod mock_auth;
+pub mod model_runner_fixture;
+pub mod nats_spy;
 pub mod test_infra;
 pub mod workspace_fixtures;
 pub mod zitadel_live;

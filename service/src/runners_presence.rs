@@ -238,6 +238,41 @@ impl RunnerPresence {
             },
         );
     }
+
+    /// Mark a runner PRESENT (or absent) in the in-memory presence map directly,
+    /// bypassing the `runner.*.presence` heartbeat → acquire/sweep machinery.
+    ///
+    /// The model-pool placement reconciler only ever consumes presence through
+    /// `serving_runner_catalogs` / `serving_runner_counts`, which gate the
+    /// `runner_interfaces` catalog scan on `snapshot()` entries with
+    /// `present == true`. The `PresenceEntry`/`PresenceMap` types are `pub(crate)`,
+    /// so an out-of-crate INTEGRATION test (under `service/tests/`) cannot
+    /// construct a present entry the way the in-crate `#[cfg(test)]`
+    /// [`Self::test_set_membership`] does. This is the public seam those tests use
+    /// to make the placement loop SEE a seeded model-serving runner without a live
+    /// executor or a real heartbeat: it inserts a liveness-only entry (empty pool,
+    /// no caps) whose only load-bearing field for placement is `present`.
+    ///
+    /// Test-support ONLY — production presence is driven by the heartbeat
+    /// controller. Calling this in prod would inject a phantom present runner the
+    /// sweep would reap on the next TTL miss (no heartbeat renews it), so it is a
+    /// no-op risk rather than a correctness hazard, but it must never be wired into
+    /// a request path.
+    pub async fn inject_present_for_test(&self, runner_id: Uuid, present: bool) {
+        let mut map = self.0.lock().await;
+        map.insert(
+            runner_id,
+            PresenceEntry {
+                last_seen: Instant::now(),
+                concurrency: 0,
+                pool_net_id: String::new(),
+                pool_alias: None,
+                backends: Vec::new(),
+                host: None,
+                present,
+            },
+        );
+    }
 }
 
 impl Default for RunnerPresence {

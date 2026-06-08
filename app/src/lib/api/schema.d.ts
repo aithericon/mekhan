@@ -7173,6 +7173,18 @@ export interface components {
              */
             last_actuated_at?: string | null;
             last_error?: string | null;
+            /** Format: int64 */
+            last_load_duration_ms?: number | null;
+            /** Format: date-time */
+            load_finished_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Cold-load instrumentation. `load_started_at` is stamped when the controller
+             *     publishes a COLD `LoadBase` (base not yet resident on the target runner) and
+             *     CLEARED once the base is observed resident; `load_finished_at` +
+             *     `last_load_duration_ms` capture the most recent completed cold load.
+             */
+            load_started_at?: string | null;
             model_id: string;
             /**
              * Format: int32
