@@ -8797,7 +8797,9 @@ export interface components {
              *     planning-scene twin from any single motion: a monitor sized to outlast
              *     the run streams the WHOLE multi-step session (arm picking/placing several
              *     samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
-             *     (so it always terminates). Ignored by the non-monitor operations.
+             *     (so it always terminates). With `stop_topic` set this is only a FAILSAFE
+             *     ceiling — the monitor normally stops the moment the work branch signals
+             *     it. Ignored by the non-monitor operations.
              */
             scene_duration_ms?: number | null;
             /**
@@ -8810,6 +8812,18 @@ export interface components {
              *     data channel carries the default per-feedback joint-state stream instead.
              */
             scene_stream_ms?: number | null;
+            /**
+             * @description `monitor_scene` STOP signal: a ROS topic the monitor subscribes to and
+             *     breaks its poll loop on the FIRST message it receives, closing the data
+             *     channel cleanly. This makes a continuous monitor's lifetime track the
+             *     WORK it watches instead of a guessed `scene_duration_ms` timer — the work
+             *     branch publishes one `std_msgs/msg/Bool` here when its last step finishes,
+             *     the monitor stops within one poll, and the sibling `join` fires
+             *     immediately (no idle wait for the timer). `None`/absent ⇒ the monitor only
+             *     stops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the
+             *     non-monitor operations.
+             */
+            stop_topic?: string | null;
             /**
              * Format: int64
              * @description Per-request timeout in milliseconds. Defaults to 30000.

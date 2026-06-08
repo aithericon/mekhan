@@ -182,7 +182,8 @@ export class YjsGraphBinding {
 					...(resultMapping && resultMapping.length > 0 ? { resultMapping } : {})
 				};
 			}
-			case 'human_task':
+			case 'human_task': {
+				type HumanTaskDataT = Extract<WorkflowNodeData, { type: 'human_task' }>;
 				return {
 					...base,
 					type: 'human_task',
@@ -192,8 +193,19 @@ export class YjsGraphBinding {
 					// Opt-in dynamic-steps source: a `<slug>.<field>` ref to an upstream
 					// producer that emits the form blocks at runtime. Undefined ⇒ static
 					// `steps` authoring. (Not yet in the generated schema → cast.)
-					stepsRef: config?.stepsRef as string | undefined
+					stepsRef: config?.stepsRef as string | undefined,
+					// Capacity binding (docs/33): the offer-dispatch pool this task is
+					// offered to + its placement Requirements. Round-trips whole +
+					// conditionally so a collaborative edit doesn't drop the offer
+					// binding (mirrors `automated_step`'s deploymentModel/requirements).
+					...(config?.capacity
+						? { capacity: config.capacity as HumanTaskDataT['capacity'] }
+						: {}),
+					...(config?.requirements
+						? { requirements: config.requirements as HumanTaskDataT['requirements'] }
+						: {})
 				} as WorkflowNodeData;
+			}
 			case 'automated_step': {
 				const spec = (config?.executionSpec as {
 					backendType: 'python';
@@ -774,7 +786,7 @@ export class YjsGraphBinding {
 					config.delete('resultMapping');
 				}
 				break;
-			case 'human_task':
+			case 'human_task': {
 				config.set('taskTitle', data.taskTitle);
 				if (data.instructionsMdsvex) config.set('instructionsMdsvex', data.instructionsMdsvex);
 				config.set('steps', data.steps);
@@ -785,7 +797,19 @@ export class YjsGraphBinding {
 				} else {
 					config.delete('stepsRef');
 				}
+				// Capacity binding (docs/33) — persist when bound, delete when cleared.
+				// Selecting "Anyone" strips both `capacity` and `requirements`; a bare
+				// `if (x) set()` would leave a stale key that reappears on reload
+				// (same reasoning as automated_step's requirements clear path).
+				type HumanTaskDataT = Extract<WorkflowNodeData, { type: 'human_task' }>;
+				const cap = (data as HumanTaskDataT).capacity;
+				if (cap) config.set('capacity', cap);
+				else config.delete('capacity');
+				const reqs = (data as HumanTaskDataT).requirements;
+				if (reqs) config.set('requirements', reqs);
+				else config.delete('requirements');
 				break;
+			}
 			case 'automated_step':
 				config.set('executionSpec', data.executionSpec);
 				// Declared output port. Persist whenever the editor supplies one

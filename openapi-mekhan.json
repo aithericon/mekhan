@@ -21508,7 +21508,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). Ignored by the non-monitor operations.",
+            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). With `stop_topic` set this is only a FAILSAFE\nceiling — the monitor normally stops the moment the work branch signals\nit. Ignored by the non-monitor operations.",
             "minimum": 0
           },
           "scene_stream_ms": {
@@ -21519,6 +21519,13 @@
             "format": "int64",
             "description": "When set on a `send_action_goal` node that declares a DATA `out` channel,\nthe action ALSO polls move_group's `/get_planning_scene` every this-many\nmilliseconds during the motion and streams each scene snapshot (slim\nNDJSON: joints + collision objects + attached objects) onto the data\nchannel — driving a live planning-scene digital twin. `None`/absent ⇒ the\ndata channel carries the default per-feedback joint-state stream instead.",
             "minimum": 0
+          },
+          "stop_topic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`monitor_scene` STOP signal: a ROS topic the monitor subscribes to and\nbreaks its poll loop on the FIRST message it receives, closing the data\nchannel cleanly. This makes a continuous monitor's lifetime track the\nWORK it watches instead of a guessed `scene_duration_ms` timer — the work\nbranch publishes one `std_msgs/msg/Bool` here when its last step finishes,\nthe monitor stops within one poll, and the sibling `join` fires\nimmediately (no idle wait for the timer). `None`/absent ⇒ the monitor only\nstops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the\nnon-monitor operations."
           },
           "timeout_ms": {
             "type": "integer",

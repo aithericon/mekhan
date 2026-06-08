@@ -67,6 +67,12 @@ const JOINT_STATE_CONTENT_TYPE: &str = "application/vnd.aithericon.joint-state+x
 /// of the REAL move_group planning scene.
 const SCENE_CONTENT_TYPE: &str = "application/vnd.aithericon.planning-scene+x-ndjson";
 
+/// ROS type the `monitor_scene` stop-signal subscription advertises. The work
+/// branch publishes a `std_msgs/msg/Bool` here when it finishes; the monitor
+/// only cares that a message ARRIVED (any value stops it), but rosbridge needs
+/// a concrete type to set up the ROS2 subscription.
+const STOP_TOPIC_TYPE: &str = "std_msgs/msg/Bool";
+
 /// Fully-resolved ROS request parked in `backend_state` after `prepare()`.
 ///
 /// `execute()` rebuilds the rosbridge op from this without re-resolving
@@ -109,6 +115,14 @@ struct ResolvedRosConfig {
     /// the monitor runs until `timeout_ms`. Only the `MonitorScene` op reads it.
     #[serde(default)]
     scene_duration_ms: Option<u64>,
+    /// `monitor_scene` STOP topic (docs/25, twin): when `Some(topic)`, the
+    /// monitor subscribes to it and breaks its poll loop on the FIRST message,
+    /// closing the data channel cleanly. The work branch publishes here when its
+    /// last step finishes, so the monitor's lifetime tracks the work instead of
+    /// the `scene_duration_ms` timer (which becomes a failsafe ceiling). `None`
+    /// ⇒ stops only on duration/timeout/cancel. Only `MonitorScene` reads it.
+    #[serde(default)]
+    stop_topic: Option<String>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -200,6 +214,7 @@ impl ExecutionBackend for RosBackend {
             feedback_data_channel,
             scene_stream_ms: config.scene_stream_ms,
             scene_duration_ms: config.scene_duration_ms,
+            stop_topic: config.stop_topic,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -690,6 +705,22 @@ impl RosBackend {
         let deadline = tokio::time::sleep(duration);
         tokio::pin!(deadline);
 
+        // STOP signal: subscribe to the work branch's "done" topic (if declared)
+        // so the monitor stops the MOMENT the work it watches finishes, rather
+        // than idling until the `scene_duration_ms`/`timeout_ms` failsafe. Any
+        // message on the topic stops the loop. A subscribe failure is non-fatal
+        // (the monitor still terminates on the deadline).
+        let mut stop_rx = match resolved.stop_topic.as_deref() {
+            Some(topic) => match client.subscribe(topic, STOP_TOPIC_TYPE).await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    debug!(error = %e, topic, "monitor: stop-topic subscribe failed — falling back to deadline");
+                    None
+                }
+            },
+            None => None,
+        };
+
         let mut data_seq: u64 = 0;
         if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
             es.data_open(ch.clone(), SCENE_CONTENT_TYPE.to_string()).await;
@@ -701,6 +732,17 @@ impl RosBackend {
                 // cleanly below (a partial-but-valid stream, never a dangling open).
                 _ = cancel.cancelled() => break,
                 _ = &mut deadline => break,
+                // Work branch signalled "done": stop and close cleanly. A closed
+                // channel (`None`) means the connection dropped — also stop.
+                _ = async {
+                    match stop_rx.as_mut() {
+                        Some(rx) => { rx.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    debug!("monitor: stop signal received — closing scene stream");
+                    break;
+                }
                 _ = scene_interval.tick() => {
                     if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
                         match client
@@ -726,6 +768,14 @@ impl RosBackend {
                         }
                     }
                 }
+            }
+        }
+
+        // Drop the stop-topic subscription (best-effort) before closing the data
+        // channel, so no route lingers on the shared rosbridge connection.
+        if let Some(topic) = resolved.stop_topic.as_deref() {
+            if stop_rx.is_some() {
+                client.unsubscribe(topic).await;
             }
         }
 
@@ -1220,6 +1270,7 @@ mod tests {
             timeout_ms: 30_000,
             scene_stream_ms: None,
             scene_duration_ms: None,
+            stop_topic: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_name"));
@@ -1235,6 +1286,7 @@ mod tests {
             timeout_ms: 30_000,
             scene_stream_ms: None,
             scene_duration_ms: None,
+            stop_topic: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_type"));
@@ -1250,6 +1302,7 @@ mod tests {
             timeout_ms: 30_000,
             scene_stream_ms: None,
             scene_duration_ms: None,
+            stop_topic: None,
         };
         assert!(validate_static(&cfg).is_ok());
     }

@@ -82,6 +82,37 @@ describe('YjsGraphBinding', () => {
 		}
 	});
 
+	it('human_task capacity binding + requirements survive the updateNodeData round-trip', () => {
+		// docs/33: a HumanTask bound to an offer-dispatch `capacity` must round-trip
+		// through Yjs, and clearing it (selecting "Anyone") must strip both keys so
+		// no stale binding reappears on reload. Regression for the dropped-binding
+		// bug (the human_task case used to map only taskTitle/steps/stepsRef).
+		const data = createDefaultNodeData('human_task');
+		binding.addNode('n1', 'human_task', { x: 0, y: 0 }, data);
+
+		binding.updateNodeData('n1', {
+			...data,
+			type: 'human_task',
+			capacity: { alias: 'reviewers' },
+			requirements: { constraints: [] }
+		});
+
+		let node = binding.graph.nodes[0];
+		expect(node.data.type).toBe('human_task');
+		if (node.data.type === 'human_task') {
+			expect(node.data.capacity?.alias).toBe('reviewers');
+			expect(node.data.requirements).toEqual({ constraints: [] });
+		}
+
+		// Clear the binding — capacity AND requirements must be gone.
+		binding.updateNodeData('n1', { ...data, type: 'human_task' });
+		node = binding.graph.nodes[0];
+		if (node.data.type === 'human_task') {
+			expect(node.data.capacity).toBeUndefined();
+			expect(node.data.requirements).toBeUndefined();
+		}
+	});
+
 	it('updateNodeData prunes decision edges wired to removed branch handles', () => {
 		const decisionData = {
 			...createDefaultNodeData('decision'),

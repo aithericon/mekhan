@@ -10,6 +10,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import { Button } from '$lib/components/ui/button';
 	import HumanTaskSection from './HumanTaskSection.svelte';
+	import OfferCapacitySection from './human-task/OfferCapacitySection.svelte';
 
 	type Props = {
 		data: HumanTaskNodeData;
@@ -21,28 +22,38 @@
 	};
 
 	let { data, readonly = false, onchange, nodeId, templateId, scope = [] }: Props = $props();
+
+	// Defensive: a freshly-dropped node may not have `steps` yet — guard so the
+	// summary never throws (an unguarded `.length` blanks the whole panel).
+	const stepCount = $derived(data.steps?.length ?? 0);
 </script>
 
-{#if templateId && nodeId}
-	<div class="space-y-3">
-		<div class="rounded-lg border border-border bg-muted/30 p-3">
-			<p class="text-sm text-muted-foreground">
-				{data.steps.length} step{data.steps.length !== 1 ? 's' : ''} configured
-			</p>
-			{#if data.taskTitle}
-				<p class="mt-1 truncate text-sm font-medium text-foreground">{data.taskTitle}</p>
-			{/if}
+<div class="space-y-4">
+	<!-- Capacity / offer-dispatch binding (docs/33) — always configurable,
+	     independent of where the task FORM is authored. -->
+	<OfferCapacitySection {data} {readonly} {onchange} />
+
+	{#if templateId && nodeId}
+		<div class="space-y-3">
+			<div class="rounded-lg border border-border bg-muted/30 p-3">
+				<p class="text-sm text-muted-foreground">
+					{stepCount} step{stepCount !== 1 ? 's' : ''} configured
+				</p>
+				{#if data.taskTitle}
+					<p class="mt-1 truncate text-sm font-medium text-foreground">{data.taskTitle}</p>
+				{/if}
+			</div>
+			<Button
+				variant="outline"
+				size="sm"
+				class="w-full"
+				href="/templates/{templateId}/ide?node={nodeId}"
+			>
+				<Pencil class="size-3.5" />
+				Edit Task Form
+			</Button>
 		</div>
-		<Button
-			variant="outline"
-			size="sm"
-			class="w-full"
-			href="/templates/{templateId}/ide?node={nodeId}"
-		>
-			<Pencil class="size-3.5" />
-			Edit Task Form
-		</Button>
-	</div>
-{:else}
-	<HumanTaskSection {data} {readonly} {onchange} {scope} />
-{/if}
+	{:else}
+		<HumanTaskSection {data} {readonly} {onchange} {scope} />
+	{/if}
+</div>
