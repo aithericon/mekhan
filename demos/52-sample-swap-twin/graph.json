@@ -51,7 +51,7 @@
       "data": {
         "type": "automated_step",
         "label": "Monitor Scene (live twin · whole run)",
-        "description": "The TWIN PRODUCER — a STANDALONE planning-scene streamer DECOUPLED from any single motion. ROS `monitor_scene` op: polls move_group's `/get_planning_scene` every `scene_stream_ms` (200ms) for up to `scene_duration_ms` (150s) and streams each slim NDJSON snapshot (arm joint states + all world collision boxes + whatever sample is currently riding the gripper) onto its Data/Out channel `scene`. Runs as a sibling of the whole sample-work branch under the held lease, so this ONE node's stream covers the ENTIRE multi-sample swap session — the twin renders the live move_group world continuously as the arm picks each sample out of the rack, carries it into the instrument port, and returns it. content_type `application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6` routes the UI render registry to the planning-scene twin renderer, drawing the LIVE scene on the `monitor_scene` → `twin_view` edge. The bulk stream rides the out-of-band JetStream datastream transport — the net sees only open + close. Plain `executor`: rides the held lease. `scene_duration_ms` is sized to outlast the job Loop; the `join` releases the lease once BOTH branches finish.",
+        "description": "The TWIN PRODUCER — a STANDALONE planning-scene streamer DECOUPLED from any single motion. ROS `monitor_scene` op: polls move_group's `/get_planning_scene` every `scene_stream_ms` (1000ms = 1 Hz) for up to `scene_duration_ms` (200s) and streams each slim NDJSON snapshot (arm joint states + all world collision boxes + whatever sample is currently riding the gripper) onto its Data/Out channel `scene`. The 1 Hz cadence is deliberate: a faster poll makes move_group serialize the scene 5×/s, stealing planner CPU from the arm's pick/place plans — 1 Hz is smooth enough for the twin while leaving move_group free to plan. Runs as a sibling of the whole sample-work branch under the held lease, so this ONE node's stream covers the ENTIRE multi-sample swap session — the twin renders the live move_group world continuously as the arm picks each sample out of the rack, carries it into the instrument port, and returns it. content_type `application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6` routes the UI render registry to the planning-scene twin renderer, drawing the LIVE scene on the `monitor_scene` → `twin_view` edge. The bulk stream rides the out-of-band JetStream datastream transport — the net sees only open + close. Plain `executor`: rides the held lease. `scene_duration_ms` is sized to outlast the job Loop; the `join` releases the lease once BOTH branches finish.",
         "deploymentModel": { "mode": "executor" },
         "channels": [
           {
@@ -70,9 +70,9 @@
             "operation": "monitor_scene",
             "interface_name": "/get_planning_scene",
             "interface_type": "moveit_msgs/srv/GetPlanningScene",
-            "scene_stream_ms": 200,
-            "scene_duration_ms": 150000,
-            "timeout_ms": 160000,
+            "scene_stream_ms": 1000,
+            "scene_duration_ms": 200000,
+            "timeout_ms": 210000,
             "fields": {}
           }
         },
@@ -211,7 +211,7 @@
         "label": "Seed Inventory into Scene",
         "description": "Maps over the bound `run_inventory` asset (alias `inv`), pushing each sample into move_group's persistent planning scene as a box CollisionObject. Runs under the held lease so every add_object hits the SAME scene the monitor streams and the jobs plan against. The seeded boxes are the amber samples the twin draws; as the jobs run, the arm grasps them (green, riding the gripper) and sets them down at the port.",
         "assetBindings": [
-          { "alias": "inv", "refKey": "run_inventory" }
+          { "alias": "inv", "refKey": "swap_inventory" }
         ],
         "itemsRef": "inv",
         "itemVar": "item",
@@ -322,6 +322,46 @@
         "maxIterations": 40,
         "loopCondition": "job_loop.iteration < load_jobs.count - 1",
         "accumulators": []
+      }
+    },
+    {
+      "id": "home_job",
+      "type": "automated_step",
+      "slug": "home_job",
+      "parentId": "handle_jobs",
+      "position": { "x": 16, "y": 10 },
+      "data": {
+        "type": "automated_step",
+        "label": "Home Arm (per-job reset)",
+        "description": "Loop body head — the cascade-breaker. Before every job, ROS `send_action_goal` drives the arm to the xArm6 all-zeros home `[0,0,0,0,0,0]` via FollowJointTrajectory, which BYPASSES move_group planning (it just executes joint angles), so it ALWAYS succeeds regardless of planner load. Two reasons: (1) it guarantees each job starts from a COLLISION-FREE pose — without it, a single failed retreat (move_group hiccup under load) leaves the arm low/in-collision and EVERY subsequent plan fails with START_STATE_IN_COLLISION (error 99999), cascading the whole run to a stall; (2) it gives the next `plan_to_pose`'s `/compute_ik` an IDENTICAL clean seed every time (a dirty current-state seed is the classic source of flaky NO_IK). Any sample attached from the prior pick rides to home (arm-up, clear of the table) and on to the port. Plain `executor`: rides the held lease.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "time_from_start": { "sec": 2, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
       }
     },
     {
@@ -500,7 +540,8 @@
     { "id": "e_seed_load", "source": "seed_inv", "target": "load_jobs", "targetHandle": "in", "type": "sequence" },
     { "id": "e_load_handle", "source": "load_jobs", "target": "handle_jobs", "targetHandle": "in", "type": "sequence" },
 
-    { "id": "e_handle_resolve", "source": "handle_jobs", "target": "resolve_poses", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_handle_home", "source": "handle_jobs", "target": "home_job", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_home_resolve", "source": "home_job", "target": "resolve_poses", "targetHandle": "in", "type": "sequence" },
     { "id": "e_resolve_gate", "source": "resolve_poses", "target": "op_gate", "targetHandle": "in", "type": "sequence" },
     { "id": "e_gate_pick", "source": "op_gate", "target": "do_pick", "sourceHandle": "is_pick", "targetHandle": "in", "label": "Pick", "type": "conditional" },
     { "id": "e_gate_place", "source": "op_gate", "target": "do_place", "sourceHandle": "default", "targetHandle": "in", "label": "Place", "type": "conditional" },

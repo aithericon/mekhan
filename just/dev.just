@@ -1350,7 +1350,16 @@ xarm-up:
     name        = "dev-xarm-runner"
     nats_url    = "{{nats_url}}"
     base_dir    = "$runner_base"
-    concurrency = 2
+    # 4 (was 2): the xArm runner now runs a long-lived scene-monitor streaming
+    # job CONCURRENTLY with the arm's pick/place steps (demo 52's live twin). At
+    # concurrency 2 the monitor (esp. if redelivered) starves the arm branch --
+    # 4 leaves headroom for the monitor + a sequential arm step + margin.
+    concurrency = 4
+    # 600s (was default 120): a scene-monitor job streams for ~150s+, longer than
+    # the default ack_wait, so under load (missed heartbeats) JetStream would
+    # redeliver it -- spawning duplicate monitor episodes that compound the
+    # starvation. A wide ack window keeps the long streamer as ONE episode.
+    ack_wait_secs = 600
     mekhan_url  = "{{service_url}}"
 
     [storage]
