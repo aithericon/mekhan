@@ -273,7 +273,10 @@ pub async fn get_task(pool: &PgPool, id: &str) -> Result<Option<HpiTask>, sqlx::
 /// pool's `t_claim` guard would reject a non-member's claim anyway — with finer
 /// caps-vs-`requirements` matching deferred (see the handler doc). `claimed` rows
 /// are returned when `assignee` is the caller, so a member can find work in
-/// flight. Both halves are workspace-scoped; ordered newest-first.
+/// flight. A third bucket surfaces UNPOOLED work (docs/33 surface unification):
+/// `pending` tasks with no `capacity_id` and no `assignee` are "open to anyone" in
+/// the workspace — claimable (a soft assign) by any member, no roster enrollment.
+/// All three are workspace-scoped; ordered newest-first.
 ///
 /// `member` is the caller's `subject_as_uuid()`; `assignee` is stored as that
 /// id's string form (the offer net relays the member id verbatim as `runner_id`).
@@ -290,6 +293,8 @@ pub async fn inbox_tasks(
                  WHERE workspace_id = $1 AND member_user_id = $2 AND revoked_at IS NULL \
              )) \
              OR (t.status = 'claimed' AND t.assignee = $3) \
+             OR (t.status = 'pending' AND t.assignee IS NULL \
+                 AND (t.detail->>'capacity_id') IS NULL) \
          ) \
          ORDER BY t.created_at DESC",
     )
@@ -297,6 +302,29 @@ pub async fn inbox_tasks(
     .bind(member)
     .bind(member.to_string())
     .fetch_all(pool)
+    .await
+}
+
+/// Soft-claim an UNPOOLED (`pending`, no capacity) task: set `assignee` + flip to
+/// `claimed` so it leaves the "open to anyone" inbox bucket and lands in the
+/// claimer's "in progress" bucket. Purely control-plane (no engine handshake — an
+/// unpooled task has no offer pool); advisory only, since `/complete` still allows
+/// `claimed` and the engine net just awaits the `human.completed` signal regardless
+/// of who submits it. Guarded on `status='pending'` so a racing second claimer (or
+/// a pooled task) is a no-op → `None`.
+pub async fn soft_claim_task(
+    pool: &PgPool,
+    id: &str,
+    member: &str,
+) -> Result<Option<HpiTask>, sqlx::Error> {
+    sqlx::query_as::<_, HpiTask>(
+        "UPDATE hpi_tasks \
+         SET status = 'claimed', assignee = $2, claimed_at = COALESCE(claimed_at, now()) \
+         WHERE id = $1 AND status = 'pending' RETURNING *",
+    )
+    .bind(id)
+    .bind(member)
+    .fetch_optional(pool)
     .await
 }
 

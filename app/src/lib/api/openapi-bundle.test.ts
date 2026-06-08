@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseBundle, type ManualEndpoint, type WebhookEndpoint } from './openapi-bundle';
+import {
+	parseBundle,
+	type ManualEndpoint,
+	type WebhookEndpoint,
+	type RunTemplateEndpoint
+} from './openapi-bundle';
 
 // A representative slice of the synthesized per-project bundle: one manual
 // trigger (typed body + a File field → both content types) and one webhook.
@@ -115,5 +120,78 @@ describe('parseBundle', () => {
 		const parsed = parseBundle(DOC);
 		expect(parsed.title).toBe('Project: Demos');
 		expect(parsed.securitySchemes.map((s) => s.name).sort()).toEqual(['bearerAuth', 'sessionCookie']);
+	});
+});
+
+// A run-by-template op (POST /api/v1/instances#tpl=<id>) for a trigger-less
+// template: the start_tokens contract is typed from the Start block port.
+const RUN_DOC = {
+	openapi: '3.0.3',
+	info: { title: 'Folder: Basics' },
+	paths: {
+		'/api/v1/instances#tpl=00000000-0000-0000-0000-000000000042': {
+			post: {
+				tags: ['templates', 'Hello World'],
+				summary: 'Run Hello World',
+				security: [{ sessionCookie: [] }, { bearerAuth: [] }],
+				'x-mekhan-run-template': true,
+				'x-mekhan-template-id': '00000000-0000-0000-0000-000000000042',
+				requestBody: {
+					content: {
+						'application/json': { schema: { $ref: '#/components/schemas/RunTemplate_x_Request' } }
+					}
+				}
+			}
+		}
+	},
+	components: {
+		schemas: {
+			RunTemplate_x_Request: {
+				type: 'object',
+				properties: {
+					template_id: { type: 'string', enum: ['00000000-0000-0000-0000-000000000042'] },
+					start_tokens: {
+						type: 'array',
+						minItems: 1,
+						maxItems: 1,
+						items: {
+							type: 'object',
+							properties: {
+								start_block_id: { type: 'string', enum: ['start_main'] },
+								token: {
+									type: 'object',
+									properties: {
+										subject: { type: 'string' },
+										count: { type: 'number' }
+									},
+									required: ['subject']
+								}
+							}
+						}
+					}
+				},
+				required: ['template_id', 'start_tokens']
+			}
+		}
+	}
+};
+
+describe('parseBundle run-template', () => {
+	it('parses a run-by-template op into a typed start-block contract', () => {
+		const parsed = parseBundle(RUN_DOC);
+		const run = parsed.endpoints.find((e) => e.kind === 'run') as RunTemplateEndpoint;
+		expect(run).toBeTruthy();
+		expect(run.templateId).toBe('00000000-0000-0000-0000-000000000042');
+		expect(run.title).toBe('Run Hello World');
+		expect(run.templateName).toBe('Hello World');
+		expect(run.security).toEqual(['sessionCookie', 'bearerAuth']);
+		expect(run.startBlocks).toHaveLength(1);
+		const sb = run.startBlocks[0];
+		expect(sb.startBlockId).toBe('start_main');
+		const byName = Object.fromEntries(sb.fields.map((f) => [f.name, f]));
+		expect(byName.subject.type).toBe('string');
+		expect(byName.subject.required).toBe(true);
+		expect(byName.count.type).toBe('number');
+		expect(byName.count.required).toBe(false);
 	});
 });

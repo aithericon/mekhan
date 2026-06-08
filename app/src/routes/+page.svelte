@@ -36,16 +36,18 @@
 	let recentTemplates = $state<TemplateSummary[]>([]);
 	let inboxTasks = $state<HumanTask[]>([]);
 
-	// Offer-dispatch inbox preview: work offered to me (claimable) and the
-	// tasks I've already claimed (my open work). Sorted newest-first, capped.
+	// Inbox preview: work I can take on — pooled offers (caps-gated) AND unpooled
+	// "open to anyone" tasks (status `pending`) — vs. the work I've already
+	// claimed (my open work). Sorted newest-first, capped. A task lives in exactly
+	// one bucket: pending/offered are claimable, claimed is mine.
 	const offeredTasks = $derived(
 		inboxTasks
-			.filter((t) => t.status === 'offered')
+			.filter((t) => t.status === 'offered' || t.status === 'pending')
 			.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 	);
 	const myOpenTasks = $derived(
 		inboxTasks
-			.filter((t) => t.status === 'claimed' || t.status === 'pending')
+			.filter((t) => t.status === 'claimed')
 			.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 	);
 	const hasInboxPreview = $derived(offeredTasks.length > 0 || myOpenTasks.length > 0);

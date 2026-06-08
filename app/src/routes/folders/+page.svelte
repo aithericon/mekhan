@@ -235,7 +235,8 @@
 			<h1 class="text-2xl font-semibold tracking-tight">Folders</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
 				Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
-				aggregating the webhook endpoints of templates in its subtree.{#if workspaces.active}
+				with a runnable contract for every published template in its subtree, plus a
+				dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
 					Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
 			</p>
 		</div>

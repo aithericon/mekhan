@@ -257,6 +257,57 @@ pub fn plan_idle_eviction(
         .map(|s| (s.runner_id, wanted_base))
 }
 
+/// The load-timing state transition for one model on one reconcile tick. PURE:
+/// maps (was the wanted base resident BEFORE this tick's action, is it resident
+/// NOW, is a measurement already in flight) → the single `model_replicas` write.
+///
+/// - **StartCold**: a cold `LoadBase` was published (base NOT resident → loaded
+///   from pulled) and no measurement is in flight → stamp `load_started_at = now()`.
+///   A warm wake of an already-resident base does NOT start one.
+/// - **Finish**: the base IS now observed resident AND a measurement was in flight
+///   → compute `last_load_duration_ms`, set `load_finished_at = now()`, CLEAR
+///   `load_started_at` so the next cold load re-measures.
+/// - **None**: nothing to write (warm wake, still-loading, or never measuring).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadTimingUpdate {
+    /// Stamp `load_started_at = now()` (only when it was NULL).
+    StartCold,
+    /// Stamp `load_finished_at = now()`, compute duration, clear `load_started_at`.
+    Finish,
+    /// No write.
+    None,
+}
+
+/// The PURE load-timing decision for one model this tick.
+///
+/// * `cold_load_published` — this tick we published a `LoadBase` for a base that
+///   was NOT resident on its target runner (a cold load from `pulled`, not a warm
+///   wake). Drives the START stamp.
+/// * `now_resident` — the wanted base IS observed resident on at least one in-zone
+///   runner right now (the runner-catalog signal already read for the zone
+///   inventory). Drives the FINISH stamp.
+/// * `load_in_flight` — `load_started_at IS NOT NULL` on the row (a measurement is
+///   already running).
+///
+/// FINISH wins over START in the (degenerate) case both are true on the same tick:
+/// if the base is already resident we are not actually cold-loading, so a stale
+/// in-flight measurement should be closed out rather than left dangling.
+pub fn load_timing_transition(
+    cold_load_published: bool,
+    now_resident: bool,
+    load_in_flight: bool,
+) -> LoadTimingUpdate {
+    if load_in_flight && now_resident {
+        // The base finished loading (or was already there) → close the measurement.
+        LoadTimingUpdate::Finish
+    } else if cold_load_published && !load_in_flight {
+        // A fresh cold load began and nothing is being measured yet → start.
+        LoadTimingUpdate::StartCold
+    } else {
+        LoadTimingUpdate::None
+    }
+}
+
 /// One reconcile pass over every `model_states` policy. Per-policy failures
 /// fail-soft (recorded on the row + carry on); a setup `sqlx::Error` (the
 /// policy-list fetch) kills the tick.
@@ -331,11 +382,47 @@ pub async fn reconcile_placement(
         };
         let observed = counts.get(&model_id).copied().unwrap_or(0);
 
-        if let Err(e) =
-            apply_plan(db, nats, workspace_id, &model_id, &policy, plan, desired_n, observed).await
+        // Resident signal for load-timing: which runners already host the wanted
+        // base RIGHT NOW (the same in-zone slot set the planner read — no second
+        // catalog scan). `now_resident` drives the FINISH stamp; the per-runner set
+        // lets `apply_plan` classify each `LoadBase` as a cold load vs a warm wake.
+        let wanted_base = policy.base.clone().unwrap_or_else(|| model_id.clone());
+        let resident_runners: HashSet<Uuid> = inv
+            .slots
+            .iter()
+            .filter(|s| s.base == wanted_base)
+            .map(|s| s.runner_id)
+            .collect();
+        let now_resident = !resident_runners.is_empty();
+
+        match apply_plan(
+            db,
+            nats,
+            workspace_id,
+            &model_id,
+            &policy,
+            plan,
+            desired_n,
+            observed,
+            &resident_runners,
+        )
+        .await
         {
-            tracing::warn!(%workspace_id, %model_id, "placement apply failed: {e}");
-            mark_placement_failed(db, workspace_id, &model_id, &policy, &e).await;
+            Ok(cold_load_published) => {
+                // Single load-timing UPDATE per model per tick (best-effort).
+                apply_load_timing(
+                    db,
+                    workspace_id,
+                    &model_id,
+                    cold_load_published,
+                    now_resident,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(%workspace_id, %model_id, "placement apply failed: {e}");
+                mark_placement_failed(db, workspace_id, &model_id, &policy, &e).await;
+            }
         }
     }
     Ok(())
@@ -421,6 +508,11 @@ async fn build_zone_inventory(
 /// Carry out the placement plan: publish each load + record the row `active` with
 /// the live observed count, or mark `provisioning` with a note when nothing in
 /// zone can serve the model.
+///
+/// Returns `true` when at least one published `LoadBase` was a COLD load — its
+/// target runner did NOT already host the base (`!resident_runners.contains`), so
+/// it was loaded from `pulled` rather than woken. The caller uses this to stamp the
+/// cold-start measurement. Adapter loads + warm base wakes do not count as cold.
 #[allow(clippy::too_many_arguments)]
 async fn apply_plan(
     db: &PgPool,
@@ -431,7 +523,8 @@ async fn apply_plan(
     plan: PlacementPlan,
     desired_n: u32,
     observed: u32,
-) -> Result<(), String> {
+    resident_runners: &HashSet<Uuid>,
+) -> Result<bool, String> {
     match plan {
         PlacementPlan::NoEligibleRunner => {
             let msg = format!(
@@ -450,9 +543,13 @@ async fn apply_plan(
                 Some(&msg),
             )
             .await;
-            Ok(())
+            Ok(false)
         }
         PlacementPlan::Place { actions } => {
+            // A `LoadBase` onto a runner that does NOT already host the base is a
+            // COLD load (loaded from `pulled`); onto a resident runner it is a warm
+            // wake. Adapter loads never count.
+            let mut cold_load_published = false;
             for action in actions {
                 let (runner_id, cmd) = match action {
                     PlacementAction::LoadAdapter {
@@ -470,12 +567,17 @@ async fn apply_plan(
                             },
                         },
                     ),
-                    PlacementAction::LoadBase { runner_id, base } => (
-                        runner_id,
-                        ModelCommand::Load {
-                            target: LoadTarget::Base { model_id: base },
-                        },
-                    ),
+                    PlacementAction::LoadBase { runner_id, base } => {
+                        if !resident_runners.contains(&runner_id) {
+                            cold_load_published = true;
+                        }
+                        (
+                            runner_id,
+                            ModelCommand::Load {
+                                target: LoadTarget::Base { model_id: base },
+                            },
+                        )
+                    }
                 };
                 publish_model_command(nats, runner_id, &cmd)
                     .await
@@ -493,7 +595,7 @@ async fn apply_plan(
                 None,
             )
             .await;
-            Ok(())
+            Ok(cold_load_published)
         }
     }
 }
@@ -596,6 +698,72 @@ async fn upsert_status(
     .bind(last_error)
     .execute(db)
     .await;
+}
+
+/// Apply the load-timing transition for one model this tick (best-effort, a single
+/// `UPDATE`). Reads the row's `load_started_at` to know whether a measurement is in
+/// flight, runs the PURE [`load_timing_transition`], and writes at most one column
+/// set using the DB clock (`now()`) — never Rust wall-clock — so START/FINISH
+/// timestamps share the Postgres clock and the duration is skew-free.
+///
+/// The row is created by `upsert_status` before this runs, so the `UPDATE` always
+/// targets an existing row (a placed/active model). A missing row (no placement
+/// this tick) is a no-op `UPDATE` — harmless.
+async fn apply_load_timing(
+    db: &PgPool,
+    workspace_id: Uuid,
+    model_id: &str,
+    cold_load_published: bool,
+    now_resident: bool,
+) {
+    // In-flight = `load_started_at IS NOT NULL` on the row.
+    let load_in_flight: bool = sqlx::query_scalar::<_, Option<chrono::DateTime<Utc>>>(
+        "SELECT load_started_at FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(model_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .is_some();
+
+    match load_timing_transition(cold_load_published, now_resident, load_in_flight) {
+        LoadTimingUpdate::None => {}
+        LoadTimingUpdate::StartCold => {
+            // Stamp the start ONLY when currently NULL — never reset an in-flight
+            // measurement (the `IS NULL` guard makes this idempotent across ticks).
+            let _ = sqlx::query(
+                "UPDATE model_replicas \
+                    SET load_started_at = now(), updated_at = now() \
+                 WHERE workspace_id = $1 AND model_id = $2 AND load_started_at IS NULL",
+            )
+            .bind(workspace_id)
+            .bind(model_id)
+            .execute(db)
+            .await;
+        }
+        LoadTimingUpdate::Finish => {
+            // Close the measurement: duration = now() - load_started_at (ms), stamp
+            // finished, CLEAR load_started_at so the next cold load re-measures. The
+            // `IS NOT NULL` guard keeps it a no-op if a concurrent tick already
+            // closed it.
+            let _ = sqlx::query(
+                "UPDATE model_replicas \
+                    SET last_load_duration_ms = \
+                            (EXTRACT(EPOCH FROM (now() - load_started_at)) * 1000)::BIGINT, \
+                        load_finished_at = now(), \
+                        load_started_at = NULL, \
+                        updated_at = now() \
+                 WHERE workspace_id = $1 AND model_id = $2 AND load_started_at IS NOT NULL",
+            )
+            .bind(workspace_id)
+            .bind(model_id)
+            .execute(db)
+            .await;
+        }
+    }
 }
 
 /// Record a placement failure on the model's row (best-effort).
@@ -875,6 +1043,79 @@ mod tests {
         assert_eq!(
             plan_idle_eviction(&evictable_base_policy("eu", true), &slots, false, false),
             None
+        );
+    }
+
+    // ── load-timing transition (cold-vs-warm gate) ────────────────────────────
+
+    #[test]
+    fn cold_load_starts_measurement() {
+        // A cold LoadBase published (base not resident), nothing in flight → START.
+        // cold=true, now_resident=false (the base is loading, not yet resident).
+        assert_eq!(
+            load_timing_transition(true, false, false),
+            LoadTimingUpdate::StartCold
+        );
+    }
+
+    #[test]
+    fn warm_wake_does_not_start_measurement() {
+        // A warm wake = a LoadBase onto an already-resident runner → apply_plan
+        // reports cold_load_published=false, and the base is resident now. With no
+        // measurement in flight that is a no-op (no start, nothing to finish).
+        assert_eq!(
+            load_timing_transition(false, true, false),
+            LoadTimingUpdate::None
+        );
+    }
+
+    #[test]
+    fn observing_residency_finishes_in_flight_measurement() {
+        // A measurement is in flight and the base is now observed resident → FINISH
+        // (compute duration, clear load_started_at). The classic cold-load close-out.
+        assert_eq!(
+            load_timing_transition(false, true, true),
+            LoadTimingUpdate::Finish
+        );
+    }
+
+    #[test]
+    fn in_flight_but_not_yet_resident_is_a_noop() {
+        // Still loading: measurement in flight, base not resident yet, no fresh cold
+        // load this tick → no write, keep measuring.
+        assert_eq!(
+            load_timing_transition(false, false, true),
+            LoadTimingUpdate::None
+        );
+    }
+
+    #[test]
+    fn cold_load_while_already_measuring_does_not_restart() {
+        // A second cold load published while a measurement is already in flight and
+        // the base isn't resident yet → no write (the StartCold guard is
+        // `!load_in_flight`); the original measurement keeps running.
+        assert_eq!(
+            load_timing_transition(true, false, true),
+            LoadTimingUpdate::None
+        );
+    }
+
+    #[test]
+    fn finish_wins_over_start_when_both_hold() {
+        // Degenerate same-tick: a stale in-flight measurement AND the base is already
+        // resident (so a published "cold" load is really a wake) → FINISH closes out
+        // the dangling measurement rather than leaving it open.
+        assert_eq!(
+            load_timing_transition(true, true, true),
+            LoadTimingUpdate::Finish
+        );
+    }
+
+    #[test]
+    fn nothing_happening_is_a_noop() {
+        assert_eq!(
+            load_timing_transition(false, false, false),
+            LoadTimingUpdate::None
         );
     }
 }

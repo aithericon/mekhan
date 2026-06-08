@@ -7384,6 +7384,18 @@ export interface components {
              */
             last_actuated_at?: string | null;
             last_error?: string | null;
+            /** Format: int64 */
+            last_load_duration_ms?: number | null;
+            /** Format: date-time */
+            load_finished_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Cold-load instrumentation. `load_started_at` is stamped when the controller
+             *     publishes a COLD `LoadBase` (base not yet resident on the target runner) and
+             *     CLEARED once the base is observed resident; `load_finished_at` +
+             *     `last_load_duration_ms` capture the most recent completed cold load.
+             */
+            load_started_at?: string | null;
             model_id: string;
             /**
              * Format: int32
@@ -16944,7 +16956,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Claim published; `claimed` status follows via projection */
+            /** @description Unpooled task soft-claimed (assigned) synchronously */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Pooled claim published; `claimed` status follows via projection */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -16960,7 +16981,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Task is not offered (already claimed or wrong state) */
+            /** @description Task is not claimable (already claimed or wrong state) */
             409: {
                 headers: {
                     [name: string]: unknown;

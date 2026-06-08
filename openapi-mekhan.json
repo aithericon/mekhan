@@ -7877,8 +7877,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Unpooled task soft-claimed (assigned) synchronously",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
           "202": {
-            "description": "Claim published; `claimed` status follows via projection",
+            "description": "Pooled claim published; `claimed` status follows via projection",
             "content": {
               "application/json": {
                 "schema": {}
@@ -7889,7 +7897,7 @@
             "description": "Task not found"
           },
           "409": {
-            "description": "Task is not offered (already claimed or wrong state)",
+            "description": "Task is not claimable (already claimed or wrong state)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18606,6 +18614,28 @@
               "string",
               "null"
             ]
+          },
+          "last_load_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "load_finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "load_started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Cold-load instrumentation. `load_started_at` is stamped when the controller\npublishes a COLD `LoadBase` (base not yet resident on the target runner) and\nCLEARED once the base is observed resident; `load_finished_at` +\n`last_load_duration_ms` capture the most recent completed cold load."
           },
           "model_id": {
             "type": "string"

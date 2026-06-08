@@ -711,9 +711,10 @@ pub async fn cancel_task(
     path = "/api/v1/tasks/{id}/claim",
     params(("id" = String, Path, description = "Task id (= offer grant_id)")),
     responses(
-        (status = 202, description = "Claim published; `claimed` status follows via projection", body = serde_json::Value),
+        (status = 200, description = "Unpooled task soft-claimed (assigned) synchronously", body = serde_json::Value),
+        (status = 202, description = "Pooled claim published; `claimed` status follows via projection", body = serde_json::Value),
         (status = 404, description = "Task not found"),
-        (status = 409, description = "Task is not offered (already claimed or wrong state)", body = ErrorResponse),
+        (status = 409, description = "Task is not claimable (already claimed or wrong state)", body = ErrorResponse),
         (status = 422, description = "Offered row carries no resolvable pool net id", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
@@ -735,6 +736,24 @@ pub async fn claim_task(
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
         })?
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
+    // An UNPOOLED task (`pending`, no `capacity_id`) has no offer pool to route a
+    // claim through — claiming it is a soft, control-plane assign (docs/33 surface
+    // unification): set assignee + flip to `claimed` so it moves from the inbox's
+    // "open to anyone" bucket into the claimer's "in progress". Advisory only;
+    // anyone can still complete it (the engine net just awaits the signal).
+    if task.status == "pending" && task.detail.get("capacity_id").is_none() {
+        let updated = queries::soft_claim_task(&state.db, &id, &member_id.to_string())
+            .await
+            .map_err(|e| {
+                tracing::error!("task soft-claim: {e}");
+                ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+            })?
+            // Lost the race (already claimed/completed between lookup and update).
+            .ok_or_else(|| ApiError::conflict("task is no longer open to claim"))?;
+        tracing::info!(task_id = %id, member = %member_id, "soft-claimed unpooled task");
+        return Ok((StatusCode::OK, Json(to_human_task_json(&updated))));
+    }
 
     if task.status != "offered" {
         return Err(ApiError::conflict(format!(
