@@ -12,6 +12,7 @@
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Activity from '@lucide/svelte/icons/activity';
 
 	import { browser } from '$app/environment';
 	import { tick } from 'svelte';
@@ -24,6 +25,13 @@
 	const highlightArtifact = browser
 		? new URLSearchParams(window.location.search).get('artifact')
 		: null;
+
+	// Producing instance: any artifact's source_net is the net_id
+	// (`mekhan-{instance_uuid}`). /instances/{id} → process view.
+	const instanceId = $derived.by(() => {
+		const net = lineage?.steps.flatMap((s) => s.artifacts).find((a) => a.source_net)?.source_net;
+		return net ? net.replace(/^mekhan-/, '') : null;
+	});
 
 	// ── Category colours ───────────────────────────────────────────────────────
 	const categoryColors: Record<string, string> = {
@@ -123,6 +131,12 @@
 					<h1 class="text-2xl font-semibold tracking-tight text-foreground">
 						Process Lineage
 					</h1>
+					{#if instanceId}
+						<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="ml-auto gap-1.5">
+							<Activity class="size-4" />
+							Open instance
+						</Button>
+					{/if}
 				</div>
 				<p class="mt-1 font-mono text-sm text-muted-foreground">
 					{lineage.process_id}
