@@ -303,10 +303,15 @@ apply-workflows dir="workflows":
 
 # ── Package + push (Docker image) ───────────────────────────────────────────
 #
-# NATIVE ARM: the CI worker is now an ARM stateful node (pool worker-stateful-arm),
+# NATIVE ARM: the CI worker is the ARM stateful node (pool worker-stateful-arm),
 # so images build natively — no QEMU, no docker-container driver, no `cross`.
-# The default docker buildx builder can't `--push`, so we `--load` the freshly
-# built arm64 image into the local store and `docker push` it.
+#
+# Push strategy (matches the proven pre-cross native pipeline):
+#   • mekhan-service — small prebuilt image: `--load` into the store + `docker push`.
+#   • executor/engine — HUGE in-docker Rust builds: `--push` straight to the
+#     registry. Do NOT `--load` these: exporting a multi-GB image into the local
+#     docker store saturates dockerd and the agent's docker.sock poll times out
+#     ("context deadline exceeded").
 
 # Stage prebuilt binary + frontend, build the mekhan-service OCI image, and
 # push both SHA and branch tags to the registry.
@@ -369,17 +374,14 @@ publish-backend-executor registry_image commit_sha ref_slug:
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
 
-    echo "▶ docker buildx build → {{registry_image}}/aithericon-executor:$sha_tag"
+    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-executor:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
-      --load \
+      --push \
       -t "{{registry_image}}/aithericon-executor:$sha_tag" \
       -t "{{registry_image}}/aithericon-executor:$ref_tag" \
       -f deploy/docker/Dockerfile.executor \
       .
-
-    docker push "{{registry_image}}/aithericon-executor:$sha_tag"
-    docker push "{{registry_image}}/aithericon-executor:$ref_tag"
 
 # Build + push the aithericon-engine image.
 #
@@ -395,17 +397,14 @@ publish-backend-engine registry_image commit_sha ref_slug:
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
 
-    echo "▶ docker buildx build → {{registry_image}}/aithericon-engine:$sha_tag"
+    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
-      --load \
+      --push \
       -t "{{registry_image}}/aithericon-engine:$sha_tag" \
       -t "{{registry_image}}/aithericon-engine:$ref_tag" \
       -f deploy/docker/Dockerfile.engine \
       .
-
-    docker push "{{registry_image}}/aithericon-engine:$sha_tag"
-    docker push "{{registry_image}}/aithericon-engine:$ref_tag"
 
 # Build the fat CI builder image and push it to the registry.
 #
