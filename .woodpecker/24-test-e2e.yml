@@ -42,12 +42,11 @@ steps:
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
-      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+      CARGO_HOME: /woodpecker/cache/cargo
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan
+      NPM_CONFIG_CACHE: /woodpecker/cache/npm
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
     commands:
       - just ci::test-e2e
     depends_on: []

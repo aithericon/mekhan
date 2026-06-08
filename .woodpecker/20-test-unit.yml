@@ -24,10 +24,8 @@ steps:
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
-      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
-    volumes:
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+      CARGO_HOME: /woodpecker/cache/cargo
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan
     commands:
       - just ci::test-unit-rust
     depends_on: []
@@ -36,9 +34,7 @@ steps:
     image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
     pull: true
     environment:
-      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
-    volumes:
-      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+      NPM_CONFIG_CACHE: /woodpecker/cache/npm
     commands:
       - just ci::test-frontend-unit
     depends_on: []
