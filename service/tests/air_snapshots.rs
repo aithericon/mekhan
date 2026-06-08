@@ -535,6 +535,15 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // ref-key (`;model=`), none resolvable by bare `compile_to_air` (empty
         // KnownResources/KnownGlobals). Live-only (Threlte scene render + MoveIt).
         "51-scene-twin",
+        // 53-human-review (human-capacity offer dispatch, docs/33) — its
+        // HumanTask binds the `reviewers` `capacity` resource via
+        // `data.capacity.alias`, lowered as the pooled offer claim/acquire/
+        // register/release scaffold. The alias resolves to `pool-<capacity_id>`
+        // only at publish time against a live `resources` row (seeded by
+        // `seed_demo_resources` + enrolled by `seed_demo_roster`); bare
+        // `compile_to_air` has an empty KnownResources. Same class as the
+        // runner-group demos above. Proven live via the Inbox claim flow.
+        "53-human-review",
     ]
     .into_iter()
     .collect();
