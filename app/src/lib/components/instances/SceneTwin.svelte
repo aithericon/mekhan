@@ -37,6 +37,7 @@
 	import { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
 	import { FOV, buildRobot, frameRobot } from '$lib/channels/robotModel';
+	import { createJointInterpolator } from '$lib/channels/jointInterpolator';
 	import type { ScenePrimitive, ScenePose, SceneFrame } from '$lib/channels/sceneStreamPlayer';
 
 	/** A group placed at a ROS pose (origin), to nest primitive meshes under so the
@@ -192,21 +193,31 @@
 		};
 	});
 
-	// Apply each incoming scene frame: joint angles, world objects, attached objects.
-	// Drop-to-latest: `frame` is the newest snapshot the player parsed.
+	// Arm pose is SMOOTHED (see RobotArmTwin): the planning-scene stream arrives at a
+	// few Hz, so easing the joints toward the latest target each animation frame
+	// avoids the teleport-between-poses stutter. The attached (grasped) sample is
+	// parented to a URDF link, so it rides the gripper smoothly once the joints glide.
+	const interp = createJointInterpolator();
+
+	// Feed the latest joint target from each scene snapshot (drop-to-latest).
+	$effect(() => {
+		if (frame) interp.setTarget(frame.joints.names, frame.joints.positions);
+	});
+
+	// Run the rAF easing loop while a robot is mounted.
+	$effect(() => {
+		const r = robot;
+		if (!r) return;
+		return interp.start(r);
+	});
+
+	// Rebuild the world + attached collision geometry on each incoming snapshot.
+	// Drop-to-latest: `frame` is the newest snapshot the player parsed. Joint angles
+	// are handled by the interpolator above; this effect owns only the object meshes.
 	$effect(() => {
 		const r = robot;
 		const f = frame;
 		if (!r || !f) return;
-
-		// 1. Arm pose — set every named joint we recognise.
-		const n = Math.min(f.joints.names.length, f.joints.positions.length);
-		for (let i = 0; i < n; i++) {
-			const angle = f.joints.positions[i];
-			if (typeof angle === 'number' && Number.isFinite(angle)) {
-				r.setJointValue(f.joints.names[i], angle);
-			}
-		}
 
 		// 2. World collision objects — full rebuild (object counts are tiny). Clear
 		//    the world group and re-add, per object, a pose group at its origin with

@@ -21,6 +21,7 @@
 	import { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
 	import { FOV, buildRobot, frameRobot } from '$lib/channels/robotModel';
+	import { createJointInterpolator } from '$lib/channels/jointInterpolator';
 	import type { UrdfJointFrame } from '$lib/channels/urdfStreamPlayer';
 
 	let {
@@ -74,19 +75,24 @@
 		};
 	});
 
-	// Apply each incoming joint frame to the model. Drop-to-latest: `frame` is the
-	// newest pose the player parsed; we set every named arm joint we recognise.
+	// Smooth the joint motion: streams arrive at the ROS emit rate (a few Hz), so
+	// applying each frame directly teleports the arm between poses (visible stutter).
+	// The interpolator eases every joint toward the latest target each animation
+	// frame, decoupling visual smoothness from data rate.
+	const interp = createJointInterpolator();
+
+	// Feed the latest target pose. Drop-to-latest: `frame` is the newest the player
+	// parsed; the easing loop carries the motion between frames.
+	$effect(() => {
+		if (frame) interp.setTarget(frame.joint_names, frame.positions);
+	});
+
+	// Run the rAF easing loop while a robot is mounted. `renderMode="always"` redraws
+	// every frame, so the eased joint mutations show without an explicit invalidate.
 	$effect(() => {
 		const r = robot;
-		const f = frame;
-		if (!r || !f) return;
-		const n = Math.min(f.joint_names.length, f.positions.length);
-		for (let i = 0; i < n; i++) {
-			const angle = f.positions[i];
-			if (typeof angle === 'number' && Number.isFinite(angle)) {
-				r.setJointValue(f.joint_names[i], angle);
-			}
-		}
+		if (!r) return;
+		return interp.start(r);
 	});
 </script>
 
