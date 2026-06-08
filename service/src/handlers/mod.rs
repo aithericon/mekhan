@@ -13,6 +13,7 @@ pub mod fleet_engines;
 pub mod folders;
 pub mod health;
 pub mod inference_metering;
+pub mod inference_telemetry;
 pub mod instances;
 pub mod job_templates;
 pub mod me;

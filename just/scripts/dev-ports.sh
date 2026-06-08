@@ -59,6 +59,7 @@ if [[ "$slot" -eq 0 ]]; then
     MEKHAN_VAULT_PORT=18200
     MEKHAN_S3_PORT=19005
     MEKHAN_S3_CONSOLE_PORT=19006
+    MEKHAN_PROMETHEUS_PORT=19090
     MEKHAN_ZITADEL_DB_PORT=15440
     MEKHAN_ZITADEL_PORT=18080
     MEKHAN_MAILPIT_SMTP_PORT=1025
@@ -87,6 +88,7 @@ else
     MEKHAN_VAULT_PORT=$(( base + 13 ))
     MEKHAN_S3_PORT=$(( base + 14 ))
     MEKHAN_S3_CONSOLE_PORT=$(( base + 15 ))
+    MEKHAN_PROMETHEUS_PORT=$(( base + 16 ))
     MEKHAN_ZITADEL_DB_PORT=$(( base + 20 ))
     MEKHAN_ZITADEL_PORT=$(( base + 21 ))
     MEKHAN_MAILPIT_SMTP_PORT=$(( base + 30 ))
@@ -107,14 +109,7 @@ fi
 # port→URL mapping in one place.
 MEKHAN_SERVICE_URL="http://localhost:${MEKHAN_SERVICE_PORT}"
 MEKHAN_ENGINE_URL="http://localhost:${MEKHAN_ENGINE_PORT}"
-# Router URL is IPv4-explicit (127.0.0.1, not localhost) on purpose: the
-# inference-router binds IPv4, but `localhost` resolves IPv6 (::1) first on
-# macOS. If any other process holds [::1]:<router-port> (e.g. a sibling
-# worktree's Vite that auto-incremented onto this port), the OpenAI-compatible
-# adapter's happy-eyeballs would connect to THAT instead of the router and an
-# internal-pool inference call would silently hit the wrong server. Pinning
-# 127.0.0.1 makes the router endpoint deterministic.
-MEKHAN_ROUTER_URL="http://127.0.0.1:${MEKHAN_ROUTER_PORT}"
+MEKHAN_ROUTER_URL="http://localhost:${MEKHAN_ROUTER_PORT}"
 MEKHAN_NATS_URL="nats://localhost:${MEKHAN_NATS_PORT}"
 MEKHAN_NATS_MON_URL="http://localhost:${MEKHAN_NATS_MON_PORT}"
 MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:${MEKHAN_PG_PORT}/mekhan"
@@ -147,7 +142,7 @@ export \
     MEKHAN_SERVICE_PORT MEKHAN_ENGINE_PORT MEKHAN_CANCEL_PORT MEKHAN_APP_PORT \
     MEKHAN_ROUTER_PORT \
     MEKHAN_PG_PORT MEKHAN_NATS_PORT MEKHAN_NATS_MON_PORT MEKHAN_VAULT_PORT \
-    MEKHAN_S3_PORT MEKHAN_S3_CONSOLE_PORT \
+    MEKHAN_S3_PORT MEKHAN_S3_CONSOLE_PORT MEKHAN_PROMETHEUS_PORT \
     MEKHAN_ZITADEL_DB_PORT MEKHAN_ZITADEL_PORT \
     MEKHAN_MAILPIT_SMTP_PORT MEKHAN_MAILPIT_UI_PORT MEKHAN_HTTPBIN_PORT \
     MEKHAN_LIVEKIT_PORT MEKHAN_LIVEKIT_RTC_TCP_PORT MEKHAN_LIVEKIT_RTC_UDP_PORT \
@@ -172,6 +167,7 @@ MEKHAN_NATS_MON_PORT=${MEKHAN_NATS_MON_PORT}
 MEKHAN_VAULT_PORT=${MEKHAN_VAULT_PORT}    (${MEKHAN_VAULT_ADDR})
 MEKHAN_S3_PORT=${MEKHAN_S3_PORT}      (${MEKHAN_S3_ENDPOINT})
 MEKHAN_S3_CONSOLE_PORT=${MEKHAN_S3_CONSOLE_PORT}
+MEKHAN_PROMETHEUS_PORT=${MEKHAN_PROMETHEUS_PORT}    (ops: just dev up-prometheus)
 ── optional ──
 MEKHAN_ZITADEL_DB_PORT=${MEKHAN_ZITADEL_DB_PORT}
 MEKHAN_ZITADEL_PORT=${MEKHAN_ZITADEL_PORT}

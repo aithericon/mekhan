@@ -37,6 +37,13 @@ client.use(sessionExpiryMiddleware);
 /** One inference metering / GDPR processing record from the audit ledger. */
 export type InferenceRequestLogRow = components['schemas']['InferenceRequestLogRow'];
 
+/** Point-in-time router operational gauges (proxied from the router /metrics). */
+export type RouterLiveMetrics = components['schemas']['RouterLiveMetrics'];
+export type RouterReplicaLive = components['schemas']['RouterReplicaLive'];
+export type RouterModelLive = components['schemas']['RouterModelLive'];
+/** One `(bucket, model)` rollup of the inference ledger over time. */
+export type InferenceTimeseriesPoint = components['schemas']['InferenceTimeseriesPoint'];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
@@ -69,6 +76,44 @@ export async function listInferenceRequests(params?: {
 				query: {
 					instance_id: params?.instanceId ?? null,
 					limit: params?.limit ?? null
+				}
+			}
+		})
+	);
+}
+
+// ── Live router gauges + historical timeseries (the "real data" telemetry) ───
+
+/**
+ * GET /api/v1/inference/router-live — point-in-time router operational gauges,
+ * proxied + parsed from the router's `/metrics` exposition. Fail-soft: when the
+ * router is unconfigured/unreachable the server returns `{ available: false }`
+ * with a 200, so callers should branch on `available` rather than catch.
+ */
+export async function getRouterLive(): Promise<RouterLiveMetrics> {
+	return unwrap(await client.GET('/api/v1/inference/router-live', {}));
+}
+
+/**
+ * GET /api/v1/inference/timeseries — per-model throughput / latency / error
+ * timeseries, time-bucketed over the durable inference ledger. `bucketSecs`
+ * (5..3600, default 60) sets the bucket width; `windowSecs` (≤ 7d, default 3600)
+ * the look-back. Optional `model` / `instanceId` filters. Oldest bucket first.
+ */
+export async function listInferenceTimeseries(params?: {
+	bucketSecs?: number;
+	windowSecs?: number;
+	model?: string;
+	instanceId?: string;
+}): Promise<InferenceTimeseriesPoint[]> {
+	return unwrap(
+		await client.GET('/api/v1/inference/timeseries', {
+			params: {
+				query: {
+					bucket_secs: params?.bucketSecs ?? null,
+					window_secs: params?.windowSecs ?? null,
+					model: params?.model ?? null,
+					instance_id: params?.instanceId ?? null
 				}
 			}
 		})

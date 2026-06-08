@@ -965,6 +965,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inference/router-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/inference/router-live` — point-in-time router operational gauges.
+         * @description Proxies + parses the router's `/metrics` exposition into JSON so the product
+         *     UI can render live per-replica/per-model state without a Prometheus
+         *     dependency. Fail-soft: a missing/unreachable router yields
+         *     `{ available: false, … }` with a 200, never a 5xx.
+         */
+        get: operations["router_live_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inference/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/inference/timeseries` — per-model throughput / latency / errors
+         *     over time, bucketed over the durable `inference_request_log` ledger.
+         * @description NOT tenant-scoped yet, for the same reason as the audit-ledger read
+         *     (`list_inference_requests`): the ledger's `tenant_id` is the router's Bearer
+         *     tenant, not yet mapped to the workspace UUID. Auth is still required.
+         */
+        get: operations["inference_timeseries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instances": {
         parameters: {
             query?: never;
@@ -5892,6 +5938,35 @@ export interface components {
             /** Format: int64 */
             total_tokens: number;
         };
+        /** @description One `(bucket, model)` rollup of the inference ledger. */
+        InferenceTimeseriesPoint: {
+            /** Format: date-time */
+            bucket: string;
+            /** Format: int64 */
+            completed: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            /**
+             * Format: int64
+             * @description `cancelled` + `upstream_error` (the failure dispositions).
+             */
+            errors: number;
+            model_id: string;
+            /**
+             * Format: double
+             * @description Median request latency (ms) within the bucket; `None` if no rows.
+             */
+            p50_ms?: number | null;
+            /**
+             * Format: double
+             * @description p95 request latency (ms) within the bucket.
+             */
+            p95_ms?: number | null;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /** Format: int64 */
+            requests: number;
+        };
         /**
          * @description One spawned sub-workflow child run of a parent instance, returned by
          *     `GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as
@@ -8454,6 +8529,80 @@ export interface components {
          */
         RotateResourceRequest: {
             config: unknown;
+        };
+        /** @description Global router counters (monotonic since the router started). */
+        RouterGlobalCounters: {
+            /** Format: int64 */
+            cancelled_total: number;
+            /** Format: int64 */
+            completed_total: number;
+            /** Format: int64 */
+            rejected_429_total: number;
+            /** Format: int64 */
+            requests_total: number;
+            /** Format: int64 */
+            upstream_error_total: number;
+        };
+        /** @description Parsed snapshot of the router's `/metrics` exposition. */
+        RouterLiveMetrics: {
+            /**
+             * @description `false` ⇒ no router configured or the scrape failed; all other fields are
+             *     empty/zero. The UI shows a "router unreachable" hint rather than an error.
+             */
+            available: boolean;
+            global: components["schemas"]["RouterGlobalCounters"];
+            models: components["schemas"]["RouterModelLive"][];
+            replicas: components["schemas"]["RouterReplicaLive"][];
+        };
+        /** @description One model's live demand signals (summed across its live replicas). */
+        RouterModelLive: {
+            /**
+             * Format: double
+             * @description Mean request latency (ms) derived from the histogram `_sum`/`_count`.
+             *     `None` when no terminal request has been observed for this model.
+             */
+            avg_latency_ms?: number | null;
+            /** Format: int64 */
+            cancelled: number;
+            /** Format: int64 */
+            completed: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            /**
+             * Format: int64
+             * @description In-flight requests summed across this model's LIVE replicas (scale-DOWN
+             *     signal — 0 ⇒ idle).
+             */
+            inflight: number;
+            model: string;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /**
+             * Format: int64
+             * @description Cumulative requests that found no live/un-saturated replica (the
+             *     scale-FROM-zero demand signal).
+             */
+            starved: number;
+            /** Format: int64 */
+            unmetered: number;
+            /** Format: int64 */
+            upstream_error: number;
+        };
+        /** @description One upstream replica's live admission state. */
+        RouterReplicaLive: {
+            /**
+             * Format: int64
+             * @description Admission capacity (`--max-num-seqs`) for this replica.
+             */
+            capacity: number;
+            /**
+             * Format: int64
+             * @description In-flight requests currently admitted on this replica.
+             */
+            in_flight: number;
+            live: boolean;
+            replica: string;
+            zone?: string | null;
         };
         /** @description Aggregate result for `run-all` (also returned to the publication gate). */
         RunAllResponse: {
@@ -12425,6 +12574,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InferenceRequestLogRow"][];
+                };
+            };
+        };
+    };
+    router_live_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live router operational gauges (point-in-time); available=false when the router is unreachable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouterLiveMetrics"];
+                };
+            };
+        };
+    };
+    inference_timeseries: {
+        parameters: {
+            query?: {
+                /** @description Bucket width in seconds (default 60, clamped 5..3600). */
+                bucket_secs?: number | null;
+                /** @description Look-back window in seconds (default 3600, capped at 7 days). */
+                window_secs?: number | null;
+                /** @description Restrict to a single model. */
+                model?: string | null;
+                /** @description Restrict to one workflow instance's requests. */
+                instance_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-model inference throughput/latency/error timeseries, oldest bucket first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceTimeseriesPoint"][];
                 };
             };
         };

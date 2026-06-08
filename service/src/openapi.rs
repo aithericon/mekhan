@@ -272,6 +272,12 @@ use utoipa::OpenApi;
             crate::handlers::model_catalog::ModelCatalogResponse,
             // Model-pool P5 (docs/29 §7') — inference metering audit ledger.
             crate::models::inference_metering::InferenceRequestLogRow,
+            // Inference telemetry — live router /metrics proxy + ledger timeseries.
+            crate::handlers::inference_telemetry::RouterLiveMetrics,
+            crate::handlers::inference_telemetry::RouterGlobalCounters,
+            crate::handlers::inference_telemetry::RouterReplicaLive,
+            crate::handlers::inference_telemetry::RouterModelLive,
+            crate::handlers::inference_telemetry::InferenceTimeseriesPoint,
             // Legacy file migration (docs/32) — file_inventory DTOs. The list
             // body wraps `InventoryEntry` in `Paginated<_>` and the register
             // request nests `InventoryRegisterItem` inside `Vec<_>`, neither of
