@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import Activity from '@lucide/svelte/icons/activity';
 
 	let ancestry = $state<AncestryNode[]>([]);
 	let crossNetEdges = $state<CrossNetEdge[]>([]);
@@ -21,6 +22,15 @@
 
 	const executionId = $derived($page.params.execution_id);
 	const artifactId = $derived($page.params.artifact_id);
+	// Producing instance: source_net is the net_id (`mekhan-{instance_uuid}`);
+	// execution_id is net_id + a run suffix. Either resolves to /instances/{id}.
+	const instanceId = $derived(
+		artifact?.source_net
+			? artifact.source_net.replace(/^mekhan-/, '')
+			: executionId
+				? executionId.replace(/^mekhan-/, '').split('-').slice(0, 5).join('-')
+				: null
+	);
 
 	$effect(() => {
 		if (executionId && artifactId) {
@@ -85,6 +95,13 @@
 
 		{#if ancestry.length > 0}
 			<Badge variant="secondary">{ancestry.length} events</Badge>
+		{/if}
+
+		{#if instanceId}
+			<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="gap-1.5">
+				<Activity class="h-4 w-4" />
+				Open instance
+			</Button>
 		{/if}
 	</div>
 

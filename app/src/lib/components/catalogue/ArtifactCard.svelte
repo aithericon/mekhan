@@ -7,6 +7,7 @@
 	import Download from '@lucide/svelte/icons/download';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Workflow from '@lucide/svelte/icons/workflow';
+	import Activity from '@lucide/svelte/icons/activity';
 	import Server from '@lucide/svelte/icons/server';
 	import Star from '@lucide/svelte/icons/star';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -159,6 +160,16 @@
 	const executionId = $derived(entry.execution_id || entry.job_id || null);
 	const netShort = $derived(entry.source_net ? entry.source_net.replace(/^mekhan-/, '').slice(0, 8) : null);
 	const lineageTarget = $derived(entry.process_id ?? entry.job_id?.split(':')[0] ?? null);
+	// The producing workflow instance: net_id is `mekhan-{instance_uuid}`, and
+	// `source_net` IS the net_id. Fall back to execution_id (= net_id + a run
+	// suffix), taking the leading UUID. /instances/{id} → process view.
+	const instanceId = $derived(
+		entry.source_net
+			? entry.source_net.replace(/^mekhan-/, '')
+			: entry.execution_id
+				? entry.execution_id.replace(/^mekhan-/, '').split('-').slice(0, 5).join('-')
+				: null
+	);
 	const Icon = $derived(fileIcon());
 
 	// The canonical (or first) physical copy — surfaced in the collapsed row.
@@ -262,6 +273,20 @@
 
 		<!-- Actions -->
 		<div class="flex shrink-0 items-center gap-0.5">
+			{#if instanceId}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<a
+							href="/instances/{instanceId}/process"
+							class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						>
+							<Activity class="size-4" />
+						</a>
+					</Tooltip.Trigger>
+					<Tooltip.Content>Open instance</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+
 			{#if lineageTarget}
 				<Tooltip.Root>
 					<Tooltip.Trigger>
@@ -431,6 +456,14 @@
 					{#if entry.process_step}
 						<dt class="text-muted-foreground">Step</dt>
 						<dd class="min-w-0 truncate text-foreground">{entry.process_step}</dd>
+					{/if}
+					{#if instanceId}
+						<dt class="text-muted-foreground">Instance</dt>
+						<dd class="flex min-w-0 items-center gap-1.5">
+							<a href="/instances/{instanceId}/process" class="inline-flex items-center gap-1 truncate font-mono text-xs hover:text-primary">
+								<Activity class="size-3 shrink-0" />{instanceId}
+							</a>
+						</dd>
 					{/if}
 					{#if entry.source_net}
 						<dt class="text-muted-foreground">Net</dt>
