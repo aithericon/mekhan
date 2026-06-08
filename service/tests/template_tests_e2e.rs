@@ -303,6 +303,8 @@ async fn seed_template_with_human_task(db: &sqlx::PgPool) -> (Uuid, String, Stri
         slug: Some(human_slug.clone()),
         position: Position { x: 0.0, y: 0.0 },
         data: WorkflowNodeData::HumanTask {
+            capacity: None,
+            requirements: None,
             label: "Review".to_string(),
             description: None,
             task_title: "Review".to_string(),

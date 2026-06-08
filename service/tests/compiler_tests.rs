@@ -249,6 +249,8 @@ fn human_task_produces_group_signal_and_transitions() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Review".to_string(),
                     description: None,
                     task_title: "Please review".to_string(),
@@ -826,6 +828,8 @@ fn parallel_split_join_produces_fork_and_join() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Task A".to_string(),
                     description: None,
                     task_title: "Do A".to_string(),
@@ -843,6 +847,8 @@ fn parallel_split_join_produces_fork_and_join() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Task B".to_string(),
                     description: None,
                     task_title: "Do B".to_string(),
@@ -973,6 +979,8 @@ fn loop_produces_enter_continue_exit() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Body".to_string(),
                     description: None,
                     task_title: "Body".to_string(),
@@ -1083,6 +1091,8 @@ fn unreachable_node_fails() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Orphan".to_string(),
                     description: None,
                     task_title: "unreachable".to_string(),
@@ -1374,6 +1384,8 @@ fn cycle_in_non_loop_edges_fails() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "A".to_string(),
                     description: None,
                     task_title: "A".to_string(),
@@ -1391,6 +1403,8 @@ fn cycle_in_non_loop_edges_fails() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "B".to_string(),
                     description: None,
                     task_title: "B".to_string(),
@@ -1988,6 +2002,8 @@ fn scope_creates_group_in_air() {
                 slug: None,
                 position: pos(),
                 data: WorkflowNodeData::HumanTask {
+                    capacity: None,
+                    requirements: None,
                     label: "Review".to_string(),
                     description: None,
                     task_title: "Review".to_string(),
@@ -2631,6 +2647,8 @@ fn loop_condition_can_reference_iteration_local() {
         slug: None,
         position: pos(),
         data: WorkflowNodeData::HumanTask {
+            capacity: None,
+            requirements: None,
             label: "Body".to_string(),
             description: None,
             task_title: "Body".to_string(),
@@ -3046,6 +3064,8 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
         slug: None,
         position: pos(),
         data: WorkflowNodeData::HumanTask {
+            capacity: None,
+            requirements: None,
             label: "Review".to_string(),
             description: None,
             task_title: "Review".to_string(),
@@ -5110,6 +5130,8 @@ fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
         slug: None,
         position: pos(),
         data: WorkflowNodeData::HumanTask {
+            capacity: None,
+            requirements: None,
             label: "Approve".to_string(),
             description: None,
             task_title: "Approve".to_string(),
