@@ -815,6 +815,13 @@
                 "azblob"
               ],
               "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
+              ],
+              "type": "string"
             }
           ]
         },
@@ -1254,6 +1261,13 @@
               "description": "Azure Blob Storage.",
               "enum": [
                 "azblob"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
               ],
               "type": "string"
             }
@@ -7727,7 +7741,7 @@
         }
       ],
       "logic": {
-        "source": "#{ body: input, data: #{ iteration: 0, observations: (input.observations), f_best: (input.f_best), best_a: (0.0), best_d: (0.0), budget: (input.max_iterations) } }",
+        "source": "#{ body: input, data: #{ iteration: 0, observations: (if type_of(input.observations) == \"array\" { input.observations } else { [] }), f_best: (if type_of(input.observations) == \"array\" && input.observations.len() > 0 { input.f_best } else { 1e18 }), best_a: (0.0), best_d: (0.0), budget: (input.max_iterations) } }",
         "type": "rhai"
       },
       "name": "BO Iterations - Enter Loop",
