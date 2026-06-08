@@ -180,6 +180,7 @@ pub async fn test_app_with_authenticator(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -237,6 +238,7 @@ pub async fn test_app_with_introspection(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -292,6 +294,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -349,6 +352,7 @@ pub async fn test_app() -> (Router, PgPool) {
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -405,6 +409,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -463,6 +468,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -531,6 +537,7 @@ pub async fn test_app_waiters(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
@@ -599,6 +606,7 @@ pub async fn test_app_with_petri_url_and_triggers(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),

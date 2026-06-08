@@ -468,6 +468,12 @@ impl TaskStep {
 pub struct HumanTaskRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// Opt-in caller-supplied task identity. Honored ONLY by the human_task
+    /// effect handler when `Some` (the pooled human-task lowering sets it to
+    /// the capacity grant_id so `hpi_tasks.id == task_id == grant_id`); when
+    /// `None` the handler mints a UUID as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub net_id: Option<String>,
     /// Organization ID for routing this task to the correct HPI org.

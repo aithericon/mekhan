@@ -107,17 +107,24 @@ impl EffectHandler for HumanTaskHandler {
             )));
         }
 
-        // Always mint a fresh task_id. A human-task dispatch is always a new
-        // assignment, so it must NOT inherit identity from the upstream control
-        // token. The control-token model whitelists `task_id` as a slim by-value
-        // key (see compiler token_shape/surface.rs), and the human-task yield
-        // emits a token carrying it — so a chained HumanTask would otherwise see
-        // `request.task_id == Some(<prior task's id>)` and reuse it. That
-        // collapses sequential tasks to one runtime identity (BFF projection
-        // ON CONFLICT (id) DO NOTHING drops the second; completion/cancel
-        // correlation keys on task_id become ambiguous). No legitimate caller
-        // supplies a task_id, so unconditionally overwriting is safe.
-        request.task_id = Some(uuid::Uuid::new_v4().to_string());
+        // Mint a fresh task_id unless the caller forced one. A human-task
+        // dispatch is normally a new assignment, so it must NOT inherit identity
+        // from the upstream control token. The control-token model whitelists
+        // `task_id` as a slim by-value key (see compiler token_shape/surface.rs),
+        // and the human-task yield emits a token carrying it — so a chained
+        // HumanTask would otherwise see `request.task_id == Some(<prior task's
+        // id>)` and reuse it. That collapses sequential tasks to one runtime
+        // identity (BFF projection ON CONFLICT (id) DO NOTHING drops the second;
+        // completion/cancel correlation keys on task_id become ambiguous). So a
+        // PROPAGATED `task_id` is still ignored (overwritten). The one exception
+        // is an explicit `forced_task_id` — set ONLY by the pooled human-task
+        // lowering to the capacity grant_id — which we honor so the offer
+        // projection row and the task share one id. No legitimate caller
+        // supplies a plain `task_id`, so overwriting that remains safe.
+        request.task_id = request
+            .forced_task_id
+            .take()
+            .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
 
         // Always use the client's scoped net_id — the client is created per-net
         // and is the authoritative source for routing.

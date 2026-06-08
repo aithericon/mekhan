@@ -247,6 +247,23 @@ async fn discover_resource_globals(
             }
         }
 
+        // `HumanTask.capacity.alias` — a capacity-bound human task (P3, docs/34)
+        // binds to a human `capacity` resource exactly like an `Executor`-pooled
+        // AutomatedStep. MUST be collected HERE (before the `_ => continue` of the
+        // executor-backend match below), since a HumanTask is neither an
+        // AutomatedStep nor an Agent — otherwise its alias is never discovered and
+        // `resolve_binding` hard-fails at lowering with `WorkspaceResourceUnknown`.
+        if let WorkflowNodeData::HumanTask {
+            capacity: Some(binding),
+            ..
+        } = &node.data
+        {
+            if !binding.alias.is_empty() {
+                envelope_heads.insert(binding.alias.clone());
+                declared.push((node.id.clone(), binding.alias.clone()));
+            }
+        }
+
         let (backend_type, config_owned, config_ref, entrypoint): (
             crate::models::template::ExecutionBackendType,
             Option<serde_json::Value>,

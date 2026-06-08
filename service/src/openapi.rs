@@ -121,6 +121,18 @@ use utoipa::OpenApi;
             // `Vec<_>`, which utoipa's auto-discovery doesn't fully walk, so
             // register it explicitly for frontend codegen.
             crate::models::runner::RunnerPresenceSnapshot,
+            // Roster (docs/33 §7 — humans as a capacity) — the human counterpart
+            // to the runner DTOs. List/get bodies refer to the summaries/details
+            // via PaginatedResponse<_> / Vec<_>, and the availability config is
+            // nested inside the detail + request bodies, so register them all
+            // explicitly for frontend codegen.
+            crate::models::roster::LivenessSource,
+            crate::models::roster::AvailabilityConfig,
+            crate::models::roster::RosterMemberSummary,
+            crate::models::roster::RosterMemberDetail,
+            crate::models::roster::EnrollMemberRequest,
+            crate::models::roster::UpdateRosterMemberRequest,
+            crate::models::roster::AvailabilityRequest,
             // Phase A (Grouped + Enrolled Workers) — the worker identity plane:
             // enroll / registration-token / list-detail DTOs. The list/get bodies
             // refer to the summaries via PaginatedResponse<_>, which utoipa's
@@ -322,6 +334,7 @@ use utoipa::OpenApi;
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
         (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
         (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
+        (name = "roster", description = "Humans as a capacity (docs/33 §7) — the set of `workspace_members` enrolled into a human `capacity` resource backed by a `pool-<capacity_id>` net (the human counterpart to the runner fleet). Admin management (enroll / update / revoke, caps validated against the capability registry) + self-service (`/roster/me`, `/roster/availability` durable toggle). A member's availability drives presence admission, reusing the runner pool plumbing verbatim."),
         (name = "workers", description = "Grouped + Enrolled Workers — the identity plane on the executor worker pool: enrolled, group-scoped, revocable workers that still PULL. Public `POST /enroll` is authed by a `wt_` registration token in the body; workers then authenticate with a mekhan-native `wkr_` bearer. A group is backed by a `capacity` resource with the `worker` preset. Plus the anonymous worker-pool coverage read."),
         (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
         (name = "capacities", description = "Capacity aggregator (docs/23 + docs/24) — the unified Control-Plane read: every `capacity` + `datacenter` resource classified by the SINGLE dispatch authority (`CapacityAxes::backend`) with live utilization (token holders / presence online / worker coverage / scheduler lease state)."),

@@ -132,6 +132,17 @@ pub const POOL_RELEASE_INBOX: &str = "release_inbox";
 /// runner is idempotent at the controller (it tracks which runners it admitted).
 pub const POOL_PRESENCE_ACQUIRE_INBOX: &str = "presence_acquire";
 
+/// The offer pool's unit-initiated CLAIM inbox
+/// (`bridge_in::<PresenceClaim>("presence_claim", …)`). Under `Dispatch::Offer`,
+/// an offer is match-once PARKED and bound only when a UNIT itself publishes a
+/// claim token here (cross-net bridge subject
+/// `petri.bridge.pool-<rid>.presence_claim`). First claim wins — `satisfies`
+/// re-confirms the parked offer's requirements against the claimant's caps, the
+/// offer token is consumed, and all other would-be claimants are implicitly
+/// rescinded. This is the offer-dispatch sibling of `presence_acquire`: the
+/// latter is mekhan-INITIATED admission, this is UNIT-INITIATED binding.
+pub const POOL_PRESENCE_CLAIM_INBOX: &str = "presence_claim";
+
 /// The presence pool's runner-expiry SIGNAL place
 /// (`signal::<PresenceExpired>("presence_expired", …)`). mekhan injects a BARE
 /// `{ runner_id }` token here (signal subject

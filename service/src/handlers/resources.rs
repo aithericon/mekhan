@@ -1113,8 +1113,18 @@ async fn ensure_pool_net_for_resource(
 ) {
     use crate::models::capacity::{axes_for_resource, CapacityBackend};
 
-    match axes_for_resource(resource_type, public).map(|a| a.backend()) {
-        Some(CapacityBackend::Tokens) => {
+    let Some(axes) = axes_for_resource(resource_type, public) else {
+        // A non-pool resource is not a capacity at all.
+        tracing::debug!(
+            %resource_id,
+            resource_type,
+            "resource resolves to no admission backend; no pool-net deployed"
+        );
+        return;
+    };
+
+    match axes.backend() {
+        CapacityBackend::Tokens => {
             // The seeded count is the `Fixed(n)` unit count flattened into
             // `capacity_amount` (the `limit` preset's free axis). Absent/malformed
             // ⇒ skip the deploy (best-effort, same posture the old path had for a
@@ -1138,18 +1148,30 @@ async fn ensure_pool_net_for_resource(
             )
             .await;
         }
-        Some(CapacityBackend::Presence) => {
+        CapacityBackend::Presence => {
             // A presence pool is capacity-LESS — its backing net seeds nothing and
             // reads no config. mekhan's presence controller injects one unit per
             // live runner (presence_acquire) and reaps it on presence-lease expiry
             // (presence_expired). Deploy is idempotent + engine-down-tolerant.
-            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
-                &state.petri,
-                resource_id,
-            )
-            .await;
+            //
+            // The `dispatch` axis selects the admission discipline: `Offer` parks a
+            // match-once offer that binds on a unit-initiated claim (first-claim-wins,
+            // rest implicitly rescinded); the default direct-assign net binds eagerly.
+            if axes.dispatch == crate::models::capacity::Dispatch::Offer {
+                crate::petri::presence_pool_net::ensure_presence_offer_pool_net_deployed(
+                    &state.petri,
+                    resource_id,
+                )
+                .await;
+            } else {
+                crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                    &state.petri,
+                    resource_id,
+                )
+                .await;
+            }
         }
-        Some(CapacityBackend::Scheduler) => {
+        CapacityBackend::Scheduler => {
             // The `datacenter` kind. `scheduler_flavor` (public field) is the
             // discriminant the connection builder reads: `"slurm"` → SSH
             // salloc/scancel, `"nomad"` → Nomad API, `"http"` (default) →
@@ -1177,11 +1199,10 @@ async fn ensure_pool_net_for_resource(
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
         }
-        Some(CapacityBackend::Queue) | Some(CapacityBackend::Deferred) | None => {
+        CapacityBackend::Queue | CapacityBackend::Deferred => {
             // A competing_consumer (pull) capacity has NO admission net (it is a
             // static partition / shared work queue — no per-task matcher); a
-            // `consume` capacity's backing is deferred (doc 24 §4); a non-pool
-            // resource is not a capacity at all.
+            // `consume` capacity's backing is deferred (doc 24 §4).
             tracing::debug!(
                 %resource_id,
                 resource_type,
