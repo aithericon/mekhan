@@ -528,6 +528,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // asset-ref demos 21-24); bare `compile_to_air` has an empty KnownGlobals.
         // Live-only (Threlte/urdf-loader render + playback source).
         "49-xarm-twin",
+        // 51-scene-twin (live planning-scene twin — samples + grasped sample on
+        // the arm) — same class as 49: ros AutomatedSteps target the `xarm_fleet`
+        // runner_group via `deploymentModel.capacity.alias`, carry a `ros`
+        // capability Requirement, and reference a `robot_description` asset by
+        // ref-key (`;model=`), none resolvable by bare `compile_to_air` (empty
+        // KnownResources/KnownGlobals). Live-only (Threlte scene render + MoveIt).
+        "51-scene-twin",
     ]
     .into_iter()
     .collect();
