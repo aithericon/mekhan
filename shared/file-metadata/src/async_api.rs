@@ -19,7 +19,16 @@ use crate::{ExtractAllOptions, FileResult};
 pub async fn extract_metadata_async(path: &Path) -> Result<FileMetadata, MetadataError> {
     let path: PathBuf = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let mut meta = crate::extract_metadata(&path)?;
+        // Unknown / unmodeled formats (e.g. `.fasta`, arbitrary binaries) make
+        // `extract_metadata` return `UnsupportedFormat` — but the content hash
+        // is still needed (content-addressing, by-reference registration, the
+        // 4M-file reconcile). Fall back to a checksum-only FileMetadata so every
+        // readable file is hashable, never aborting before the checksum.
+        let mut meta = match crate::extract_metadata(&path) {
+            Ok(m) => m,
+            Err(MetadataError::UnsupportedFormat(_)) => FileMetadata::checksum_only(&path),
+            Err(e) => return Err(e),
+        };
         meta.checksum = crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
         Ok(meta)
     })

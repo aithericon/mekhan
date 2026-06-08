@@ -22,8 +22,11 @@ use serde::{Deserialize, Serialize};
 /// `PublishTopic` (the default) publishes a single message to a topic.
 /// `CallService` performs a request/response service call. `AwaitTopic`
 /// blocks for the next message on a topic. `SendActionGoal` dispatches a
-/// goal to an action server. This is the source of truth for which rosbridge
-/// op the backend issues.
+/// goal to an action server. `MonitorScene` polls move_group's
+/// `/get_planning_scene` on a cadence for a bounded duration and streams each
+/// snapshot onto a DATA channel — a live planning-scene twin DECOUPLED from
+/// any single motion, so one monitor can watch a whole multi-step run. This is
+/// the source of truth for which rosbridge op the backend issues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +36,7 @@ pub enum RosOperation {
     CallService,
     AwaitTopic,
     SendActionGoal,
+    MonitorScene,
 }
 
 /// Configuration for a single ROS interaction job.
@@ -72,6 +76,15 @@ pub struct RosConfig {
     /// data channel carries the default per-feedback joint-state stream instead.
     #[serde(default)]
     pub scene_stream_ms: Option<u64>,
+
+    /// How long a `monitor_scene` op keeps polling `/get_planning_scene` (in
+    /// milliseconds) before it closes its data channel. Decouples the
+    /// planning-scene twin from any single motion: a monitor sized to outlast
+    /// the run streams the WHOLE multi-step session (arm picking/placing several
+    /// samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
+    /// (so it always terminates). Ignored by the non-monitor operations.
+    #[serde(default)]
+    pub scene_duration_ms: Option<u64>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -91,6 +104,7 @@ mod tests {
             fields: serde_json::json!({ "linear": { "x": 1.0 } }),
             timeout_ms: 15_000,
             scene_stream_ms: None,
+            scene_duration_ms: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let de: RosConfig = serde_json::from_str(&json).unwrap();
@@ -144,5 +158,29 @@ mod tests {
         }"#;
         let cfg: RosConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.scene_stream_ms, None);
+    }
+
+    #[test]
+    fn monitor_scene_op_and_duration_parse() {
+        let json = r#"{
+            "operation": "monitor_scene",
+            "interface_name": "/get_planning_scene",
+            "interface_type": "moveit_msgs/srv/GetPlanningScene",
+            "scene_stream_ms": 200,
+            "scene_duration_ms": 120000
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.operation, RosOperation::MonitorScene);
+        assert_eq!(cfg.scene_stream_ms, Some(200));
+        assert_eq!(cfg.scene_duration_ms, Some(120_000));
+
+        // Duration omitted → None (falls back to timeout_ms at runtime).
+        let json = r#"{
+            "operation": "monitor_scene",
+            "interface_name": "/get_planning_scene",
+            "interface_type": "moveit_msgs/srv/GetPlanningScene"
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.scene_duration_ms, None);
     }
 }

@@ -1,0 +1,29 @@
+{
+  "asset_type": {
+    "name": "swap_inventory",
+    "display_name": "Swap Inventory",
+    "cardinality": "collection",
+    "fields": [
+      { "name": "sample_id", "label": "Sample ID", "kind": "text", "required": true },
+      { "name": "slot_id", "label": "Slot ID", "kind": "text", "required": true },
+      { "name": "dimensions", "label": "Dimensions", "kind": "json", "required": true },
+      { "name": "pose", "label": "Pose", "kind": "json", "required": true }
+    ]
+  },
+  "ref_key": "swap_inventory",
+  "display_name": "Swap Inventory",
+  "records": [
+    {
+      "sample_id": "S1",
+      "slot_id": "A1",
+      "dimensions": [0.04, 0.04, 0.06],
+      "pose": { "position": { "x": 0.30, "y": -0.15, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } }
+    },
+    {
+      "sample_id": "S3",
+      "slot_id": "A3",
+      "dimensions": [0.04, 0.04, 0.06],
+      "pose": { "position": { "x": 0.30, "y": 0.075, "z": 0.28 }, "orientation": { "x": 1, "y": 0, "z": 0, "w": 0 } }
+    }
+  ]
+}

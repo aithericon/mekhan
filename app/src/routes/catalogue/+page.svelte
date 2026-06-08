@@ -134,7 +134,12 @@
 	}
 
 	function entryKey(e: CatalogueEntry): string {
-		return `${e.execution_id}/${e.id}`;
+		// `entry_id` is the surrogate PK (always unique). Content-addressed /
+		// by-reference rows have NULL execution_id + id, so the old
+		// `${execution_id}/${id}` collapsed to `/` and collided across every
+		// such row (duplicate keyed-each crash). Prefer entry_id, then the
+		// content hash, then the legacy job-provenance pair.
+		return e.entry_id ?? e.content_hash ?? `${e.execution_id}/${e.id}`;
 	}
 
 	function lineageId(e: CatalogueEntry): string | null {

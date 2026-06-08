@@ -174,7 +174,9 @@ fn output_root_key(interface_type: &str, operation: RosOperation) -> Option<Stri
         return None;
     }
     match operation {
-        RosOperation::PublishTopic => None,
+        // No ROS-typed response: a synthetic port is surfaced in
+        // `derive_output_port` instead, so these return no registry root.
+        RosOperation::PublishTopic | RosOperation::MonitorScene => None,
         RosOperation::AwaitTopic => Some(base),
         RosOperation::CallService => Some(format!("{base}_Response")),
         RosOperation::SendActionGoal => Some(format!("{base}_Result")),
@@ -225,6 +227,26 @@ fn derive_output_port(config: &Value) -> Port {
             id: "out".into(),
             label: "Output".into(),
             fields: vec![published_field()],
+        };
+    }
+
+    // MonitorScene drives no ROS request/response — it polls the planning scene
+    // and streams it onto a data channel — so it surfaces a synthetic
+    // `{ frames_streamed: Number }` count instead of a typed message port.
+    if operation == RosOperation::MonitorScene {
+        return Port {
+            id: "out".into(),
+            label: "Output".into(),
+            fields: vec![PortField {
+                name: "frames_streamed".into(),
+                label: "Frames streamed".into(),
+                kind: FieldKind::Number,
+                required: false,
+                options: None,
+                description: Some("Number of planning-scene snapshots streamed to the twin.".into()),
+                accept: None,
+                schema: None,
+            }],
         };
     }
 

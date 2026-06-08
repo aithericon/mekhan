@@ -230,6 +230,18 @@ fn build_command_from_event(
         signal_key,
         process_id,
         process_step,
+        by_reference: detail
+            .get("by_reference")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        file_server_id: detail
+            .get("file_server_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        reference_path: detail
+            .get("reference_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         created_at: Utc::now(),
     })
 }

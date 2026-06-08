@@ -68,6 +68,11 @@ pub async fn log_artifact(
             extract_file_metadata: extract_metadata,
             blocking: true,
             storage_config_json: String::new(),
+            // CLI logs artifacts the normal way (upload). By-reference
+            // registration is the SDK `log_artifact(upload=False)` path.
+            no_upload: false,
+            file_server_id: String::new(),
+            reference_path: String::new(),
         })
         .await?
         .into_inner();

@@ -7,7 +7,7 @@
       "data": {
         "type": "start",
         "label": "Start",
-        "processName": "Legacy Crawl + Index + Register",
+        "processName": "Legacy Crawl + Register by reference",
         "initial": {
           "id": "in",
           "label": "Crawl parameters",
@@ -18,13 +18,6 @@
               "kind": "text",
               "required": true,
               "default": "demo-nas"
-            },
-            {
-              "name": "mekhan_url",
-              "label": "mekhan base URL (inventory target)",
-              "kind": "text",
-              "required": true,
-              "default": "http://localhost:13100"
             }
           ]
         }
@@ -134,46 +127,14 @@
       }
     },
     {
-      "id": "index",
-      "type": "automated_step",
-      "slug": "index",
-      "position": { "x": 1260, "y": 80 },
-      "data": {
-        "type": "automated_step",
-        "label": "Index by observation (inventory only)",
-        "description": "The hashless OBSERVE half of the lifecycle. POSTs the folded listing to mekhan's `/api/v1/inventory/index` — one `{path}` row per crawled file under the Start `file_server_id`, status `indexed`. This writes `file_inventory` rows ONLY: an indexed file has a location but no claimed content identity yet (crawl read no bytes). It deliberately CANNOT write a catalogue row — claiming an identity is what `register` is for. The rows appear in the app's Inventory view as `indexed`, awaiting a probe+register. The literal `fold.files`, `start.file_server_id`, and `start.mekhan_url` reads in the source MUST stay verbatim so the compiler synthesizes their read-arcs.",
-        "channels": [],
-        "executionSpec": {
-          "backendType": "python",
-          "entrypoint": "main.py",
-          "config": {
-            "python": "python3",
-            "requirements": [],
-            "virtualenv": false,
-            "sdk": true,
-            "inherit_env": true,
-            "env": {}
-          }
-        },
-        "output": {
-          "id": "out",
-          "label": "Index result",
-          "fields": [
-            { "name": "files_seen", "label": "Files seen", "kind": "number" },
-            { "name": "inventory_upserted", "label": "Inventory rows indexed", "kind": "number" }
-          ]
-        }
-      }
-    },
-    {
       "id": "register",
       "type": "automated_step",
       "slug": "register",
-      "position": { "x": 1580, "y": 80 },
+      "position": { "x": 1260, "y": 80 },
       "data": {
         "type": "automated_step",
-        "label": "Probe + register (fills both)",
-        "description": "The coupling half. The runner is co-located with the files, so it HASHES each indexed file (stdlib hashlib SHA-256 over the storage root + crawled path) — the migration model where the edge probes and the server couples. It then POSTs one `{file_server_id, path, content_hash, status: \"registered\", size_bytes, name}` row per file to `/api/v1/inventory/register`, which fills BOTH halves of the equation atomically: a content-addressed `catalogue_entries` row keyed on the hash AND the physical `file_inventory` copy (promoting the same `(file_server_id, path)` row from `indexed` to `registered`). Because every file now carries a hash, `catalogue_inserted` matches the file count — you can no longer register only one side. The literal `fold.files`, `seed.root`, `start.file_server_id`, and `start.mekhan_url` reads in the source MUST stay verbatim so the compiler synthesizes their read-arcs.",
+        "label": "Register each file BY REFERENCE (log_artifact upload=False)",
+        "description": "Registers each crawled file BY REFERENCE via `log_artifact(..., upload=False)` — no bytes are moved, no HTTP is made. The runner is co-located with the files, so for each folded file the SDK/executor hashes it locally over IPC and uploads NOTHING (the bytes stay on the file server). A single `log_artifact` call is the whole registration: the platform's causality projector fills BOTH halves atomically server-side — the content-addressed `catalogue_entries` row (logical identity, keyed on the SHA-256) AND the physical `file_inventory` copy at `(file_server_id, reference_path)`. The literal `fold.files`, `seed.root`, and `start.file_server_id` reads in the source MUST stay verbatim so the compiler synthesizes their read-arcs.",
         "channels": [],
         "executionSpec": {
           "backendType": "python",
@@ -191,9 +152,7 @@
           "id": "out",
           "label": "Register result",
           "fields": [
-            { "name": "files_seen", "label": "Files seen", "kind": "number" },
-            { "name": "inventory_upserted", "label": "Inventory rows registered", "kind": "number" },
-            { "name": "catalogue_inserted", "label": "Catalogue rows inserted", "kind": "number" }
+            { "name": "files_registered", "label": "Files registered by reference", "kind": "number" }
           ]
         }
       }
@@ -208,9 +167,7 @@
         "resultMapping": [
           { "targetField": "files_crawled", "expression": "crawl.count" },
           { "targetField": "batches", "expression": "crawl.batches" },
-          { "targetField": "inventory_indexed", "expression": "index.inventory_upserted" },
-          { "targetField": "inventory_registered", "expression": "register.inventory_upserted" },
-          { "targetField": "catalogue_inserted", "expression": "register.catalogue_inserted" }
+          { "targetField": "files_registered", "expression": "register.files_registered" }
         ]
       }
     }
@@ -219,8 +176,7 @@
     { "id": "e_start_seed", "source": "start", "target": "seed_nas", "targetHandle": "in", "type": "sequence" },
     { "id": "e_seed_crawl", "source": "seed_nas", "target": "crawl", "targetHandle": "in", "type": "sequence" },
     { "id": "e_crawl_fold", "source": "crawl", "sourceHandle": "crawl", "target": "fold", "targetHandle": "in", "type": "sequence", "join": "gather" },
-    { "id": "e_fold_index", "source": "fold", "target": "index", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_index_register", "source": "index", "target": "register", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_fold_register", "source": "fold", "target": "register", "targetHandle": "in", "type": "sequence" },
     { "id": "e_register_end", "source": "register", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

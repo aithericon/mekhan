@@ -25,6 +25,7 @@
 		type RunnerPresenceSnapshot
 	} from '$lib/api/models';
 	import { shortId } from '$lib/components/fleet/model-pool';
+	import { hostSummary as hostLine } from '$lib/components/fleet/runner-identity';
 	import { listRunners, type RunnerSummary } from '$lib/api/runners';
 	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 
@@ -94,25 +95,10 @@
 	}
 
 	/** Compact one-line host summary from the presence fingerprint, e.g.
-	 *  "CUDA ×2 · 80 GB · gpu-box-3 · 10.0.0.7". Empty string when no host. */
+	 *  "CUDA ×2 · 80 GB · gpu-box-3 · 10.0.0.7". Empty string when no host.
+	 *  Delegates to the shared helper so the roster + this lens never drift. */
 	function hostSummary(runnerId: string): string {
-		const h = presence[runnerId]?.host;
-		if (!h) return '';
-		const parts: string[] = [];
-		const accel = (h.accelerator ?? '').toLowerCase();
-		if (accel === 'cuda' || accel === 'rocm') {
-			let head = accel.toUpperCase();
-			if (h.gpu_count) head += ` ×${h.gpu_count}`;
-			if (h.vram_gb) head += ` · ${h.vram_gb} GB`;
-			parts.push(head);
-		} else if (accel === 'metal') {
-			parts.push(`Metal${h.vram_gb ? ` · ${h.vram_gb} GB` : ''}`);
-		} else if (accel === 'cpu') {
-			parts.push(h.cpu_cores ? `CPU · ${h.cpu_cores} cores` : 'CPU');
-		}
-		if (h.hostname) parts.push(h.hostname);
-		if (h.ips && h.ips.length > 0) parts.push(h.ips[0]);
-		return parts.join(' · ');
+		return hostLine(presence[runnerId]?.host);
 	}
 
 	// ── Actions ────────────────────────────────────────────────────────────────
@@ -235,9 +221,9 @@
 						<span class="flex shrink-0 items-center gap-2">
 							<span class="text-sm text-muted-foreground">{node.engines.length} engine(s)</span>
 							<a
-								href="/fleet"
+								href="/fleet?tab=runners&role=engines"
 								class="inline-flex items-center gap-0.5 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-								title="Open this runner in the fleet board (full host record + capabilities)"
+								title="Open the fleet roster filtered to model servers — full host record, role, and capabilities"
 							>
 								fleet <ArrowUpRight class="size-3" />
 							</a>

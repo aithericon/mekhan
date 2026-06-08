@@ -1169,6 +1169,18 @@ async fn handle_log_artifact(
             file_metadata: None,
             metadata,
             created_at: Utc::now(),
+            // no_upload == true  ⇒  register by reference (no byte upload).
+            by_reference: req.no_upload,
+            file_server_id: if req.no_upload && !req.file_server_id.is_empty() {
+                Some(req.file_server_id.clone())
+            } else {
+                None
+            },
+            reference_path: if req.no_upload && !req.reference_path.is_empty() {
+                Some(req.reference_path.clone())
+            } else {
+                None
+            },
         };
 
         let idx = state.artifacts.len();
@@ -1185,6 +1197,32 @@ async fn handle_log_artifact(
         blocking = req.blocking,
         "artifact logged"
     );
+
+    // By-reference artifact: the SDK passed `upload=False`, so we do NOT push the
+    // bytes to any object store. The artifact's physical home stays at
+    // (file_server_id, reference_path); we still hash + enrich it (mekhan's
+    // catalogue/inventory coupling content-addresses every artifact on
+    // `file_metadata.checksum.digest`, by-reference or not). Hashing is cheap +
+    // synchronous, so we do it inline here regardless of `blocking`.
+    if artifact_for_upload.by_reference {
+        let mut enriched = artifact_for_upload.clone();
+        aithericon_executor_storage::local::enrich_artifact_metadata(
+            &mut enriched,
+            std::path::Path::new(&path),
+        )
+        .await;
+        {
+            let mut state = state.lock().await;
+            if artifact_index < state.artifacts.len() {
+                state.artifacts[artifact_index] = enriched;
+            }
+        }
+        debug!(
+            artifact_id = %req.artifact_id,
+            "artifact registered by reference (no upload)"
+        );
+        return (proto::ResponseStatus::Ok, None);
+    }
 
     // Upload to store — per-artifact storage config takes priority over global store.
     #[cfg(feature = "opendal")]
