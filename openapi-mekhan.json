@@ -2649,6 +2649,31 @@
         }
       }
     },
+    "/api/v1/human-presence": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/human-presence` — live in-memory presence snapshot of the human\ncapacity pools (docs/33 P4). The human counterpart to\n`GET /api/v1/runners/presence`.",
+        "description": "Returns the presence controller's in-memory map — which enrolled members mekhan\ncurrently considers *admitted* (a live unit in their pool), NOT the durable\n`roster_members.available` intent column. Feeds the Fleet human-pool view.\n\nThe in-memory map is keyed by `(capacity_id, member_user_id)` and carries no\nworkspace, so it is filtered here to the capacities that live in the caller's\nworkspace — without this it would leak every workspace's human-capacity ids +\nmember liveness timing, exactly as `runners::runner_presence` guards.",
+        "operationId": "human_presence",
+        "responses": {
+          "200": {
+            "description": "Live human presence snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HumanPresenceSnapshot"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inference/requests": {
       "get": {
         "tags": [
@@ -2693,6 +2718,105 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/InferenceRequestLogRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inference/router-live": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/inference/router-live` — point-in-time router operational gauges.",
+        "description": "Proxies + parses the router's `/metrics` exposition into JSON so the product\nUI can render live per-replica/per-model state without a Prometheus\ndependency. Fail-soft: a missing/unreachable router yields\n`{ available: false, … }` with a 200, never a 5xx.",
+        "operationId": "router_live_metrics",
+        "responses": {
+          "200": {
+            "description": "Live router operational gauges (point-in-time); available=false when the router is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouterLiveMetrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inference/timeseries": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "`GET /api/v1/inference/timeseries` — per-model throughput / latency / errors\nover time, bucketed over the durable `inference_request_log` ledger.",
+        "description": "NOT tenant-scoped yet, for the same reason as the audit-ledger read\n(`list_inference_requests`): the ledger's `tenant_id` is the router's Bearer\ntenant, not yet mapped to the workspace UUID. Auth is still required.",
+        "operationId": "inference_timeseries",
+        "parameters": [
+          {
+            "name": "bucket_secs",
+            "in": "query",
+            "description": "Bucket width in seconds (default 60, clamped 5..3600).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "window_secs",
+            "in": "query",
+            "description": "Look-back window in seconds (default 3600, capped at 7 days).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Restrict to a single model.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "instance_id",
+            "in": "query",
+            "description": "Restrict to one workflow instance's requests.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-model inference throughput/latency/error timeseries, oldest bucket first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InferenceTimeseriesPoint"
                   }
                 }
               }
@@ -7294,6 +7418,36 @@
           },
           "400": {
             "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/inbox": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox\n(docs/33 P4).",
+        "description": "Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object\n(same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`\ntasks whose backing human capacity the caller is *enrolled in* — the offers\nthey may claim — and (b) `claimed` tasks the caller already holds (their work\nin flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility\ncontract (membership now; caps-vs-`requirements` matching deferred).\n\nMounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.",
+        "operationId": "inbox",
+        "responses": {
+          "200": {
+            "description": "The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -15871,6 +16025,38 @@
           "DELETE"
         ]
       },
+      "HumanPresenceSnapshot": {
+        "type": "object",
+        "description": "Read-API row: one tracked roster member's live presence in a human capacity.",
+        "required": [
+          "capacity_id",
+          "member_user_id",
+          "present",
+          "last_seen_ms_ago"
+        ],
+        "properties": {
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`)."
+          },
+          "last_seen_ms_ago": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the member's last liveness renewal.",
+            "minimum": 0
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The enrolled member's `workspace_members.user_id`."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether mekhan currently considers the member admitted to the pool."
+          }
+        }
+      },
       "ImageDisplay": {
         "type": "string",
         "description": "Layout mode for image blocks. Snake-case wire values: `\"single\"`,\n`\"grid\"`, `\"gallery\"`.",
@@ -16048,6 +16234,65 @@
             "type": "string"
           },
           "total_tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "InferenceTimeseriesPoint": {
+        "type": "object",
+        "description": "One `(bucket, model)` rollup of the inference ledger.",
+        "required": [
+          "bucket",
+          "model_id",
+          "requests",
+          "completed",
+          "errors",
+          "prompt_tokens",
+          "completion_tokens"
+        ],
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`cancelled` + `upstream_error` (the failure dispositions)."
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "p50_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Median request latency (ms) within the bucket; `None` if no rows."
+          },
+          "p95_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "p95 request latency (ms) within the bucket."
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requests": {
             "type": "integer",
             "format": "int64"
           }
@@ -21409,6 +21654,15 @@
             "$ref": "#/components/schemas/RosOperation",
             "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
           },
+          "scene_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). Ignored by the non-monitor operations.",
+            "minimum": 0
+          },
           "scene_stream_ms": {
             "type": [
               "integer",
@@ -21428,12 +21682,13 @@
       },
       "RosOperation": {
         "type": "string",
-        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. This is the source of truth for which rosbridge\nop the backend issues.",
+        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. `MonitorScene` polls move_group's\n`/get_planning_scene` on a cadence for a bounded duration and streams each\nsnapshot onto a DATA channel — a live planning-scene twin DECOUPLED from\nany single motion, so one monitor can watch a whole multi-step run. This is\nthe source of truth for which rosbridge op the backend issues.",
         "enum": [
           "publish_topic",
           "call_service",
           "await_topic",
-          "send_action_goal"
+          "send_action_goal",
+          "monitor_scene"
         ]
       },
       "RosterMemberDetail": {
@@ -21543,6 +21798,181 @@
         ],
         "properties": {
           "config": {}
+        }
+      },
+      "RouterGlobalCounters": {
+        "type": "object",
+        "description": "Global router counters (monotonic since the router started).",
+        "required": [
+          "requests_total",
+          "completed_total",
+          "rejected_429_total",
+          "cancelled_total",
+          "upstream_error_total"
+        ],
+        "properties": {
+          "cancelled_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completed_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rejected_429_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "requests_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "upstream_error_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RouterLiveMetrics": {
+        "type": "object",
+        "description": "Parsed snapshot of the router's `/metrics` exposition.",
+        "required": [
+          "available",
+          "global",
+          "replicas",
+          "models"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`false` ⇒ no router configured or the scrape failed; all other fields are\nempty/zero. The UI shows a \"router unreachable\" hint rather than an error."
+          },
+          "global": {
+            "$ref": "#/components/schemas/RouterGlobalCounters"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouterModelLive"
+            }
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouterReplicaLive"
+            }
+          }
+        }
+      },
+      "RouterModelLive": {
+        "type": "object",
+        "description": "One model's live demand signals (summed across its live replicas).",
+        "required": [
+          "model",
+          "inflight",
+          "starved",
+          "completed",
+          "unmetered",
+          "cancelled",
+          "upstream_error",
+          "prompt_tokens",
+          "completion_tokens"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Mean request latency (ms) derived from the histogram `_sum`/`_count`.\n`None` when no terminal request has been observed for this model."
+          },
+          "cancelled": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "inflight": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In-flight requests summed across this model's LIVE replicas (scale-DOWN\nsignal — 0 ⇒ idle).",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "starved": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative requests that found no live/un-saturated replica (the\nscale-FROM-zero demand signal).",
+            "minimum": 0
+          },
+          "unmetered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "upstream_error": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RouterReplicaLive": {
+        "type": "object",
+        "description": "One upstream replica's live admission state.",
+        "required": [
+          "replica",
+          "live",
+          "in_flight",
+          "capacity"
+        ],
+        "properties": {
+          "capacity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Admission capacity (`--max-num-seqs`) for this replica.",
+            "minimum": 0
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64",
+            "description": "In-flight requests currently admitted on this replica.",
+            "minimum": 0
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "replica": {
+            "type": "string"
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "RunAllResponse": {

@@ -340,6 +340,42 @@ pub async fn list_tasks(
     }))
 }
 
+/// GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox
+/// (docs/33 P4).
+///
+/// Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object
+/// (same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`
+/// tasks whose backing human capacity the caller is *enrolled in* — the offers
+/// they may claim — and (b) `claimed` tasks the caller already holds (their work
+/// in flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility
+/// contract (membership now; caps-vs-`requirements` matching deferred).
+///
+/// Mounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tasks/inbox",
+    responses(
+        (status = 200, description = "The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope", body = serde_json::Value),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
+pub async fn inbox(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<JsonValue>, ApiError> {
+    let workspace_id = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let member = user.subject_as_uuid();
+    let rows = queries::inbox_tasks(&state.db, workspace_id, member)
+        .await
+        .map_err(|e| {
+            tracing::error!("task inbox: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    let tasks: Vec<JsonValue> = rows.iter().map(to_human_task_json).collect();
+    Ok(Json(json!({ "tasks": tasks })))
+}
+
 /// GET /api/v1/tasks/:id — get a single task.
 ///
 /// Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`

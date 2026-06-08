@@ -120,6 +120,41 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Prometheus: optional OPS layer scraping the inference-router /metrics ──
+  # NOT part of the default `just dev` stack — it sits behind the `ops` compose
+  # profile, so `docker compose up -d` skips it and only `just dev up-prometheus`
+  # (which names the service explicitly) brings it up. The product UI does NOT
+  # depend on this: the /models Router page reads real data from mekhan
+  # (TimescaleDB ledger timeseries + a live router /metrics proxy). Prometheus is
+  # here for ops dashboards (point Grafana at it) and to give the `prometheus`
+  # executor backend a live target to query in dev.
+  #
+  # The router runs as a HOST process (`just dev up-router`), not a container, so
+  # the scrape target is `host.docker.internal:<router_port>`. The config is
+  # RENDERED per-worktree to `.dev/prometheus.yml` by `up-prometheus` (the router
+  # port is slot-dependent and Prometheus does not expand env vars in scrape
+  # configs), and mounted read-only here. `extra_hosts` maps host.docker.internal
+  # on Linux (Docker Desktop/macOS provide it natively).
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["ops"]
+    ports:
+      - "${MEKHAN_PROMETHEUS_PORT:-19090}:9090"
+    volumes:
+      - ./.dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - mekhan-prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=3d"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # ── Zitadel: local OIDC/SSO provider for the auth integration ────────────
   # First-instance bootstrap creates:
   #   - org "Mekhan"
@@ -225,4 +260,5 @@ volumes:
   mekhan-natsdata:
   mekhan-rustfs-data:
   mekhan-rustfs-logs:
+  mekhan-prometheus-data:
   zitadel-pgdata:

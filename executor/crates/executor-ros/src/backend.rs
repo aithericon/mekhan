@@ -104,6 +104,11 @@ struct ResolvedRosConfig {
     /// joint-state feedback stream (byte-for-byte unchanged).
     #[serde(default)]
     scene_stream_ms: Option<u64>,
+    /// `monitor_scene` poll window: how long the standalone scene monitor keeps
+    /// polling `/get_planning_scene` before it closes its data channel. `None` ⇒
+    /// the monitor runs until `timeout_ms`. Only the `MonitorScene` op reads it.
+    #[serde(default)]
+    scene_duration_ms: Option<u64>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -194,6 +199,7 @@ impl ExecutionBackend for RosBackend {
             feedback_channel,
             feedback_data_channel,
             scene_stream_ms: config.scene_stream_ms,
+            scene_duration_ms: config.scene_duration_ms,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -257,6 +263,21 @@ impl ExecutionBackend for RosBackend {
                 Err(ActionFail::Error(message)) => {
                     Ok(make_backend_error(run_context, start, message))
                 }
+            };
+        }
+
+        // MonitorScene is long-running + streaming like SendActionGoal, but it
+        // drives NO motion: it polls `/get_planning_scene` on a cadence and
+        // streams each snapshot onto its data channel. It owns its own cancel +
+        // deadline handling inside `run_monitor_scene`, so it is NOT run through
+        // the `run_operation` select below.
+        if resolved.operation == RosOperation::MonitorScene {
+            return match self
+                .run_monitor_scene(&resolved, event_stream, &cancel, timeout)
+                .await
+            {
+                Ok(outputs) => Ok(make_success(run_context, start, outputs, resolved.operation)),
+                Err(message) => Ok(make_backend_error(run_context, start, message)),
             };
         }
 
@@ -329,6 +350,7 @@ impl RosBackend {
                 promote_object_fields(&mut outputs, message);
             }
             RosOperation::SendActionGoal => unreachable!("handled in execute()"),
+            RosOperation::MonitorScene => unreachable!("handled in execute()"),
         }
         Ok(outputs)
     }
@@ -623,6 +645,98 @@ impl RosBackend {
             }
         }
     }
+
+    /// Run a `monitor_scene` op: a STANDALONE planning-scene streamer, decoupled
+    /// from any motion. It polls move_group's `/get_planning_scene` every
+    /// `scene_stream_ms` (floored at 50ms) for up to `scene_duration_ms` (or the
+    /// node `timeout_ms` if unset, or until cancelled), projects each snapshot
+    /// with [`project_planning_scene`], and writes it as one NDJSON envelope onto
+    /// the node's declared DATA `out` channel — the SAME `open → chunk* → close`
+    /// contract `run_action_goal`'s scene mode uses, just without an action.
+    ///
+    /// This is what lets ONE twin watch a WHOLE multi-step run: the monitor runs
+    /// as a sibling step under a held lease while the arm picks/places several
+    /// samples on other steps against the same persistent move_group scene, so
+    /// every world + attached-object change shows up live. A poll error skips the
+    /// frame (best-effort) and never aborts. With no data channel declared it
+    /// still runs to its deadline but emits nothing (the graph always declares
+    /// one). Returns `frames_streamed` = the envelope count.
+    async fn run_monitor_scene(
+        &self,
+        resolved: &ResolvedRosConfig,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
+        cancel: &CancellationToken,
+        timeout: Duration,
+    ) -> Result<HashMap<String, Value>, String> {
+        let client = RosbridgeClient::connect(&self.ws_url)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let channel = resolved.feedback_data_channel.clone();
+        let poll_ms = resolved.scene_stream_ms.unwrap_or(200).max(50);
+        let mut scene_interval = tokio::time::interval(Duration::from_millis(poll_ms));
+        // A short per-poll service-call timeout: a wedged `/get_planning_scene`
+        // must not stall the monitor loop; a missed frame is best-effort.
+        let scene_poll_timeout = Duration::from_secs(2);
+
+        // Poll window: explicit `scene_duration_ms`, else the node timeout (so the
+        // monitor ALWAYS terminates and its sibling `join` can fire). Capped at
+        // the node timeout either way.
+        let duration = resolved
+            .scene_duration_ms
+            .map(Duration::from_millis)
+            .unwrap_or(timeout)
+            .min(timeout);
+        let deadline = tokio::time::sleep(duration);
+        tokio::pin!(deadline);
+
+        let mut data_seq: u64 = 0;
+        if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+            es.data_open(ch.clone(), SCENE_CONTENT_TYPE.to_string()).await;
+        }
+
+        loop {
+            tokio::select! { biased;
+                // Cancellation / deadline: stop polling and close the channel
+                // cleanly below (a partial-but-valid stream, never a dangling open).
+                _ = cancel.cancelled() => break,
+                _ = &mut deadline => break,
+                _ = scene_interval.tick() => {
+                    if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+                        match client
+                            .call_service("/get_planning_scene", &scene_request(), scene_poll_timeout)
+                            .await
+                        {
+                            Ok(response) => {
+                                let frame = project_planning_scene(&response);
+                                let mut line = serde_json::to_vec(&frame).unwrap_or_default();
+                                line.push(b'\n');
+                                es.data_chunk(
+                                    ch.clone(),
+                                    data_seq,
+                                    SCENE_CONTENT_TYPE.to_string(),
+                                    line,
+                                )
+                                .await;
+                                data_seq += 1;
+                            }
+                            Err(e) => {
+                                debug!(error = %e, "planning-scene poll failed — skipping frame");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+            es.data_close(ch.clone(), data_seq, data_seq).await;
+        }
+
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        outputs.insert("frames_streamed".into(), json!(data_seq));
+        Ok(outputs)
+    }
 }
 
 /// Why a `send_action_goal` run ended without a successful result. `execute()`
@@ -782,9 +896,14 @@ fn validate_static(config: &RosConfig) -> Result<(), ExecutorError> {
             "ros config: interface_name is required (the topic/service/action name)".into(),
         ));
     }
-    // CallService sends no type on the wire, but PublishTopic/AwaitTopic need
-    // the ROS type for rosbridge's advertise/subscribe ops.
-    if config.operation != RosOperation::CallService && config.interface_type.trim().is_empty() {
+    // CallService (and MonitorScene, which issues a `/get_planning_scene`
+    // service call) send no type on the wire; PublishTopic/AwaitTopic need the
+    // ROS type for rosbridge's advertise/subscribe ops.
+    if !matches!(
+        config.operation,
+        RosOperation::CallService | RosOperation::MonitorScene
+    ) && config.interface_type.trim().is_empty()
+    {
         return Err(ExecutorError::Config(
             "ros config: interface_type is required for publish/await operations".into(),
         ));
@@ -798,6 +917,7 @@ fn operation_label(op: RosOperation) -> &'static str {
         RosOperation::CallService => "call_service",
         RosOperation::AwaitTopic => "await_topic",
         RosOperation::SendActionGoal => "send_action_goal",
+        RosOperation::MonitorScene => "monitor_scene",
     }
 }
 
@@ -1099,6 +1219,7 @@ mod tests {
             fields: Value::Null,
             timeout_ms: 30_000,
             scene_stream_ms: None,
+            scene_duration_ms: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_name"));
@@ -1113,6 +1234,7 @@ mod tests {
             fields: Value::Null,
             timeout_ms: 30_000,
             scene_stream_ms: None,
+            scene_duration_ms: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_type"));
@@ -1127,6 +1249,7 @@ mod tests {
             fields: Value::Null,
             timeout_ms: 30_000,
             scene_stream_ms: None,
+            scene_duration_ms: None,
         };
         assert!(validate_static(&cfg).is_ok());
     }

@@ -81,6 +81,35 @@ describe('groupFleet', () => {
 		expect(sections).toHaveLength(1);
 		expect(sections[0]).toMatchObject({ kind: 'unbacked', alias: 'orphan', resource: null });
 	});
+
+	it('surfaces an ungrouped model server as its own first-class "model" section', () => {
+		// `m` is group-less but serves engines → model section, NOT ungrouped.
+		const sections = groupFleet([runner('m', null)], { m: present('m') }, [], new Set(['m']));
+		expect(sections).toHaveLength(1);
+		expect(sections[0]).toMatchObject({ kind: 'model', alias: null });
+		expect(sections.some((s) => s.kind === 'ungrouped')).toBe(false);
+	});
+
+	it('orders sections backed → model → unbacked → ungrouped', () => {
+		const runners = [
+			runner('a', 'lab'), // backed
+			runner('b', 'ghost'), // unbacked
+			runner('m', null), // model server (group-less)
+			runner('d', null) // genuine ungrouped (group-less, no engines)
+		];
+		const sections = groupFleet(runners, {}, [groupResource('lab')], new Set(['m']));
+		expect(sections.map((s) => s.kind)).toEqual(['backed', 'model', 'unbacked', 'ungrouped']);
+		expect(sections.find((s) => s.kind === 'model')!.runners.map((r) => r.id)).toEqual(['m']);
+		expect(sections.find((s) => s.kind === 'ungrouped')!.runners.map((r) => r.id)).toEqual(['d']);
+	});
+
+	it('keeps a GROUPED model server in its backed group (it is a real dispatch target there)', () => {
+		// A model server that DOES carry a backed group stays put — not split out.
+		const sections = groupFleet([runner('g', 'lab')], {}, [groupResource('lab')], new Set(['g']));
+		expect(sections.map((s) => s.kind)).toEqual(['backed']);
+		expect(sections[0].runners.map((r) => r.id)).toEqual(['g']);
+		expect(sections.some((s) => s.kind === 'model')).toBe(false);
+	});
 });
 
 describe('filterFleetByGroup', () => {

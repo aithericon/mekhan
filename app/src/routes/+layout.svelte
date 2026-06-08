@@ -67,6 +67,7 @@
 			<Button variant="ghost" size="sm" href="/folders" data-testid="nav-folders">Folders</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
+			<Button variant="ghost" size="sm" href="/tasks/inbox" data-testid="nav-inbox">Inbox</Button>
 			<NavMenu label="Library" items={libraryItems} testid="nav-library" />
 			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
 			<Button variant="ghost" size="sm" href="/models" data-testid="nav-models">Models</Button>

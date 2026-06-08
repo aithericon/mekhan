@@ -689,6 +689,27 @@ export async function cancelTask(taskId: string, reason?: string): Promise<void>
 	});
 }
 
+/**
+ * GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox:
+ * `offered` tasks for the human capacities they're enrolled in plus the tasks
+ * they already `claimed`. HumanTask-shaped, so it uses the same `rawJson` path
+ * as the rest of the task surface.
+ */
+export async function listTaskInbox(): Promise<{
+	tasks: import('$lib/types/tasks').HumanTask[];
+}> {
+	return rawJson(`/tasks/inbox`);
+}
+
+/**
+ * POST /api/v1/tasks/{id}/claim — claim an offered human task. Returns 202: the
+ * authoritative `claimed` status + assignee arrive asynchronously via the pool
+ * net's projection, so callers should re-poll (or rely on the task SSE stream).
+ */
+export async function claimTask(taskId: string): Promise<void> {
+	await rawJson(`/tasks/${taskId}/claim`, { method: 'POST' });
+}
+
 // ── Processes ───────────────────────────────────────────────────────────────
 
 export async function listProcesses(params?: {

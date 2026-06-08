@@ -228,6 +228,51 @@ pub async fn my_enrollments(
     Ok(Json(rows.into_iter().map(RosterMemberDetail::from).collect()))
 }
 
+/// `GET /api/v1/human-presence` — live in-memory presence snapshot of the human
+/// capacity pools (docs/33 P4). The human counterpart to
+/// `GET /api/v1/runners/presence`.
+///
+/// Returns the presence controller's in-memory map — which enrolled members mekhan
+/// currently considers *admitted* (a live unit in their pool), NOT the durable
+/// `roster_members.available` intent column. Feeds the Fleet human-pool view.
+///
+/// The in-memory map is keyed by `(capacity_id, member_user_id)` and carries no
+/// workspace, so it is filtered here to the capacities that live in the caller's
+/// workspace — without this it would leak every workspace's human-capacity ids +
+/// member liveness timing, exactly as `runners::runner_presence` guards.
+#[utoipa::path(
+    get,
+    path = "/api/v1/human-presence",
+    responses(
+        (status = 200, description = "Live human presence snapshot", body = [crate::human_presence::HumanPresenceSnapshot]),
+    ),
+    tag = "roster",
+)]
+pub async fn human_presence(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Vec<crate::human_presence::HumanPresenceSnapshot>>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    // Human capacities are `resources` rows; scope the snapshot to those in the
+    // caller's workspace.
+    let own: std::collections::HashSet<Uuid> =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM resources WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .collect();
+
+    let snapshot = state
+        .human_presence
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| own.contains(&s.capacity_id))
+        .collect();
+    Ok(Json(snapshot))
+}
+
 /// `GET /api/v1/roster/{id}` — admin view of a single member (workspace-scoped).
 /// 404 when missing or revoked.
 #[utoipa::path(

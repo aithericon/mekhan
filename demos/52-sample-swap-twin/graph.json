@@ -1,0 +1,557 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 0, "y": 320 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Sample Swap — Live Twin",
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
+      }
+    },
+    {
+      "id": "lease",
+      "type": "lease_scope",
+      "slug": "cell",
+      "position": { "x": 190, "y": 0 },
+      "width": 3520,
+      "height": 700,
+      "data": {
+        "type": "lease_scope",
+        "label": "xArm Sample Cell",
+        "description": "Acquires ONE `xarm_fleet` runner for the whole run and releases it on exit. The body forks (`parallel_split`) into TWO branches that BOTH ride the held `runner.<id>` namespace by containment: (A) a standalone `monitor_scene` step that streams the live move_group planning scene to the twin for the whole run, and (B) the actual sample work (reset → home → seed → the sequential job Loop that picks/places samples in and out of the instrument port). Because both branches hit the SAME held move_group scene, the monitor in (A) sees every world + attached-object change the arm in (B) makes — so the twin shows the entire experiment live. A `join` waits for both before the lease releases. The `requirements` pick WHICH runner (an xArm6); body steps are plain `executor` — they ride the lease, they do NOT claim their own unit.",
+        "lease": { "pool": "xarm_fleet" },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "split",
+      "type": "parallel_split",
+      "parentId": "lease",
+      "position": { "x": 16, "y": 320 },
+      "data": {
+        "type": "parallel_split",
+        "label": "Fork (monitor ‖ work)",
+        "description": "Forks the held-lease body into the scene-monitor branch and the sample-work branch. Both children inherit the enclosing cell lease's held `runner.<id>` namespace by containment, so the monitor polls the SAME persistent move_group scene the work branch mutates. The two branches run concurrently on the held runner (the executor processes the long-running monitor job alongside each short arm-step job)."
+      }
+    },
+    {
+      "id": "monitor_scene",
+      "type": "automated_step",
+      "slug": "monitor_scene",
+      "parentId": "lease",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Monitor Scene (live twin · whole run)",
+        "description": "The TWIN PRODUCER — a STANDALONE planning-scene streamer DECOUPLED from any single motion. ROS `monitor_scene` op: polls move_group's `/get_planning_scene` every `scene_stream_ms` (1000ms = 1 Hz) for up to `scene_duration_ms` (200s) and streams each slim NDJSON snapshot (arm joint states + all world collision boxes + whatever sample is currently riding the gripper) onto its Data/Out channel `scene`. The 1 Hz cadence is deliberate: a faster poll makes move_group serialize the scene 5×/s, stealing planner CPU from the arm's pick/place plans — 1 Hz is smooth enough for the twin while leaving move_group free to plan. Runs as a sibling of the whole sample-work branch under the held lease, so this ONE node's stream covers the ENTIRE multi-sample swap session — the twin renders the live move_group world continuously as the arm picks each sample out of the rack, carries it into the instrument port, and returns it. content_type `application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6` routes the UI render registry to the planning-scene twin renderer, drawing the LIVE scene on the `monitor_scene` → `twin_view` edge. The bulk stream rides the out-of-band JetStream datastream transport — the net sees only open + close. Plain `executor`: rides the held lease. `scene_duration_ms` is sized to outlast the job Loop; the `join` releases the lease once BOTH branches finish.",
+        "deploymentModel": { "mode": "executor" },
+        "channels": [
+          {
+            "name": "scene",
+            "direction": "out",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "monitor_scene",
+            "interface_name": "/get_planning_scene",
+            "interface_type": "moveit_msgs/srv/GetPlanningScene",
+            "scene_stream_ms": 1000,
+            "scene_duration_ms": 200000,
+            "timeout_ms": 210000,
+            "fields": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "frames_streamed", "label": "Frames streamed", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "twin_view",
+      "type": "automated_step",
+      "slug": "twin_view",
+      "parentId": "lease",
+      "position": { "x": 620, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Twin view (drain planning-scene stream)",
+        "description": "Consumer of the `scene` data channel — the net-side anchor the live planning-scene twin renders ON (the UI taps the SAME channel out-of-band via `?follow=1`, while this node drains it on the data plane). Reads the NDJSON planning-scene frames with the ordinary transport-unaware `for chunk in stream('scene')` API, reframes on newlines, validates each frame parses, and counts complete frames. The robot model is carried in the channel content_type as `;model=xarm6` so the twin renderer knows which URDF to load. Frames carry the REAL move_group scene streamed live by `monitor_scene` for the whole run. Plain `executor`: rides the held lease.",
+        "deploymentModel": { "mode": "executor" },
+        "channels": [
+          {
+            "name": "scene",
+            "direction": "in",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.planning-scene+x-ndjson;model=xarm6"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Twin view",
+          "fields": [
+            { "name": "received_frames", "label": "Frames received", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "reset_scene",
+      "type": "automated_step",
+      "slug": "reset_scene",
+      "parentId": "lease",
+      "position": { "x": 320, "y": 460 },
+      "data": {
+        "type": "automated_step",
+        "label": "Reset Scene (clear move_group)",
+        "description": "Cell-reset head — makes the whole run idempotent. ROS `call_service` to `/clear_scene` — removes ALL world + attached collision objects from move_group's persistent planning scene, so a re-run starts clean and any sample still attached to the gripper from a prior run is detached. Plain `executor`: rides the held lease by containment. Runs ONCE, before seeding.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/clear_scene",
+            "interface_type": "aithericon_motion_bridge/srv/ClearScene",
+            "fields": { "confirm": true },
+            "interface_typedefs": [
+              { "type": "aithericon_motion_bridge/ClearScene_Request", "fieldnames": ["confirm"], "fieldtypes": ["boolean"], "fieldarraylen": [-1] },
+              { "type": "aithericon_motion_bridge/ClearScene_Response", "fieldnames": ["success", "removed_count", "error_message"], "fieldtypes": ["boolean", "int32", "string"], "fieldarraylen": [-1, -1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "success", "label": "Success", "kind": "bool" },
+            { "name": "removed_count", "label": "Removed count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "home_arm",
+      "type": "automated_step",
+      "slug": "home_arm",
+      "parentId": "lease",
+      "position": { "x": 620, "y": 460 },
+      "data": {
+        "type": "automated_step",
+        "label": "Home Arm (reference config)",
+        "description": "Cell-reset tail — brings the arm to the xArm6 all-zeros home `[0,0,0,0,0,0]` so every run's motion planning starts from the SAME deterministic, collision-free state (the upright home clears the table-level rack samples seeded below; a forward-leaning ready pose intersects a sample box and MoveIt rejects the first pick with an in-collision START). ROS `send_action_goal` to the FollowJointTrajectory controller. Plain `executor`: rides the held lease.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "time_from_start": { "sec": 3, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "seed_inv",
+      "type": "map",
+      "slug": "seed_inventory",
+      "parentId": "lease",
+      "position": { "x": 920, "y": 440 },
+      "width": 272,
+      "height": 172,
+      "data": {
+        "type": "map",
+        "label": "Seed Inventory into Scene",
+        "description": "Maps over the bound `run_inventory` asset (alias `inv`), pushing each sample into move_group's persistent planning scene as a box CollisionObject. Runs under the held lease so every add_object hits the SAME scene the monitor streams and the jobs plan against. The seeded boxes are the amber samples the twin draws; as the jobs run, the arm grasps them (green, riding the gripper) and sets them down at the port.",
+        "assetBindings": [
+          { "alias": "inv", "refKey": "swap_inventory" }
+        ],
+        "itemsRef": "inv",
+        "itemVar": "item",
+        "resultVar": "seeded",
+        "output": {
+          "id": "out",
+          "label": "Seeded",
+          "fields": [
+            { "name": "seeded", "label": "Seeded", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "add_sample",
+      "type": "automated_step",
+      "slug": "add_sample",
+      "parentId": "seed_inv",
+      "position": { "x": 16, "y": 32 },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Sample to Scene",
+        "description": "Map body. ROS `call_service` to `/add_object` — pushes ONE inventory sample into the persistent planning scene as a box CollisionObject (`object_id`=`{{ item.sample_id }}`, `dimensions`=`{{ item.dimensions }}`, inner `pose`=`{{ item.pose }}`). Plain `executor`: inherits the held lease by containment.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "call_service",
+            "interface_name": "/add_object",
+            "interface_type": "aithericon_motion_bridge/srv/AddObject",
+            "fields": {
+              "object_id": "{{ item.sample_id }}",
+              "primitive": "box",
+              "dimensions": "{{ item.dimensions }}",
+              "pose": {
+                "header": { "frame_id": "link_base" },
+                "pose": "{{ item.pose }}"
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "aithericon_motion_bridge/AddObject_Request",
+                "fieldnames": ["object_id", "primitive", "dimensions", "pose"],
+                "fieldtypes": ["string", "string", "float64", "geometry_msgs/PoseStamped"],
+                "fieldarraylen": [-1, -1, 0, -1]
+              },
+              {
+                "type": "aithericon_motion_bridge/AddObject_Response",
+                "fieldnames": ["success", "error_message"],
+                "fieldtypes": ["boolean", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "seeded", "label": "Seeded", "kind": "bool", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "load_jobs",
+      "type": "automated_step",
+      "slug": "load_jobs",
+      "parentId": "lease",
+      "position": { "x": 1280, "y": 460 },
+      "data": {
+        "type": "automated_step",
+        "label": "Load Jobs → array",
+        "description": "Stages the bound `transfer_jobs` asset (alias `jobs`) as a token-resident JSON array + count so the sequential Loop iterates it one record at a time. Asset bindings are python-global stagings, not node outputs, so the Loop reads them via the parked `load_jobs` output flowing into the Loop's `in` port. Plain `executor`: rides the held lease.",
+        "deploymentModel": { "mode": "executor" },
+        "assetBindings": [
+          { "alias": "jobs", "refKey": "transfer_jobs" }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Jobs",
+          "fields": [
+            { "name": "items", "label": "Job records", "kind": "json", "required": true },
+            { "name": "count", "label": "Job count", "kind": "number", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "handle_jobs",
+      "type": "loop",
+      "slug": "job_loop",
+      "parentId": "lease",
+      "position": { "x": 1600, "y": 300 },
+      "width": 1240,
+      "height": 360,
+      "data": {
+        "type": "loop",
+        "label": "Handle Jobs (sequential)",
+        "description": "Iterates the staged `transfer_jobs` records ONE AT A TIME (sequential Loop, NOT a concurrent Map) so the single arm is never driven by two jobs at once. The job array is immutable, so the Loop needs NO accumulators: the body indexes the parked `load_jobs` output directly by the counter (`load_jobs.items[job_loop.iteration]`) and `loopCondition` borrows `load_jobs.count`. Each iteration resolves the current job's grasp/insert poses, a Decision dispatches on its `op` into the pick (37) or place (38) SubWorkflow, then loops back. The pick/place pair on a sample moves it between locations — the grasped sample stays ATTACHED across jobs (persistent move_group scene on the held runner), so `pick` then `place` actually carries it from the rack into the instrument port, and a later pick-from-port + place-to-rack returns it: a sample swapped in and out of the experiment.",
+        "maxIterations": 40,
+        "loopCondition": "job_loop.iteration < load_jobs.count - 1",
+        "accumulators": []
+      }
+    },
+    {
+      "id": "home_job",
+      "type": "automated_step",
+      "slug": "home_job",
+      "parentId": "handle_jobs",
+      "position": { "x": 16, "y": 10 },
+      "data": {
+        "type": "automated_step",
+        "label": "Home Arm (per-job reset)",
+        "description": "Loop body head — the cascade-breaker. Before every job, ROS `send_action_goal` drives the arm to the xArm6 all-zeros home `[0,0,0,0,0,0]` via FollowJointTrajectory, which BYPASSES move_group planning (it just executes joint angles), so it ALWAYS succeeds regardless of planner load. Two reasons: (1) it guarantees each job starts from a COLLISION-FREE pose — without it, a single failed retreat (move_group hiccup under load) leaves the arm low/in-collision and EVERY subsequent plan fails with START_STATE_IN_COLLISION (error 99999), cascading the whole run to a stall; (2) it gives the next `plan_to_pose`'s `/compute_ik` an IDENTICAL clean seed every time (a dirty current-state seed is the classic source of flaky NO_IK). Any sample attached from the prior pick rides to home (arm-up, clear of the table) and on to the port. Plain `executor`: rides the held lease.",
+        "deploymentModel": { "mode": "executor" },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "time_from_start": { "sec": 2, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "resolve_poses",
+      "type": "automated_step",
+      "slug": "resolve_poses",
+      "parentId": "handle_jobs",
+      "position": { "x": 16, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Resolve Job Poses",
+        "description": "Loop body head. Python step: reads the CURRENT job from the parked array (`load_jobs.items[job_loop.iteration]`) plus the bound `sample_rack` (alias `racks`) and `instrument_ports` (alias `ports`) collections, and resolves a UNIFIED location model — `from_loc`/`to_loc` can be a rack slot (A1/A2/A3) OR the instrument port (P1). It emits the grasp poses from `from_loc` (where the arm grabs) and the insert poses from `to_loc` (where it releases) as geometry_msgs/Pose JSON, so the same step serves both pick (uses grasp_*) and place (uses insert_*). This is what makes a sample cycle IN and OUT of the port: pick from rack + place to port, then pick from port + place to rack. Also echoes `op` (drives the Decision) and `sample_id` (the collision-object id to attach/detach). Outputs are implicit (the runner sweeps globals matching the declared output port).",
+        "assetBindings": [
+          { "alias": "racks", "refKey": "sample_rack" },
+          { "alias": "ports", "refKey": "instrument_ports" }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Resolved Poses",
+          "fields": [
+            { "name": "grasp_pose", "label": "Grasp Pose", "kind": "json", "required": true },
+            { "name": "grasp_approach", "label": "Grasp Approach Pose", "kind": "json", "required": true },
+            { "name": "insert_pose", "label": "Insert Pose", "kind": "json", "required": true },
+            { "name": "insert_approach", "label": "Insert Approach Pose", "kind": "json", "required": true },
+            { "name": "op", "label": "Operation", "kind": "text", "required": true },
+            { "name": "sample_id", "label": "Sample ID", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "op_gate",
+      "type": "decision",
+      "slug": "op_gate",
+      "parentId": "handle_jobs",
+      "position": { "x": 326, "y": 160 },
+      "data": {
+        "type": "decision",
+        "label": "Dispatch on op",
+        "description": "Compiler-checked gate on the current job's `op`. `pick` → the 37-pick SubWorkflow (grab the sample at `from_loc` and lift it, leaving it attached to the gripper); anything else (`place`) → the 38-place SubWorkflow (carry the held sample to `to_loc` and release it). The guard resolves `resolve_poses.op` against that step's declared output port at compile time.",
+        "conditions": [
+          {
+            "edgeId": "is_pick",
+            "label": "Pick",
+            "guard": "resolve_poses.op == \"pick\""
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "do_pick",
+      "type": "sub_workflow",
+      "slug": "do_pick",
+      "parentId": "handle_jobs",
+      "position": { "x": 636, "y": 60 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Pick (37)",
+        "description": "Embeds the 37-pick child template. Plans to the resolved approach pose, gates the plan, executes (Path B), descends, then grasps (atomic close + attach) the sample at `from_loc`. inputMapping wires the resolved grasp pose, approach pose, and the job's sample id into the child's Start.initial fields. The grasped sample stays attached after this returns, ready for the matching place job.",
+        "templateId": "00000000-0000-0000-0000-000000000370",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "grasp_pose", "expression": "resolve_poses.grasp_pose" },
+          { "targetField": "approach_pose", "expression": "resolve_poses.grasp_approach" },
+          { "targetField": "object_id", "expression": "resolve_poses.sample_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Pick Result",
+          "fields": [
+            { "name": "picked", "label": "Picked", "kind": "bool", "required": true },
+            { "name": "object_id", "label": "Object Id", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "do_place",
+      "type": "sub_workflow",
+      "slug": "do_place",
+      "parentId": "handle_jobs",
+      "position": { "x": 636, "y": 220 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Place (38)",
+        "description": "Default branch. Embeds the 38-place child template. Plans to the resolved insert approach pose, gates, executes (Path B), descends, then releases the held sample at `to_loc` — detaching it back into the world at that location. inputMapping wires the resolved insert pose, insert approach pose, and the job's sample id into the child's Start.initial fields.",
+        "templateId": "00000000-0000-0000-0000-000000000380",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "insert_pose", "expression": "resolve_poses.insert_pose" },
+          { "targetField": "approach_pose", "expression": "resolve_poses.insert_approach" },
+          { "targetField": "object_id", "expression": "resolve_poses.sample_id" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Place Result",
+          "fields": [
+            { "name": "placed", "label": "Placed", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mark_done",
+      "type": "automated_step",
+      "slug": "mark_done",
+      "parentId": "handle_jobs",
+      "position": { "x": 946, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Mark Job Done",
+        "description": "Loop body terminal. The Decision dispatches each job into the pick or place SubWorkflow, each declaring its OWN result shape (`picked`/`placed`). This trivial Python step emits `done: true`, giving the body one uniform terminal field regardless of which op ran.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Done",
+          "fields": [
+            { "name": "done", "label": "Done", "kind": "bool", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "parentId": "lease",
+      "position": { "x": 3360, "y": 320 },
+      "data": {
+        "type": "join",
+        "label": "Join (monitor + work)",
+        "mode": "all",
+        "mergeStrategy": "shallow_last_wins",
+        "description": "Waits for BOTH branches — the scene monitor + its twin_view drain, and the whole sample-work pipeline — before the cell lease releases. The monitor's `scene_duration_ms` is sized to outlast the job Loop, so the twin streams for the entire run; once the work finishes and the monitor's window closes, both arrive here and the lease is released."
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 3780, "y": 300 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "jobs_done", "expression": "load_jobs.count" },
+          { "targetField": "seeded", "expression": "(seed_inventory[*]).len()" },
+          { "targetField": "frames", "expression": "twin_view.received_frames" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_lease", "source": "start", "target": "lease", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_lease_split", "source": "lease", "target": "split", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_split_monitor", "source": "split", "target": "monitor_scene", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_monitor_twin", "source": "monitor_scene", "target": "twin_view", "sourceHandle": "scene", "targetHandle": "scene", "type": "sequence" },
+    { "id": "e_twin_join", "source": "twin_view", "target": "join", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_split_reset", "source": "split", "target": "reset_scene", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_reset_home", "source": "reset_scene", "target": "home_arm", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_home_seed", "source": "home_arm", "target": "seed_inv", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_seed_add", "source": "seed_inv", "target": "add_sample", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_add_seed", "source": "add_sample", "target": "seed_inv", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_seed_load", "source": "seed_inv", "target": "load_jobs", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_load_handle", "source": "load_jobs", "target": "handle_jobs", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_handle_home", "source": "handle_jobs", "target": "home_job", "sourceHandle": "body_in", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_home_resolve", "source": "home_job", "target": "resolve_poses", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_resolve_gate", "source": "resolve_poses", "target": "op_gate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_gate_pick", "source": "op_gate", "target": "do_pick", "sourceHandle": "is_pick", "targetHandle": "in", "label": "Pick", "type": "conditional" },
+    { "id": "e_gate_place", "source": "op_gate", "target": "do_place", "sourceHandle": "default", "targetHandle": "in", "label": "Place", "type": "conditional" },
+    { "id": "e_pick_mark", "source": "do_pick", "target": "mark_done", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_place_mark", "source": "do_place", "target": "mark_done", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_mark_handle", "source": "mark_done", "target": "handle_jobs", "targetHandle": "body_out", "type": "loop_back" },
+
+    { "id": "e_handle_join", "source": "handle_jobs", "target": "join", "targetHandle": "in", "type": "sequence" },
+
+    { "id": "e_join_lease", "source": "join", "target": "lease", "targetHandle": "body_out", "type": "sequence" },
+    { "id": "e_lease_end", "source": "lease", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

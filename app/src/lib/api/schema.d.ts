@@ -939,6 +939,35 @@ export interface paths {
         patch: operations["update_folder"];
         trace?: never;
     };
+    "/api/v1/human-presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/human-presence` — live in-memory presence snapshot of the human
+         *     capacity pools (docs/33 P4). The human counterpart to
+         *     `GET /api/v1/runners/presence`.
+         * @description Returns the presence controller's in-memory map — which enrolled members mekhan
+         *     currently considers *admitted* (a live unit in their pool), NOT the durable
+         *     `roster_members.available` intent column. Feeds the Fleet human-pool view.
+         *
+         *     The in-memory map is keyed by `(capacity_id, member_user_id)` and carries no
+         *     workspace, so it is filtered here to the capacities that live in the caller's
+         *     workspace — without this it would leak every workspace's human-capacity ids +
+         *     member liveness timing, exactly as `runners::runner_presence` guards.
+         */
+        get: operations["human_presence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/requests": {
         parameters: {
             query?: never;
@@ -957,6 +986,52 @@ export interface paths {
          *     GDPR processing record is readable across tenants. Tracked as a P5 follow-up.
          */
         get: operations["list_inference_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inference/router-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/inference/router-live` — point-in-time router operational gauges.
+         * @description Proxies + parses the router's `/metrics` exposition into JSON so the product
+         *     UI can render live per-replica/per-model state without a Prometheus
+         *     dependency. Fail-soft: a missing/unreachable router yields
+         *     `{ available: false, … }` with a 200, never a 5xx.
+         */
+        get: operations["router_live_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/inference/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/inference/timeseries` — per-model throughput / latency / errors
+         *     over time, bucketed over the durable `inference_request_log` ledger.
+         * @description NOT tenant-scoped yet, for the same reason as the audit-ledger read
+         *     (`list_inference_requests`): the ledger's `tenant_id` is the router's Bearer
+         *     tenant, not yet mapped to the workspace UUID. Auth is still required.
+         */
+        get: operations["inference_timeseries"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2583,6 +2658,34 @@ export interface paths {
          *     of the pagination envelope is preserved for richer clients.
          */
         get: operations["list_tasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox
+         *     (docs/33 P4).
+         * @description Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object
+         *     (same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`
+         *     tasks whose backing human capacity the caller is *enrolled in* — the offers
+         *     they may claim — and (b) `claimed` tasks the caller already holds (their work
+         *     in flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility
+         *     contract (membership now; caps-vs-`requirements` matching deferred).
+         *
+         *     Mounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.
+         */
+        get: operations["inbox"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6077,6 +6180,26 @@ export interface components {
         };
         /** @enum {string} */
         HttpMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+        /** @description Read-API row: one tracked roster member's live presence in a human capacity. */
+        HumanPresenceSnapshot: {
+            /**
+             * Format: uuid
+             * @description The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`).
+             */
+            capacity_id: string;
+            /**
+             * Format: int64
+             * @description Milliseconds since the member's last liveness renewal.
+             */
+            last_seen_ms_ago: number;
+            /**
+             * Format: uuid
+             * @description The enrolled member's `workspace_members.user_id`.
+             */
+            member_user_id: string;
+            /** @description Whether mekhan currently considers the member admitted to the pool. */
+            present: boolean;
+        };
         /**
          * @description Layout mode for image blocks. Snake-case wire values: `"single"`,
          *     `"grid"`, `"gallery"`.
@@ -6138,6 +6261,35 @@ export interface components {
             tenant_id: string;
             /** Format: int64 */
             total_tokens: number;
+        };
+        /** @description One `(bucket, model)` rollup of the inference ledger. */
+        InferenceTimeseriesPoint: {
+            /** Format: date-time */
+            bucket: string;
+            /** Format: int64 */
+            completed: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            /**
+             * Format: int64
+             * @description `cancelled` + `upstream_error` (the failure dispositions).
+             */
+            errors: number;
+            model_id: string;
+            /**
+             * Format: double
+             * @description Median request latency (ms) within the bucket; `None` if no rows.
+             */
+            p50_ms?: number | null;
+            /**
+             * Format: double
+             * @description p95 request latency (ms) within the bucket.
+             */
+            p95_ms?: number | null;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /** Format: int64 */
+            requests: number;
         };
         /**
          * @description One spawned sub-workflow child run of a parent instance, returned by
@@ -8742,6 +8894,16 @@ export interface components {
             operation?: components["schemas"]["RosOperation"];
             /**
              * Format: int64
+             * @description How long a `monitor_scene` op keeps polling `/get_planning_scene` (in
+             *     milliseconds) before it closes its data channel. Decouples the
+             *     planning-scene twin from any single motion: a monitor sized to outlast
+             *     the run streams the WHOLE multi-step session (arm picking/placing several
+             *     samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
+             *     (so it always terminates). Ignored by the non-monitor operations.
+             */
+            scene_duration_ms?: number | null;
+            /**
+             * Format: int64
              * @description When set on a `send_action_goal` node that declares a DATA `out` channel,
              *     the action ALSO polls move_group's `/get_planning_scene` every this-many
              *     milliseconds during the motion and streams each scene snapshot (slim
@@ -8762,11 +8924,14 @@ export interface components {
          *     `PublishTopic` (the default) publishes a single message to a topic.
          *     `CallService` performs a request/response service call. `AwaitTopic`
          *     blocks for the next message on a topic. `SendActionGoal` dispatches a
-         *     goal to an action server. This is the source of truth for which rosbridge
-         *     op the backend issues.
+         *     goal to an action server. `MonitorScene` polls move_group's
+         *     `/get_planning_scene` on a cadence for a bounded duration and streams each
+         *     snapshot onto a DATA channel — a live planning-scene twin DECOUPLED from
+         *     any single motion, so one monitor can watch a whole multi-step run. This is
+         *     the source of truth for which rosbridge op the backend issues.
          * @enum {string}
          */
-        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal";
+        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal" | "monitor_scene";
         /**
          * @description Admin view for a single roster member — carries the trusted caps and the
          *     typed availability config.
@@ -8813,6 +8978,80 @@ export interface components {
          */
         RotateResourceRequest: {
             config: unknown;
+        };
+        /** @description Global router counters (monotonic since the router started). */
+        RouterGlobalCounters: {
+            /** Format: int64 */
+            cancelled_total: number;
+            /** Format: int64 */
+            completed_total: number;
+            /** Format: int64 */
+            rejected_429_total: number;
+            /** Format: int64 */
+            requests_total: number;
+            /** Format: int64 */
+            upstream_error_total: number;
+        };
+        /** @description Parsed snapshot of the router's `/metrics` exposition. */
+        RouterLiveMetrics: {
+            /**
+             * @description `false` ⇒ no router configured or the scrape failed; all other fields are
+             *     empty/zero. The UI shows a "router unreachable" hint rather than an error.
+             */
+            available: boolean;
+            global: components["schemas"]["RouterGlobalCounters"];
+            models: components["schemas"]["RouterModelLive"][];
+            replicas: components["schemas"]["RouterReplicaLive"][];
+        };
+        /** @description One model's live demand signals (summed across its live replicas). */
+        RouterModelLive: {
+            /**
+             * Format: double
+             * @description Mean request latency (ms) derived from the histogram `_sum`/`_count`.
+             *     `None` when no terminal request has been observed for this model.
+             */
+            avg_latency_ms?: number | null;
+            /** Format: int64 */
+            cancelled: number;
+            /** Format: int64 */
+            completed: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            /**
+             * Format: int64
+             * @description In-flight requests summed across this model's LIVE replicas (scale-DOWN
+             *     signal — 0 ⇒ idle).
+             */
+            inflight: number;
+            model: string;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /**
+             * Format: int64
+             * @description Cumulative requests that found no live/un-saturated replica (the
+             *     scale-FROM-zero demand signal).
+             */
+            starved: number;
+            /** Format: int64 */
+            unmetered: number;
+            /** Format: int64 */
+            upstream_error: number;
+        };
+        /** @description One upstream replica's live admission state. */
+        RouterReplicaLive: {
+            /**
+             * Format: int64
+             * @description Admission capacity (`--max-num-seqs`) for this replica.
+             */
+            capacity: number;
+            /**
+             * Format: int64
+             * @description In-flight requests currently admitted on this replica.
+             */
+            in_flight: number;
+            live: boolean;
+            replica: string;
+            zone?: string | null;
         };
         /** @description Aggregate result for `run-all` (also returned to the publication gate). */
         RunAllResponse: {
@@ -12775,6 +13014,26 @@ export interface operations {
             };
         };
     };
+    human_presence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live human presence snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HumanPresenceSnapshot"][];
+                };
+            };
+        };
+    };
     list_inference_requests: {
         parameters: {
             query?: {
@@ -12796,6 +13055,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InferenceRequestLogRow"][];
+                };
+            };
+        };
+    };
+    router_live_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live router operational gauges (point-in-time); available=false when the router is unreachable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouterLiveMetrics"];
+                };
+            };
+        };
+    };
+    inference_timeseries: {
+        parameters: {
+            query?: {
+                /** @description Bucket width in seconds (default 60, clamped 5..3600). */
+                bucket_secs?: number | null;
+                /** @description Look-back window in seconds (default 3600, capped at 7 days). */
+                window_secs?: number | null;
+                /** @description Restrict to a single model. */
+                model?: string | null;
+                /** @description Restrict to one workflow instance's requests. */
+                instance_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-model inference throughput/latency/error timeseries, oldest bucket first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceTimeseriesPoint"][];
                 };
             };
         };
@@ -16069,6 +16377,35 @@ export interface operations {
             };
             /** @description Invalid query */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    inbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

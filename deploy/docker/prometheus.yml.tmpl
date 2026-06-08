@@ -1,0 +1,28 @@
+# Dev Prometheus scrape config — TEMPLATE.
+#
+# Rendered by `just dev up-prometheus` to `.dev/prometheus.yml` (gitignored,
+# per-worktree) with __ROUTER_TARGET__ replaced by the slot's router host:port.
+# Prometheus does not expand env vars in scrape configs, hence the render step.
+#
+# This is an OPS layer, independent of the product UI: the /models Router page
+# reads real data straight from mekhan (TimescaleDB ledger timeseries + a live
+# router /metrics proxy). Prometheus here is for Grafana dashboards and for the
+# `prometheus` executor backend to have a live target to query in dev.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # The inference-router runs as a HOST process (`just dev up-router`) and binds
+  # 0.0.0.0:<router_port>, reachable from this container via host.docker.internal.
+  - job_name: inference-router
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["__ROUTER_TARGET__"]
+        labels:
+          service: inference-router
+
+  # Prometheus self-scrape (handy for a "is it even up" smoke).
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
