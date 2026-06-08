@@ -21654,6 +21654,15 @@
             "$ref": "#/components/schemas/RosOperation",
             "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
           },
+          "scene_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). Ignored by the non-monitor operations.",
+            "minimum": 0
+          },
           "scene_stream_ms": {
             "type": [
               "integer",
@@ -21673,12 +21682,13 @@
       },
       "RosOperation": {
         "type": "string",
-        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. This is the source of truth for which rosbridge\nop the backend issues.",
+        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. `MonitorScene` polls move_group's\n`/get_planning_scene` on a cadence for a bounded duration and streams each\nsnapshot onto a DATA channel — a live planning-scene twin DECOUPLED from\nany single motion, so one monitor can watch a whole multi-step run. This is\nthe source of truth for which rosbridge op the backend issues.",
         "enum": [
           "publish_topic",
           "call_service",
           "await_topic",
-          "send_action_goal"
+          "send_action_goal",
+          "monitor_scene"
         ]
       },
       "RosterMemberDetail": {
