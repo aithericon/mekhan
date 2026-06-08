@@ -2387,6 +2387,272 @@
         }
       }
     },
+    "/api/v1/file-servers": {
+      "get": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "GET /api/v1/file-servers — registered servers (with derived rollups) plus\nunregistered inventory keys (adopt candidates).",
+        "operationId": "file_servers_list",
+        "responses": {
+          "200": {
+            "description": "Registered servers + unregistered keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileServersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "POST /api/v1/file-servers — register a new file server.",
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFileServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileServer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/file-servers/adopt": {
+      "post": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "POST /api/v1/file-servers/adopt — promote an inventory `file_server_id`\nstring (seen in `file_inventory` but with no backing entity) into a real\nfile server. Identical to create, but the key MUST exist in inventory.",
+        "operationId": "adopt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFileServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Adopted server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileServer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Key not present in inventory, or bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/file-servers/{key}": {
+      "get": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "GET /api/v1/file-servers/{key} — one server with rollups.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "File-server key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileServerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "PUT /api/v1/file-servers/{key} — update mutable fields.",
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "File-server key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFileServerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileServer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "DELETE /api/v1/file-servers/{key} — drop the entity (inventory untouched).",
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "File-server key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -13474,6 +13740,49 @@
           }
         }
       },
+      "CreateFileServerRequest": {
+        "type": "object",
+        "description": "Create / adopt body. `adopt` additionally requires `key` to exist in\n`file_inventory`; otherwise the shape is identical.",
+        "required": [
+          "key",
+          "kind"
+        ],
+        "properties": {
+          "base_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "config": {},
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional explicit workspace; falls back to the caller's workspace."
+          }
+        }
+      },
       "CreateFolderRequest": {
         "type": "object",
         "required": [
@@ -15158,6 +15467,136 @@
           }
         ],
         "description": "Tagged enum of all file operations."
+      },
+      "FileServer": {
+        "type": "object",
+        "description": "A first-class storage-backend entity (maps 1:1 to the `file_servers` table).\n\nIdentity + topology only — **secrets never live here**. `resource_ref` points\nat a workspace `resource` (by its `path`) that holds the connection +\ncredentials in Vault; it is NULL for the built-in `object_store` (which uses\nplatform S3 config). See docs/32 §4.1.",
+        "required": [
+          "id",
+          "workspace_id",
+          "key",
+          "display_name",
+          "kind",
+          "status",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "base_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Root / prefix within the backend."
+          },
+          "config": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable slug; equals `file_inventory.file_server_id` (soft join, no FK)."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource `path` holding connection + secrets. NULL for `object_store`."
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "FileServerView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FileServer"
+          },
+          {
+            "type": "object",
+            "required": [
+              "file_count",
+              "total_size_bytes",
+              "by_status",
+              "resource_resolves"
+            ],
+            "properties": {
+              "by_status": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/InventoryCount"
+                },
+                "description": "Per-status breakdown of this server's copies."
+              },
+              "file_count": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Number of physical copies on this server."
+              },
+              "resource_resolves": {
+                "type": "boolean",
+                "description": "Whether `resource_ref` resolves to an existing, non-deleted resource in\nthe same workspace (false when NULL or dangling)."
+              },
+              "total_size_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Sum of logical sizes of those copies (via `catalogue_entries.size_bytes`\njoined on `content_hash`; copies of unhashed/uncatalogued files add 0)."
+              }
+            }
+          }
+        ],
+        "description": "A registered file server plus its DERIVED rollups (joined from\n`file_inventory` by `key` at read time — never stored)."
+      },
+      "FileServersResponse": {
+        "type": "object",
+        "description": "Response of `GET /api/v1/file-servers`: registered servers (with rollups)\nplus the unregistered inventory keys (so the UI can offer \"adopt\").",
+        "required": [
+          "servers",
+          "unregistered"
+        ],
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileServerView"
+            }
+          },
+          "unregistered": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnregisteredServer"
+            }
+          }
+        }
       },
       "FileUploadResponse": {
         "type": "object",
@@ -23927,6 +24366,28 @@
           }
         }
       },
+      "UnregisteredServer": {
+        "type": "object",
+        "description": "An inventory `file_server_id` string observed in `file_inventory` that has\nNO backing `file_servers` row yet — a candidate for `adopt`.",
+        "required": [
+          "key",
+          "file_count",
+          "total_size_bytes"
+        ],
+        "properties": {
+          "file_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "UpdateAssetTypeRequest": {
         "type": "object",
         "description": "Request body for `PUT /api/v1/asset-types/{id}`. Schema updates must be\n**additive-only** (docs/20 §4.3): add optional fields or widen; rename /\nremove / retype / newly-require is rejected server-side.",
@@ -23952,6 +24413,44 @@
               "$ref": "#/components/schemas/PortField"
             },
             "description": "New schema. When present it is validated additive-only against the\ncurrent schema and bumps `version`."
+          }
+        }
+      },
+      "UpdateFileServerRequest": {
+        "type": "object",
+        "description": "Update body — all fields optional; `key` and `workspace_id` are immutable.",
+        "properties": {
+          "base_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "config": {},
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set to `Some(Some(_))` to change, `Some(None)` to clear, omit to keep."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -25875,6 +26374,10 @@
     {
       "name": "inventory",
       "description": "Legacy file migration (docs/32) — by-reference physical-copy registry (`file_inventory`), content-addressed to the catalogue via `content_hash`. Batched register (no bytes) + list/stats."
+    },
+    {
+      "name": "file_servers",
+      "description": "First-class storage backends (docs/32 §4.1) — the entities the platform tracks files on. Hybrid: identity + transport `kind` + derived rollups here; connection + secrets in the referenced workspace `resource`."
     },
     {
       "name": "provenance",

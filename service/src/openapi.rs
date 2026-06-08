@@ -309,6 +309,13 @@ use utoipa::OpenApi;
             crate::inventory::reconcile::OrphanDbRow,
             crate::inventory::handlers::ReconcileBatchRequest,
             crate::inventory::handlers::MarkCanonicalResponse,
+            // File servers (docs/32 §4.1) — first-class storage backends.
+            crate::file_servers::model::FileServer,
+            crate::file_servers::model::FileServerView,
+            crate::file_servers::model::UnregisteredServer,
+            crate::file_servers::model::FileServersResponse,
+            crate::file_servers::model::CreateFileServerRequest,
+            crate::file_servers::model::UpdateFileServerRequest,
         ),
     ),
     tags(
@@ -320,6 +327,7 @@ use utoipa::OpenApi;
         (name = "tasks", description = "Human task lifecycle — list, complete, cancel."),
         (name = "catalogue", description = "Artifact catalogue, lineage, distinct-value filters."),
         (name = "inventory", description = "Legacy file migration (docs/32) — by-reference physical-copy registry (`file_inventory`), content-addressed to the catalogue via `content_hash`. Batched register (no bytes) + list/stats."),
+        (name = "file_servers", description = "First-class storage backends (docs/32 §4.1) — the entities the platform tracks files on. Hybrid: identity + transport `kind` + derived rollups here; connection + secrets in the referenced workspace `resource`."),
         (name = "provenance", description = "Token ancestry walks and cross-net signal links."),
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),

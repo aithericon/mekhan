@@ -445,6 +445,20 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Seed the built-in platform object store as a first-class file server
+    // (docs/32 §4.1) so every `log_artifact` copy lands on a real, tracked
+    // backend (key = the platform S3 bucket; no resource_ref — uses platform
+    // config). Idempotent + best-effort; runs regardless of the demo seeder.
+    if let Err(e) = mekhan_service::file_servers::queries::seed_builtin_object_store(
+        &state.db,
+        uuid::Uuid::nil(),
+        &config.s3.bucket,
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "file-server object-store seed failed — proceeding");
+    }
+
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;

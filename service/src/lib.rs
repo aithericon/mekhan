@@ -10,6 +10,7 @@ pub mod compiler;
 pub mod config;
 pub mod db;
 pub mod demos;
+pub mod file_servers;
 pub mod fleet;
 pub mod handlers;
 pub mod human_presence;
@@ -383,6 +384,19 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(inventory::handlers::reconcile_summary))
         .routes(routes!(inventory::handlers::reconcile_orphans))
         .routes(routes!(inventory::handlers::reconcile_duplicates))
+        // File servers (docs/32 §4.1) — first-class storage backends the
+        // platform tracks files on. Hybrid entity: identity + rollups here,
+        // secrets in the referenced workspace `resource`.
+        .routes(routes!(
+            file_servers::handlers::list,
+            file_servers::handlers::create
+        ))
+        .routes(routes!(file_servers::handlers::adopt))
+        .routes(routes!(
+            file_servers::handlers::get,
+            file_servers::handlers::update,
+            file_servers::handlers::delete
+        ))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

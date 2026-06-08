@@ -839,6 +839,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/file-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/file-servers — registered servers (with derived rollups) plus
+         *     unregistered inventory keys (adopt candidates).
+         */
+        get: operations["file_servers_list"];
+        put?: never;
+        /** POST /api/v1/file-servers — register a new file server. */
+        post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/file-servers/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/file-servers/adopt — promote an inventory `file_server_id`
+         *     string (seen in `file_inventory` but with no backing entity) into a real
+         *     file server. Identical to create, but the key MUST exist in inventory.
+         */
+        post: operations["adopt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/file-servers/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/file-servers/{key} — one server with rollups. */
+        get: operations["get"];
+        /** PUT /api/v1/file-servers/{key} — update mutable fields. */
+        put: operations["update"];
+        post?: never;
+        /** DELETE /api/v1/file-servers/{key} — drop the entity (inventory untouched). */
+        delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -5143,6 +5204,23 @@ export interface components {
             /** @description Capability name, unique within the workspace. */
             name: string;
         };
+        /**
+         * @description Create / adopt body. `adopt` additionally requires `key` to exist in
+         *     `file_inventory`; otherwise the shape is identical.
+         */
+        CreateFileServerRequest: {
+            base_path?: string | null;
+            config?: unknown;
+            display_name?: string | null;
+            key: string;
+            kind: string;
+            resource_ref?: string | null;
+            /**
+             * Format: uuid
+             * @description Optional explicit workspace; falls back to the caller's workspace.
+             */
+            workspace_id?: string | null;
+        };
         CreateFolderRequest: {
             description?: string;
             display_name: string;
@@ -5818,6 +5896,68 @@ export interface components {
             /** @enum {string} */
             operation: "crawl";
         });
+        /**
+         * @description A first-class storage-backend entity (maps 1:1 to the `file_servers` table).
+         *
+         *     Identity + topology only — **secrets never live here**. `resource_ref` points
+         *     at a workspace `resource` (by its `path`) that holds the connection +
+         *     credentials in Vault; it is NULL for the built-in `object_store` (which uses
+         *     platform S3 config). See docs/32 §4.1.
+         */
+        FileServer: {
+            /** @description Root / prefix within the backend. */
+            base_path?: string | null;
+            config: unknown;
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            /** @description Stable slug; equals `file_inventory.file_server_id` (soft join, no FK). */
+            key: string;
+            kind: string;
+            /** Format: date-time */
+            last_seen?: string | null;
+            /** @description Resource `path` holding connection + secrets. NULL for `object_store`. */
+            resource_ref?: string | null;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description A registered file server plus its DERIVED rollups (joined from
+         *     `file_inventory` by `key` at read time — never stored).
+         */
+        FileServerView: components["schemas"]["FileServer"] & {
+            /** @description Per-status breakdown of this server's copies. */
+            by_status: components["schemas"]["InventoryCount"][];
+            /**
+             * Format: int64
+             * @description Number of physical copies on this server.
+             */
+            file_count: number;
+            /**
+             * @description Whether `resource_ref` resolves to an existing, non-deleted resource in
+             *     the same workspace (false when NULL or dangling).
+             */
+            resource_resolves: boolean;
+            /**
+             * Format: int64
+             * @description Sum of logical sizes of those copies (via `catalogue_entries.size_bytes`
+             *     joined on `content_hash`; copies of unhashed/uncatalogued files add 0).
+             */
+            total_size_bytes: number;
+        };
+        /**
+         * @description Response of `GET /api/v1/file-servers`: registered servers (with rollups)
+         *     plus the unregistered inventory keys (so the UI can offer "adopt").
+         */
+        FileServersResponse: {
+            servers: components["schemas"]["FileServerView"][];
+            unregistered: components["schemas"]["UnregisteredServer"][];
+        };
         /**
          * @description Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.
          *
@@ -10015,6 +10155,17 @@ export interface components {
             };
         };
         /**
+         * @description An inventory `file_server_id` string observed in `file_inventory` that has
+         *     NO backing `file_servers` row yet — a candidate for `adopt`.
+         */
+        UnregisteredServer: {
+            /** Format: int64 */
+            file_count: number;
+            key: string;
+            /** Format: int64 */
+            total_size_bytes: number;
+        };
+        /**
          * @description Request body for `PUT /api/v1/asset-types/{id}`. Schema updates must be
          *     **additive-only** (docs/20 §4.3): add optional fields or widen; rename /
          *     remove / retype / newly-require is rejected server-side.
@@ -10027,6 +10178,16 @@ export interface components {
              *     current schema and bumps `version`.
              */
             fields?: components["schemas"]["PortField"][] | null;
+        };
+        /** @description Update body — all fields optional; `key` and `workspace_id` are immutable. */
+        UpdateFileServerRequest: {
+            base_path?: string | null;
+            config?: unknown;
+            display_name?: string | null;
+            kind?: string | null;
+            /** @description Set to `Some(Some(_))` to change, `Some(None)` to clear, omit to keep. */
+            resource_ref?: string | null;
+            status?: string | null;
         };
         /**
          * @description Partial update for a folder. All fields optional. Supplying `slug` and/or
@@ -12716,6 +12877,226 @@ export interface operations {
             };
             /** @description LiveKit is not configured on this mekhan instance. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    file_servers_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered servers + unregistered keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServersResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFileServerRequest"];
+            };
+        };
+        responses: {
+            /** @description Created server */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServer"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Key already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    adopt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFileServerRequest"];
+            };
+        };
+        responses: {
+            /** @description Adopted server */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServer"];
+                };
+            };
+            /** @description Key not present in inventory, or bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Key already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File server */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServerView"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFileServerRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated server */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServer"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
