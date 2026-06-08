@@ -16443,7 +16443,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Claim published; `claimed` status follows via projection */
+            /** @description Unpooled task soft-claimed (assigned) synchronously */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Pooled claim published; `claimed` status follows via projection */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -16459,7 +16468,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Task is not offered (already claimed or wrong state) */
+            /** @description Task is not claimable (already claimed or wrong state) */
             409: {
                 headers: {
                     [name: string]: unknown;

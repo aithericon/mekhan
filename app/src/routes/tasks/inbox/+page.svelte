@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import Hand from '@lucide/svelte/icons/hand';
+	import ClipboardList from '@lucide/svelte/icons/clipboard-list';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 
 	const POLL_MS = 4000;
@@ -23,6 +24,8 @@
 	let togglingCaps = $state<Set<string>>(new Set());
 
 	const offered = $derived(tasks.filter((t) => t.status === 'offered'));
+	// Unpooled tasks bound to no capacity — open to anyone in the workspace.
+	const open = $derived(tasks.filter((t) => t.status === 'pending'));
 	const claimed = $derived(tasks.filter((t) => t.status === 'claimed'));
 
 	function capName(id: string): string {
@@ -37,11 +40,14 @@
 		try {
 			const res = await listTaskInbox();
 			tasks = res.tasks;
-			// Drop any claim-pending markers whose task is no longer offered.
-			const stillOffered = new Set(
-				res.tasks.filter((t) => t.status === 'offered').map((t) => t.task_id)
+			// Drop any claim-pending markers whose task is no longer claimable
+			// (left the offered/open buckets — claimed, completed, or gone).
+			const stillClaimable = new Set(
+				res.tasks
+					.filter((t) => t.status === 'offered' || t.status === 'pending')
+					.map((t) => t.task_id)
 			);
-			claiming = new Set([...claiming].filter((id) => stillOffered.has(id)));
+			claiming = new Set([...claiming].filter((id) => stillClaimable.has(id)));
 			error = null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -242,6 +248,44 @@
 					</div>
 				{/if}
 			</div>
+
+			<!-- Open to anyone — unpooled tasks (no capacity), claimable by any
+			     workspace member. Claiming is a soft assign; anyone can still
+			     complete an unclaimed one. -->
+			{#if open.length > 0}
+				<div class="mb-6">
+					<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+						<ClipboardList class="size-4 text-muted-foreground" />
+						Open to anyone
+						<Badge variant="outline" class="rounded-full">{open.length}</Badge>
+					</div>
+					<div class="space-y-2">
+						{#each open as task (task.task_id)}
+							<div
+								class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
+							>
+								<div class="min-w-0 flex-1">
+									<div class="truncate text-sm font-semibold leading-snug text-foreground">
+										{task.title}
+									</div>
+									<div class="mt-1 text-xs text-muted-foreground">
+										Anyone in your workspace can take this on · {formatDate(task.created_at)}
+									</div>
+								</div>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={claiming.has(task.task_id)}
+									onclick={() => onClaim(task)}
+									data-testid="claim-button"
+								>
+									{claiming.has(task.task_id) ? 'Claiming…' : 'Claim'}
+								</Button>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
 
 			<!-- Claimed by you -->
 			<div>

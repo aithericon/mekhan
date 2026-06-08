@@ -41,7 +41,7 @@
 	});
 
 	function key(ep: Endpoint): string {
-		return `${ep.kind}:${ep.nodeId}`;
+		return ep.kind === 'run' ? `run:${ep.templateId}` : `${ep.kind}:${ep.nodeId}`;
 	}
 	function toggle(ep: Endpoint) {
 		const k = key(ep);
@@ -50,6 +50,7 @@
 
 	const manualCount = $derived(bundle?.endpoints.filter((e) => e.kind === 'manual').length ?? 0);
 	const webhookCount = $derived(bundle?.endpoints.filter((e) => e.kind === 'webhook').length ?? 0);
+	const runCount = $derived(bundle?.endpoints.filter((e) => e.kind === 'run').length ?? 0);
 </script>
 
 <div class="space-y-4">
@@ -64,6 +65,7 @@
 	{:else if bundle}
 		<!-- Spec link + counts -->
 		<div class="flex flex-wrap items-center gap-2 text-sm">
+			<Badge variant="secondary">{runCount} template{runCount === 1 ? '' : 's'}</Badge>
 			<Badge variant="secondary">{manualCount} callable</Badge>
 			<Badge variant="secondary">{webhookCount} webhook{webhookCount === 1 ? '' : 's'}</Badge>
 			<a
@@ -90,8 +92,9 @@
 
 		{#if bundle.endpoints.length === 0}
 			<p class="text-sm text-muted-foreground">
-				No callable triggers. Add an enabled Manual or Webhook trigger to a published
-				template homed in this folder.
+				No callable contracts. Publish a template homed in this folder (or any
+				descendant) — each published template is exposed as a runnable endpoint, plus
+				a dedicated path per enabled Manual or Webhook trigger.
 			</p>
 		{/if}
 
@@ -106,6 +109,8 @@
 							{/if}
 							{#if ep.kind === 'manual' && !ep.typed}
 								<Badge variant="secondary" class="text-xs">loose body</Badge>
+							{:else if ep.kind === 'run'}
+								<Badge variant="secondary" class="text-xs">run</Badge>
 							{/if}
 						</div>
 						{#if ep.kind === 'manual'}
@@ -118,9 +123,13 @@
 									<span><span class="font-semibold text-foreground">POST</span> {ep.invokePath}</span>
 								{/if}
 							</div>
-						{:else}
+						{:else if ep.kind === 'webhook'}
 							<div class="font-mono text-xs text-muted-foreground">
 								<span class="font-semibold text-foreground">{ep.method}</span> {ep.path}
+							</div>
+						{:else if ep.kind === 'run'}
+							<div class="font-mono text-xs text-muted-foreground">
+								<span class="font-semibold text-foreground">POST</span> /api/v1/instances
 							</div>
 						{/if}
 					</div>
@@ -145,6 +154,34 @@
 					<div class="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
 						Async webhook receiver — accepts a free-form JSON body (projected by the
 						trigger's payload mapping). Returns <code>202</code>.
+					</div>
+				{:else if ep.kind === 'run'}
+					<div class="space-y-2 border-t border-border/60 px-3 py-2.5 text-xs text-muted-foreground">
+						<p>
+							Launch this template via
+							<code>POST /api/v1/instances</code> with
+							<code>template_id</code> = <code class="break-all">{ep.templateId}</code>.
+						</p>
+						{#each ep.startBlocks as sb (sb.startBlockId)}
+							<div class="rounded border border-border/40 px-2 py-1.5">
+								<div class="font-mono text-[11px] text-foreground/80">
+									start_tokens[] · <span class="text-muted-foreground">{sb.startBlockId}</span>
+								</div>
+								{#if sb.fields.length > 0}
+									<ul class="mt-1 space-y-0.5">
+										{#each sb.fields as f (f.name)}
+											<li class="font-mono text-[11px]">
+												<span class="text-foreground">{f.name}</span><span class="text-muted-foreground"
+													>: {f.type}{f.format ? ` (${f.format})` : ''}{f.required ? '' : '?'}</span
+												>
+											</li>
+										{/each}
+									</ul>
+								{:else}
+									<div class="mt-1 text-[11px] text-muted-foreground/70">No input fields.</div>
+								{/if}
+							</div>
+						{/each}
 					</div>
 				{/if}
 			</div>

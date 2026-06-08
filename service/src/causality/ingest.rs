@@ -1881,14 +1881,34 @@ async fn record_task_event(
     // Build detail from the whole effect_result (net_id, place, response_subject, etc.)
     let detail = effect_result.clone();
 
+    // Resolve the task's workspace so an UNPOOLED task is workspace-scoped like a
+    // pooled one — the precondition for it to surface in `/tasks/inbox` as an
+    // "open to anyone" task (the inbox is workspace-bracketed). Chain: process →
+    // its linked instance → template → workspace. Best-effort: a process not yet
+    // linked to an instance (or a sub/anonymous instance) yields NULL, the same
+    // fail-soft posture as the pooled `offers` projection — the global `/tasks`
+    // list still shows it, it just won't appear in the (scoped) inbox.
+    let workspace_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT t.workspace_id \
+         FROM hpi_processes p \
+         JOIN workflow_instances i ON i.id = p.instance_id \
+         JOIN workflow_templates  t ON t.id = i.template_id \
+         WHERE p.process_id = $1",
+    )
+    .bind(&process_id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+
     // Fresh insert seeds status='pending' (unpooled tasks). If a pooled
     // `offers`/`in_use` projection (§4.1/4.2) already created an
     // offered/claimed row for this grant_id, enrich it with the effect's
     // net_id/place/response_subject routing (needed by /complete) WITHOUT
-    // resetting the projected status.
+    // resetting the projected status or workspace (DO UPDATE touches `detail`
+    // only — the pooled row already carries its capacity-resolved workspace).
     sqlx::query(
-        "INSERT INTO hpi_tasks (id, process_id, title, status, detail, created_at) \
-         VALUES ($1, $2, $3, 'pending', $4, $5) \
+        "INSERT INTO hpi_tasks (id, process_id, title, status, detail, created_at, workspace_id) \
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6) \
          ON CONFLICT (id) DO UPDATE SET detail = excluded.detail",
     )
     .bind(task_id)
@@ -1896,6 +1916,7 @@ async fn record_task_event(
     .bind(&title)
     .bind(&detail)
     .bind(ts)
+    .bind(workspace_id)
     .execute(db)
     .await?;
 
