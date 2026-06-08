@@ -28,7 +28,9 @@ export type LiveRenderKind =
 	/** A stream of self-contained JPEG frames → swap each into an `<img>`. */
 	| 'mjpeg'
 	/** A robot joint-angle (joint-state) stream → drive a 3D URDF twin. */
-	| 'urdf';
+	| 'urdf'
+	/** A planning-scene stream → drive a 3D twin of the arm + collision objects. */
+	| 'scene';
 
 export interface LiveRenderPlan {
 	kind: LiveRenderKind;
@@ -108,6 +110,13 @@ export function planLiveRender(
 	// Only this exact base type (the NDJSON joint-state shape); others fall through.
 	if (base === 'application/vnd.aithericon.joint-state+x-ndjson') {
 		return { kind: 'urdf', mediaKind: '3d', mime: contentType };
+	}
+	// Planning-scene twin: a data channel of full planning-scene snapshots (one
+	// NDJSON object per tick) carrying the arm pose + world collision objects +
+	// any attached (grasped) object. The sibling of the joint-state 'urdf' arm —
+	// the player feeds each snapshot into a 3D twin of the arm AND its scene.
+	if (base === 'application/vnd.aithericon.planning-scene+x-ndjson') {
+		return { kind: 'scene', mediaKind: '3d', mime: contentType };
 	}
 	return null;
 }

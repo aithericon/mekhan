@@ -18,10 +18,9 @@
 <script lang="ts">
 	import { Canvas, T } from '@threlte/core';
 	import { OrbitControls } from '@threlte/extras';
-	import { Box3, LoadingManager, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three';
-	import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-	import URDFLoader, { type URDFRobot } from 'urdf-loader';
+	import { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
+	import { FOV, buildRobot, frameRobot } from '$lib/channels/robotModel';
 	import type { UrdfJointFrame } from '$lib/channels/urdfStreamPlayer';
 
 	let {
@@ -33,85 +32,12 @@
 	let robot = $state<URDFRobot | null>(null);
 	let error = $state<string | null>(null);
 
-	// Camera framing — derived from the loaded robot's bounding box so the arm
-	// fills the stage at whatever size/aspect the edge widget gives us, instead of
-	// a fixed pose that leaves dead space when the container grows.
-	const FOV = 35;
+	// Camera framing — derived from the loaded robot's bounding box (via the shared
+	// `frameRobot`) so the arm fills the stage at whatever size/aspect the edge
+	// widget gives us, instead of a fixed pose that leaves dead space when the
+	// container grows.
 	let camPos = $state<[number, number, number]>([0.9, 0.7, 0.9]);
 	let camTarget = $state<[number, number, number]>([0, 0.35, 0]);
-
-	// Fit the camera to the robot's AABB: centre on it, back off just far enough
-	// (plus a small margin) that the tallest reach fits in the FOV. Framed once at
-	// load using the home pose (the arm's largest extent), so subsequent motion
-	// always stays in view without the camera jumping.
-	function frameRobot(r: URDFRobot) {
-		r.updateMatrixWorld(true);
-		const box = new Box3().setFromObject(r);
-		if (box.isEmpty()) return;
-		const center = box.getCenter(new Vector3());
-		const size = box.getSize(new Vector3());
-		const maxDim = Math.max(size.x, size.y, size.z) || 1;
-		const dist = (maxDim / 2 / Math.tan(((FOV * Math.PI) / 180) / 2)) * 1.2;
-		const dir = new Vector3(1, 0.5, 1).normalize();
-		camTarget = [center.x, center.y, center.z];
-		camPos = [center.x + dir.x * dist, center.y + dir.y * dist, center.z + dir.z * dist];
-	}
-
-	// Resolve a `package://…` (or already-resolved) mesh path back to the bytes in
-	// the unzipped bundle. Keys are full archive paths, e.g.
-	// `xarm_description/meshes/xarm6/visual/link1.stl`. We try, in order: exact
-	// match, the substring from the package root, then a basename suffix match —
-	// robust to whatever prefix urdf-loader prepends.
-	function lookupMesh(meshes: Map<string, Uint8Array>, path: string): Uint8Array | null {
-		if (meshes.has(path)) return meshes.get(path) ?? null;
-		const pkgIdx = path.indexOf('xarm_description/');
-		if (pkgIdx >= 0) {
-			const k = path.slice(pkgIdx);
-			if (meshes.has(k)) return meshes.get(k) ?? null;
-		}
-		const base = path.split(/[\\/]/).pop() ?? '';
-		if (base) {
-			for (const [k, v] of meshes) {
-				if (k === base || k.endsWith('/' + base)) return v;
-			}
-		}
-		return null;
-	}
-
-	function buildRobot(urdfText: string, meshes: Map<string, Uint8Array>): URDFRobot {
-		const manager = new LoadingManager();
-		const loader = new URDFLoader(manager);
-		// Map the package name to itself so urdf-loader's `package://xarm_description/…`
-		// resolves to a path our bundle keys match on.
-		loader.packages = { xarm_description: 'xarm_description' };
-		loader.loadMeshCb = (path: string, _mgr: LoadingManager, onLoad: (mesh: Object3D, err?: Error) => void) => {
-			try {
-				const bytes = lookupMesh(meshes, path);
-				if (!bytes) {
-					// Keep the link in the tree (empty placeholder) but flag the miss.
-					onLoad(new Object3D(), new Error(`mesh not in bundle: ${path}`));
-					return;
-				}
-				// STLLoader wants an ArrayBuffer; slice to the exact view so a shared
-				// underlying buffer (from fflate) doesn't leak adjacent entries.
-				const ab = bytes.buffer.slice(
-					bytes.byteOffset,
-					bytes.byteOffset + bytes.byteLength
-				) as ArrayBuffer;
-				const geometry = new STLLoader().parse(ab);
-				const mesh = new Mesh(
-					geometry,
-					new MeshStandardMaterial({ color: 0xc8ccd0, metalness: 0.25, roughness: 0.55 })
-				);
-				onLoad(mesh);
-			} catch (e) {
-				onLoad(new Object3D(), e as Error);
-			}
-		};
-		const r = loader.parse(urdfText);
-		r.rotation.x = -Math.PI / 2; // ROS Z-up → three Y-up
-		return r;
-	}
 
 	// (Re)load the URDF whenever the robot model changes. Synchronous mesh parsing
 	// means once `loadRobotDescription` resolves, the robot is ready in one tick.
@@ -133,7 +59,7 @@
 					return;
 				}
 				const r = buildRobot(desc.urdfText, desc.meshes);
-				frameRobot(r);
+				({ camPos, camTarget } = frameRobot(r));
 				robot = r;
 				error = null;
 			} catch (e) {

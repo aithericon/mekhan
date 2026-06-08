@@ -20864,6 +20864,15 @@
             "$ref": "#/components/schemas/RosOperation",
             "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
           },
+          "scene_stream_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When set on a `send_action_goal` node that declares a DATA `out` channel,\nthe action ALSO polls move_group's `/get_planning_scene` every this-many\nmilliseconds during the motion and streams each scene snapshot (slim\nNDJSON: joints + collision objects + attached objects) onto the data\nchannel — driving a live planning-scene digital twin. `None`/absent ⇒ the\ndata channel carries the default per-feedback joint-state stream instead.",
+            "minimum": 0
+          },
           "timeout_ms": {
             "type": "integer",
             "format": "int64",
