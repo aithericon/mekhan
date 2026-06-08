@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { getTask, completeTask, cancelTask, getProcess } from '$lib/api/client';
+	import { getTask, completeTask, cancelTask, claimTask, getProcess } from '$lib/api/client';
 	import type { HumanTask, ProcessState } from '$lib/types/tasks';
 	import { HumanTaskPanel, TaskForm, SuccessOverlay } from '$lib/components/tasks';
 	import { Badge } from '$lib/components/ui/badge';
@@ -14,6 +14,7 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let submitting = $state(false);
+	let claiming = $state(false);
 	let showSuccess = $state(false);
 
 	const taskId = $derived($page.params.id as string);
@@ -70,6 +71,26 @@
 		}
 	}
 
+	async function handleClaim() {
+		if (!task) return;
+		claiming = true;
+		error = null;
+		try {
+			await claimTask(task.task_id);
+			// 202 — the authoritative `claimed` flip arrives via the pool-net
+			// projection. Poll a few times until the row leaves `offered`.
+			for (let i = 0; i < 8; i++) {
+				await new Promise((r) => setTimeout(r, 600));
+				await load();
+				if (task && task.status !== 'offered') break;
+			}
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to claim task';
+		} finally {
+			claiming = false;
+		}
+	}
+
 	async function handleCancel() {
 		if (!task) return;
 		const reason = prompt('Reason for cancellation (optional):');
@@ -116,14 +137,36 @@
 				Loading...
 			</div>
 		{:else if task}
-			{#if task.status === 'pending' && task.steps?.length}
-				<!-- Pending with steps: show interactive form -->
+			{#if task.status === 'offered'}
+				<!-- Offered to the capacity pool: the member claims to bind it. -->
+				<div class="rounded-xl border border-amber-200 bg-card">
+					<div class="border-b border-border p-4">
+						<div class="flex items-center gap-2">
+							<h1 class="text-lg font-semibold text-foreground">{task.title}</h1>
+							<Badge class="bg-amber-100 text-amber-700" variant="secondary">Offered</Badge>
+						</div>
+						{#if task.instructions_mdsvex}
+							<p class="mt-2 text-sm text-muted-foreground">{task.instructions_mdsvex}</p>
+						{/if}
+					</div>
+					<div class="flex items-center justify-between gap-3 p-4">
+						<p class="text-sm text-muted-foreground">
+							This task is offered to everyone available in its capacity. Claim it to take it on —
+							first claim wins.
+						</p>
+						<Button onclick={handleClaim} disabled={claiming} data-testid="claim-button">
+							{claiming ? 'Claiming…' : 'Claim'}
+						</Button>
+					</div>
+				</div>
+			{:else if (task.status === 'pending' || task.status === 'claimed') && task.steps?.length}
+				<!-- Pending/claimed with steps: show interactive form -->
 				<div class="rounded-xl border border-border bg-card">
 					<div class="border-b border-border p-4">
 						<div class="flex items-center gap-2">
 							<h1 class="text-lg font-semibold text-foreground">{task.title}</h1>
 							<Badge class="bg-amber-100 text-amber-700" variant="secondary">
-								Pending
+								{task.status === 'claimed' ? 'Claimed' : 'Pending'}
 							</Badge>
 						</div>
 						{#if task.instructions_mdsvex}

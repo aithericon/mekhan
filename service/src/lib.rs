@@ -346,6 +346,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::process_live::artifacts_stream))
         // Tasks
         .routes(routes!(process::handlers::list_tasks))
+        // `/tasks/inbox` is a literal child of `/tasks` and MUST be registered
+        // before the `/tasks/{id}` wildcard so matchit prefers it.
+        .routes(routes!(process::handlers::inbox))
         .routes(routes!(handlers::task_stream::task_stream))
         .routes(routes!(process::handlers::get_task))
         .routes(routes!(process::handlers::complete_task))
@@ -471,6 +474,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::roster::my_enrollments))
         .routes(routes!(handlers::roster::set_availability))
+        .routes(routes!(handlers::roster::human_presence))
         .routes(routes!(
             handlers::roster::get_roster_member,
             handlers::roster::update_roster_member,

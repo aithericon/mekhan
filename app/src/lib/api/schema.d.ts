@@ -939,6 +939,35 @@ export interface paths {
         patch: operations["update_folder"];
         trace?: never;
     };
+    "/api/v1/human-presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/human-presence` — live in-memory presence snapshot of the human
+         *     capacity pools (docs/33 P4). The human counterpart to
+         *     `GET /api/v1/runners/presence`.
+         * @description Returns the presence controller's in-memory map — which enrolled members mekhan
+         *     currently considers *admitted* (a live unit in their pool), NOT the durable
+         *     `roster_members.available` intent column. Feeds the Fleet human-pool view.
+         *
+         *     The in-memory map is keyed by `(capacity_id, member_user_id)` and carries no
+         *     workspace, so it is filtered here to the capacities that live in the caller's
+         *     workspace — without this it would leak every workspace's human-capacity ids +
+         *     member liveness timing, exactly as `runners::runner_presence` guards.
+         */
+        get: operations["human_presence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/requests": {
         parameters: {
             query?: never;
@@ -2583,6 +2612,34 @@ export interface paths {
          *     of the pagination envelope is preserved for richer clients.
          */
         get: operations["list_tasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox
+         *     (docs/33 P4).
+         * @description Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object
+         *     (same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`
+         *     tasks whose backing human capacity the caller is *enrolled in* — the offers
+         *     they may claim — and (b) `claimed` tasks the caller already holds (their work
+         *     in flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility
+         *     contract (membership now; caps-vs-`requirements` matching deferred).
+         *
+         *     Mounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.
+         */
+        get: operations["inbox"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6077,6 +6134,26 @@ export interface components {
         };
         /** @enum {string} */
         HttpMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+        /** @description Read-API row: one tracked roster member's live presence in a human capacity. */
+        HumanPresenceSnapshot: {
+            /**
+             * Format: uuid
+             * @description The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`).
+             */
+            capacity_id: string;
+            /**
+             * Format: int64
+             * @description Milliseconds since the member's last liveness renewal.
+             */
+            last_seen_ms_ago: number;
+            /**
+             * Format: uuid
+             * @description The enrolled member's `workspace_members.user_id`.
+             */
+            member_user_id: string;
+            /** @description Whether mekhan currently considers the member admitted to the pool. */
+            present: boolean;
+        };
         /**
          * @description Layout mode for image blocks. Snake-case wire values: `"single"`,
          *     `"grid"`, `"gallery"`.
@@ -12775,6 +12852,26 @@ export interface operations {
             };
         };
     };
+    human_presence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live human presence snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HumanPresenceSnapshot"][];
+                };
+            };
+        };
+    };
     list_inference_requests: {
         parameters: {
             query?: {
@@ -16069,6 +16166,35 @@ export interface operations {
             };
             /** @description Invalid query */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    inbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

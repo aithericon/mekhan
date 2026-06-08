@@ -2649,6 +2649,31 @@
         }
       }
     },
+    "/api/v1/human-presence": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/human-presence` — live in-memory presence snapshot of the human\ncapacity pools (docs/33 P4). The human counterpart to\n`GET /api/v1/runners/presence`.",
+        "description": "Returns the presence controller's in-memory map — which enrolled members mekhan\ncurrently considers *admitted* (a live unit in their pool), NOT the durable\n`roster_members.available` intent column. Feeds the Fleet human-pool view.\n\nThe in-memory map is keyed by `(capacity_id, member_user_id)` and carries no\nworkspace, so it is filtered here to the capacities that live in the caller's\nworkspace — without this it would leak every workspace's human-capacity ids +\nmember liveness timing, exactly as `runners::runner_presence` guards.",
+        "operationId": "human_presence",
+        "responses": {
+          "200": {
+            "description": "Live human presence snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HumanPresenceSnapshot"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inference/requests": {
       "get": {
         "tags": [
@@ -7294,6 +7319,36 @@
           },
           "400": {
             "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/inbox": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox\n(docs/33 P4).",
+        "description": "Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object\n(same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`\ntasks whose backing human capacity the caller is *enrolled in* — the offers\nthey may claim — and (b) `claimed` tasks the caller already holds (their work\nin flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility\ncontract (membership now; caps-vs-`requirements` matching deferred).\n\nMounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.",
+        "operationId": "inbox",
+        "responses": {
+          "200": {
+            "description": "The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -15870,6 +15925,38 @@
           "PATCH",
           "DELETE"
         ]
+      },
+      "HumanPresenceSnapshot": {
+        "type": "object",
+        "description": "Read-API row: one tracked roster member's live presence in a human capacity.",
+        "required": [
+          "capacity_id",
+          "member_user_id",
+          "present",
+          "last_seen_ms_ago"
+        ],
+        "properties": {
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`)."
+          },
+          "last_seen_ms_ago": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the member's last liveness renewal.",
+            "minimum": 0
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The enrolled member's `workspace_members.user_id`."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether mekhan currently considers the member admitted to the pool."
+          }
+        }
       },
       "ImageDisplay": {
         "type": "string",

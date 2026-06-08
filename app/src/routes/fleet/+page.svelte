@@ -21,6 +21,7 @@
 	import { deleteResource } from '$lib/api/resources';
 	import { reconnectCluster, drainCluster } from '$lib/api/clusters';
 	import CapacitySection from '$lib/components/fleet/CapacitySection.svelte';
+	import HumanCapacitySection from '$lib/components/fleet/HumanCapacitySection.svelte';
 	import BoardHeader from '$lib/components/fleet/BoardHeader.svelte';
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
@@ -47,7 +48,15 @@
 
 	// ── Derived: partition by backend ───────────────────────────────────────────
 
-	const presence = $derived(capacities.filter((c) => c.backend === 'presence'));
+	// Human capacities are ALSO presence-backed — the `offer` dispatch axis is what
+	// distinguishes a self-claiming human pool from a runner group. Split them so
+	// the Presence section stays runner-only and humans get their own roster view.
+	const humans = $derived(
+		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch === 'offer')
+	);
+	const presence = $derived(
+		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch !== 'offer')
+	);
 	const queue = $derived(capacities.filter((c) => c.backend === 'queue'));
 	// `deferred` shares the Tokens lane (the consume-quota path is a Tokens flavour).
 	const tokens = $derived(
@@ -266,6 +275,10 @@
 			>
 				{#snippet emptyIcon()}<Boxes class="size-10 text-muted-foreground/40" />{/snippet}
 			</CapacitySection>
+
+			<!-- HUMANS — offer-dispatch presence pools (docs/33). Roster members +
+				 their live presence; the human counterpart to the runner cards. -->
+			<HumanCapacitySection capacities={humans} />
 
 			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
 				 placement, router/inference-audit) now lives on its own page at
