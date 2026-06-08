@@ -490,7 +490,13 @@ class MotionBridge(Node):
             return resp
 
         get_req = GetPlanningScene.Request()
-        get_req.components.components = PlanningSceneComponents.WORLD_OBJECT_NAMES
+        # Request BOTH world objects AND attached objects — otherwise the attached
+        # set comes back empty and clear_scene silently leaves grasped samples
+        # stuck on the gripper (its detach loop below iterates nothing).
+        get_req.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_NAMES
+            | PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+        )
         try:
             get_resp = self._get_scene_client.call(get_req)
         except Exception as exc:  # noqa: BLE001
@@ -746,6 +752,67 @@ class MotionBridge(Node):
 
         return self._apply_scene_diff(scene)
 
+    def _attached_ids(self):
+        """Read every object currently attached to the robot as (link, id) pairs.
+
+        Returns None if the scene can't be read (caller treats as 'unknown')."""
+        if not self._get_scene_client.wait_for_service(timeout_sec=5.0):
+            return None
+        get_req = GetPlanningScene.Request()
+        get_req.components.components = (
+            PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+        )
+        try:
+            get_resp = self._get_scene_client.call(get_req)
+        except Exception:  # noqa: BLE001
+            return None
+        if get_resp is None:
+            return None
+        return [
+            (a.link_name, a.object.id)
+            for a in get_resp.scene.robot_state.attached_collision_objects
+        ]
+
+    def _detach_all_attached(self, retries=4):
+        """Detach EVERY attached object back into the world, VERIFYING it stuck.
+
+        Robustness backstop. A single AttachedCollisionObject REMOVE diff
+        occasionally does not take effect under rapid scene churn (a place's
+        detach immediately followed by retract motion + the twin's concurrent
+        /get_planning_scene polling), leaving a sample stuck on the gripper.
+        A stuck body then makes every SUBSEQUENT pick's /compute_ik read the
+        held object as an in-collision start state, so the whole rest of a
+        multi-sample run silently fails. Re-querying and re-applying the detach
+        until the gripper reads empty makes release self-healing. Detaches ALL
+        attached ids (not just one) so a stuck PRIOR sample is also cleared.
+        """
+        last = None
+        for _ in range(max(1, retries)):
+            attached = self._attached_ids()
+            if attached is None:
+                return False, "could not read attached objects"
+            if not attached:
+                return True, ""
+            last = attached
+            diffs = []
+            for link_name, obj_id in attached:
+                aco = AttachedCollisionObject()
+                aco.link_name = link_name
+                aco.object.id = obj_id
+                aco.object.operation = CollisionObject.REMOVE
+                diffs.append(aco)
+            scene = PlanningScene()
+            scene.is_diff = True
+            scene.robot_state.is_diff = True
+            scene.robot_state.attached_collision_objects = diffs
+            self._apply_scene_diff(scene)
+            # Let the planning-scene monitor catch up before re-reading.
+            time.sleep(0.15)
+        attached = self._attached_ids()
+        if attached:
+            return False, "still attached after %d retries: %s" % (retries, last)
+        return True, ""
+
     def _handle_grasp(self, req, resp):
         if not req.object_id:
             resp.success = False
@@ -791,8 +858,14 @@ class MotionBridge(Node):
             resp.error_message = "object_id is required"
             return resp
 
-        # 1. The part that MATTERS: detach the object back into the world.
-        ok, message = self._attach_diff(req.object_id, CollisionObject.REMOVE)
+        # 1. The part that MATTERS: detach the object back into the world. Use the
+        #    self-healing detach-ALL + verify path rather than a single one-shot
+        #    diff — a lone REMOVE intermittently doesn't stick under the demo's
+        #    rapid place->retract->poll churn, stranding a sample on the gripper
+        #    that then blocks every later pick. In this cell only one object is
+        #    ever held, so detaching all is equivalent for the named release and
+        #    additionally clears any stuck prior sample.
+        ok, message = self._detach_all_attached()
         if not ok:
             resp.success = False
             # Attach state unknown on failure; report still-attached conservatively.
