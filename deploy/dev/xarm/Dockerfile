@@ -159,6 +159,18 @@ RUN sed -i "s/\(['\"]no_gui_ctrl['\"]: ['\"]true['\"],\)/\1\n            'add_gr
         /ros2_ws/install/xarm_planner/share/xarm_planner/launch/xarm6_planner_fake.launch.py \
         /ros2_ws/src/xarm_ros2/xarm_planner/launch/xarm6_planner_fake.launch.py
 
+# ── Hide the MoveIt "Planned Path" trajectory ghost in RViz (planner.rviz is the
+#    config the fake planner's RViz loads, `rviz2 -d .../planner.rviz`). The
+#    MotionPlanning display renders the planned trajectory as a translucent ghost
+#    robot (Robot Alpha 0.5) that LINGERS after planning — distracting on the
+#    noVNC viewer, and unrelated to the actual arm. Disable ONLY the Planned
+#    Path's robot visual: the sed is scoped to the `Planned Path:` … `Planning
+#    Request:` block, so the SOLID "Scene Robot" (the live arm, further down) is
+#    untouched. Alpha→0 belt-and-suspenders so any residual marker is invisible.
+RUN f=/ros2_ws/install/xarm_moveit_config/share/xarm_moveit_config/rviz/planner.rviz \
+    && sed -i '/Planned Path:/,/Planning Request:/ s/Show Robot Visual: true/Show Robot Visual: false/' "$f" \
+    && sed -i '/Planned Path:/,/Planning Request:/ s/Robot Alpha: 0.5/Robot Alpha: 0/' "$f"
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
