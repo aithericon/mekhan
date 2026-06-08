@@ -79,23 +79,23 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup component add clippy rustfmt \
     && rustup target add aarch64-unknown-linux-musl
 
-# ── aarch64-musl CROSS toolchain (x86_64-hosted, from musl.cc) ──────────────
-# The Woodpecker CI worker is now an x86 node (HetznerCluster 04g, cpx42), but
-# the deploy/cluster is ARM64 (cax21). So this is an x86 → aarch64 CROSS build:
-# ship the `-cross` tarball (x86_64 ELF binaries that EMIT aarch64-linux-musl),
-# NOT the `-native` tarball (aarch64 binaries, which can't run on the x86 host).
+# ── aarch64-musl NATIVE toolchain (aarch64-hosted, from musl.cc) ────────────
+# The Woodpecker CI worker is an ARM64 node (the stateful-arm pool), so this is
+# a NATIVE build: ship the `-native` tarball (aarch64 ELF binaries that emit
+# aarch64-linux-musl), NOT the `-cross` tarball (x86_64 binaries, which can't
+# run on the ARM host).
 #
-# Build this image as `--platform linux/amd64` (it must RUN on the x86 worker).
+# Build this image as `--platform linux/arm64` (it must RUN on the ARM worker).
 # The aarch64 binaries are produced by `cargo build --target
-# aarch64-unknown-linux-musl` using this cross toolchain + .cargo/config.toml
-# (already written for an x86_64 host cross-compiling to aarch64).
+# aarch64-unknown-linux-musl` using this toolchain + .cargo/config.toml.
 #
-# The `-cross` tarball ships every tool under the `aarch64-linux-musl-` prefix
-# (some also unprefixed); the loop symlinks the prefixed form to whichever name
-# exists, then verifies `gcc`/`ar` resolve so a broken tarball fails here, not CI.
+# The `-native` tarball ships some binaries under unprefixed names (`bin/ar`,
+# `bin/ld`) while only `gcc`/`g++` reliably carry the `aarch64-linux-musl-`
+# prefix; the loop symlinks the prefixed form to whichever name exists, then
+# verifies `gcc`/`ar` resolve so a broken tarball fails here, not in CI.
 RUN set -eux; \
-    curl -sL https://musl.cc/aarch64-linux-musl-cross.tgz | tar xz -C /opt; \
-    toolprefix="/opt/aarch64-linux-musl-cross"; \
+    curl -sL https://musl.cc/aarch64-linux-musl-native.tgz | tar xz -C /opt; \
+    toolprefix="/opt/aarch64-linux-musl-native"; \
     for tool in gcc g++ ar ld ranlib strip nm objcopy objdump; do \
         if [ -x "${toolprefix}/bin/aarch64-linux-musl-${tool}" ]; then \
             ln -sf "${toolprefix}/bin/aarch64-linux-musl-${tool}" "/usr/local/bin/aarch64-linux-musl-${tool}"; \

@@ -22,7 +22,7 @@ when:
 
 labels:
   role: build
-  host: worker-hetzner
+  host: worker-stateful-arm
 
 steps:
   - name: build-backend-service

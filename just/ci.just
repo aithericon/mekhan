@@ -301,28 +301,12 @@ apply-workflows dir="workflows":
     fi
     echo "✓ Applied all workflow templates under {{dir}}/"
 
-# ── buildx setup: QEMU + docker-container driver (build arm64 images on x86) ─
-#
-# The CI worker is x86 but the runtime images are linux/arm64
-
-
-# Every publish recipe calls this first. Each CI step is a fresh container
-# (buildx config is ephemeral) sharing the host docker daemon (the buildkit
-# container may persist), so we recreate idempotently under a stable name.
-ensure-buildx:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "▶ registering QEMU (binfmt) + docker-container buildx builder"
-    docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null
-
-    docker buildx use xbuild 2>/dev/null \
-      || docker buildx create --name xbuild --driver docker-container --use 2>/dev/null \
-      || { docker buildx rm xbuild >/dev/null 2>&1 || true; \
-           docker rm -f buildx_buildkit_xbuild0 >/dev/null 2>&1 || true; \
-           docker buildx create --name xbuild --driver docker-container --use --bootstrap >/dev/null; }
-    echo "✓ buildx ready (docker-container driver + qemu, persistent cache)"
-
 # ── Package + push (Docker image) ───────────────────────────────────────────
+#
+# NATIVE ARM: the CI worker is now an ARM stateful node (pool worker-stateful-arm),
+# so images build natively — no QEMU, no docker-container driver, no `cross`.
+# The default docker buildx builder can't `--push`, so we `--load` the freshly
+# built arm64 image into the local store and `docker push` it.
 
 # Stage prebuilt binary + frontend, build the mekhan-service OCI image, and
 # push both SHA and branch tags to the registry.
@@ -333,7 +317,6 @@ ensure-buildx:
 publish-backend-service registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     cd ..
-    just ci::ensure-buildx
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
     ctx="/tmp/mekhan-build-context"
@@ -353,19 +336,19 @@ publish-backend-service registry_image commit_sha ref_slug:
     # See deploy/docker/Dockerfile.service.prebuilt for the COPY.
     cp -r demos "$ctx/demos"
 
-    echo "▶ docker buildx build + push → {{registry_image}}/mekhan-service:$sha_tag"
-    # --push (not --load): the docker-container builder builds in an isolated
-    # BuildKit, so push straight to the registry rather than loading an arm64
-    # image into the x86 daemon first.
+    echo "▶ docker buildx build → {{registry_image}}/mekhan-service:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
-      --push \
+      --load \
       -t "{{registry_image}}/mekhan-service:$sha_tag" \
       -t "{{registry_image}}/mekhan-service:$ref_tag" \
       -f deploy/docker/Dockerfile.service.prebuilt \
       "$ctx"
 
     rm -rf "$ctx"
+
+    docker push "{{registry_image}}/mekhan-service:$sha_tag"
+    docker push "{{registry_image}}/mekhan-service:$ref_tag"
 
 # Build + push the aithericon-executor image.
 #
@@ -381,23 +364,22 @@ publish-backend-executor registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
-    # The executor Dockerfile compiles Rust IN-DOCKER. On the x86 CI worker the
-    # whole --platform arm64 build runs under QEMU (BuildKit/docker-container
-    # driver, set up here). NOTE: emulated compilation of the executor
-    # (kreuzberg/tesseract/ONNX native deps) is SLOW — consider a dedicated arm
-    # builder or cross-compiling if this gets too slow / times out.
-    just ci::ensure-buildx
+    # The executor Dockerfile compiles Rust IN-DOCKER. On the native ARM worker
+    # this is a native compile (no QEMU) — ~5-8 min as intended.
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
 
-    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-executor:$sha_tag"
+    echo "▶ docker buildx build → {{registry_image}}/aithericon-executor:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
-      --push \
+      --load \
       -t "{{registry_image}}/aithericon-executor:$sha_tag" \
       -t "{{registry_image}}/aithericon-executor:$ref_tag" \
       -f deploy/docker/Dockerfile.executor \
       .
+
+    docker push "{{registry_image}}/aithericon-executor:$sha_tag"
+    docker push "{{registry_image}}/aithericon-executor:$ref_tag"
 
 # Build + push the aithericon-engine image.
 #
@@ -409,21 +391,21 @@ publish-backend-engine registry_image commit_sha ref_slug:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ..
-    # Engine also compiles Rust in-docker → emulated arm64 build on the x86 CI
-    # worker (docker-container driver + QEMU, set up here). Engine is pure-Rust/
-    # rustls (no ONNX), so emulation is far lighter than the executor's.
-    just ci::ensure-buildx
+    # Engine compiles Rust in-docker too → native ARM build (no QEMU).
     sha_tag="{{commit_sha}}"
     ref_tag="{{ref_slug}}"
 
-    echo "▶ docker buildx build + push → {{registry_image}}/aithericon-engine:$sha_tag"
+    echo "▶ docker buildx build → {{registry_image}}/aithericon-engine:$sha_tag"
     docker buildx build \
       --platform {{platform}} \
-      --push \
+      --load \
       -t "{{registry_image}}/aithericon-engine:$sha_tag" \
       -t "{{registry_image}}/aithericon-engine:$ref_tag" \
       -f deploy/docker/Dockerfile.engine \
       .
+
+    docker push "{{registry_image}}/aithericon-engine:$sha_tag"
+    docker push "{{registry_image}}/aithericon-engine:$ref_tag"
 
 # Build the fat CI builder image and push it to the registry.
 #
@@ -441,15 +423,18 @@ publish-backend-engine registry_image commit_sha ref_slug:
 # need atomic rollouts, switch the YAMLs to a SHA tag and produce that here.
 build-ci-builder registry_image:
     #!/usr/bin/env bash
+    set -euo pipefail
     cd ..
-    # amd64 — the Woodpecker CI worker is now an x86 node (cpx42). It carries the
-    # x86-hosted aarch64 cross toolchain to build the aarch64 service binary.
+    # arm64 — the Woodpecker CI worker is the ARM stateful node (worker-stateful-arm).
+    # Build natively on an ARM host (the worker, or an Apple-Silicon Mac). Carries
+    # the aarch64-native musl toolchain to build the aarch64 service binary.
     docker buildx build \
-      --platform linux/amd64 \
-      --push \
+      --platform linux/arm64 \
+      --load \
       -f deploy/docker/Dockerfile.ci-build \
       -t "{{registry_image}}/mekhan-ci-builder:latest" \
       .
+    docker push "{{registry_image}}/mekhan-ci-builder:latest"
 
 # ── Deploy (Terraform / Nomad) ──────────────────────────────────────────────
 #
