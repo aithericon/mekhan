@@ -136,12 +136,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Causality ingest (PETRI_GLOBAL domain events → causality tables)
     // Single projection path for processes, tasks, metrics, logs, and catalogue.
+    // The bucket workflow artifacts physically land in — used as the
+    // `file_server_id` for the platform's own object store when the causality
+    // projector couples a catalogued artifact to its physical-copy inventory
+    // row. Mirrors the artifact-store selection (artifact_s3 overrides s3).
+    let object_store_id = config
+        .artifact_s3
+        .as_ref()
+        .map(|c| c.bucket.clone())
+        .unwrap_or_else(|| config.s3.bucket.clone());
     tokio::spawn(mekhan_service::causality::ingest::start_causality_ingest(
         mekhan_nats.clone(),
         db.clone(),
         subscription_manager.clone(),
         live.clone(),
         Some(trigger_dispatcher.clone()),
+        object_store_id,
     ));
 
     // Step-executions projection (PETRI_GLOBAL domain events → step_execution
@@ -221,6 +231,22 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         petri.clone(),
         fleet.clone(),
+    );
+
+    // Human presence controller (docs/33 §7 — humans as a capacity). The human
+    // analogue of the runner presence controller: a roster MEMBER's availability
+    // (not a daemon heartbeat) drives admission into the `pool-<capacity_id>`
+    // net. Subscribes to BOTH `human.*.availability` (durable intent toggle) and
+    // `human.*.presence` (session/external liveness), and a sweep reaps a
+    // TTL-missing member. The injected pool unit reuses the runner plumbing
+    // verbatim, so no engine HTTP client is needed (pure NATS bridge + signal).
+    // Construct the shared handle ONCE: the controller tasks mutate it and the
+    // AppState read API reads through it.
+    let human_presence = mekhan_service::human_presence::HumanPresence::new();
+    mekhan_service::human_presence::spawn_human_presence_controller(
+        human_presence.clone(),
+        mekhan_nats.clone(),
+        db.clone(),
     );
 
     // Worker liveness tasks (worker-pool feature). Subscribe to
@@ -406,6 +432,7 @@ async fn main() -> anyhow::Result<()> {
         resource_resolver,
         runner_nats_signer,
         runner_presence,
+        human_presence,
         fleet,
         asset_resolver,
     };

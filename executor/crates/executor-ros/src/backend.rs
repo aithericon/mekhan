@@ -59,6 +59,14 @@ pub const BACKEND_NAME: &str = "ros";
 /// of the net's firing rate.
 const JOINT_STATE_CONTENT_TYPE: &str = "application/vnd.aithericon.joint-state+x-ndjson";
 
+/// Content-type stamped on a DATA-plane planning-scene stream (the `scene_stream_ms`
+/// opt-in path). Each NDJSON line is one FULL planning-scene snapshot
+/// `{joints, objects, attached}` — the arm pose plus the world collision objects
+/// and any attached/grasped object — so a downstream twin decodes the byte stream
+/// line-by-line off-band of the net's firing rate, driving a live 3D digital twin
+/// of the REAL move_group planning scene.
+const SCENE_CONTENT_TYPE: &str = "application/vnd.aithericon.planning-scene+x-ndjson";
+
 /// Fully-resolved ROS request parked in `backend_state` after `prepare()`.
 ///
 /// `execute()` rebuilds the rosbridge op from this without re-resolving
@@ -88,6 +96,14 @@ struct ResolvedRosConfig {
     /// (`feedback_channel` is left `None` whenever this is `Some`).
     #[serde(default)]
     feedback_data_channel: Option<String>,
+    /// SCENE-STREAMING opt-in (docs/25 §6, twin): when `Some(ms)` AND a data
+    /// channel is declared, a `send_action_goal` (FollowJointTrajectory) ALSO
+    /// polls move_group's `/get_planning_scene` every `ms` milliseconds during
+    /// the motion and streams each slim scene snapshot onto the data channel
+    /// instead of the per-feedback joint-state stream. `None` ⇒ the default
+    /// joint-state feedback stream (byte-for-byte unchanged).
+    #[serde(default)]
+    scene_stream_ms: Option<u64>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -177,6 +193,7 @@ impl ExecutionBackend for RosBackend {
             timeout_ms,
             feedback_channel,
             feedback_data_channel,
+            scene_stream_ms: config.scene_stream_ms,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -374,12 +391,26 @@ impl RosBackend {
         // the envelope index; open the channel up front so the consumer can start
         // draining while the goal still runs.
         let feedback_data_channel = resolved.feedback_data_channel.clone();
+        // SCENE-STREAMING mode (docs/25 §6, twin): active only when the node both
+        // opts in (`scene_stream_ms`) AND declares a data channel. In this mode the
+        // data channel carries FULL planning-scene snapshots polled from
+        // `/get_planning_scene` (joints + collision objects + attached object),
+        // and the per-feedback joint-state `data_chunk` emit is SUPPRESSED (the
+        // scene frames already carry the joints). `None` ⇒ the default joint-state
+        // feedback stream, byte-for-byte unchanged.
+        let scene_mode = resolved.scene_stream_ms.is_some() && feedback_data_channel.is_some();
         let mut data_seq: u64 = 0;
         if let (Some(es), Some(channel)) =
             (event_stream.as_ref(), feedback_data_channel.as_ref())
         {
-            es.data_open(channel.clone(), JOINT_STATE_CONTENT_TYPE.to_string())
-                .await;
+            // In scene mode stamp the planning-scene content type; otherwise the
+            // joint-state content type (default path, unchanged).
+            let content_type = if scene_mode {
+                SCENE_CONTENT_TYPE
+            } else {
+                JOINT_STATE_CONTENT_TYPE
+            };
+            es.data_open(channel.clone(), content_type.to_string()).await;
         }
         let outputs: HashMap<String, Value> = HashMap::new();
         let mut feedback_index: usize = 0;
@@ -390,6 +421,17 @@ impl RosBackend {
 
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
+
+        // SCENE-mode poll cadence: tick every `scene_stream_ms` (floored at 50ms so
+        // a misconfigured tiny value can't hammer move_group). The first tick fires
+        // ~immediately, emitting the initial scene snapshot (harmless). Built even
+        // when not in scene mode so the `select!` arm type-checks; gated by
+        // `scene_mode` in the arm guard so it never fires on the default path.
+        let scene_poll_ms = resolved.scene_stream_ms.unwrap_or(0).max(50);
+        let mut scene_interval = tokio::time::interval(Duration::from_millis(scene_poll_ms));
+        // A short per-poll service-call timeout: a `/get_planning_scene` that wedges
+        // must not stall the action loop; a missed frame is best-effort.
+        let scene_poll_timeout = Duration::from_secs(2);
 
         // The client drops the feedback sender in the SAME locked section where it
         // resolves the result oneshot, so on normal completion `feedback_rx` closes
@@ -412,6 +454,37 @@ impl RosBackend {
                     let _ = client.cancel_action_goal(&resolved.interface_name, &goal_id).await;
                     return Err(ActionFail::TimedOut);
                 }
+                // SCENE mode: poll `/get_planning_scene` on the cadence and stream
+                // each slim snapshot onto the data channel. Best-effort — a poll
+                // error skips the frame but never aborts the action. Gated on
+                // `scene_mode` so the default path is untouched.
+                _ = scene_interval.tick(), if scene_mode => {
+                    if let (Some(es), Some(channel)) =
+                        (event_stream.as_ref(), feedback_data_channel.as_ref())
+                    {
+                        match client
+                            .call_service("/get_planning_scene", &scene_request(), scene_poll_timeout)
+                            .await
+                        {
+                            Ok(response) => {
+                                let frame = project_planning_scene(&response);
+                                let mut line = serde_json::to_vec(&frame).unwrap_or_default();
+                                line.push(b'\n');
+                                es.data_chunk(
+                                    channel.clone(),
+                                    data_seq,
+                                    SCENE_CONTENT_TYPE.to_string(),
+                                    line,
+                                )
+                                .await;
+                                data_seq += 1;
+                            }
+                            Err(e) => {
+                                debug!(error = %e, "planning-scene poll failed — skipping frame");
+                            }
+                        }
+                    }
+                }
                 // Feedback: dedup consecutive-identical frames, then emit each
                 // DISTINCT one as a `item` control token. Disabled once
                 // the channel closes (see `feedback_open` above).
@@ -422,7 +495,12 @@ impl RosBackend {
                                 continue; // duplicate consecutive frame — drop
                             }
                             last_feedback = Some(values.clone());
-                            if let (Some(es), Some(channel)) =
+                            if scene_mode {
+                                // SCENE mode: the scene-poll arm carries the joints
+                                // already, so SUPPRESS the per-feedback joint emit.
+                                // The dedup above still runs so the result/exactness
+                                // path is unaffected.
+                            } else if let (Some(es), Some(channel)) =
                                 (event_stream.as_ref(), feedback_data_channel.as_ref())
                             {
                                 // DATA plane: frame the joint state as one NDJSON
@@ -478,7 +556,11 @@ impl RosBackend {
                                     continue;
                                 }
                                 last_feedback = Some(values.clone());
-                                if let (Some(es), Some(channel)) =
+                                if scene_mode {
+                                    // SCENE mode: drain + dedup for exactness, but
+                                    // suppress the joint emit (scene frames carry
+                                    // joints). No further data_chunk here.
+                                } else if let (Some(es), Some(channel)) =
                                     (event_stream.as_ref(), feedback_data_channel.as_ref())
                                 {
                                     let frame = json!({
@@ -588,6 +670,106 @@ fn promote_object_fields(outputs: &mut HashMap<String, Value>, value: Value) {
             outputs.insert("value".into(), other);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Planning-scene streaming (the digital-twin SCENE mode)
+// ---------------------------------------------------------------------------
+
+/// The `/get_planning_scene` (moveit_msgs/srv/GetPlanningScene) request: a
+/// `PlanningSceneComponents` bitmask selecting exactly what the twin needs —
+/// ROBOT_STATE (2) | ROBOT_STATE_ATTACHED_OBJECTS (4) | WORLD_OBJECT_NAMES (8) |
+/// WORLD_OBJECT_GEOMETRY (16) = 30. Omitting the heavy components (octomap,
+/// transforms, ACM) keeps each polled frame slim.
+fn scene_request() -> Value {
+    json!({ "components": { "components": 30 } })
+}
+
+/// Project a rosbridge `/get_planning_scene` (moveit_msgs/srv/GetPlanningScene)
+/// response into a slim NDJSON scene frame for the twin renderer. Pure JSON
+/// reshaping — no ROS type modeling. Pulls only what the 3D twin needs:
+///   joints   — robot_state.joint_state {name[], position[]}  (the arm pose)
+///   objects  — world.collision_objects[] {id, frame, origin, primitives:[{type,dimensions}], poses}
+///   attached — robot_state.attached_collision_objects[] {link, id, origin, primitives, poses}
+/// `origin` is the object's top-level `pose` (the renderer composes it with each
+/// primitive pose — MoveIt parks the world transform there, zeroing primitive_poses).
+/// Missing fields degrade to empty arrays (a poll mid-mutation is tolerated).
+fn project_planning_scene(response: &Value) -> Value {
+    let empty = || Value::Array(vec![]);
+    // MoveIt NORMALIZES collision objects on GET: it parks the object's world
+    // transform in the top-level `pose` and zeroes each `primitive_poses` entry.
+    // So the renderer must compose `origin` (this pose) with each primitive pose;
+    // emitting both (origin default-identity) is correct whether the transform
+    // rode `pose` (MoveIt) or `primitive_poses` (raw add_object author).
+    let identity_pose = || {
+        json!({
+            "position": { "x": 0.0, "y": 0.0, "z": 0.0 },
+            "orientation": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 }
+        })
+    };
+
+    // The arm pose.
+    let joint_names = response
+        .pointer("/scene/robot_state/joint_state/name")
+        .cloned()
+        .unwrap_or_else(empty);
+    let joint_positions = response
+        .pointer("/scene/robot_state/joint_state/position")
+        .cloned()
+        .unwrap_or_else(empty);
+
+    // World collision objects: {id, frame, primitives, poses}.
+    let objects = response
+        .pointer("/scene/world/collision_objects")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|co| {
+                    json!({
+                        "id": co.get("id").cloned().unwrap_or(Value::Null),
+                        "frame": co.pointer("/header/frame_id").cloned().unwrap_or(Value::Null),
+                        "origin": co.get("pose").cloned().unwrap_or_else(identity_pose),
+                        "primitives": co.get("primitives").cloned().unwrap_or_else(empty),
+                        "poses": co.get("primitive_poses").cloned().unwrap_or_else(empty),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Attached (grasped) collision objects: {link, id, primitives, poses}.
+    let attached = response
+        .pointer("/scene/robot_state/attached_collision_objects")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|aco| {
+                    json!({
+                        "link": aco.get("link_name").cloned().unwrap_or(Value::Null),
+                        "id": aco.pointer("/object/id").cloned().unwrap_or(Value::Null),
+                        "origin": aco
+                            .pointer("/object/pose")
+                            .cloned()
+                            .unwrap_or_else(identity_pose),
+                        "primitives": aco
+                            .pointer("/object/primitives")
+                            .cloned()
+                            .unwrap_or_else(empty),
+                        "poses": aco
+                            .pointer("/object/primitive_poses")
+                            .cloned()
+                            .unwrap_or_else(empty),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "joints": { "names": joint_names, "positions": joint_positions },
+        "objects": objects,
+        "attached": attached,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -916,6 +1098,7 @@ mod tests {
             interface_type: "geometry_msgs/Twist".into(),
             fields: Value::Null,
             timeout_ms: 30_000,
+            scene_stream_ms: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_name"));
@@ -929,6 +1112,7 @@ mod tests {
             interface_type: "".into(),
             fields: Value::Null,
             timeout_ms: 30_000,
+            scene_stream_ms: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_type"));
@@ -942,6 +1126,7 @@ mod tests {
             interface_type: "".into(),
             fields: Value::Null,
             timeout_ms: 30_000,
+            scene_stream_ms: None,
         };
         assert!(validate_static(&cfg).is_ok());
     }
@@ -1165,6 +1350,102 @@ mod tests {
         // A value that recurs after a different value is a distinct position.
         let raw = vec![r(0.2), r(0.1), r(0.2)];
         assert_eq!(dedup_consecutive(&raw).len(), 3);
+    }
+
+    /// A full planning-scene response (one world box + one attached box)
+    /// projects to the slim twin shape: joints {names,positions}, objects with
+    /// {id,frame,primitives,poses}, attached with {link,id,primitives,poses}.
+    #[test]
+    fn project_planning_scene_full() {
+        let response = json!({
+            "scene": {
+                "robot_state": {
+                    "joint_state": {
+                        "name": ["joint1", "joint2"],
+                        "position": [0.1, -0.2]
+                    },
+                    "attached_collision_objects": [
+                        {
+                            "link_name": "link_tcp",
+                            "object": {
+                                "id": "sample_0",
+                                "pose": { "position": { "x": 0.0, "y": 0.0, "z": 0.12 }, "orientation": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 } },
+                                "primitives": [ { "type": 1, "dimensions": [0.04, 0.04, 0.04] } ],
+                                "primitive_poses": [ { "position": { "x": 0.0, "y": 0.0, "z": 0.0 } } ]
+                            }
+                        }
+                    ]
+                },
+                "world": {
+                    "collision_objects": [
+                        {
+                            "id": "table",
+                            "header": { "frame_id": "world" },
+                            "pose": { "position": { "x": 0.3, "y": 0.0, "z": 0.0 }, "orientation": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 } },
+                            "primitives": [ { "type": 1, "dimensions": [0.5, 0.5, 0.02] } ],
+                            "primitive_poses": [ { "position": { "x": 0.0, "y": 0.0, "z": 0.0 } } ]
+                        }
+                    ]
+                }
+            }
+        });
+
+        let frame = project_planning_scene(&response);
+
+        assert_eq!(frame["joints"]["names"], json!(["joint1", "joint2"]));
+        assert_eq!(frame["joints"]["positions"], json!([0.1, -0.2]));
+
+        let objects = frame["objects"].as_array().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0]["id"], "table");
+        assert_eq!(objects[0]["frame"], "world");
+        assert_eq!(objects[0]["primitives"][0]["type"], 1);
+        assert_eq!(objects[0]["primitives"][0]["dimensions"], json!([0.5, 0.5, 0.02]));
+        // The world transform rides the object `pose` → `origin` (MoveIt zeroes
+        // primitive_poses); the renderer composes origin ∘ primitive_pose.
+        assert_eq!(objects[0]["origin"]["position"]["x"], json!(0.3));
+        assert_eq!(objects[0]["poses"][0]["position"]["x"], json!(0.0));
+
+        let attached = frame["attached"].as_array().unwrap();
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0]["link"], "link_tcp");
+        assert_eq!(attached[0]["id"], "sample_0");
+        assert_eq!(attached[0]["primitives"][0]["dimensions"], json!([0.04, 0.04, 0.04]));
+        // The grasp offset rides the attached object's `pose` → `origin`.
+        assert_eq!(attached[0]["origin"]["position"]["z"], json!(0.12));
+        assert_eq!(attached[0]["poses"][0]["position"]["z"], json!(0.0));
+    }
+
+    /// An empty/partial scene (a poll mid-mutation, or a response missing the
+    /// `scene` key entirely) yields empty arrays and never panics.
+    #[test]
+    fn project_planning_scene_empty_and_partial() {
+        // Wholly empty response.
+        let frame = project_planning_scene(&json!({}));
+        assert_eq!(frame["joints"]["names"], json!([]));
+        assert_eq!(frame["joints"]["positions"], json!([]));
+        assert_eq!(frame["objects"], json!([]));
+        assert_eq!(frame["attached"], json!([]));
+
+        // Partial: joints present, world/attached absent.
+        let frame = project_planning_scene(&json!({
+            "scene": {
+                "robot_state": {
+                    "joint_state": { "name": ["j1"], "position": [0.5] }
+                }
+            }
+        }));
+        assert_eq!(frame["joints"]["names"], json!(["j1"]));
+        assert_eq!(frame["joints"]["positions"], json!([0.5]));
+        assert_eq!(frame["objects"], json!([]));
+        assert_eq!(frame["attached"], json!([]));
+    }
+
+    /// The `/get_planning_scene` request carries the PlanningSceneComponents
+    /// bitmask 30 (ROBOT_STATE | ATTACHED | WORLD_NAMES | WORLD_GEOMETRY).
+    #[test]
+    fn scene_request_selects_components_bitmask() {
+        assert_eq!(scene_request(), json!({ "components": { "components": 30 } }));
     }
 
     #[test]

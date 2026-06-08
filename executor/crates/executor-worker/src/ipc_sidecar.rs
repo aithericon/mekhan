@@ -1345,6 +1345,16 @@ async fn upload_artifact_via_opendal(
         let mut uploaded = artifact.clone();
         uploaded.storage_path = Some(remote_path.clone());
         uploaded.size_bytes = Some(file_size);
+        // Hash + enrich BEFORE the artifact row is published, mirroring the
+        // local store's `extract_metadata: true`. mekhan's catalogue/inventory
+        // coupling reads `file_metadata.checksum.digest` as the content_hash and
+        // refuses to register an artifact without one — so the S3/OpenDAL path
+        // must compute it too, not just the local store.
+        aithericon_executor_storage::local::enrich_artifact_metadata(
+            &mut uploaded,
+            std::path::Path::new(local_path_str),
+        )
+        .await;
 
         let mut state = state.lock().await;
         if artifact_index < state.artifacts.len() {
@@ -1362,6 +1372,14 @@ async fn upload_artifact_via_opendal(
                             let mut uploaded = artifact;
                             uploaded.storage_path = Some(remote_path);
                             uploaded.size_bytes = Some(file_size);
+                            // Same as the blocking path: compute the checksum
+                            // into file_metadata so mekhan can content-address
+                            // this artifact (catalogue/inventory coupling).
+                            aithericon_executor_storage::local::enrich_artifact_metadata(
+                                &mut uploaded,
+                                std::path::Path::new(&local_path),
+                            )
+                            .await;
                             (artifact_index, Some(uploaded))
                         }
                         Err(e) => {

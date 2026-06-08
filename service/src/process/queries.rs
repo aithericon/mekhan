@@ -264,6 +264,42 @@ pub async fn get_task(pool: &PgPool, id: &str) -> Result<Option<HpiTask>, sqlx::
         .await
 }
 
+/// The caller's human-task INBOX (docs/33 P4): the offered tasks they are
+/// *eligible* to claim plus the tasks they already hold, scoped to one workspace.
+///
+/// Eligibility v1 is membership: an `offered` task is shown only when its backing
+/// human capacity (`detail->>'capacity_id'`) is one the caller is *enrolled in*
+/// (a live `roster_members` row). That is the correct coarse filter — the offer
+/// pool's `t_claim` guard would reject a non-member's claim anyway — with finer
+/// caps-vs-`requirements` matching deferred (see the handler doc). `claimed` rows
+/// are returned when `assignee` is the caller, so a member can find work in
+/// flight. Both halves are workspace-scoped; ordered newest-first.
+///
+/// `member` is the caller's `subject_as_uuid()`; `assignee` is stored as that
+/// id's string form (the offer net relays the member id verbatim as `runner_id`).
+pub async fn inbox_tasks(
+    pool: &PgPool,
+    workspace_id: uuid::Uuid,
+    member: uuid::Uuid,
+) -> Result<Vec<HpiTask>, sqlx::Error> {
+    sqlx::query_as::<_, HpiTask>(
+        "SELECT * FROM hpi_tasks t \
+         WHERE t.workspace_id = $1 AND ( \
+             (t.status = 'offered' AND (t.detail->>'capacity_id')::uuid IN ( \
+                 SELECT capacity_id FROM roster_members \
+                 WHERE workspace_id = $1 AND member_user_id = $2 AND revoked_at IS NULL \
+             )) \
+             OR (t.status = 'claimed' AND t.assignee = $3) \
+         ) \
+         ORDER BY t.created_at DESC",
+    )
+    .bind(workspace_id)
+    .bind(member)
+    .bind(member.to_string())
+    .fetch_all(pool)
+    .await
+}
+
 /// Update a task's status and completed_at timestamp.
 pub async fn update_task_status(
     pool: &PgPool,

@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::query::builder::{self, QueryError};
 use crate::query::extractor::QueryParams;
@@ -126,62 +126,145 @@ pub async fn stats(pool: &PgPool) -> Result<InventoryStats, sqlx::Error> {
     })
 }
 
-/// Batched by-reference upsert.
+// ---------------------------------------------------------------------------
+// The coupling primitive (docs/32) — "register fills both, never half".
+//
+// `catalogue_entries` (logical content, keyed on `content_hash`) and
+// `file_inventory` (physical copies, keyed on `(file_server_id, path)`) are two
+// halves of one equation: a *logical identity* and *where that content
+// physically lives*. Registering an artifact must write BOTH, atomically. The
+// two helpers below are the only sanctioned writers of that pair; both the HTTP
+// register path and the causality projector go through them. The catalogue
+// helper takes a NON-OPTIONAL `&str` hash — it is structurally impossible to
+// create a logical row without a content identity. Hashless *observation* of a
+// physical file (we saw it on disk but haven't hashed it) is the separate
+// [`index`] path, which writes inventory only.
+// ---------------------------------------------------------------------------
+
+/// Upsert the logical `catalogue_entries` row for `content_hash` (caller owns
+/// the tx). `execution_id`/`id` stay NULL — this is a by-reference logical row.
+/// Returns rows newly inserted (`ON CONFLICT (content_hash) DO NOTHING`).
+pub async fn upsert_catalogue_by_hash(
+    tx: &mut Transaction<'_, Postgres>,
+    content_hash: &str,
+    category: &str,
+    name: Option<&str>,
+    size_bytes: Option<i64>,
+    mime_type: Option<&str>,
+) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query(
+        r#"
+        INSERT INTO catalogue_entries
+            (content_hash, category, name, size_bytes, mime_type)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (content_hash) DO NOTHING
+        "#,
+    )
+    .bind(content_hash)
+    .bind(category)
+    .bind(name)
+    .bind(size_bytes)
+    .bind(mime_type)
+    .execute(&mut **tx)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Upsert one physical-copy `file_inventory` row on `(file_server_id, path)`
+/// (caller owns the tx). `is_canonical` is set only on INSERT — re-observing an
+/// existing copy never clobbers a reconcile-assigned canonical flag. Returns
+/// rows inserted-or-updated.
+pub async fn upsert_inventory_copy(
+    tx: &mut Transaction<'_, Postgres>,
+    content_hash: Option<&str>,
+    file_server_id: &str,
+    path: &str,
+    status: &str,
+    is_canonical: bool,
+    provenance: &serde_json::Value,
+) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query(
+        r#"
+        INSERT INTO file_inventory
+            (content_hash, file_server_id, path, status, is_canonical, provenance, last_seen, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+        ON CONFLICT (file_server_id, path) DO UPDATE SET
+            status       = EXCLUDED.status,
+            content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
+            provenance   = EXCLUDED.provenance,
+            last_seen    = NOW(),
+            updated_at   = NOW()
+        "#,
+    )
+    .bind(content_hash)
+    .bind(file_server_id)
+    .bind(path)
+    .bind(status)
+    .bind(is_canonical)
+    .bind(provenance)
+    .execute(&mut **tx)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Batched by-reference **register** — fills both halves of the equation.
 ///
-/// For each item: if it carries content metadata + a `content_hash`, UPSERT a
-/// logical `catalogue_entries` row (`ON CONFLICT (content_hash) DO NOTHING`,
-/// `execution_id`/`id` NULL, `category = 'legacy'`); then UPSERT the
-/// `file_inventory` row (`ON CONFLICT (file_server_id, path) DO UPDATE` the
-/// status / last_seen / updated_at / content_hash). No bytes.
+/// Every item MUST carry a `content_hash`; an item without one is rejected
+/// (`QueryError::InvalidValue`) and the whole batch rolls back, so you can never
+/// half-register. For each item, in one transaction: upsert the logical
+/// `catalogue_entries` row (keyed on hash, `category = 'legacy'`) AND the
+/// physical `file_inventory` row (keyed on `(file_server_id, path)`). No bytes
+/// move — this is the online crawl/reconcile path after a `probe` has supplied
+/// the hash. Hashless observation goes through [`index`].
 pub async fn register(
     pool: &PgPool,
     req: &InventoryRegisterRequest,
-) -> Result<InventoryRegisterResponse, sqlx::Error> {
+) -> Result<InventoryRegisterResponse, QueryError> {
+    // Validate the invariant up front so a bad item rejects the batch cleanly
+    // (before any write) rather than mid-transaction.
+    for item in &req.entries {
+        let has_hash = item
+            .content_hash
+            .as_deref()
+            .map(|h| !h.trim().is_empty())
+            .unwrap_or(false);
+        if !has_hash {
+            return Err(QueryError::InvalidValue {
+                field: "content_hash".to_string(),
+                reason: format!(
+                    "register requires a content_hash for every item (missing for path {:?} on {}); \
+                     use POST /api/v1/inventory/index to record a hashless observation",
+                    item.path, item.file_server_id
+                ),
+            });
+        }
+    }
+
     let mut tx = pool.begin().await?;
     let mut catalogue_inserted: i64 = 0;
     let mut inventory_upserted: i64 = 0;
 
     for item in &req.entries {
-        if let Some(hash) = item.content_hash.as_ref() {
-            // Logical catalogue row keyed on content_hash. execution_id/id NULL.
-            let r = sqlx::query(
-                r#"
-                INSERT INTO catalogue_entries
-                    (content_hash, category, name, size_bytes, mime_type)
-                VALUES ($1, 'legacy', $2, $3, $4)
-                ON CONFLICT (content_hash) DO NOTHING
-                "#,
-            )
-            .bind(hash)
-            .bind(&item.name)
-            .bind(item.size_bytes)
-            .bind(&item.mime_type)
-            .execute(&mut *tx)
-            .await?;
-            catalogue_inserted += r.rows_affected() as i64;
-        }
-
-        let r = sqlx::query(
-            r#"
-            INSERT INTO file_inventory
-                (content_hash, file_server_id, path, status, provenance, last_seen, updated_at)
-            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-            ON CONFLICT (file_server_id, path) DO UPDATE SET
-                status      = EXCLUDED.status,
-                content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
-                provenance  = EXCLUDED.provenance,
-                last_seen   = NOW(),
-                updated_at  = NOW()
-            "#,
+        let hash = item.content_hash.as_deref().expect("validated above");
+        catalogue_inserted += upsert_catalogue_by_hash(
+            &mut tx,
+            hash,
+            "legacy",
+            item.name.as_deref(),
+            item.size_bytes,
+            item.mime_type.as_deref(),
         )
-        .bind(&item.content_hash)
-        .bind(&item.file_server_id)
-        .bind(&item.path)
-        .bind(&item.status)
-        .bind(&item.provenance)
-        .execute(&mut *tx)
-        .await?;
-        inventory_upserted += r.rows_affected() as i64;
+        .await? as i64;
+        inventory_upserted += upsert_inventory_copy(
+            &mut tx,
+            Some(hash),
+            &item.file_server_id,
+            &item.path,
+            &item.status,
+            false,
+            &item.provenance,
+        )
+        .await? as i64;
     }
 
     tx.commit().await?;
@@ -190,4 +273,36 @@ pub async fn register(
         inventory_upserted,
         catalogue_inserted,
     })
+}
+
+/// Batched hashless **index** — the explicit "observe a physical file" path.
+///
+/// Writes `file_inventory` rows ONLY (status defaults to `indexed`); it never
+/// touches `catalogue_entries`, because an indexed file has a location but no
+/// claimed content identity yet. This is where `crawl` output lands before a
+/// `probe` hashes the bytes. Once hashed, the file is promoted via [`register`],
+/// which couples it to a logical catalogue row.
+pub async fn index(
+    pool: &PgPool,
+    req: &InventoryIndexRequest,
+) -> Result<InventoryIndexResponse, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let mut inventory_upserted: i64 = 0;
+
+    for item in &req.items {
+        inventory_upserted += upsert_inventory_copy(
+            &mut tx,
+            None,
+            &req.file_server_id,
+            &item.path,
+            &item.status,
+            false,
+            &item.provenance,
+        )
+        .await? as i64;
+    }
+
+    tx.commit().await?;
+
+    Ok(InventoryIndexResponse { inventory_upserted })
 }

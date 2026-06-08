@@ -1,5 +1,5 @@
 {
-  "name": "Seed a synthetic 7-file NAS, crawl it with the file-ops `crawl` op (streaming `{path,size,mtime}` batches over the `crawl` control channel, batch_size 3), gather-fold the batches, and register each file by reference into file_inventory via POST /api/v1/inventory/register. No bytes move; crawl carries no content hash so catalogue_inserted is 0. The register step reaches mekhan over HTTP — `mekhan_url` defaults to http://localhost:13100 (override per slot, e.g. 20100).",
+  "name": "Seed a synthetic 7-file NAS, crawl it with the file-ops `crawl` op (streaming `{path,size,mtime}` batches over the `crawl` control channel, batch_size 3), gather-fold the batches, INDEX each file hashlessly into file_inventory via POST /api/v1/inventory/index (status indexed, no catalogue rows), then PROBE+REGISTER each file (stdlib SHA-256) via POST /api/v1/inventory/register, which fills BOTH halves: the same inventory rows are promoted to `registered` AND a content-addressed catalogue_entries row is inserted per distinct hash. All 7 files have distinct content, so catalogue_inserted is 7. The HTTP calls reach mekhan — `mekhan_url` defaults to http://localhost:13100 (override per slot, e.g. 20100).",
   "enabled": true,
   "start_tokens": [
     {
@@ -14,7 +14,8 @@
   "assertions": [
     { "path": "result.value.files_crawled", "op": "eq", "value": 7 },
     { "path": "result.value.batches", "op": "eq", "value": 3 },
-    { "path": "result.value.inventory_upserted", "op": "eq", "value": 7 },
-    { "path": "result.value.catalogue_inserted", "op": "eq", "value": 0 }
+    { "path": "result.value.inventory_indexed", "op": "eq", "value": 7 },
+    { "path": "result.value.inventory_registered", "op": "eq", "value": 7 },
+    { "path": "result.value.catalogue_inserted", "op": "eq", "value": 7 }
   ]
 }

@@ -75,7 +75,74 @@ use crate::petri::pool_net::{build_pool_net, CapacitySource};
 /// `reset_reply_routing_on("unit")`) lives in [`build_pool_net`]'s presence
 /// branch — see [`CapacitySource::Presence`] for the load-bearing details.
 pub fn build_presence_pool_net(resource_id: Uuid) -> ScenarioDefinition {
-    build_pool_net(resource_id, CapacitySource::Presence)
+    build_pool_net(resource_id, CapacitySource::Presence { offer: false })
+}
+
+/// Build the AIR `ScenarioDefinition` for an **offer-mode** presence pool —
+/// thin wrapper over [`build_pool_net`] with
+/// `CapacitySource::Presence { offer: true }` (docs/33).
+///
+/// Same net id and cross-net claim contract as the grant-mode presence pool, but
+/// the admission discipline differs: there is NO auto-firing `t_grant`. A claim
+/// is match-once PARKED as an offer (`t_post_offer` → the `offers` place) and
+/// binds only when a UNIT itself publishes a claim on the
+/// [`well_known::POOL_PRESENCE_CLAIM_INBOX`] bridge (`t_claim`). First claim wins;
+/// consuming the offer token is the implicit rescind of all other would-be
+/// claimants. The SAME `satisfies(requirements, caps)` matcher gates the bind.
+/// See `CapacitySource::Presence`'s `offer` arm for the load-bearing details.
+pub fn build_presence_offer_pool_net(resource_id: Uuid) -> ScenarioDefinition {
+    build_pool_net(resource_id, CapacitySource::Presence { offer: true })
+}
+
+/// Idempotently ensure an **offer-mode** presence pool's backing net is deployed
+/// and running on the engine. Mirrors [`ensure_presence_pool_net_deployed`]
+/// exactly (probe-then-deploy via [`crate::petri::instance::deploy_instance`];
+/// engine-down failures logged + SWALLOWED; same [`well_known::pool_net_id`] net
+/// id) — only the built topology differs ([`build_presence_offer_pool_net`]).
+pub async fn ensure_presence_offer_pool_net_deployed(
+    petri: &crate::petri::client::PetriClient,
+    resource_id: Uuid,
+) {
+    let net_id = well_known::pool_net_id(resource_id);
+
+    if matches!(
+        petri.try_get_run_mode(&net_id).await,
+        Some(petri_api_types::RunMode::Running)
+    ) {
+        tracing::debug!(
+            net_id,
+            "presence-offer pool net already deployed + running; no-op"
+        );
+        return;
+    }
+
+    let air = match serde_json::to_value(build_presence_offer_pool_net(resource_id)) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(net_id, %e, "failed to serialize presence-offer pool net AIR");
+            return;
+        }
+    };
+
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
+        tracing::warn!(
+            net_id,
+            %e,
+            "failed to deploy presence-offer pool net to the engine — resource CRUD still \
+             succeeded; the net will be (re)deployed on the next resource version \
+             or at template publish when the alias is referenced"
+        );
+        return;
+    }
+    tracing::info!(net_id, "deployed + activated presence-offer pool net");
 }
 
 /// Idempotently ensure a `presence_pool` resource's backing net is deployed +
@@ -148,6 +215,29 @@ mod tests {
     fn air(resource_id: Uuid) -> serde_json::Value {
         serde_json::to_value(build_presence_pool_net(resource_id))
             .expect("presence pool net serializes to AIR")
+    }
+
+    fn offer_air(resource_id: Uuid) -> serde_json::Value {
+        serde_json::to_value(build_presence_offer_pool_net(resource_id))
+            .expect("presence offer pool net serializes to AIR")
+    }
+
+    fn inputs(t: &serde_json::Value) -> Vec<String> {
+        t["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["place"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn outputs(t: &serde_json::Value) -> Vec<String> {
+        t["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["place"].as_str().unwrap().to_string())
+            .collect()
     }
 
     fn place<'a>(air: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
@@ -475,5 +565,171 @@ mod tests {
         let a = air(id);
         assert_eq!(a["name"], format!("pool-{id}"));
         assert_eq!(a["name"], well_known::pool_net_id(id));
+    }
+
+    // ===================================================================
+    // Offer-mode (docs/33) — match-once PARK + UNIT-INITIATED claim.
+    // ===================================================================
+
+    /// The offer net adds the `offers` parked-offer place + the
+    /// `presence_claim` unit-initiated claim bridge_in, and the `t_post_offer`
+    /// + `t_claim` transitions — and OMITS the auto-firing `t_grant` entirely.
+    #[test]
+    fn offer_net_topology() {
+        let a = offer_air(Uuid::nil());
+
+        // Parked-offer pool place.
+        assert!(
+            place(&a, "offers").is_some(),
+            "offer net has an `offers` place"
+        );
+        // Unit-initiated claim inbox is a bridge_in on the well-known name.
+        let claim_in = place(&a, well_known::POOL_PRESENCE_CLAIM_INBOX)
+            .expect("presence_claim bridge_in present");
+        assert_eq!(claim_in["type"], "bridge_in");
+        // Offer transitions present.
+        assert!(
+            transition(&a, "t_post_offer").is_some(),
+            "offer net has t_post_offer"
+        );
+        assert!(transition(&a, "t_claim").is_some(), "offer net has t_claim");
+        // NO auto-firing t_grant.
+        assert!(
+            transition(&a, "t_grant").is_none(),
+            "offer net must OMIT t_grant entirely"
+        );
+    }
+
+    /// `t_claim` reuses the SAME `satisfies(...)` matcher (verbatim, against the
+    /// parked offer's requirements + the claiming unit's caps), consumes the
+    /// parked `offers` token (the implicit rescind), and outputs ONLY the grant
+    /// on `grant_outbox` — NOT the hold. This mirrors the grant discipline's
+    /// `t_grant` and enforces the docs/14 taint rule: t_claim consumes the offer
+    /// (which carries the instance's "grant" routing), so it must route ONLY the
+    /// grant; the hold is created by `t_register` (where the "fail" routing
+    /// `t_reap_held` needs is established). A hold minted here would inherit stale
+    /// "grant" routing and lack the "fail" route — wedging recycle/reap.
+    ///
+    /// It correlates offer↔claim on `grant_id` and the unit by **`runner_id`** (=
+    /// member id), binding ANY FREE SLOT of the claiming member — NOT an exact
+    /// `unit_id` (docs/34 §3; docs/33 §3 P1→P2 generalization). The
+    /// `correlate(..)` builder lowers each pair to a `port1.field == port2.field`
+    /// clause AND-joined into the guard, so the member-bind clause shows up in
+    /// `guard_src`.
+    #[test]
+    fn offer_t_claim_binds_on_unit_claim() {
+        let a = offer_air(Uuid::nil());
+        let t = transition(&a, "t_claim").expect("t_claim");
+
+        // Reuses the satisfies() matcher against the offer + unit caps.
+        assert!(
+            guard_src(t).contains("satisfies(offer.requirements, unit.caps)"),
+            "t_claim must reuse satisfies(offer.requirements, unit.caps): {}",
+            guard_src(t)
+        );
+
+        // Bind ANY FREE SLOT of the member: the unit is correlated by `runner_id`
+        // (member id), NOT `unit_id` (docs/34 §3). offer↔claim stay correlated on
+        // `grant_id`.
+        assert!(
+            guard_src(t).contains("claim.runner_id == unit.runner_id"),
+            "t_claim must correlate the unit by runner_id (bind any free slot of \
+             the member), not unit_id: {}",
+            guard_src(t)
+        );
+        assert!(
+            !guard_src(t).contains("claim.unit_id == unit.unit_id"),
+            "t_claim must NOT pin the exact unit_id (it binds any free member \
+             slot): {}",
+            guard_src(t)
+        );
+        assert!(
+            guard_src(t).contains("claim.grant_id == offer.grant_id"),
+            "t_claim must still correlate offer↔claim on grant_id: {}",
+            guard_src(t)
+        );
+
+        let ins = inputs(t);
+        assert!(
+            ins.contains(&"offers".to_string())
+                && ins.contains(&well_known::POOL_PRESENCE_CLAIM_INBOX.to_string())
+                && ins.contains(&"pool".to_string()),
+            "t_claim consumes offers + presence_claim + a free pool unit: {ins:?}"
+        );
+
+        let outs = outputs(t);
+        assert!(
+            outs.contains(&"grant_outbox".to_string()),
+            "t_claim must output the grant on grant_outbox: {outs:?}"
+        );
+        // Taint rule: t_claim routes ONLY the grant — the hold comes from
+        // t_register (fail-routed), never from here.
+        assert!(
+            !outs.contains(&"in_use".to_string()),
+            "t_claim must NOT mint the hold (taint rule): {outs:?}"
+        );
+    }
+
+    /// `t_post_offer` parks the routed claim into `offers`, preserving its
+    /// "grant" reply routing — it does NOT reset reply routing (the later grant
+    /// reply must flow to the ORIGINAL claimer).
+    #[test]
+    fn offer_t_post_offer_parks_preserving_routing() {
+        let a = offer_air(Uuid::nil());
+        let t = transition(&a, "t_post_offer").expect("t_post_offer");
+
+        let ins = inputs(t);
+        assert!(
+            ins.contains(&well_known::POOL_CLAIM_INBOX.to_string()),
+            "t_post_offer consumes the claim_inbox: {ins:?}"
+        );
+        let outs = outputs(t);
+        assert!(
+            outs.contains(&"offers".to_string()),
+            "t_post_offer parks into offers: {outs:?}"
+        );
+        // No reply-routing reset on the parked offer (preserve grant routing).
+        assert!(
+            t.get("reset_reply_routing").is_none() || t["reset_reply_routing"].is_null(),
+            "t_post_offer must NOT reset reply routing (preserve grant routing): {t}"
+        );
+        // Parks the claim color through verbatim (grant_id + requirements).
+        let src = logic_src(t);
+        assert!(
+            src.contains("grant_id: claim.grant_id")
+                && src.contains("requirements: claim.requirements"),
+            "t_post_offer parks the claim verbatim: {src}"
+        );
+    }
+
+    /// The shared reuse pieces are still intact in the offer net — the offer
+    /// discipline ONLY swaps the admission front (t_grant → t_post_offer +
+    /// t_claim); register/release/reap machinery is unchanged.
+    #[test]
+    fn offer_net_reuses_register_release_reap() {
+        let a = offer_air(Uuid::nil());
+        for t in ["t_register", "t_release", "t_reap_held", "t_reap_free"] {
+            assert!(transition(&a, t).is_some(), "offer net reuses {t}");
+        }
+    }
+
+    /// The grant-mode wrapper builds `offer: false` — no offer topology leaks
+    /// into the historical presence pool.
+    #[test]
+    fn grant_mode_wrapper_has_no_offer_topology() {
+        let a = air(Uuid::nil());
+        assert!(
+            transition(&a, "t_grant").is_some(),
+            "grant mode keeps t_grant"
+        );
+        assert!(
+            transition(&a, "t_post_offer").is_none() && transition(&a, "t_claim").is_none(),
+            "grant mode must have NO offer transitions"
+        );
+        assert!(
+            place(&a, "offers").is_none()
+                && place(&a, well_known::POOL_PRESENCE_CLAIM_INBOX).is_none(),
+            "grant mode must have NO offer places"
+        );
     }
 }

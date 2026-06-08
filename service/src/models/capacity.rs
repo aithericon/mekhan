@@ -73,6 +73,11 @@ pub enum Dispatch {
     /// The platform pushes a matched grant to a specific capacity inbox
     /// (the presence/lease admission net).
     Push,
+    /// The platform matches once and PARKS an offer; the binding happens on a
+    /// UNIT-INITIATED self-claim (first-claim-wins, the rest implicitly
+    /// rescinded as the offer token is consumed). Presence/lease only — there
+    /// must be a live unit to do the claiming.
+    Offer,
 }
 
 /// Hold-vs-consume (doc 23 §3 "exclusivity discipline" — the real fork of §5).
@@ -304,6 +309,37 @@ impl CapacityAxes {
             ));
         }
 
+        // An `offer` is matched-once then PARKED for a unit-initiated self-claim
+        // (first-claim-wins, rest rescinded). It therefore needs (a) a grantable
+        // liveness with a live unit to do the claiming — `presence`/`lease`,
+        // never the pull-only `competing_consumer` — (b) a real matcher to park
+        // a meaningful offer (`predicate`, not a bare `partition` queue name),
+        // and (c) a self-claiming unit, which `seeded` (a static count) lacks.
+        if matches!(self.dispatch, Dispatch::Offer) {
+            if !push_grantable {
+                return Err(ApiError::bad_request(
+                    "incoherent capacity: `offer` dispatch requires a grantable \
+                     liveness (`presence` or `lease`) — there is no unit to bind the \
+                     parked offer when liveness is `competing_consumer`",
+                ));
+            }
+            if matches!(self.liveness, Liveness::Seeded) {
+                return Err(ApiError::bad_request(
+                    "incoherent capacity: `offer` dispatch on `seeded` liveness has \
+                     no self-claiming unit — a seeded count is push-granted from a \
+                     fixed pool, not claimed; use `presence`/`lease`, or \
+                     `dispatch = push`",
+                ));
+            }
+            if matches!(self.eligibility, Eligibility::Partition) {
+                return Err(ApiError::bad_request(
+                    "incoherent capacity: `offer` dispatch requires a `predicate` \
+                     eligibility (a matcher to park a matched offer) — an `offer` \
+                     without a matcher is just a queue; use `eligibility = predicate`",
+                ));
+            }
+        }
+
         let mut warnings = Vec::new();
         if matches!(self.dispatch, Dispatch::Pull)
             && matches!(self.eligibility, Eligibility::Predicate)
@@ -323,9 +359,11 @@ impl CapacityAxes {
 /// [`CapacityAxes::validate`] cleanly; the create form prefills the locked axes
 /// and exposes only the free ones.
 ///
-/// - `worker`     = competing_consumer · pull · hold · fixed(1)        · partition → Queue
-/// - `limit`      = seeded             · push · hold · fixed(1)        · partition → Tokens
-/// - `instrument` = presence           · push · hold · presence_driven · predicate → Presence
+/// - `worker`     = competing_consumer · pull  · hold · fixed(1)        · partition → Queue
+/// - `limit`      = seeded             · push  · hold · fixed(1)        · partition → Tokens
+/// - `instrument` = presence           · push  · hold · presence_driven · predicate → Presence
+/// - `self_claim` = presence           · offer · hold · presence_driven · predicate → Presence
+/// - `human`      = presence           · offer · hold · presence_driven · predicate → Presence
 ///
 /// There is no `hpc`/lease preset: lease capacity is the `datacenter` kind (it
 /// dispatches through [`axes_for_resource`]'s locked lease axes), not a
@@ -362,6 +400,32 @@ pub fn presets() -> Vec<CapacityPreset> {
             axes: CapacityAxes {
                 liveness: Liveness::Presence,
                 dispatch: Dispatch::Push,
+                exclusivity: Exclusivity::Hold,
+                capacity_amount: CapacityAmount::PresenceDriven,
+                eligibility: Eligibility::Predicate,
+            },
+        },
+        CapacityPreset {
+            name: "self_claim".to_string(),
+            display_name: "Self-claim pool".to_string(),
+            axes: CapacityAxes {
+                liveness: Liveness::Presence,
+                dispatch: Dispatch::Offer,
+                exclusivity: Exclusivity::Hold,
+                capacity_amount: CapacityAmount::PresenceDriven,
+                eligibility: Eligibility::Predicate,
+            },
+        },
+        CapacityPreset {
+            // The human-facing relabel of `self_claim`: same offer axes, but a
+            // dedicated entry-point name so the create form reads as a human task
+            // pool. The deploy router keys off `Dispatch::Offer`, not the preset
+            // name, so this routes through the same offer net (docs/33 §3.2).
+            name: "human".to_string(),
+            display_name: "Human task pool".to_string(),
+            axes: CapacityAxes {
+                liveness: Liveness::Presence,
+                dispatch: Dispatch::Offer,
                 exclusivity: Exclusivity::Hold,
                 capacity_amount: CapacityAmount::PresenceDriven,
                 eligibility: Eligibility::Predicate,
@@ -543,6 +607,94 @@ mod tests {
         assert_eq!(backend_of("worker"), CapacityBackend::Queue);
         assert_eq!(backend_of("limit"), CapacityBackend::Tokens);
         assert_eq!(backend_of("instrument"), CapacityBackend::Presence);
+        // presence · offer routes to the same presence backend (backend() keys
+        // only off liveness, not dispatch).
+        assert_eq!(backend_of("self_claim"), CapacityBackend::Presence);
+        // `human` is the human-facing relabel of `self_claim`: same offer axes,
+        // same presence backend.
+        assert_eq!(backend_of("human"), CapacityBackend::Presence);
+        let human = preset_by_name("human").expect("human preset exists").axes;
+        assert_eq!(human.dispatch, Dispatch::Offer);
+    }
+
+    /// presence · offer maps to `Presence` — the parked-offer self-claim pool
+    /// dispatches through the presence admission net (backend() ignores the
+    /// dispatch discipline; liveness is the authority).
+    #[test]
+    fn presence_offer_routes_to_presence() {
+        let a = CapacityAxes {
+            liveness: Liveness::Presence,
+            dispatch: Dispatch::Offer,
+            exclusivity: Exclusivity::Hold,
+            capacity_amount: CapacityAmount::PresenceDriven,
+            eligibility: Eligibility::Predicate,
+        };
+        assert_eq!(a.backend(), CapacityBackend::Presence);
+    }
+
+    /// The `self_claim` preset (presence · offer · predicate) validates clean.
+    #[test]
+    fn self_claim_preset_validates_clean() {
+        let a = preset_by_name("self_claim")
+            .expect("self_claim preset exists")
+            .axes;
+        let warnings = a.validate().expect("self_claim preset must validate");
+        assert!(warnings.is_empty(), "expected warn-free, got {warnings:?}");
+    }
+
+    /// `offer` × `competing_consumer` is rejected: no live unit to bind the
+    /// parked offer.
+    #[test]
+    fn offer_competing_consumer_is_rejected() {
+        let a = axes(
+            Liveness::CompetingConsumer,
+            Dispatch::Offer,
+            CapacityAmount::PresenceDriven,
+            Eligibility::Predicate,
+        );
+        let err = a
+            .validate()
+            .expect_err("offer × competing_consumer must reject");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            msg(&err).contains("grantable liveness"),
+            "wrong message: {err:?}"
+        );
+    }
+
+    /// `offer` × `seeded` is rejected: a seeded count has no self-claiming unit.
+    #[test]
+    fn offer_seeded_is_rejected() {
+        let a = axes(
+            Liveness::Seeded,
+            Dispatch::Offer,
+            CapacityAmount::Fixed(4),
+            Eligibility::Predicate,
+        );
+        let err = a.validate().expect_err("offer × seeded must reject");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            msg(&err).contains("no self-claiming unit"),
+            "wrong message: {err:?}"
+        );
+    }
+
+    /// `offer` × `partition` is rejected: an offer without a matcher is just a
+    /// queue.
+    #[test]
+    fn offer_partition_is_rejected() {
+        let a = axes(
+            Liveness::Presence,
+            Dispatch::Offer,
+            CapacityAmount::PresenceDriven,
+            Eligibility::Partition,
+        );
+        let err = a.validate().expect_err("offer × partition must reject");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            msg(&err).contains("requires a `predicate`"),
+            "wrong message: {err:?}"
+        );
     }
 
     /// `consume` exclusivity short-circuits the authority to `Deferred`

@@ -12,6 +12,7 @@ use super::model::{
     ProcessUpdateRequest,
 };
 use super::queries;
+use crate::auth::AuthUser;
 use crate::catalogue::model::CatalogueEntry;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::TaskListResponse;
@@ -339,6 +340,42 @@ pub async fn list_tasks(
     }))
 }
 
+/// GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox
+/// (docs/33 P4).
+///
+/// Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object
+/// (same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`
+/// tasks whose backing human capacity the caller is *enrolled in* — the offers
+/// they may claim — and (b) `claimed` tasks the caller already holds (their work
+/// in flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility
+/// contract (membership now; caps-vs-`requirements` matching deferred).
+///
+/// Mounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.
+#[utoipa::path(
+    get,
+    path = "/api/v1/tasks/inbox",
+    responses(
+        (status = 200, description = "The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope", body = serde_json::Value),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
+pub async fn inbox(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<JsonValue>, ApiError> {
+    let workspace_id = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let member = user.subject_as_uuid();
+    let rows = queries::inbox_tasks(&state.db, workspace_id, member)
+        .await
+        .map_err(|e| {
+            tracing::error!("task inbox: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    let tasks: Vec<JsonValue> = rows.iter().map(to_human_task_json).collect();
+    Ok(Json(json!({ "tasks": tasks })))
+}
+
 /// GET /api/v1/tasks/:id — get a single task.
 ///
 /// Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`
@@ -506,7 +543,10 @@ pub async fn complete_task(
         })?
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    if task.status != "pending" {
+    // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
+    // once a member has bound a slot (docs/34). Both are completable/cancelable;
+    // `offered` (unclaimed) / terminal states are not.
+    if !matches!(task.status.as_str(), "pending" | "claimed") {
         return Err(ApiError::conflict(format!(
             "task is already {}",
             task.status
@@ -594,7 +634,10 @@ pub async fn cancel_task(
         })?
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    if task.status != "pending" {
+    // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
+    // once a member has bound a slot (docs/34). Both are completable/cancelable;
+    // `offered` (unclaimed) / terminal states are not.
+    if !matches!(task.status.as_str(), "pending" | "claimed") {
         return Err(ApiError::conflict(format!(
             "task is already {}",
             task.status
@@ -637,6 +680,107 @@ pub async fn cancel_task(
     }
 
     Ok(Json(to_human_task_json(&updated)))
+}
+
+/// POST /api/v1/tasks/{id}/claim — claim an offered human task (docs/34 §6).
+///
+/// A pooled `HumanTask` is *offered* (not assigned) to eligible available
+/// members: the offer parks in the capacity `pool-<id>` net and a member binds
+/// it by claiming. This endpoint publishes that claim and returns **202
+/// Accepted immediately** (docs/33 §11) — it is a pure, projection-confirmed
+/// fire-and-forget: the authoritative `claimed` status (and `assignee`) arrives
+/// asynchronously via the causality projection of the pool net's `in_use`
+/// token, NOT from this handler. We deliberately take no optimistic local lock
+/// and do NOT write `status` here; the engine `t_claim` guard is authoritative
+/// (an ineligible member's claim simply fails to bind and the row stays
+/// `offered`).
+///
+/// The caller IS the claiming member: their id is `subject_as_uuid()`, carried
+/// as the offer net's `runner_id` correlation (docs/34 §3 — bind ANY free slot
+/// of the member, not an exact unit).
+///
+/// Pool-net resolution contract: the offered row's `id` IS the `grant_id`, and
+/// the backing pool net is `pool-<capacity_id>`. We read the net id from the
+/// offered projection's `detail` — `detail->>'pool_net_id'` is the canonical
+/// field the offered projection (`causality/ingest.rs` §4.1) writes; we fall
+/// back to deriving `pool-<capacity_id>` from `detail->>'capacity_id'` if only
+/// the bare capacity id was projected. If neither is present the offer cannot
+/// be routed → 422.
+#[utoipa::path(
+    post,
+    path = "/api/v1/tasks/{id}/claim",
+    params(("id" = String, Path, description = "Task id (= offer grant_id)")),
+    responses(
+        (status = 202, description = "Claim published; `claimed` status follows via projection", body = serde_json::Value),
+        (status = 404, description = "Task not found"),
+        (status = 409, description = "Task is not offered (already claimed or wrong state)", body = ErrorResponse),
+        (status = 422, description = "Offered row carries no resolvable pool net id", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "tasks",
+)]
+pub async fn claim_task(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<JsonValue>), ApiError> {
+    // The caller is the claiming member; the offer net correlates on this id as
+    // `runner_id` (docs/34 §3).
+    let member_id = user.subject_as_uuid();
+
+    let task = queries::get_task(&state.db, &id)
+        .await
+        .map_err(|e| {
+            tracing::error!("task claim lookup: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?
+        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
+    if task.status != "offered" {
+        return Err(ApiError::conflict(format!(
+            "task is not offered (status is {})",
+            task.status
+        )));
+    }
+
+    // Resolve the pool net id from the offered projection's `detail`. Prefer the
+    // explicit `pool_net_id`; fall back to deriving `pool-<capacity_id>` from a
+    // bare `capacity_id`. (Contract with `causality/ingest.rs` §4.1.)
+    let pool_net_id = task
+        .detail
+        .get("pool_net_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            task.detail
+                .get("capacity_id")
+                .and_then(|v| v.as_str())
+                .map(|cap| format!("pool-{cap}"))
+        })
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "offered task carries no pool_net_id/capacity_id to route the claim",
+            )
+        })?;
+
+    // Publish the claim onto the capacity pool's existing cross-net bridge. This
+    // is fire-and-forget; the `claimed` status is projected from the pool net's
+    // `in_use` token (docs/34 §4.2), not set here.
+    crate::runners_presence::inject_claim(&state.nats, &pool_net_id, &id, &member_id.to_string())
+        .await;
+
+    tracing::info!(
+        task_id = %id,
+        member = %member_id,
+        pool_net_id = %pool_net_id,
+        "published human task claim"
+    );
+
+    // 202: the row is still `offered` here; the projection will flip it to
+    // `claimed`. Return the current shape so the caller can render optimistically
+    // and re-poll.
+    Ok((StatusCode::ACCEPTED, Json(to_human_task_json(&task))))
 }
 
 #[cfg(test)]

@@ -434,3 +434,404 @@ async fn schedule_is_replay_deterministic() {
         "live and replay must reach a byte-identical final marking"
     );
 }
+
+// ===========================================================================
+// Offer dispatch (docs/33, P1) — engine-side drive proof.
+//
+// `Dispatch::Offer` is the pull-mode counterpart of the push-mode pool above.
+// In push mode `t_grant` auto-fires the instant a claim AND free capacity are
+// both present — the net *pushes* the grant. In OFFER mode the control plane
+// (mekhan, off-engine) runs `satisfies(requirements, caps)` ONCE to match a
+// unit, then PARKS an offer token in the net reserving that unit. The grant is
+// NOT minted yet. Binding waits for a UNIT-INITIATED claim: the matched unit
+// posts `presence_claim {grant_id, unit_id}`, which fires `t_claim` to mint the
+// grant and consume the offer. First claim wins; any further claim for the same
+// grant_id finds no parked offer and no-ops (the offer was implicitly rescinded
+// the moment it was consumed). This is the same conservation/reap machinery as
+// push mode — only the *binding trigger* differs (parked offer + claim, not an
+// auto-firing grant), so reap parity must hold for a held offer-unit too.
+//
+// The engine workspace cannot import mekhan's `build_offer_net` (separate cargo
+// workspace, mekhan emits AIR only). So — exactly as `build_pool_net` above
+// replicates the deployable `resource_pool_net` SDK example in the engine's own
+// SDK DSL — this builds the offer topology in the SDK directly. The off-engine
+// `satisfies` match-once is modelled by the driver: it picks the unit whose caps
+// satisfy the requirement and posts an offer reserving that unit_id. What the
+// engine net itself proves is the *binding discipline*: parked-offer → no
+// auto-bind, claim-driven first-wins, rescind-on-consume, and reap parity.
+// ===========================================================================
+
+/// Build the in-net OFFER topology. Pure Rhai, injectable signals — runs fully
+/// in-process, mirroring `build_pool_net`.
+///
+/// Places: `pool` (capacity units tagged with `caps`); `offers` (PARKED offers —
+/// grant_id + reserved unit_id + caps; an offer reserves a unit, which leaves
+/// `pool` when the offer is posted, and NO transition auto-binds it);
+/// `presence_claim` (signal: a unit-initiated claim `{grant_id, unit_id}`);
+/// `in_use` (held capacity); `grants` (emitted grants — the "grant channel" sink,
+/// what a push-mode `grant_outbox` would carry back); `release_inbox` (signal:
+/// `{grant_id}`); `presence_expired` (signal: a unit dropped out `{grant_id}`);
+/// `done` (sink for released/reaped/failed records).
+///
+/// Transitions: `t_claim` (offer + matching claim, correlate grant_id → grant +
+/// hold; fires ONLY on a claim; consumes the offer = rescind); `t_release`
+/// (release + hold → recycle unit); `t_reap_held` (presence_expired + hold →
+/// recycle unit + `fail` record; reap parity with push mode).
+fn build_offer_net() -> TestScenario {
+    let mut ctx = Context::new("offer-dispatch-m1");
+
+    let pool = ctx.state::<DynamicToken>("pool", "Capacity Pool");
+    let offers = ctx.state::<DynamicToken>("offers", "Parked Offers");
+    let presence_claim = ctx.signal::<DynamicToken>("presence_claim", "Unit Claims");
+    let in_use = ctx.state::<DynamicToken>("in_use", "In Use");
+    let grants = ctx.state::<DynamicToken>("grants", "Emitted Grants");
+    let release_inbox = ctx.signal::<DynamicToken>("release_inbox", "Release Requests");
+    let presence_expired = ctx.signal::<DynamicToken>("presence_expired", "Unit Dropped");
+    let done = ctx.state::<DynamicToken>("done", "Done");
+
+    // t_claim — the OFFER bind. Requires a parked offer AND a unit-initiated
+    // claim carrying the same grant_id. There is deliberately NO auto-bind
+    // transition (no `t_grant` reading pool + offer): an offer just sits parked
+    // until its unit claims it. Consuming the offer here implicitly rescinds it
+    // for any later claim — first claim wins, deterministically (one transition
+    // fires per step). Emits the grant on the grant channel and records the hold.
+    ctx.transition("t_claim", "Claim Offer")
+        .auto_input("offer", &offers)
+        .auto_input("claim", &presence_claim)
+        .correlate("offer", "claim", "grant_id")
+        .auto_output("grant", &grants)
+        .auto_output("hold", &in_use)
+        .logic(
+            r#"#{
+                grant: #{ grant_id: offer.grant_id, unit_id: offer.unit_id, caps: offer.caps },
+                hold:  #{ grant_id: offer.grant_id, unit_id: offer.unit_id, caps: offer.caps }
+            }"#,
+        );
+
+    // t_release — holder finished: return the reserved unit to the pool.
+    ctx.transition("t_release", "Release Hold")
+        .auto_input("req", &release_inbox)
+        .auto_input("held", &in_use)
+        .correlate("req", "held", "grant_id")
+        .auto_output("cap", &pool)
+        .auto_output("done", &done)
+        .logic(
+            r#"#{
+                cap:  #{ unit_id: held.unit_id, caps: held.caps },
+                done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "released" }
+            }"#,
+        );
+
+    // t_reap_held — the held unit dropped out (presence expired) before
+    // releasing: reclaim its capacity, matched by grant_id. This is the OFFER
+    // analogue of push-mode `t_reap` — proving reap parity: a held offer-unit is
+    // reaped exactly like a held push-mode hold. Emits a `fail` record.
+    ctx.transition("t_reap_held", "Reap Held Unit")
+        .auto_input("exp", &presence_expired)
+        .auto_input("held", &in_use)
+        .correlate("exp", "held", "grant_id")
+        .auto_output("cap", &pool)
+        .auto_output("done", &done)
+        .logic(
+            r#"#{
+                cap:  #{ unit_id: held.unit_id, caps: held.caps },
+                done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped" }
+            }"#,
+        );
+
+    TestScenario::from_sdk(ctx.build())
+}
+
+// --- offer-net helpers -----------------------------------------------------
+
+/// A capacity unit carrying its capabilities (the `caps` the off-engine
+/// `satisfies(requirements, caps)` matcher reads).
+fn unit(unit_id: &str, caps: serde_json::Value) -> TokenColor {
+    TokenColor::Data(serde_json::json!({ "unit_id": unit_id, "caps": caps }))
+}
+
+/// The off-engine match-once result, parked as an offer: a grant_id reserving a
+/// specific unit (already chosen by `satisfies`) with that unit's caps.
+fn offer(grant_id: &str, unit_id: &str, caps: serde_json::Value) -> TokenColor {
+    TokenColor::Data(serde_json::json!({ "grant_id": grant_id, "unit_id": unit_id, "caps": caps }))
+}
+
+/// A unit-initiated claim against a parked offer.
+fn claim(grant_id: &str, unit_id: &str) -> TokenColor {
+    TokenColor::Data(serde_json::json!({ "grant_id": grant_id, "unit_id": unit_id }))
+}
+
+/// `satisfies(requirements, caps)` — the SAME predicate the push-mode matcher
+/// uses, applied here by the driver to pick which unit an offer reserves. A unit
+/// satisfies a requirement when it offers every required capability.
+fn satisfies(requirements: &[&str], caps: &serde_json::Value) -> bool {
+    let have: Vec<&str> = caps
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    requirements.iter().all(|r| have.contains(r))
+}
+
+/// Drive one tick set to quiescence and return how many events were appended.
+async fn run_to_quiescent(ctx: &Ctx) -> usize {
+    loop {
+        let before = ctx.service.get_events().await.len();
+        let result = ctx
+            .service
+            .evaluate_until_quiescent(1)
+            .await
+            .expect("evaluate");
+        let after = ctx.service.get_events().await.len();
+        if matches!(
+            result.final_state,
+            petri_application::EvaluateFinalState::Quiescent
+        ) && after == before
+        {
+            return after;
+        }
+    }
+}
+
+/// Match-once + post-offer: run `satisfies` over the pool, pick the first unit
+/// that matches, REMOVE it from the pool (reserve it), and park an offer for it.
+/// Returns the reserved unit_id. Panics if nothing matches (caller's invariant).
+async fn post_offer(
+    ctx: &Ctx,
+    scenario: &TestScenario,
+    grant_id: &str,
+    requirements: &[&str],
+) -> String {
+    let marking = ctx.service.get_marking().await;
+    let pool_place = pid(scenario, "pool");
+    let (reserved_unit, reserved_caps) = marking
+        .tokens_at(&pool_place)
+        .iter()
+        .find_map(|t| {
+            let v = token_color_json(&t.color);
+            let caps = v.get("caps").cloned().unwrap_or(serde_json::Value::Null);
+            if satisfies(requirements, &caps) {
+                Some((
+                    v.get("unit_id")
+                        .and_then(|u| u.as_str())
+                        .unwrap()
+                        .to_string(),
+                    caps,
+                ))
+            } else {
+                None
+            }
+        })
+        .expect("satisfies found no matching unit in the pool");
+
+    // Reserve: remove the matched unit token from the pool.
+    let units = marking.tokens_at(&pool_place);
+    let token_id = units
+        .iter()
+        .find(|t| {
+            token_color_json(&t.color)
+                .get("unit_id")
+                .and_then(|u| u.as_str())
+                == Some(reserved_unit.as_str())
+        })
+        .map(|t| t.id.clone())
+        .expect("reserved unit token present");
+    ctx.service
+        .remove_token(pool_place.clone(), Some(token_id), None, None)
+        .await
+        .expect("reserve unit out of pool");
+
+    // Park the offer (the match-once result). NO grant minted yet.
+    ctx.service
+        .create_token(
+            pid(scenario, "offers"),
+            offer(grant_id, &reserved_unit, reserved_caps),
+        )
+        .await
+        .expect("park offer");
+
+    reserved_unit
+}
+
+// --- offer-net tests -------------------------------------------------------
+
+/// The core offer/claim discipline:
+///   1. post an offer  → it PARKS, no grant emitted (no auto-bind);
+///   2. a unit claim   → `t_claim` fires: grant emitted, offer consumed;
+///   3. a SECOND claim → no-op (offer already rescinded; deterministic 1st-wins);
+///   4. release        → the reserved unit recycles back to the pool.
+#[tokio::test]
+async fn offer_parks_then_binds_on_unit_claim_first_wins() {
+    let scenario = build_offer_net();
+    let ctx = new_ctx(&scenario).await;
+
+    // A pool of two units with distinct capabilities.
+    ctx.service
+        .create_token(
+            pid(&scenario, "pool"),
+            unit("unit-a", serde_json::json!(["gpu", "cuda"])),
+        )
+        .await
+        .unwrap();
+    ctx.service
+        .create_token(
+            pid(&scenario, "pool"),
+            unit("unit-b", serde_json::json!(["cpu"])),
+        )
+        .await
+        .unwrap();
+
+    // (1) Post an offer requiring "gpu" — satisfies() matches unit-a only.
+    let reserved = post_offer(&ctx, &scenario, "g1", &["gpu"]).await;
+    assert_eq!(reserved, "unit-a", "satisfies matched the gpu unit");
+
+    run_to_quiescent(&ctx).await;
+    let m = ctx.service.get_marking().await;
+    assert_eq!(
+        m.token_count(&pid(&scenario, "offers")),
+        1,
+        "offer PARKS — no unit-initiated claim yet"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "grants")),
+        0,
+        "NO grant minted: offer mode does not auto-bind"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "in_use")),
+        0,
+        "nothing held until the unit claims"
+    );
+    // The reserved unit is out of the pool; the non-matching unit remains.
+    assert_eq!(m.token_count(&pid(&scenario, "pool")), 1);
+
+    // (2) The matched unit claims its offer.
+    ctx.service
+        .create_token(pid(&scenario, "presence_claim"), claim("g1", "unit-a"))
+        .await
+        .unwrap();
+    run_to_quiescent(&ctx).await;
+
+    let m = ctx.service.get_marking().await;
+    assert_eq!(
+        m.token_count(&pid(&scenario, "grants")),
+        1,
+        "claim bound the offer → exactly one grant emitted"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "in_use")),
+        1,
+        "the unit now holds capacity"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "offers")),
+        0,
+        "the offer was consumed (rescinded) on bind"
+    );
+    let granted = m.tokens_at(&pid(&scenario, "grants"));
+    let gv = token_color_json(&granted[0].color);
+    assert_eq!(gv["grant_id"], "g1");
+    assert_eq!(gv["unit_id"], "unit-a");
+
+    // (3) A SECOND claim for the same grant_id — the offer is gone, so there is
+    // nothing for t_claim to bind against: deterministic first-wins, the late
+    // claim no-ops. (It sits unconsumed in the signal place, harmlessly.)
+    let grants_before = m.token_count(&pid(&scenario, "grants"));
+    let in_use_before = m.token_count(&pid(&scenario, "in_use"));
+    ctx.service
+        .create_token(pid(&scenario, "presence_claim"), claim("g1", "unit-a"))
+        .await
+        .unwrap();
+    run_to_quiescent(&ctx).await;
+
+    let m = ctx.service.get_marking().await;
+    assert_eq!(
+        m.token_count(&pid(&scenario, "grants")),
+        grants_before,
+        "no SECOND grant — first claim already won, offer rescinded"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "in_use")),
+        in_use_before,
+        "no second hold minted"
+    );
+
+    // (4) Release: the reserved unit recycles back to the pool.
+    ctx.service
+        .create_token(pid(&scenario, "release_inbox"), grant_ref("g1"))
+        .await
+        .unwrap();
+    run_to_quiescent(&ctx).await;
+
+    let m = ctx.service.get_marking().await;
+    assert_eq!(m.token_count(&pid(&scenario, "in_use")), 0, "hold released");
+    assert_eq!(
+        m.token_count(&pid(&scenario, "pool")),
+        2,
+        "the reserved unit is recycled — pool whole again"
+    );
+    let dones = m.tokens_at(&pid(&scenario, "done"));
+    assert_eq!(dones.len(), 1);
+    assert_eq!(token_color_json(&dones[0].color)["outcome"], "released");
+}
+
+/// Reap parity: a HELD offer-unit whose holder drops out (presence_expired) is
+/// reclaimed by `t_reap_held`, emitting a `fail`-style record — exactly as
+/// push-mode `t_reap` reclaims a crashed hold. Proves the offer hold is reapable
+/// on the same journaled-signal discipline (no wall clock).
+#[tokio::test]
+async fn held_offer_unit_is_reaped_on_presence_expired() {
+    let scenario = build_offer_net();
+    let ctx = new_ctx(&scenario).await;
+
+    ctx.service
+        .create_token(
+            pid(&scenario, "pool"),
+            unit("unit-a", serde_json::json!(["gpu"])),
+        )
+        .await
+        .unwrap();
+
+    // Post an offer and let the unit claim it → it is now HELD.
+    post_offer(&ctx, &scenario, "g9", &["gpu"]).await;
+    run_to_quiescent(&ctx).await;
+    ctx.service
+        .create_token(pid(&scenario, "presence_claim"), claim("g9", "unit-a"))
+        .await
+        .unwrap();
+    run_to_quiescent(&ctx).await;
+    assert_eq!(
+        ctx.service
+            .get_marking()
+            .await
+            .token_count(&pid(&scenario, "in_use")),
+        1,
+        "unit-a holds capacity before it drops out"
+    );
+
+    // The holding unit drops out without releasing — presence_expired fires the
+    // reap. No release ever arrives.
+    ctx.service
+        .create_token(pid(&scenario, "presence_expired"), grant_ref("g9"))
+        .await
+        .unwrap();
+    run_to_quiescent(&ctx).await;
+
+    let m = ctx.service.get_marking().await;
+    assert_eq!(
+        m.token_count(&pid(&scenario, "in_use")),
+        0,
+        "the held unit was reaped"
+    );
+    assert_eq!(
+        m.token_count(&pid(&scenario, "pool")),
+        1,
+        "reaped capacity returned to the pool — reap parity with push mode"
+    );
+    let dones = m.tokens_at(&pid(&scenario, "done"));
+    assert_eq!(dones.len(), 1);
+    assert_eq!(
+        token_color_json(&dones[0].color)["outcome"],
+        "reaped",
+        "reap emits the fail/reaped record"
+    );
+}

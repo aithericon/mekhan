@@ -306,6 +306,25 @@ pub enum WorkflowNodeData {
         /// `<slug>.<field>` reference instead of the static `steps` literal.
         #[serde(rename = "stepsRef", default, skip_serializing_if = "Option::is_none")]
         steps_ref: Option<String>,
+        /// Bind this human task to a Presence `capacity` resource (docs/33/34).
+        /// Mirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's
+        /// unpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to
+        /// eligible available members of the named capacity and lowered as the
+        /// pooled claim/acquire/register/release scaffold (the offer discipline).
+        /// Resolved at publish like `AutomatedStep` to the backing
+        /// `pool-<capacity_id>` net.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capacity: Option<CapacityBinding>,
+        /// Placement Requirements on a capacity-bound human task — typed
+        /// [`Constraint`]s over the offered member's advertised `caps`. Mirrors
+        /// [`WorkflowNodeData::AutomatedStep`]'s `requirements`: injected into the
+        /// offer's claim payload as a Rhai literal, with the offer pool's
+        /// `t_claim` guard (`satisfies(offer.requirements, unit.caps)`) admitting
+        /// ONLY a member whose caps satisfy every constraint. `None` (the
+        /// default) ⇒ no placement constraint (any available member may claim).
+        /// Ignored when `capacity` is `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requirements: Option<Requirements>,
     },
     #[serde(rename = "automated_step")]
     AutomatedStep {
@@ -3090,6 +3109,12 @@ pub mod dsl {
                         instructions_mdsvex: step.instructions.clone(),
                         steps: task_steps,
                         steps_ref: step.steps_ref.clone(),
+                        // The legacy text DSL does not model capacity binding;
+                        // a DSL-authored human task is always unpooled (byte-
+                        // identical to pre-P3). The xyflow JSON path carries
+                        // `capacity`/`requirements` via the field derive.
+                        capacity: None,
+                        requirements: None,
                     })
                 }
                 "agent" => {
@@ -3784,6 +3809,8 @@ mod tests {
                 instructions_mdsvex: None,
                 steps: vec![],
                 steps_ref: None,
+                capacity: None,
+                requirements: None,
             },
             parent_id: Some("scope1".to_string()),
             width: None,

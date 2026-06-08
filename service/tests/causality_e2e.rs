@@ -317,6 +317,7 @@ async fn causality_full_pipeline() {
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
         runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        human_presence: mekhan_service::human_presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
@@ -344,8 +345,17 @@ async fn causality_full_pipeline() {
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let _causality =
-        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let _causality = spawn_consumer(move || {
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+    })
+    .await;
 
     // Lifecycle listener
     let l_nats = nats.clone();
@@ -596,8 +606,17 @@ async fn interpolated_human_task_resolves_start_file_param() {
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let _causality =
-        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let _causality = spawn_consumer(move || {
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+    })
+    .await;
 
     let l_nats = nats.clone();
     let l_db = db.clone();
@@ -823,8 +842,17 @@ async fn rrv_publish_and_create(
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let causality =
-        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let causality = spawn_consumer(move || {
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+    })
+    .await;
     let l_nats = nats.clone();
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();

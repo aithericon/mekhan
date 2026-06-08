@@ -267,8 +267,17 @@ async fn setup(
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let causality =
-        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let causality = spawn_consumer(move || {
+        start_causality_ingest(
+            c_nats,
+            c_db,
+            c_sub,
+            c_live,
+            None,
+            "mekhan-artifacts".to_string(),
+        )
+    })
+    .await;
 
     let l_nats = nats.clone();
     let l_db = db.clone();

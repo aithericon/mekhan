@@ -34,6 +34,10 @@ pub async fn start_causality_ingest(
     subscription_manager: Arc<SubscriptionManager>,
     live: Arc<LiveBroadcasts>,
     triggers: Option<Arc<TriggerDispatcher>>,
+    // `file_server_id` for the platform object store — where catalogued
+    // artifacts physically live, so the projector can write their inventory
+    // copy row alongside the catalogue row (docs/32 §4.1).
+    object_store_id: String,
 ) {
     let consumer = match nats.causality_consumer().await {
         Ok(c) => c,
@@ -76,6 +80,7 @@ pub async fn start_causality_ingest(
                 &subscription_manager,
                 &live,
                 triggers.as_deref(),
+                &object_store_id,
             )
             .await
         } else {
@@ -154,6 +159,7 @@ async fn process_domain_event(
     subscription_manager: &SubscriptionManager,
     live: &LiveBroadcasts,
     triggers: Option<&TriggerDispatcher>,
+    object_store_id: &str,
 ) -> Result<(), sqlx::Error> {
     // Extract net_id from subject: petri.events.{net_id}.{event_type...}
     let net_id = match subject.split('.').nth(2) {
@@ -257,6 +263,29 @@ async fn process_domain_event(
                 .map(|(_, t)| t.id.0.to_string())
                 .collect();
             propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
+
+            // Pooled human-task offer/claim projection (docs/34 §4). The offer
+            // (`offers`) and hold (`in_use`) tokens are PRODUCED by pool-net
+            // transitions (`t_post_offer` / `t_register`), so they arrive on
+            // `TransitionFired.produced_tokens` — NOT as `TokenCreated` (which
+            // fires only for injected / bridged / seed tokens). Run AFTER
+            // `propagate_process_tags` so the freshly-produced offer token already
+            // carries the instance's process tag (`resolve_process_ids`). Cheap
+            // `pool-` prefix gate keeps every non-pool net off this path.
+            if net_id.starts_with("pool-") {
+                for (place_id, token) in produced_tokens {
+                    let data = token_color_to_json(&token.color);
+                    project_pool_task_state(
+                        db,
+                        net_id,
+                        Some(place_id.0.as_str()),
+                        &token.id.0.to_string(),
+                        &data,
+                        ts,
+                    )
+                    .await?;
+                }
+            }
         }
 
         DomainEvent::EffectCompleted {
@@ -391,6 +420,7 @@ async fn process_domain_event(
                     subscription_manager,
                     live,
                     triggers,
+                    object_store_id,
                 };
                 projector.project(&ctx).await?;
             }
@@ -604,7 +634,7 @@ async fn process_domain_event(
                 let status = extract_task_status_from_token(&token.color);
                 sqlx::query(
                     "UPDATE hpi_tasks SET status = $2, completed_at = $3 \
-                     WHERE id = $1 AND status = 'pending'",
+                     WHERE id = $1 AND status IN ('pending', 'offered', 'claimed')",
                 )
                 .bind(sk)
                 .bind(&status)
@@ -651,6 +681,21 @@ async fn process_domain_event(
             // else: token produced by a transition (created_by_event is set) —
             // inherits process tags via propagate_process_tags() when the
             // TransitionFired/EffectCompleted event is processed.
+
+            // Pooled human-task offer/claim projection (docs/34 §4). Cheap
+            // prefix check first so the hot path skips it for every non-pool
+            // net; only pool-<capacity_id> nets carry offer/hold tokens.
+            if net_id.starts_with("pool-") {
+                project_pool_task_state(
+                    db,
+                    net_id,
+                    place_name.as_deref(),
+                    &token_id_str,
+                    &token_data,
+                    ts,
+                )
+                .await?;
+            }
         }
 
         DomainEvent::TokenBridgedOut {
@@ -742,6 +787,10 @@ struct ProjectorCtx<'a> {
     subscription_manager: &'a SubscriptionManager,
     live: &'a LiveBroadcasts,
     triggers: Option<&'a TriggerDispatcher>,
+    /// `file_server_id` of the platform object store (see
+    /// [`start_causality_ingest`]) — the projector writes the catalogued
+    /// artifact's physical-copy inventory row under this server.
+    object_store_id: &'a str,
 }
 
 /// One `effect_handler_id` → causality side-effect mapping.
@@ -902,6 +951,7 @@ impl Projector for CatalogueRegister {
             ctx.subscription_manager,
             ctx.live,
             ctx.triggers,
+            ctx.object_store_id,
         )
         .await
     }
@@ -1831,10 +1881,15 @@ async fn record_task_event(
     // Build detail from the whole effect_result (net_id, place, response_subject, etc.)
     let detail = effect_result.clone();
 
+    // Fresh insert seeds status='pending' (unpooled tasks). If a pooled
+    // `offers`/`in_use` projection (§4.1/4.2) already created an
+    // offered/claimed row for this grant_id, enrich it with the effect's
+    // net_id/place/response_subject routing (needed by /complete) WITHOUT
+    // resetting the projected status.
     sqlx::query(
         "INSERT INTO hpi_tasks (id, process_id, title, status, detail, created_at) \
          VALUES ($1, $2, $3, 'pending', $4, $5) \
-         ON CONFLICT (id) DO NOTHING",
+         ON CONFLICT (id) DO UPDATE SET detail = excluded.detail",
     )
     .bind(task_id)
     .bind(&process_id)
@@ -1849,6 +1904,144 @@ async fn record_task_event(
         process_id = %process_id,
         "projected task from human_task EffectCompleted",
     );
+    Ok(())
+}
+
+/// Project a `pool-<capacity_id>` net's offer/hold token state into `hpi_tasks`
+/// (docs/34 §4). Two place-keyed projections, dispatched by `place_name`:
+///
+/// - `offers`  ⇒ a new `offered` row (the offer token color is
+///   `{ grant_id, requirements, request }`).
+/// - `in_use`  ⇒ flip an existing `offered` row to `claimed` (the hold color is
+///   `{ grant_id, runner_id, .. }`). A no-op for grant-discipline pools, whose
+///   `in_use` grant has no `hpi_tasks` row.
+///
+/// Engine-authoritative: the inbox is a pure projection of net state (docs/33 §5).
+async fn project_pool_task_state(
+    db: &PgPool,
+    net_id: &str,
+    place_name: Option<&str>,
+    token_id_str: &str,
+    token_data: &serde_json::Value,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    match place_name {
+        Some("offers") => {
+            let grant_id = match token_data.get("grant_id").and_then(|v| v.as_str()) {
+                Some(g) => g,
+                None => return Ok(()),
+            };
+            let request = token_data
+                .get("request")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let title = request
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled Task")
+                .to_string();
+
+            // workspace_id: parse the capacity_id from the pool-<capacity_id>
+            // net id, then look up the resource's workspace.
+            let capacity_id = net_id
+                .strip_prefix("pool-")
+                .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+            // Enrich the projected `detail` with the routing fields the
+            // `/claim` handler needs (docs/34 §6 contract): `pool_net_id` is
+            // THIS net id (the offer token landed in the `pool-<capacity_id>`
+            // net), and `capacity_id` is its parsed suffix. We start from the
+            // `request` display payload (title/instructions/steps the inbox
+            // renders) and overlay the routing fields. `pool_net_id` is the
+            // canonical field `claim_task` reads; `capacity_id` is its fallback.
+            let mut detail = match request.clone() {
+                serde_json::Value::Object(m) => m,
+                _ => serde_json::Map::new(),
+            };
+            detail.insert(
+                "pool_net_id".to_string(),
+                serde_json::Value::String(net_id.to_string()),
+            );
+            if let Some(cid) = capacity_id {
+                detail.insert(
+                    "capacity_id".to_string(),
+                    serde_json::Value::String(cid.to_string()),
+                );
+            }
+            let detail = serde_json::Value::Object(detail);
+
+            let workspace_id: Option<uuid::Uuid> = match capacity_id {
+                Some(cid) => {
+                    sqlx::query_scalar("SELECT workspace_id FROM resources WHERE id = $1")
+                        .bind(cid)
+                        .fetch_optional(db)
+                        .await?
+                }
+                None => None,
+            };
+
+            // process_id is NOT NULL with an FK to hpi_processes, so we must
+            // resolve a real process. The offer token crossed the bridge
+            // carrying the task net's process tag (inherited above via
+            // signal_key), so resolve it from this token's own tag. If none
+            // resolves yet, log + skip (mirrors record_task_event) — the offer
+            // becomes visible on a later re-ingest once the tag lands.
+            let offer_token = [token_id_str.to_string()];
+            let process_ids = resolve_process_ids(db, &offer_token, &[]).await?;
+            let process_id = match process_ids.first() {
+                Some(pid) => pid.clone(),
+                None => {
+                    tracing::debug!(
+                        grant_id = %grant_id,
+                        net_id = %net_id,
+                        "no process tag resolved for offer; skipping offered projection",
+                    );
+                    return Ok(());
+                }
+            };
+
+            sqlx::query(
+                "INSERT INTO hpi_tasks \
+                     (id, workspace_id, process_id, title, status, detail, created_at) \
+                 VALUES ($1, $2, $3, $4, 'offered', $5, $6) \
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(grant_id)
+            .bind(workspace_id)
+            .bind(&process_id)
+            .bind(&title)
+            .bind(&detail)
+            .bind(ts)
+            .execute(db)
+            .await?;
+
+            tracing::debug!(
+                grant_id = %grant_id,
+                process_id = %process_id,
+                "projected offered task from pool offers place",
+            );
+        }
+        Some("in_use") => {
+            let grant_id = match token_data.get("grant_id").and_then(|v| v.as_str()) {
+                Some(g) => g,
+                None => return Ok(()),
+            };
+            let runner_id = token_data.get("runner_id").and_then(|v| v.as_str());
+
+            // No-op for grant-discipline pools: only the `offers` projection
+            // creates a row, so a grant pool's in_use grant_id matches nothing.
+            sqlx::query(
+                "UPDATE hpi_tasks SET status = 'claimed', assignee = $2, claimed_at = $3 \
+                 WHERE id = $1 AND status = 'offered'",
+            )
+            .bind(grant_id)
+            .bind(runner_id)
+            .bind(ts)
+            .execute(db)
+            .await?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -1883,6 +2076,7 @@ async fn register_catalogue_entry(
     subscription_manager: &SubscriptionManager,
     live: &LiveBroadcasts,
     triggers: Option<&TriggerDispatcher>,
+    object_store_id: &str,
 ) -> Result<(), sqlx::Error> {
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
@@ -1928,10 +2122,64 @@ async fn register_catalogue_entry(
     let file_metadata = cmd.file_metadata.clone().unwrap_or_default();
     let size_bytes = cmd.size_bytes.map(|s| s as i64);
 
-    // Deterministic nats_msg_id for dedup (matches the engine's msg ID pattern)
+    // --- The coupling (docs/32) -------------------------------------------
+    // A catalogued artifact has a content identity AND a physical location;
+    // both must be written, never one. The executor hashes every artifact
+    // before upload and ships the digest in `file_metadata.checksum.digest`;
+    // `storage_path` is where it physically landed in the object store. Derive
+    // the hash (prefer an explicit command hash, else the checksum) and require
+    // both it and a storage_path. If either is missing this is a malformed
+    // upload — fail closed (record + drop) rather than write a half row.
+    let content_hash = cmd
+        .content_hash
+        .clone()
+        .filter(|h| !h.trim().is_empty())
+        .or_else(|| {
+            file_metadata
+                .get("checksum")
+                .and_then(|c| c.get("digest"))
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .filter(|h| !h.trim().is_empty())
+        });
+    let (content_hash, storage_path) = match (content_hash, cmd.storage_path.clone()) {
+        (Some(h), Some(p)) if !p.trim().is_empty() => (h, p),
+        (h, p) => {
+            let missing = if h.is_none() {
+                "content_hash (file_metadata.checksum.digest absent)"
+            } else {
+                "storage_path"
+            };
+            record_silent_drop_with(
+                "catalogue_register_uncoupled",
+                &format!(
+                    "artifact {} has no {missing} — refusing to write a half catalogue/inventory row",
+                    cmd.artifact_id
+                ),
+                serde_json::json!({
+                    "net_id": net_id,
+                    "event_seq": event_seq,
+                    "artifact_id": cmd.artifact_id,
+                    "has_hash": h.is_some(),
+                    "storage_path": p,
+                }),
+                None,
+            );
+            return Ok(());
+        }
+    };
+
+    // Deterministic nats_msg_id (kept for tracing/forensics; dedup is now on
+    // content_hash — see ON CONFLICT below).
     let nats_msg_id = format!("cat-{}-{}", cmd.execution_id, cmd.artifact_id);
 
-    let result = sqlx::query(
+    let mut tx = db.begin().await?;
+
+    // Logical catalogue row — content-addressed. ON CONFLICT (content_hash):
+    // identical bytes already catalogued (this execution redelivered, or a
+    // different execution emitting the same content) reuse the one logical row;
+    // a fresh inventory copy is still recorded below.
+    let cat = sqlx::query(
         r#"
         INSERT INTO catalogue_entries (
             id, execution_id, job_id, name, category, filename,
@@ -1946,9 +2194,9 @@ async fn register_catalogue_entry(
             $10, $11, $12, $13, $14,
             $15,
             $16, $17, $18, $19,
-            NULL
+            $20
         )
-        ON CONFLICT (nats_msg_id) DO NOTHING
+        ON CONFLICT (content_hash) DO NOTHING
         "#,
     )
     .bind(&cmd.artifact_id)
@@ -1970,108 +2218,135 @@ async fn register_catalogue_entry(
     .bind(&user_metadata)
     .bind(cmd.created_at)
     .bind(&nats_msg_id)
-    .execute(db)
+    .bind(&content_hash)
+    .execute(&mut *tx)
     .await;
 
-    match result {
-        Ok(r) => {
-            if r.rows_affected() > 0 {
-                tracing::debug!(
-                    artifact_id = %cmd.artifact_id,
-                    source_net = %net_id,
-                    process_id = ?process_id,
-                    "catalogued artifact from causality projector",
-                );
-
-                // Fan out to live SSE subscribers once the row is committed.
-                if let Some(pid) = process_id.as_ref() {
-                    live.emit_artifact(
-                        pid.clone(),
-                        cmd.artifact_id.clone(),
-                        cmd.execution_id.clone(),
-                        cmd.name.clone(),
-                        cmd.category.clone(),
-                        cmd.filename.clone(),
-                        cmd.mime_type.clone(),
-                        cmd.storage_path.clone(),
-                        size_bytes,
-                        step.clone(),
-                        cmd.signal_key.clone(),
-                        user_metadata.clone(),
-                        cmd.created_at,
-                    );
-                }
-
-                // Evaluate subscriptions with full provenance
-                let entry = crate::catalogue::model::CatalogueEntry {
-                    entry_id: None,
-                    content_hash: None,
-                    id: cmd.artifact_id.clone(),
-                    execution_id: cmd.execution_id.clone(),
-                    job_id: Some(cmd.job_id.clone()),
-                    name: cmd.name.clone(),
-                    category: cmd.category.clone(),
-                    filename: cmd.filename.clone(),
-                    mime_type: cmd.mime_type.clone(),
-                    size_bytes,
-                    storage_path: cmd.storage_path.clone(),
-                    source_net: Some(net_id.to_string()),
-                    source_place: source_place.clone(),
-                    signal_key: cmd.signal_key.clone(),
-                    process_id: process_id.clone(),
-                    process_step: step.clone(),
-                    source_event_sequence: Some(event_seq),
-                    file_metadata,
-                    user_metadata,
-                    created_at: cmd.created_at,
-                    catalogued_at: Utc::now(),
-                };
-                let matched = subscription_manager.evaluate_new_artifact(&entry).await;
-
-                // Catalog triggers (Phase 5c): fire any static `Catalog`
-                // triggers whose filters match this entry. Static triggers
-                // coexist with the engine's runtime `catalogue_subscribe`
-                // effect — they share the same `CatalogueEntry` source of
-                // truth, just author it differently.
-                if let Some(dispatcher) = triggers {
-                    crate::triggers::sources::catalog::evaluate(dispatcher, &entry).await;
-                }
-
-                // Record egress-side cross-links for every matched subscription.
-                // The ingress side is filled in later by the TokenCreated handler
-                // when the signal arrives in the subscriber net. Because the
-                // causality ingest consumer is single-threaded, the egress row
-                // is guaranteed to exist before any TokenCreated from the same
-                // signal is processed.
-                for m in &matched {
-                    if let Err(e) = sqlx::query(
-                        "INSERT INTO causality_cross_links \
-                             (signal_key, egress_net, egress_seq, link_type) \
-                         VALUES ($1, $2, $3, 'catalogue_subscription') \
-                         ON CONFLICT (signal_key) DO UPDATE \
-                         SET egress_net = $2, egress_seq = $3",
-                    )
-                    .bind(&m.signal_key)
-                    .bind(net_id)
-                    .bind(event_seq)
-                    .execute(db)
-                    .await
-                    {
-                        tracing::warn!(
-                            signal_key = %m.signal_key,
-                            target_net = %m.target_net_id,
-                            "failed to record catalogue subscription cross-link: {e}"
-                        );
-                    }
-                }
-            }
-        }
+    let cat = match cat {
+        Ok(r) => r,
         Err(e) => {
             tracing::error!(
                 artifact_id = %cmd.artifact_id,
                 "catalogue insert from causality projector failed: {e}",
             );
             return Err(e);
+        }
+    };
+    // Side-effects fire once, when *this* call is the one that newly catalogued
+    // the content (was: gated on the nats_msg_id dedup; now on content_hash).
+    let newly_catalogued = cat.rows_affected() > 0;
+
+    // Physical-copy inventory row for the platform object store — ALWAYS written
+    // (idempotent on (file_server_id, path)) so a catalogue row is never without
+    // its inventory copy. is_canonical = true: this is our own authoritative
+    // store. This is the other half the projector previously skipped entirely.
+    let provenance = serde_json::json!({
+        "source": "workflow_artifact",
+        "execution_id": cmd.execution_id,
+        "artifact_id": cmd.artifact_id,
+        "source_net": net_id,
+    });
+    crate::inventory::queries::upsert_inventory_copy(
+        &mut tx,
+        Some(&content_hash),
+        object_store_id,
+        &storage_path,
+        "registered",
+        true,
+        &provenance,
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    if newly_catalogued {
+        tracing::debug!(
+            artifact_id = %cmd.artifact_id,
+            source_net = %net_id,
+            process_id = ?process_id,
+            content_hash = %content_hash,
+            object_store_id = %object_store_id,
+            "catalogued + inventoried artifact from causality projector",
+        );
+
+        // Fan out to live SSE subscribers once the row is committed.
+        if let Some(pid) = process_id.as_ref() {
+            live.emit_artifact(
+                pid.clone(),
+                cmd.artifact_id.clone(),
+                cmd.execution_id.clone(),
+                cmd.name.clone(),
+                cmd.category.clone(),
+                cmd.filename.clone(),
+                cmd.mime_type.clone(),
+                cmd.storage_path.clone(),
+                size_bytes,
+                step.clone(),
+                cmd.signal_key.clone(),
+                user_metadata.clone(),
+                cmd.created_at,
+            );
+        }
+
+        // Evaluate subscriptions with full provenance
+        let entry = crate::catalogue::model::CatalogueEntry {
+            entry_id: None,
+            content_hash: Some(content_hash.clone()),
+            id: cmd.artifact_id.clone(),
+            execution_id: cmd.execution_id.clone(),
+            job_id: Some(cmd.job_id.clone()),
+            name: cmd.name.clone(),
+            category: cmd.category.clone(),
+            filename: cmd.filename.clone(),
+            mime_type: cmd.mime_type.clone(),
+            size_bytes,
+            storage_path: cmd.storage_path.clone(),
+            source_net: Some(net_id.to_string()),
+            source_place: source_place.clone(),
+            signal_key: cmd.signal_key.clone(),
+            process_id: process_id.clone(),
+            process_step: step.clone(),
+            source_event_sequence: Some(event_seq),
+            file_metadata,
+            user_metadata,
+            created_at: cmd.created_at,
+            catalogued_at: Utc::now(),
+        };
+        let matched = subscription_manager.evaluate_new_artifact(&entry).await;
+
+        // Catalog triggers (Phase 5c): fire any static `Catalog` triggers whose
+        // filters match this entry. Static triggers coexist with the engine's
+        // runtime `catalogue_subscribe` effect — they share the same
+        // `CatalogueEntry` source of truth, just author it differently.
+        if let Some(dispatcher) = triggers {
+            crate::triggers::sources::catalog::evaluate(dispatcher, &entry).await;
+        }
+
+        // Record egress-side cross-links for every matched subscription. The
+        // ingress side is filled in later by the TokenCreated handler when the
+        // signal arrives in the subscriber net. Because the causality ingest
+        // consumer is single-threaded, the egress row is guaranteed to exist
+        // before any TokenCreated from the same signal is processed.
+        for m in &matched {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO causality_cross_links \
+                     (signal_key, egress_net, egress_seq, link_type) \
+                 VALUES ($1, $2, $3, 'catalogue_subscription') \
+                 ON CONFLICT (signal_key) DO UPDATE \
+                 SET egress_net = $2, egress_seq = $3",
+            )
+            .bind(&m.signal_key)
+            .bind(net_id)
+            .bind(event_seq)
+            .execute(db)
+            .await
+            {
+                tracing::warn!(
+                    signal_key = %m.signal_key,
+                    target_net = %m.target_net_id,
+                    "failed to record catalogue subscription cross-link: {e}"
+                );
+            }
         }
     }
 

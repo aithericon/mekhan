@@ -634,6 +634,57 @@ mod tests {
         }
     }
 
+    /// A capacity-bound `HumanTask`'s `capacity`/`requirements` (P3, docs/34)
+    /// MUST survive graph→Y.Doc→graph. Publish reconstructs the graph via
+    /// `doc_to_graph`; a drop here silently lowers the task UNPOOLED (no offer
+    /// handshake) even though the author bound it to a human capacity — exactly
+    /// the loop-lease / lease.pool silent-drop class.
+    #[test]
+    fn human_task_capacity_survives_ydoc_roundtrip() {
+        use crate::models::template::CapacityBinding;
+        let graph = WorkflowGraph {
+            nodes: vec![WorkflowNode {
+                id: "approve".to_string(),
+                node_type: "human_task".to_string(),
+                slug: None,
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::HumanTask {
+                    label: "Approve".to_string(),
+                    description: None,
+                    task_title: "Approve the request".to_string(),
+                    instructions_mdsvex: None,
+                    steps: vec![],
+                    steps_ref: None,
+                    capacity: Some(CapacityBinding {
+                        alias: "ops_desk".to_string(),
+                        request: None,
+                    }),
+                    requirements: None,
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            }],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::HumanTask { capacity, .. } => {
+                assert_eq!(
+                    capacity.as_ref().map(|c| c.alias.as_str()),
+                    Some("ops_desk"),
+                    "HumanTask.capacity must survive the Y.Doc round-trip (else publish lowers it unpooled)"
+                );
+            }
+            other => panic!("expected HumanTask, got {other:?}"),
+        }
+    }
+
     /// Locks in that AutomatedStep `output` (and `input`) survive a Y.Doc
     /// round-trip. Pre-fix the seeder wrote a graph with output ports but
     /// the Y.Doc init dropped them, so the editor's port panel rendered

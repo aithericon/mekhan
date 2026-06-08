@@ -2649,6 +2649,31 @@
         }
       }
     },
+    "/api/v1/human-presence": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/human-presence` — live in-memory presence snapshot of the human\ncapacity pools (docs/33 P4). The human counterpart to\n`GET /api/v1/runners/presence`.",
+        "description": "Returns the presence controller's in-memory map — which enrolled members mekhan\ncurrently considers *admitted* (a live unit in their pool), NOT the durable\n`roster_members.available` intent column. Feeds the Fleet human-pool view.\n\nThe in-memory map is keyed by `(capacity_id, member_user_id)` and carries no\nworkspace, so it is filtered here to the capacities that live in the caller's\nworkspace — without this it would leak every workspace's human-capacity ids +\nmember liveness timing, exactly as `runners::runner_presence` guards.",
+        "operationId": "human_presence",
+        "responses": {
+          "200": {
+            "description": "Live human presence snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HumanPresenceSnapshot"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inference/requests": {
       "get": {
         "tags": [
@@ -3474,6 +3499,48 @@
         }
       }
     },
+    "/api/v1/inventory/index": {
+      "post": {
+        "tags": [
+          "inventory"
+        ],
+        "summary": "POST /api/v1/inventory/index",
+        "description": "Batched hashless **index** — record physical files observed on a server\nwithout claiming a content identity. Writes `file_inventory` rows only\n(status defaults to `indexed`); never touches `catalogue_entries`. This is\nwhere `crawl` output lands; promote to a coupled catalogue row later via\n`/register` once a `probe` supplies the hash.",
+        "operationId": "index",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Index counts (inventory only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryIndexResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inventory/reconcile-batch": {
       "post": {
         "tags": [
@@ -3522,7 +3589,7 @@
           "inventory"
         ],
         "summary": "POST /api/v1/inventory/register",
-        "description": "Batched by-reference upsert. For each item with content metadata + a\n`content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on\n`content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`\nrow on `(file_server_id, path)`. No bytes are transferred — this is the\nonline crawl/reconcile path. Returns insert/upsert counts.",
+        "description": "Batched by-reference register — **fills both halves of the equation**. Every\nitem MUST carry a `content_hash`; for each, in one transaction, UPSERTs a\nlogical `catalogue_entries` row (keyed on `content_hash`, `category =\n'legacy'`) AND the physical `file_inventory` row on `(file_server_id,\npath)`. A hashless item is rejected (400) — observe-only goes through\n`/index`. No bytes are transferred. Returns insert/upsert counts.",
         "operationId": "register",
         "requestBody": {
           "content": {
@@ -3546,7 +3613,7 @@
             }
           },
           "400": {
-            "description": "Bad request",
+            "description": "Missing content_hash, or bad request",
             "content": {
               "application/json": {
                 "schema": {
@@ -6442,6 +6509,307 @@
         }
       }
     },
+    "/api/v1/roster": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster` — paginated, workspace-scoped (live members only).\nOptionally filtered to a single `capacity_id`.",
+        "operationId": "list_roster",
+        "parameters": [
+          {
+            "name": "capacity_id",
+            "in": "query",
+            "description": "Optional filter: only members enrolled in this human capacity.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of roster members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_RosterMemberSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`POST /api/v1/roster` — enroll a `workspace_member` into a human capacity.\nAdmin (session `AuthUser`); workspace = caller's. Caps are admin-assigned on\nthe trusted row and validated against the workspace's `CapabilityType`s\nBEFORE insert — an unknown capability or a value mismatching its declared\nFieldKind → 400. A repeat enrollment of the same (capacity, member) → 409.",
+        "operationId": "enroll_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Member enrolled into the human capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Caps fail validation against the capability registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Member is already enrolled in this capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/availability": {
+      "post": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`POST /api/v1/roster/availability` — the caller flips their OWN durable\navailability intent on a specific human capacity. Self-service: keyed on\n`member_user_id = subject_as_uuid()`, so a member can only toggle their own\npresence. 404 when the caller is not enrolled in that capacity.",
+        "description": "The durable `available` row is the source of truth; AFTER the commit we\npublish a fire-and-forget CORE NATS message so the presence controller learns\nthe intent edge live (`human.{member}.availability`). A publish failure is\nwarned-and-swallowed — the next reconcile reads the durable row.\n\nMounted BEFORE `/roster/{id}` so matchit routes `availability` to this literal\nhandler.",
+        "operationId": "set_availability",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvailabilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Availability intent recorded"
+          },
+          "404": {
+            "description": "Caller is not enrolled in that capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/me": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster/me` — the caller's OWN live enrollments across the\nworkspace. Self-service read keyed on `member_user_id = subject_as_uuid()`;\nfeeds the availability UI. Returns the full [`RosterMemberDetail`] (caps +\ntyped availability) since a member is trusted to see their own enrollment.",
+        "description": "Mounted BEFORE `/roster/{id}` so matchit routes `me` to this literal handler.",
+        "operationId": "my_enrollments",
+        "responses": {
+          "200": {
+            "description": "The caller's own live roster enrollments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RosterMemberDetail"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roster/{id}": {
+      "get": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`GET /api/v1/roster/{id}` — admin view of a single member (workspace-scoped).\n404 when missing or revoked.",
+        "operationId": "get_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Roster member detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`DELETE /api/v1/roster/{id}` — revoke a member (soft delete; sets\n`revoked_at`). Workspace-scoped; 404 when missing or already revoked.",
+        "operationId": "revoke_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Roster member revoked"
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`PATCH /api/v1/roster/{id}` — admin update of a member's caps / concurrency /\navailability. Every field optional; only the supplied ones are written. When\n`caps` is supplied it is re-validated against the workspace's\n`CapabilityType`s (same gate as enroll). 404 when missing or revoked.",
+        "operationId": "update_roster_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Roster member id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRosterMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated roster member detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterMemberDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Caps fail validation against the capability registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners": {
       "get": {
         "tags": [
@@ -7061,6 +7429,36 @@
         }
       }
     },
+    "/api/v1/tasks/inbox": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox\n(docs/33 P4).",
+        "description": "Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object\n(same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`\ntasks whose backing human capacity the caller is *enrolled in* — the offers\nthey may claim — and (b) `claimed` tasks the caller already holds (their work\nin flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility\ncontract (membership now; caps-vs-`requirements` matching deferred).\n\nMounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.",
+        "operationId": "inbox",
+        "responses": {
+          "200": {
+            "description": "The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tasks/stream": {
       "get": {
         "tags": [
@@ -7164,6 +7562,70 @@
           },
           "409": {
             "description": "Task is not pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/claim": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "POST /api/v1/tasks/{id}/claim — claim an offered human task (docs/34 §6).",
+        "description": "A pooled `HumanTask` is *offered* (not assigned) to eligible available\nmembers: the offer parks in the capacity `pool-<id>` net and a member binds\nit by claiming. This endpoint publishes that claim and returns **202\nAccepted immediately** (docs/33 §11) — it is a pure, projection-confirmed\nfire-and-forget: the authoritative `claimed` status (and `assignee`) arrives\nasynchronously via the causality projection of the pool net's `in_use`\ntoken, NOT from this handler. We deliberately take no optimistic local lock\nand do NOT write `status` here; the engine `t_claim` guard is authoritative\n(an ineligible member's claim simply fails to bind and the row stays\n`offered`).\n\nThe caller IS the claiming member: their id is `subject_as_uuid()`, carried\nas the offer net's `runner_id` correlation (docs/34 §3 — bind ANY free slot\nof the member, not an exact unit).\n\nPool-net resolution contract: the offered row's `id` IS the `grant_id`, and\nthe backing pool net is `pool-<capacity_id>`. We read the net id from the\noffered projection's `detail` — `detail->>'pool_net_id'` is the canonical\nfield the offered projection (`causality/ingest.rs` §4.1) writes; we fall\nback to deriving `pool-<capacity_id>` from `detail->>'capacity_id'` if only\nthe bare capacity id was projected. If neither is present the offer cannot\nbe routed → 422.",
+        "operationId": "claim_task",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id (= offer grant_id)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Claim published; `claimed` status follows via projection",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Task not found"
+          },
+          "409": {
+            "description": "Task is not offered (already claimed or wrong state)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Offered row carries no resolvable pool net id",
             "content": {
               "application/json": {
                 "schema": {
@@ -11375,6 +11837,54 @@
           }
         }
       },
+      "AvailabilityConfig": {
+        "type": "object",
+        "description": "The availability knobs stored in the `availability` JSONB column. Container-level\n`#[serde(default)]` so an empty `{}` JSONB — or any missing field — falls back to\n[`AvailabilityConfig::default`] (the interactive defaults: `session` liveness, 45 s\nTTL, 15 s grace), NOT each field's type-default (which would zero `ttl_secs`).",
+        "properties": {
+          "grace_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Additional grace before a lapsed presence is reaped.",
+            "default": 15,
+            "minimum": 0
+          },
+          "liveness_source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LivenessSource",
+                "description": "What renews presence for this member."
+              }
+            ],
+            "default": "session"
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Expiry window: seconds since the last renewal before presence lapses.",
+            "default": 45,
+            "minimum": 0
+          }
+        }
+      },
+      "AvailabilityRequest": {
+        "type": "object",
+        "description": "Request body for a member's durable availability toggle. The member flips\ntheir own intent on a specific human capacity.",
+        "required": [
+          "capacity_id",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`true` → online (available for offers); `false` → offline."
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id`."
+          }
+        }
+      },
       "BackendCoverageEntry": {
         "type": "object",
         "description": "Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of\n0 means NO live worker serves this backend — steps on it will queue.",
@@ -13802,7 +14312,8 @@
         "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
         "enum": [
           "pull",
-          "push"
+          "push",
+          "offer"
         ]
       },
       "DispatchMode": {
@@ -14070,6 +14581,49 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "EnrollMemberRequest": {
+        "type": "object",
+        "description": "Request body for enrolling a `workspace_member` into a human capacity.\nCaps are admin-assigned here — the trusted row, never the wire claim.",
+        "required": [
+          "capacity_id",
+          "member_user_id"
+        ],
+        "properties": {
+          "availability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AvailabilityConfig",
+                "description": "Optional availability config; defaults to the interactive preset."
+              }
+            ]
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id` to enroll into."
+          },
+          "caps": {
+            "description": "Admin-assigned capability blob, validated against `CapabilityType`s.\nDefaults to `{}`."
+          },
+          "concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Per-person `C`. Defaults to `1` when omitted.",
+            "minimum": 0
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `workspace_members.user_id` being enrolled."
           }
         }
       },
@@ -15309,6 +15863,14 @@
               "null"
             ]
           },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a member claimed an offered task (offer discipline only)."
+          },
           "completed_at": {
             "type": [
               "string",
@@ -15332,6 +15894,14 @@
           },
           "title": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace scope (docs/33 §4); NULL for legacy rows pre-migration."
           }
         }
       },
@@ -15454,6 +16024,38 @@
           "PATCH",
           "DELETE"
         ]
+      },
+      "HumanPresenceSnapshot": {
+        "type": "object",
+        "description": "Read-API row: one tracked roster member's live presence in a human capacity.",
+        "required": [
+          "capacity_id",
+          "member_user_id",
+          "present",
+          "last_seen_ms_ago"
+        ],
+        "properties": {
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`)."
+          },
+          "last_seen_ms_ago": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the member's last liveness renewal.",
+            "minimum": 0
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The enrolled member's `workspace_members.user_id`."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether mekhan currently considers the member admitted to the pool."
+          }
+        }
       },
       "ImageDisplay": {
         "type": "string",
@@ -16058,9 +16660,59 @@
           }
         }
       },
+      "InventoryIndexItem": {
+        "type": "object",
+        "description": "One item in a batched **index** request — a hashless physical observation.\n\nIndex records that a file exists at `path` on a server, WITHOUT a content\nidentity. It writes `file_inventory` only (never `catalogue_entries`),\nbecause we haven't hashed the bytes yet. This is the landing zone for\n`crawl` output; promote to a coupled catalogue row later via `/register`\nonce a `probe` supplies the hash. There is deliberately no `content_hash`\nfield here — claiming an identity is what `register` is for.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "provenance": {},
+          "status": {
+            "type": "string",
+            "description": "Physical-observation status — defaults to `indexed`."
+          }
+        }
+      },
+      "InventoryIndexRequest": {
+        "type": "object",
+        "description": "Batched index request body — all items share one `file_server_id`.",
+        "required": [
+          "file_server_id",
+          "items"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryIndexItem"
+            }
+          }
+        }
+      },
+      "InventoryIndexResponse": {
+        "type": "object",
+        "description": "Result count of a batched index call.",
+        "required": [
+          "inventory_upserted"
+        ],
+        "properties": {
+          "inventory_upserted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`file_inventory` rows inserted or updated. No catalogue rows are written."
+          }
+        }
+      },
       "InventoryRegisterItem": {
         "type": "object",
-        "description": "One item in a batched by-reference register request.\n\nOptional content metadata (`name`/`size_bytes`/`mime_type`) is used to\nUPSERT a logical `catalogue_entries` row keyed on `content_hash`; the\n`file_inventory` row is always upserted on `(file_server_id, path)`. No\nbytes are transferred — this is the online crawl/reconcile path, not the 4M\noffline load (that goes through the importer).",
+        "description": "One item in a batched by-reference **register** request.\n\n`content_hash` is REQUIRED: register fills both halves of the equation (a\nlogical `catalogue_entries` row keyed on the hash AND a physical\n`file_inventory` row on `(file_server_id, path)`), so a row with no content\nidentity is rejected (400). To record a file you've *seen* but not yet\nhashed, use [`InventoryIndexItem`] (`POST /api/v1/inventory/index`) instead.\nOptional content metadata (`name`/`size_bytes`/`mime_type`) enriches the\ncatalogue row. No bytes are transferred — this is the online crawl/reconcile\npath, not the 4M offline load (that goes through the importer).",
         "required": [
           "file_server_id",
           "path",
@@ -16072,7 +16724,7 @@
               "string",
               "null"
             ],
-            "description": "Bare-hex SHA-256, if known. NULL until a `probe` populates it."
+            "description": "Bare-hex SHA-256 of the content. REQUIRED — supplied by a `probe`. An\nitem missing this is rejected; observe-only goes through `/index`."
           },
           "file_server_id": {
             "type": "string"
@@ -16677,6 +17329,15 @@
           "seeded",
           "presence",
           "lease"
+        ]
+      },
+      "LivenessSource": {
+        "type": "string",
+        "description": "What renews a roster member's presence (docs/33 §7.1). A person has no daemon\nheartbeat, so availability is one parameterised controller, not three code\npaths — this picks the renewal signal.",
+        "enum": [
+          "none",
+          "session",
+          "external"
         ]
       },
       "LlmConfig": {
@@ -18680,6 +19341,69 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_RosterMemberSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by the roster list endpoint.",
+              "required": [
+                "id",
+                "capacity_id",
+                "member_user_id",
+                "concurrency",
+                "available",
+                "enrolled_at"
+              ],
+              "properties": {
+                "available": {
+                  "type": "boolean"
+                },
+                "capacity_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "concurrency": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "enrolled_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "member_user_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -20930,6 +21654,15 @@
             "$ref": "#/components/schemas/RosOperation",
             "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
           },
+          "scene_stream_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When set on a `send_action_goal` node that declares a DATA `out` channel,\nthe action ALSO polls move_group's `/get_planning_scene` every this-many\nmilliseconds during the motion and streams each scene snapshot (slim\nNDJSON: joints + collision objects + attached objects) onto the data\nchannel — driving a live planning-scene digital twin. `None`/absent ⇒ the\ndata channel carries the default per-feedback joint-state stream instead.",
+            "minimum": 0
+          },
           "timeout_ms": {
             "type": "integer",
             "format": "int64",
@@ -20947,6 +21680,105 @@
           "await_topic",
           "send_action_goal"
         ]
+      },
+      "RosterMemberDetail": {
+        "type": "object",
+        "description": "Admin view for a single roster member — carries the trusted caps and the\ntyped availability config.",
+        "required": [
+          "id",
+          "capacity_id",
+          "member_user_id",
+          "caps",
+          "concurrency",
+          "availability",
+          "available",
+          "enrolled_by",
+          "enrolled_at"
+        ],
+        "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AvailabilityConfig"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "available_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "caps": {},
+          "concurrency": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enrolled_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "RosterMemberSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by the roster list endpoint.",
+        "required": [
+          "id",
+          "capacity_id",
+          "member_user_id",
+          "concurrency",
+          "available",
+          "enrolled_at"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "capacity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "concurrency": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "member_user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "RotateResourceRequest": {
         "type": "object",
@@ -23364,6 +24196,31 @@
           }
         }
       },
+      "UpdateRosterMemberRequest": {
+        "type": "object",
+        "description": "Request body for an admin update of a roster member. Every field optional —\nonly the supplied ones are written.",
+        "properties": {
+          "availability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AvailabilityConfig"
+              }
+            ]
+          },
+          "caps": {},
+          "concurrency": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -24185,6 +25042,17 @@
               "type"
             ],
             "properties": {
+              "capacity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CapacityBinding",
+                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (the offer discipline).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
+                  }
+                ]
+              },
               "description": {
                 "type": [
                   "string",
@@ -24199,6 +25067,17 @@
               },
               "label": {
                 "type": "string"
+              },
+              "requirements": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Requirements",
+                    "description": "Placement Requirements on a capacity-bound human task — typed\n[`Constraint`]s over the offered member's advertised `caps`. Mirrors\n[`WorkflowNodeData::AutomatedStep`]'s `requirements`: injected into the\noffer's claim payload as a Rhai literal, with the offer pool's\n`t_claim` guard (`satisfies(offer.requirements, unit.caps)`) admitting\nONLY a member whose caps satisfy every constraint. `None` (the\ndefault) ⇒ no placement constraint (any available member may claim).\nIgnored when `capacity` is `None`."
+                  }
+                ]
               },
               "steps": {
                 "type": "array",
@@ -25203,6 +26082,10 @@
     {
       "name": "runners",
       "description": "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."
+    },
+    {
+      "name": "roster",
+      "description": "Humans as a capacity (docs/33 §7) — the set of `workspace_members` enrolled into a human `capacity` resource backed by a `pool-<capacity_id>` net (the human counterpart to the runner fleet). Admin management (enroll / update / revoke, caps validated against the capability registry) + self-service (`/roster/me`, `/roster/availability` durable toggle). A member's availability drives presence admission, reusing the runner pool plumbing verbatim."
     },
     {
       "name": "workers",

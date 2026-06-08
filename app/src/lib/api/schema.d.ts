@@ -939,6 +939,35 @@ export interface paths {
         patch: operations["update_folder"];
         trace?: never;
     };
+    "/api/v1/human-presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/human-presence` — live in-memory presence snapshot of the human
+         *     capacity pools (docs/33 P4). The human counterpart to
+         *     `GET /api/v1/runners/presence`.
+         * @description Returns the presence controller's in-memory map — which enrolled members mekhan
+         *     currently considers *admitted* (a live unit in their pool), NOT the durable
+         *     `roster_members.available` intent column. Feeds the Fleet human-pool view.
+         *
+         *     The in-memory map is keyed by `(capacity_id, member_user_id)` and carries no
+         *     workspace, so it is filtered here to the capacities that live in the caller's
+         *     workspace — without this it would leak every workspace's human-capacity ids +
+         *     member liveness timing, exactly as `runners::runner_presence` guards.
+         */
+        get: operations["human_presence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/requests": {
         parameters: {
             query?: never;
@@ -1233,6 +1262,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inventory/index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/inventory/index
+         * @description Batched hashless **index** — record physical files observed on a server
+         *     without claiming a content identity. Writes `file_inventory` rows only
+         *     (status defaults to `indexed`); never touches `catalogue_entries`. This is
+         *     where `crawl` output lands; promote to a coupled catalogue row later via
+         *     `/register` once a `probe` supplies the hash.
+         */
+        post: operations["index"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inventory/reconcile-batch": {
         parameters: {
             query?: never;
@@ -1266,11 +1319,12 @@ export interface paths {
         put?: never;
         /**
          * POST /api/v1/inventory/register
-         * @description Batched by-reference upsert. For each item with content metadata + a
-         *     `content_hash`, UPSERTs a logical `catalogue_entries` row (keyed on
-         *     `content_hash`, `category = 'legacy'`); then UPSERTs the `file_inventory`
-         *     row on `(file_server_id, path)`. No bytes are transferred — this is the
-         *     online crawl/reconcile path. Returns insert/upsert counts.
+         * @description Batched by-reference register — **fills both halves of the equation**. Every
+         *     item MUST carry a `content_hash`; for each, in one transaction, UPSERTs a
+         *     logical `catalogue_entries` row (keyed on `content_hash`, `category =
+         *     'legacy'`) AND the physical `file_inventory` row on `(file_server_id,
+         *     path)`. A hashless item is rejected (400) — observe-only goes through
+         *     `/index`. No bytes are transferred. Returns insert/upsert counts.
          */
         post: operations["register"];
         delete?: never;
@@ -2231,6 +2285,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/roster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/roster` — paginated, workspace-scoped (live members only).
+         *     Optionally filtered to a single `capacity_id`.
+         */
+        get: operations["list_roster"];
+        put?: never;
+        /**
+         * `POST /api/v1/roster` — enroll a `workspace_member` into a human capacity.
+         *     Admin (session `AuthUser`); workspace = caller's. Caps are admin-assigned on
+         *     the trusted row and validated against the workspace's `CapabilityType`s
+         *     BEFORE insert — an unknown capability or a value mismatching its declared
+         *     FieldKind → 400. A repeat enrollment of the same (capacity, member) → 409.
+         */
+        post: operations["enroll_member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roster/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/roster/availability` — the caller flips their OWN durable
+         *     availability intent on a specific human capacity. Self-service: keyed on
+         *     `member_user_id = subject_as_uuid()`, so a member can only toggle their own
+         *     presence. 404 when the caller is not enrolled in that capacity.
+         * @description The durable `available` row is the source of truth; AFTER the commit we
+         *     publish a fire-and-forget CORE NATS message so the presence controller learns
+         *     the intent edge live (`human.{member}.availability`). A publish failure is
+         *     warned-and-swallowed — the next reconcile reads the durable row.
+         *
+         *     Mounted BEFORE `/roster/{id}` so matchit routes `availability` to this literal
+         *     handler.
+         */
+        post: operations["set_availability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roster/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/roster/me` — the caller's OWN live enrollments across the
+         *     workspace. Self-service read keyed on `member_user_id = subject_as_uuid()`;
+         *     feeds the availability UI. Returns the full [`RosterMemberDetail`] (caps +
+         *     typed availability) since a member is trusted to see their own enrollment.
+         * @description Mounted BEFORE `/roster/{id}` so matchit routes `me` to this literal handler.
+         */
+        get: operations["my_enrollments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/roster/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/roster/{id}` — admin view of a single member (workspace-scoped).
+         *     404 when missing or revoked.
+         */
+        get: operations["get_roster_member"];
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/roster/{id}` — revoke a member (soft delete; sets
+         *     `revoked_at`). Workspace-scoped; 404 when missing or already revoked.
+         */
+        delete: operations["revoke_roster_member"];
+        options?: never;
+        head?: never;
+        /**
+         * `PATCH /api/v1/roster/{id}` — admin update of a member's caps / concurrency /
+         *     availability. Every field optional; only the supplied ones are written. When
+         *     `caps` is supplied it is re-validated against the workspace's
+         *     `CapabilityType`s (same gate as enroll). 404 when missing or revoked.
+         */
+        patch: operations["update_roster_member"];
+        trace?: never;
+    };
     "/api/v1/runners": {
         parameters: {
             query?: never;
@@ -2503,6 +2666,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/tasks/inbox — the caller's eligibility-filtered human-task inbox
+         *     (docs/33 P4).
+         * @description Returns `{ tasks: [...] }` where each task is a `HumanTask`-shaped JSON object
+         *     (same shape as `GET /api/v1/tasks`). The set is the union of (a) `offered`
+         *     tasks whose backing human capacity the caller is *enrolled in* — the offers
+         *     they may claim — and (b) `claimed` tasks the caller already holds (their work
+         *     in flight). Workspace-scoped; see [`queries::inbox_tasks`] for the eligibility
+         *     contract (membership now; caps-vs-`requirements` matching deferred).
+         *
+         *     Mounted BEFORE `/tasks/{id}` so matchit routes the literal `inbox` here.
+         */
+        get: operations["inbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/stream": {
         parameters: {
             query?: never;
@@ -2559,6 +2750,47 @@ export interface paths {
         put?: never;
         /** POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal. */
         post: operations["cancel_task"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/tasks/{id}/claim — claim an offered human task (docs/34 §6).
+         * @description A pooled `HumanTask` is *offered* (not assigned) to eligible available
+         *     members: the offer parks in the capacity `pool-<id>` net and a member binds
+         *     it by claiming. This endpoint publishes that claim and returns **202
+         *     Accepted immediately** (docs/33 §11) — it is a pure, projection-confirmed
+         *     fire-and-forget: the authoritative `claimed` status (and `assignee`) arrives
+         *     asynchronously via the causality projection of the pool net's `in_use`
+         *     token, NOT from this handler. We deliberately take no optimistic local lock
+         *     and do NOT write `status` here; the engine `t_claim` guard is authoritative
+         *     (an ineligible member's claim simply fails to bind and the row stays
+         *     `offered`).
+         *
+         *     The caller IS the claiming member: their id is `subject_as_uuid()`, carried
+         *     as the offer net's `runner_id` correlation (docs/34 §3 — bind ANY free slot
+         *     of the member, not an exact unit).
+         *
+         *     Pool-net resolution contract: the offered row's `id` IS the `grant_id`, and
+         *     the backing pool net is `pool-<capacity_id>`. We read the net id from the
+         *     offered projection's `detail` — `detail->>'pool_net_id'` is the canonical
+         *     field the offered projection (`causality/ingest.rs` §4.1) writes; we fall
+         *     back to deriving `pool-<capacity_id>` from `detail->>'capacity_id'` if only
+         *     the bare capacity id was projected. If neither is present the offer cannot
+         *     be routed → 422.
+         */
+        post: operations["claim_task"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4096,6 +4328,41 @@ export interface components {
             status?: string | null;
         };
         /**
+         * @description The availability knobs stored in the `availability` JSONB column. Container-level
+         *     `#[serde(default)]` so an empty `{}` JSONB — or any missing field — falls back to
+         *     [`AvailabilityConfig::default`] (the interactive defaults: `session` liveness, 45 s
+         *     TTL, 15 s grace), NOT each field's type-default (which would zero `ttl_secs`).
+         */
+        AvailabilityConfig: {
+            /**
+             * Format: int64
+             * @description Additional grace before a lapsed presence is reaped.
+             * @default 15
+             */
+            grace_secs: number;
+            /** @default session */
+            liveness_source: components["schemas"]["LivenessSource"];
+            /**
+             * Format: int64
+             * @description Expiry window: seconds since the last renewal before presence lapses.
+             * @default 45
+             */
+            ttl_secs: number;
+        };
+        /**
+         * @description Request body for a member's durable availability toggle. The member flips
+         *     their own intent on a specific human capacity.
+         */
+        AvailabilityRequest: {
+            /** @description `true` → online (available for offers); `false` → offline. */
+            available: boolean;
+            /**
+             * Format: uuid
+             * @description The human-capacity `resources.id`.
+             */
+            capacity_id: string;
+        };
+        /**
          * @description Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of
          *     0 means NO live worker serves this backend — steps on it will queue.
          */
@@ -5230,7 +5497,7 @@ export interface components {
          * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
          * @enum {string}
          */
-        Dispatch: "pull" | "push";
+        Dispatch: "pull" | "push" | "offer";
         /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
          *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
@@ -5320,6 +5587,33 @@ export interface components {
         EngineStatus: {
             available: boolean;
             run_mode?: string | null;
+        };
+        /**
+         * @description Request body for enrolling a `workspace_member` into a human capacity.
+         *     Caps are admin-assigned here — the trusted row, never the wire claim.
+         */
+        EnrollMemberRequest: {
+            availability?: null | components["schemas"]["AvailabilityConfig"];
+            /**
+             * Format: uuid
+             * @description The human-capacity `resources.id` to enroll into.
+             */
+            capacity_id: string;
+            /**
+             * @description Admin-assigned capability blob, validated against `CapabilityType`s.
+             *     Defaults to `{}`.
+             */
+            caps?: unknown;
+            /**
+             * Format: int32
+             * @description Per-person `C`. Defaults to `1` when omitted.
+             */
+            concurrency?: number | null;
+            /**
+             * Format: uuid
+             * @description The `workspace_members.user_id` being enrolled.
+             */
+            member_user_id: string;
         };
         /**
          * @description Request body for `POST /api/v1/runners/enroll`. Authenticated by the
@@ -5815,6 +6109,11 @@ export interface components {
         };
         HpiTask: {
             assignee?: string | null;
+            /**
+             * Format: date-time
+             * @description When a member claimed an offered task (offer discipline only).
+             */
+            claimed_at?: string | null;
             /** Format: date-time */
             completed_at?: string | null;
             /** Format: date-time */
@@ -5824,6 +6123,11 @@ export interface components {
             process_id: string;
             status: string;
             title: string;
+            /**
+             * Format: uuid
+             * @description Workspace scope (docs/33 §4); NULL for legacy rows pre-migration.
+             */
+            workspace_id?: string | null;
         };
         /** @description Configuration for the HTTP request backend. */
         HttpConfig: {
@@ -5876,6 +6180,26 @@ export interface components {
         };
         /** @enum {string} */
         HttpMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+        /** @description Read-API row: one tracked roster member's live presence in a human capacity. */
+        HumanPresenceSnapshot: {
+            /**
+             * Format: uuid
+             * @description The human-capacity `resources.id` (its pool net is `pool-<capacity_id>`).
+             */
+            capacity_id: string;
+            /**
+             * Format: int64
+             * @description Milliseconds since the member's last liveness renewal.
+             */
+            last_seen_ms_ago: number;
+            /**
+             * Format: uuid
+             * @description The enrolled member's `workspace_members.user_id`.
+             */
+            member_user_id: string;
+            /** @description Whether mekhan currently considers the member admitted to the pool. */
+            present: boolean;
+        };
         /**
          * @description Layout mode for image blocks. Snake-case wire values: `"single"`,
          *     `"grid"`, `"gallery"`.
@@ -6133,16 +6457,51 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description One item in a batched by-reference register request.
+         * @description One item in a batched **index** request — a hashless physical observation.
          *
-         *     Optional content metadata (`name`/`size_bytes`/`mime_type`) is used to
-         *     UPSERT a logical `catalogue_entries` row keyed on `content_hash`; the
-         *     `file_inventory` row is always upserted on `(file_server_id, path)`. No
-         *     bytes are transferred — this is the online crawl/reconcile path, not the 4M
-         *     offline load (that goes through the importer).
+         *     Index records that a file exists at `path` on a server, WITHOUT a content
+         *     identity. It writes `file_inventory` only (never `catalogue_entries`),
+         *     because we haven't hashed the bytes yet. This is the landing zone for
+         *     `crawl` output; promote to a coupled catalogue row later via `/register`
+         *     once a `probe` supplies the hash. There is deliberately no `content_hash`
+         *     field here — claiming an identity is what `register` is for.
+         */
+        InventoryIndexItem: {
+            path: string;
+            provenance?: unknown;
+            /** @description Physical-observation status — defaults to `indexed`. */
+            status?: string;
+        };
+        /** @description Batched index request body — all items share one `file_server_id`. */
+        InventoryIndexRequest: {
+            file_server_id: string;
+            items: components["schemas"]["InventoryIndexItem"][];
+        };
+        /** @description Result count of a batched index call. */
+        InventoryIndexResponse: {
+            /**
+             * Format: int64
+             * @description `file_inventory` rows inserted or updated. No catalogue rows are written.
+             */
+            inventory_upserted: number;
+        };
+        /**
+         * @description One item in a batched by-reference **register** request.
+         *
+         *     `content_hash` is REQUIRED: register fills both halves of the equation (a
+         *     logical `catalogue_entries` row keyed on the hash AND a physical
+         *     `file_inventory` row on `(file_server_id, path)`), so a row with no content
+         *     identity is rejected (400). To record a file you've *seen* but not yet
+         *     hashed, use [`InventoryIndexItem`] (`POST /api/v1/inventory/index`) instead.
+         *     Optional content metadata (`name`/`size_bytes`/`mime_type`) enriches the
+         *     catalogue row. No bytes are transferred — this is the online crawl/reconcile
+         *     path, not the 4M offline load (that goes through the importer).
          */
         InventoryRegisterItem: {
-            /** @description Bare-hex SHA-256, if known. NULL until a `probe` populates it. */
+            /**
+             * @description Bare-hex SHA-256 of the content. REQUIRED — supplied by a `probe`. An
+             *     item missing this is rejected; observe-only goes through `/index`.
+             */
             content_hash?: string | null;
             file_server_id: string;
             mime_type?: string | null;
@@ -6393,6 +6752,13 @@ export interface components {
          * @enum {string}
          */
         Liveness: "competing_consumer" | "seeded" | "presence" | "lease";
+        /**
+         * @description What renews a roster member's presence (docs/33 §7.1). A person has no daemon
+         *     heartbeat, so availability is one parameterised controller, not three code
+         *     paths — this picks the renewal signal.
+         * @enum {string}
+         */
+        LivenessSource: "none" | "session" | "external";
         /** @description Configuration for the LLM backend. */
         LlmConfig: {
             /** @description API key. Falls back to provider-specific env var if absent. */
@@ -7395,6 +7761,27 @@ export interface components {
                 resource_type: string;
                 /** Format: date-time */
                 updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_RosterMemberSummary: {
+            items: {
+                available: boolean;
+                /** Format: uuid */
+                capacity_id: string;
+                /** Format: int32 */
+                concurrency: number;
+                /** Format: date-time */
+                enrolled_at: string;
+                /** Format: uuid */
+                id: string;
+                /** Format: uuid */
+                member_user_id: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -8507,6 +8894,16 @@ export interface components {
             operation?: components["schemas"]["RosOperation"];
             /**
              * Format: int64
+             * @description When set on a `send_action_goal` node that declares a DATA `out` channel,
+             *     the action ALSO polls move_group's `/get_planning_scene` every this-many
+             *     milliseconds during the motion and streams each scene snapshot (slim
+             *     NDJSON: joints + collision objects + attached objects) onto the data
+             *     channel — driving a live planning-scene digital twin. `None`/absent ⇒ the
+             *     data channel carries the default per-feedback joint-state stream instead.
+             */
+            scene_stream_ms?: number | null;
+            /**
+             * Format: int64
              * @description Per-request timeout in milliseconds. Defaults to 30000.
              */
             timeout_ms?: number;
@@ -8522,6 +8919,45 @@ export interface components {
          * @enum {string}
          */
         RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal";
+        /**
+         * @description Admin view for a single roster member — carries the trusted caps and the
+         *     typed availability config.
+         */
+        RosterMemberDetail: {
+            availability: components["schemas"]["AvailabilityConfig"];
+            available: boolean;
+            /** Format: date-time */
+            available_since?: string | null;
+            /** Format: uuid */
+            capacity_id: string;
+            caps: unknown;
+            /** Format: int32 */
+            concurrency: number;
+            /** Format: date-time */
+            enrolled_at: string;
+            /** Format: uuid */
+            enrolled_by: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_user_id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+        };
+        /** @description Compact list-row shape. Returned by the roster list endpoint. */
+        RosterMemberSummary: {
+            available: boolean;
+            /** Format: uuid */
+            capacity_id: string;
+            /** Format: int32 */
+            concurrency: number;
+            /** Format: date-time */
+            enrolled_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_user_id: string;
+        };
         /**
          * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
          *     version. The body carries the new config — the type cannot change at
@@ -9715,6 +10151,16 @@ export interface components {
             config?: unknown;
             display_name?: string | null;
         };
+        /**
+         * @description Request body for an admin update of a roster member. Every field optional —
+         *     only the supplied ones are written.
+         */
+        UpdateRosterMemberRequest: {
+            availability?: null | components["schemas"]["AvailabilityConfig"];
+            caps?: unknown;
+            /** Format: int32 */
+            concurrency?: number | null;
+        };
         UpdateTemplateRequest: {
             description?: string | null;
             graph?: null | components["schemas"]["WorkflowGraph"];
@@ -10095,9 +10541,11 @@ export interface components {
             /** @enum {string} */
             type: "end";
         } | {
+            capacity?: null | components["schemas"]["CapacityBinding"];
             description?: string | null;
             instructionsMdsvex?: string | null;
             label: string;
+            requirements?: null | components["schemas"]["Requirements"];
             steps: components["schemas"]["TaskStepConfig"][];
             /**
              * @description Opt-in: source the form block list at RUNTIME from a producer-namespaced
@@ -12553,6 +13001,26 @@ export interface operations {
             };
         };
     };
+    human_presence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live human presence snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HumanPresenceSnapshot"][];
+                };
+            };
+        };
+    };
     list_inference_requests: {
         parameters: {
             query?: {
@@ -13118,6 +13586,39 @@ export interface operations {
             };
         };
     };
+    index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryIndexRequest"];
+            };
+        };
+        responses: {
+            /** @description Index counts (inventory only) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryIndexResponse"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     reconcile_batch: {
         parameters: {
             query?: never;
@@ -13173,7 +13674,7 @@ export interface operations {
                     "application/json": components["schemas"]["InventoryRegisterResponse"];
                 };
             };
-            /** @description Bad request */
+            /** @description Missing content_hash, or bad request */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15167,6 +15668,231 @@ export interface operations {
             };
         };
     };
+    list_roster: {
+        parameters: {
+            query?: {
+                /** @description Optional filter: only members enrolled in this human capacity. */
+                capacity_id?: string | null;
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of roster members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_RosterMemberSummary"];
+                };
+            };
+        };
+    };
+    enroll_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Member enrolled into the human capacity */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RosterMemberDetail"];
+                };
+            };
+            /** @description Caps fail validation against the capability registry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Member is already enrolled in this capacity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_availability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Availability intent recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller is not enrolled in that capacity */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    my_enrollments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's own live roster enrollments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RosterMemberDetail"][];
+                };
+            };
+        };
+    };
+    get_roster_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Roster member id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Roster member detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RosterMemberDetail"];
+                };
+            };
+            /** @description Roster member not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_roster_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Roster member id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Roster member revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Roster member not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_roster_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Roster member id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRosterMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated roster member detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RosterMemberDetail"];
+                };
+            };
+            /** @description Caps fail validation against the capability registry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Roster member not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_runners: {
         parameters: {
             query?: {
@@ -15647,6 +16373,35 @@ export interface operations {
             };
         };
     };
+    inbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's inbox (offered-to-me + claimed-by-me), HumanTask-shaped, in a `tasks` envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     task_stream: {
         parameters: {
             query?: never;
@@ -15741,6 +16496,63 @@ export interface operations {
             };
             /** @description Task is not pending */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    claim_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task id (= offer grant_id) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Claim published; `claimed` status follows via projection */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Task not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task is not offered (already claimed or wrong state) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Offered row carries no resolvable pool net id */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
