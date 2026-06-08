@@ -47,7 +47,20 @@ export interface WebhookEndpoint {
 	security: string[];
 }
 
-export type Endpoint = ManualEndpoint | WebhookEndpoint;
+/** Generic "run this template" entry — `POST /api/v1/instances` specialized to
+ * one template. Emitted for every published template, including trigger-less
+ * ones (run ad-hoc from their Start block). */
+export interface RunTemplateEndpoint {
+	kind: 'run';
+	templateId: string;
+	title: string;
+	templateName?: string;
+	/** The Start blocks' typed input ports, one per Start. */
+	startBlocks: { startBlockId: string; fields: ApiField[] }[];
+	security: string[];
+}
+
+export type Endpoint = ManualEndpoint | WebhookEndpoint | RunTemplateEndpoint;
 
 export interface ParsedBundle {
 	title: string;
@@ -84,6 +97,28 @@ function securityNames(op: Json): string[] {
 		if (r) for (const k of Object.keys(r)) names.add(k);
 	}
 	return [...names];
+}
+
+/** Flatten an object JSON Schema's `properties` into display fields. */
+function fieldsFromObjectSchema(schema: Json | undefined, schemas: Json): ApiField[] {
+	const resolved = resolveSchema(schema, schemas);
+	const props = asObj(resolved?.properties);
+	if (!props) return [];
+	const requiredList = Array.isArray(resolved?.required) ? (resolved!.required as string[]) : [];
+	const fields: ApiField[] = [];
+	for (const [name, raw] of Object.entries(props)) {
+		const p = asObj(raw) ?? {};
+		fields.push({
+			name,
+			type: typeof p.type === 'string' ? p.type : 'object',
+			required: requiredList.includes(name),
+			format: typeof p.format === 'string' ? p.format : undefined,
+			enum: Array.isArray(p.enum) ? (p.enum as unknown[]).map(String) : undefined,
+			description: typeof p.description === 'string' ? p.description : undefined,
+			isFile: false
+		});
+	}
+	return fields;
 }
 
 function fieldsFromContent(content: Json | undefined, schemas: Json): {
@@ -153,9 +188,10 @@ export function parseBundle(doc: Record<string, unknown>): ParsedBundle {
 	}
 
 	// Group manual ops by node id (fire + invoke share one trigger); webhooks
-	// stand alone.
+	// and run-template ops stand alone.
 	const manualByNode = new Map<string, ManualEndpoint>();
 	const webhooks: WebhookEndpoint[] = [];
+	const runs: RunTemplateEndpoint[] = [];
 
 	for (const [path, rawItem] of Object.entries(paths)) {
 		const item = asObj(rawItem);
@@ -166,8 +202,45 @@ export function parseBundle(doc: Record<string, unknown>): ParsedBundle {
 
 			const nodeId = String(op['x-mekhan-node-id'] ?? '');
 			const tags = Array.isArray(op.tags) ? (op.tags as unknown[]).map(String) : [];
-			const templateName = tags.find((t) => t !== 'triggers' && t !== 'webhooks');
+			const templateName = tags.find(
+				(t) => t !== 'triggers' && t !== 'webhooks' && t !== 'templates'
+			);
 			const content = asObj(asObj(op.requestBody)?.content);
+
+			// Generic run-this-template op (POST /api/v1/instances#tpl=<id>).
+			if (op['x-mekhan-run-template'] === true) {
+				const reqSchema = resolveSchema(
+					asObj(content?.['application/json'])?.schema,
+					schemas
+				);
+				const startTokens = resolveSchema(asObj(reqSchema?.properties)?.start_tokens, schemas);
+				// `items` is a single object schema (one Start) or a `oneOf` (many).
+				const items = asObj(startTokens?.items);
+				const variants = Array.isArray(items?.oneOf)
+					? (items!.oneOf as unknown[])
+					: items
+						? [items]
+						: [];
+				const startBlocks = variants.map((v) => {
+					const vs = asObj(v) ?? {};
+					const tokenProps = asObj(vs.properties);
+					const idEnum = asObj(tokenProps?.start_block_id)?.enum;
+					const startBlockId = Array.isArray(idEnum) ? String(idEnum[0] ?? '') : '';
+					return {
+						startBlockId,
+						fields: fieldsFromObjectSchema(asObj(tokenProps?.token), schemas)
+					};
+				});
+				runs.push({
+					kind: 'run',
+					templateId: String(op['x-mekhan-template-id'] ?? ''),
+					title: String(op.summary ?? path),
+					templateName,
+					startBlocks,
+					security: securityNames(op)
+				});
+				continue;
+			}
 
 			if (path.includes('/triggers/webhook/')) {
 				webhooks.push({
@@ -218,7 +291,8 @@ export function parseBundle(doc: Record<string, unknown>): ParsedBundle {
 
 	const endpoints: Endpoint[] = [
 		...[...manualByNode.values()].sort((a, b) => a.title.localeCompare(b.title)),
-		...webhooks.sort((a, b) => a.title.localeCompare(b.title))
+		...webhooks.sort((a, b) => a.title.localeCompare(b.title)),
+		...runs.sort((a, b) => a.title.localeCompare(b.title))
 	];
 
 	return {

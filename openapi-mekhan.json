@@ -18016,6 +18016,28 @@
               "null"
             ]
           },
+          "last_load_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "load_finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "load_started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Cold-load instrumentation. `load_started_at` is stamped when the controller\npublishes a COLD `LoadBase` (base not yet resident on the target runner) and\nCLEARED once the base is observed resident; `load_finished_at` +\n`last_load_duration_ms` capture the most recent completed cold load."
+          },
           "model_id": {
             "type": "string"
           },
