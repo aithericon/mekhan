@@ -81,6 +81,16 @@ pub enum StatusDetail {
         mime_type: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         storage_path: Option<String>,
+        /// Registered by reference (SDK `upload=False`): not uploaded, still
+        /// hashed; physical location is `(file_server_id, reference_path)`.
+        #[serde(default)]
+        by_reference: bool,
+        /// Identifier of the file server holding a by-reference artifact's bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_server_id: Option<String>,
+        /// Physical path of a by-reference artifact on its file server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reference_path: Option<String>,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,6 +413,9 @@ mod tests {
                 size_bytes: Some(1024),
                 mime_type: None,
                 storage_path: None,
+                by_reference: false,
+                file_server_id: None,
+                reference_path: None,
                 metadata: HashMap::new(),
                 file_metadata: None,
             },
@@ -478,6 +491,9 @@ mod tests {
                 size_bytes: None,
                 mime_type: None,
                 storage_path: None,
+                by_reference: false,
+                file_server_id: None,
+                reference_path: None,
                 metadata: HashMap::new(),
                 file_metadata: None,
             },
@@ -506,6 +522,9 @@ mod tests {
                 size_bytes: Some(100),
                 mime_type: None,
                 storage_path: Some("s3://bucket/obs".into()),
+                by_reference: false,
+                file_server_id: None,
+                reference_path: None,
                 metadata: HashMap::new(),
                 file_metadata: None,
             },

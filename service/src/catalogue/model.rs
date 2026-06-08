@@ -113,5 +113,16 @@ pub struct CatalogueRegisterCommand {
     /// `None`; legacy / by-reference registration sets it.
     #[serde(default)]
     pub content_hash: Option<String>,
+    /// By-reference artifact (`log_artifact(upload=False)`): the bytes were not
+    /// uploaded to the object store; they stay put and the inventory copy is
+    /// located by `(file_server_id, reference_path)` instead of `storage_path`.
+    #[serde(default)]
+    pub by_reference: bool,
+    /// File server holding a by-reference artifact's physical bytes.
+    #[serde(default)]
+    pub file_server_id: Option<String>,
+    /// Path on `file_server_id` where a by-reference artifact physically lives.
+    #[serde(default)]
+    pub reference_path: Option<String>,
     pub created_at: DateTime<Utc>,
 }

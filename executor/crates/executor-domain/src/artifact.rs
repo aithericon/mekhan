@@ -51,6 +51,22 @@ pub struct Artifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_path: Option<String>,
 
+    /// Registered by reference instead of uploaded. When the SDK calls
+    /// `log_artifact(..., upload=False)`, the bytes are NOT copied into the
+    /// object store; the artifact is still hashed and catalogued, but its
+    /// physical location is `(file_server_id, reference_path)` rather than a
+    /// `storage_path`.
+    #[serde(default)]
+    pub by_reference: bool,
+
+    /// Identifier of the file server holding a by-reference artifact's bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_server_id: Option<String>,
+
+    /// Physical path of a by-reference artifact on its file server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_path: Option<String>,
+
     /// Extracted file metadata as JSON (avoids hard dependency on file-metadata crate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_metadata: Option<serde_json::Value>,
@@ -92,6 +108,9 @@ mod tests {
             mime_type: Some("application/octet-stream".into()),
             size_bytes: Some(1024),
             storage_path: Some("artifacts/exec-123/art-001/model.pt".into()),
+            by_reference: false,
+            file_server_id: None,
+            reference_path: None,
             file_metadata: None,
             metadata: HashMap::from([("epoch".into(), "10".into())]),
             created_at: Utc::now(),

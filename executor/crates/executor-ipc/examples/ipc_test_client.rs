@@ -249,6 +249,9 @@ async fn main() -> ExitCode {
                         extract_file_metadata: *extract_file_metadata,
                         blocking: false,
                         storage_config_json: String::new(),
+                        no_upload: false,
+                        file_server_id: String::new(),
+                        reference_path: String::new(),
                     })
                     .await
             }

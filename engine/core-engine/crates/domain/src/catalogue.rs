@@ -62,6 +62,18 @@ pub struct CatalogueRegisterCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_step: Option<String>,
 
+    // -- By-reference catalogue fields --
+    /// Whether this artifact is registered by reference (not uploaded to the
+    /// object store; physical location is `(file_server_id, reference_path)`).
+    #[serde(default)]
+    pub by_reference: bool,
+    /// Identifier of the file server that holds the by-reference artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_server_id: Option<String>,
+    /// Path on the file server where the by-reference artifact lives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_path: Option<String>,
+
     /// When the artifact was originally created.
     pub created_at: DateTime<Utc>,
 }

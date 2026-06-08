@@ -107,6 +107,15 @@ message LogArtifactRequest {
     // When non-empty, the artifact is uploaded to this storage backend
     // instead of the global ArtifactStore.
     string storage_config_json = 9;
+    // By-reference registration: when true the artifact is NOT uploaded
+    // (no byte transfer); it is still hashed, and its physical location is
+    // recorded as (file_server_id, reference_path) instead of an
+    // object-store storage_path.
+    bool no_upload = 10;
+    // Identifier of the file server / host where the by-reference file lives.
+    string file_server_id = 11;
+    // Absolute path of the file on that file server (its physical location).
+    string reference_path = 12;
 }
 
 message UpdateProgressRequest {

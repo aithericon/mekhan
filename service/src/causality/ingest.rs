@@ -2124,12 +2124,15 @@ async fn register_catalogue_entry(
 
     // --- The coupling (docs/32) -------------------------------------------
     // A catalogued artifact has a content identity AND a physical location;
-    // both must be written, never one. The executor hashes every artifact
-    // before upload and ships the digest in `file_metadata.checksum.digest`;
-    // `storage_path` is where it physically landed in the object store. Derive
-    // the hash (prefer an explicit command hash, else the checksum) and require
-    // both it and a storage_path. If either is missing this is a malformed
-    // upload — fail closed (record + drop) rather than write a half row.
+    // both must be written, never one. The executor hashes every artifact and
+    // ships the digest in `file_metadata.checksum.digest`. Two location shapes:
+    //   * uploaded (default): bytes live in the platform object store at
+    //     `storage_path` -> inventory copy = (object_store_id, storage_path).
+    //   * by-reference (`log_artifact(upload=False)`): no bytes moved; the file
+    //     stays put -> inventory copy = (file_server_id, reference_path) and the
+    //     catalogue row keeps no object-store storage_path (cmd.storage_path is
+    //     None for by-reference artifacts).
+    // Either way require the hash + a usable location, else fail closed.
     let content_hash = cmd
         .content_hash
         .clone()
@@ -2142,32 +2145,49 @@ async fn register_catalogue_entry(
                 .map(|s| s.to_string())
                 .filter(|h| !h.trim().is_empty())
         });
-    let (content_hash, storage_path) = match (content_hash, cmd.storage_path.clone()) {
-        (Some(h), Some(p)) if !p.trim().is_empty() => (h, p),
-        (h, p) => {
-            let missing = if h.is_none() {
-                "content_hash (file_metadata.checksum.digest absent)"
-            } else {
-                "storage_path"
-            };
-            record_silent_drop_with(
-                "catalogue_register_uncoupled",
-                &format!(
-                    "artifact {} has no {missing} — refusing to write a half catalogue/inventory row",
-                    cmd.artifact_id
-                ),
-                serde_json::json!({
-                    "net_id": net_id,
-                    "event_seq": event_seq,
-                    "artifact_id": cmd.artifact_id,
-                    "has_hash": h.is_some(),
-                    "storage_path": p,
-                }),
-                None,
-            );
-            return Ok(());
-        }
-    };
+    let by_ref_loc = cmd.by_reference.then(|| {
+        (
+            cmd.file_server_id.clone().filter(|s| !s.trim().is_empty()),
+            cmd.reference_path.clone().filter(|p| !p.trim().is_empty()),
+        )
+    });
+    // (content_hash, inventory file_server_id, inventory path)
+    let (content_hash, inv_file_server, inv_path): (String, String, String) =
+        match (content_hash, by_ref_loc) {
+            // by-reference: location is (file_server_id, reference_path), no S3 object
+            (Some(h), Some((Some(fs), Some(rp)))) => (h, fs, rp),
+            // uploaded: location is (object_store, storage_path)
+            (Some(h), None)
+                if cmd
+                    .storage_path
+                    .as_deref()
+                    .map(|p| !p.trim().is_empty())
+                    .unwrap_or(false) =>
+            {
+                (h, object_store_id.to_string(), cmd.storage_path.clone().unwrap())
+            }
+            (h, _) => {
+                record_silent_drop_with(
+                    "catalogue_register_uncoupled",
+                    &format!(
+                        "artifact {} cannot be coupled (by_reference={}) — refusing to write a half catalogue/inventory row",
+                        cmd.artifact_id, cmd.by_reference
+                    ),
+                    serde_json::json!({
+                        "net_id": net_id,
+                        "event_seq": event_seq,
+                        "artifact_id": cmd.artifact_id,
+                        "by_reference": cmd.by_reference,
+                        "has_hash": h.is_some(),
+                        "storage_path": cmd.storage_path,
+                        "file_server_id": cmd.file_server_id,
+                        "reference_path": cmd.reference_path,
+                    }),
+                    None,
+                );
+                return Ok(());
+            }
+        };
 
     // Deterministic nats_msg_id (kept for tracing/forensics; dedup is now on
     // content_hash — see ON CONFLICT below).
@@ -2249,8 +2269,8 @@ async fn register_catalogue_entry(
     crate::inventory::queries::upsert_inventory_copy(
         &mut tx,
         Some(&content_hash),
-        object_store_id,
-        &storage_path,
+        &inv_file_server,
+        &inv_path,
         "registered",
         true,
         &provenance,

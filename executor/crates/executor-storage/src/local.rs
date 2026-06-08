@@ -242,6 +242,9 @@ mod tests {
             size_bytes: None,
             storage_path: None,
             file_metadata: None,
+            by_reference: false,
+            file_server_id: None,
+            reference_path: None,
             metadata: HashMap::new(),
             created_at: Utc::now(),
         }
