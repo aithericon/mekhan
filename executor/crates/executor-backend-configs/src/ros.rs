@@ -82,9 +82,23 @@ pub struct RosConfig {
     /// planning-scene twin from any single motion: a monitor sized to outlast
     /// the run streams the WHOLE multi-step session (arm picking/placing several
     /// samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
-    /// (so it always terminates). Ignored by the non-monitor operations.
+    /// (so it always terminates). With `stop_topic` set this is only a FAILSAFE
+    /// ceiling — the monitor normally stops the moment the work branch signals
+    /// it. Ignored by the non-monitor operations.
     #[serde(default)]
     pub scene_duration_ms: Option<u64>,
+
+    /// `monitor_scene` STOP signal: a ROS topic the monitor subscribes to and
+    /// breaks its poll loop on the FIRST message it receives, closing the data
+    /// channel cleanly. This makes a continuous monitor's lifetime track the
+    /// WORK it watches instead of a guessed `scene_duration_ms` timer — the work
+    /// branch publishes one `std_msgs/msg/Bool` here when its last step finishes,
+    /// the monitor stops within one poll, and the sibling `join` fires
+    /// immediately (no idle wait for the timer). `None`/absent ⇒ the monitor only
+    /// stops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the
+    /// non-monitor operations.
+    #[serde(default)]
+    pub stop_topic: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -105,6 +119,7 @@ mod tests {
             timeout_ms: 15_000,
             scene_stream_ms: None,
             scene_duration_ms: None,
+            stop_topic: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let de: RosConfig = serde_json::from_str(&json).unwrap();
@@ -182,5 +197,27 @@ mod tests {
         }"#;
         let cfg: RosConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.scene_duration_ms, None);
+    }
+
+    #[test]
+    fn stop_topic_parses() {
+        // Present → Some(topic): the monitor stops on this topic's first message.
+        let json = r#"{
+            "operation": "monitor_scene",
+            "interface_name": "/get_planning_scene",
+            "interface_type": "moveit_msgs/srv/GetPlanningScene",
+            "stop_topic": "/aithericon/monitor_stop"
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.stop_topic.as_deref(), Some("/aithericon/monitor_stop"));
+
+        // Omitted → None (additive, deserialize-tolerant).
+        let json = r#"{
+            "operation": "monitor_scene",
+            "interface_name": "/get_planning_scene",
+            "interface_type": "moveit_msgs/srv/GetPlanningScene"
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.stop_topic, None);
     }
 }
