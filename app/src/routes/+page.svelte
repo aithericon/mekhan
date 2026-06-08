@@ -7,10 +7,12 @@
 		listInstances,
 		listTemplates,
 		listTasks,
+		listTaskInbox,
 		createTemplate,
 		type InstanceListItem,
 		type TemplateSummary
 	} from '$lib/api/client';
+	import type { HumanTask } from '$lib/types/tasks';
 	import { findShowcaseTemplate } from '$lib/templates/showcase';
 	import BrandSpiral from '$lib/components/BrandSpiral.svelte';
 	import { auth } from '$lib/auth/store.svelte';
@@ -21,6 +23,8 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import Hand from '@lucide/svelte/icons/hand';
+	import Inbox from '@lucide/svelte/icons/inbox';
 
 	let openingDemo = $state(false);
 	let demoError = $state<string | null>(null);
@@ -30,6 +34,21 @@
 	let runningInstances = $state<InstanceListItem[]>([]);
 	let recentInstances = $state<InstanceListItem[]>([]);
 	let recentTemplates = $state<TemplateSummary[]>([]);
+	let inboxTasks = $state<HumanTask[]>([]);
+
+	// Offer-dispatch inbox preview: work offered to me (claimable) and the
+	// tasks I've already claimed (my open work). Sorted newest-first, capped.
+	const offeredTasks = $derived(
+		inboxTasks
+			.filter((t) => t.status === 'offered')
+			.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+	);
+	const myOpenTasks = $derived(
+		inboxTasks
+			.filter((t) => t.status === 'claimed' || t.status === 'pending')
+			.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+	);
+	const hasInboxPreview = $derived(offeredTasks.length > 0 || myOpenTasks.length > 0);
 	let stats = $state({
 		running: 0,
 		pendingTasks: 0,
@@ -95,15 +114,20 @@
 			const sinceMidnight = new Date();
 			sinceMidnight.setHours(0, 0, 0, 0);
 
-			const [running, completedRecent, failedRecent, templates, pendingTasks] = await Promise.all([
-				listInstances({ status: 'running', perPage: 6 }),
-				listInstances({ status: 'completed', perPage: 20 }),
-				listInstances({ status: 'failed', perPage: 20 }),
-				listTemplates({ pageSize: 50 }),
-				listTasks({ status: 'pending', limit: 1 })
-			]);
+			const [running, completedRecent, failedRecent, templates, pendingTasks, inbox] =
+				await Promise.all([
+					listInstances({ status: 'running', perPage: 6 }),
+					listInstances({ status: 'completed', perPage: 20 }),
+					listInstances({ status: 'failed', perPage: 20 }),
+					listTemplates({ pageSize: 50 }),
+					listTasks({ status: 'pending', limit: 1 }),
+					// The inbox is a per-user surface; a failure here (e.g. no human
+					// capacity in this workspace) shouldn't blank the whole dashboard.
+					listTaskInbox().catch(() => ({ tasks: [] as HumanTask[] }))
+				]);
 
 			runningInstances = running.items;
+			inboxTasks = inbox.tasks;
 			recentInstances =
 				running.items.length >= 5 ? running.items.slice(0, 5) : [
 					...running.items,
@@ -281,6 +305,125 @@
 				</div>
 			</a>
 		</div>
+
+		<!-- My inbox preview: tasks to claim + my open work (offer dispatch).
+		     Only shown when there's something relevant, so it stays out of the
+		     way for users with no human-task assignments. -->
+		{#if hasInboxPreview}
+			<div class="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+				<!-- Tasks to claim -->
+				<section>
+					<div class="mb-3 flex items-baseline justify-between">
+						<h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+							<Hand class="size-3.5" />
+							Tasks to claim
+							{#if offeredTasks.length > 0}
+								<Badge variant="secondary" class="rounded-full">{offeredTasks.length}</Badge>
+							{/if}
+						</h2>
+						<a
+							href="/tasks/inbox"
+							class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+						>
+							Open inbox <ArrowRight class="size-3" />
+						</a>
+					</div>
+
+					{#if offeredTasks.length === 0}
+						<div
+							class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
+						>
+							<Inbox class="size-7 text-muted-foreground/40" />
+							<p class="mt-2 text-sm text-muted-foreground">No open offers</p>
+						</div>
+					{:else}
+						<div class="space-y-1.5">
+							{#each offeredTasks.slice(0, 4) as task (task.task_id)}
+								<a
+									href="/tasks/{task.task_id}"
+									class="group flex items-center justify-between rounded-lg border border-border bg-card px-3.5 py-2.5 transition-colors hover:bg-accent/50"
+									data-testid="home-offered-{task.task_id}"
+								>
+									<div class="min-w-0">
+										<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
+										<p class="mt-0.5 truncate text-sm text-muted-foreground">
+											Offered {formatRelative(task.created_at)}
+										</p>
+									</div>
+									<ArrowRight
+										class="size-4 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground"
+									/>
+								</a>
+							{/each}
+							{#if offeredTasks.length > 4}
+								<a
+									href="/tasks/inbox"
+									class="block px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+								>
+									+{offeredTasks.length - 4} more
+								</a>
+							{/if}
+						</div>
+					{/if}
+				</section>
+
+				<!-- My open tasks -->
+				<section>
+					<div class="mb-3 flex items-baseline justify-between">
+						<h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+							<ClipboardList class="size-3.5" />
+							My open tasks
+							{#if myOpenTasks.length > 0}
+								<Badge variant="secondary" class="rounded-full">{myOpenTasks.length}</Badge>
+							{/if}
+						</h2>
+						<a
+							href="/tasks/inbox"
+							class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+						>
+							View all <ArrowRight class="size-3" />
+						</a>
+					</div>
+
+					{#if myOpenTasks.length === 0}
+						<div
+							class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
+						>
+							<ClipboardList class="size-7 text-muted-foreground/40" />
+							<p class="mt-2 text-sm text-muted-foreground">Nothing in progress</p>
+						</div>
+					{:else}
+						<div class="space-y-1.5">
+							{#each myOpenTasks.slice(0, 4) as task (task.task_id)}
+								<a
+									href="/tasks/{task.task_id}"
+									class="group flex items-center justify-between rounded-lg border border-border bg-card px-3.5 py-2.5 transition-colors hover:bg-accent/50"
+									data-testid="home-open-task-{task.task_id}"
+								>
+									<div class="min-w-0">
+										<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
+										<p class="mt-0.5 truncate text-sm text-muted-foreground">
+											Claimed {formatRelative(task.created_at)}
+										</p>
+									</div>
+									<ArrowRight
+										class="size-4 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-foreground"
+									/>
+								</a>
+							{/each}
+							{#if myOpenTasks.length > 4}
+								<a
+									href="/tasks/inbox"
+									class="block px-3.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+								>
+									+{myOpenTasks.length - 4} more
+								</a>
+							{/if}
+						</div>
+					{/if}
+				</section>
+			</div>
+		{/if}
 
 		{#if isEmpty}
 			<!-- Empty state: a clean "let's get started" -->
