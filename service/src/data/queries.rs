@@ -82,27 +82,18 @@ pub async fn list_entries(
         }
     }
 
-    // 3. Assemble DataEntry rows.
+    // 3. Assemble DataEntry rows — carry the FULL catalogue entry so the
+    //    unified browser renders the same rich card the catalogue page did.
     let entries: Vec<DataEntry> = page
         .items
-        .iter()
+        .into_iter()
         .map(|e| {
             let copies = e
                 .content_hash
                 .as_ref()
                 .and_then(|h| copies_by_hash.get(h).cloned())
                 .unwrap_or_default();
-            DataEntry {
-                entry_id: e.entry_id,
-                content_hash: e.content_hash.clone(),
-                name: e.name.clone(),
-                category: e.category.clone(),
-                mime_type: e.mime_type.clone(),
-                size_bytes: e.size_bytes,
-                created_at: e.created_at,
-                catalogued: true,
-                copies,
-            }
+            DataEntry { entry: e, copies }
         })
         .collect();
 
@@ -139,16 +130,11 @@ pub async fn list_entries(
             .map(|r| {
                 let name = r.path.rsplit('/').next().unwrap_or(&r.path).to_string();
                 let content_hash = r.content_hash.clone();
-                let created_at = r.first_seen;
-                DataEntry {
-                    entry_id: None,
-                    content_hash,
+                let first_seen = r.first_seen;
+                UncataloguedFile {
                     name,
-                    category: "uncatalogued".to_string(),
-                    mime_type: None,
-                    size_bytes: None,
-                    created_at,
-                    catalogued: false,
+                    content_hash,
+                    first_seen,
                     copies: vec![to_copy(r, &servers)],
                 }
             })

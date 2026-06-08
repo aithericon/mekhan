@@ -14527,7 +14527,7 @@
               "uncatalogued": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/DataEntry"
+                  "$ref": "#/components/schemas/UncataloguedFile"
                 },
                 "description": "Index-only files with no logical catalogue identity yet (capped peek)."
               },
@@ -14542,65 +14542,28 @@
         "description": "Response of `GET /api/v1/data/entries`: a page of catalogued entries (each\nwith copies), plus a capped peek at uncatalogued (index-only) files and the\ntotal uncatalogued count."
       },
       "DataEntry": {
-        "type": "object",
-        "description": "A unified Data-browser row: the logical entry (catalogued content) plus its\nphysical copies. The bridge `content_hash` is surfaced navigably here — the\nwhole point of consolidating the catalogue + inventory split worlds.",
-        "required": [
-          "name",
-          "category",
-          "created_at",
-          "catalogued",
-          "copies"
-        ],
-        "properties": {
-          "catalogued": {
-            "type": "boolean",
-            "description": "True when backed by a `catalogue_entries` row (logical identity exists)."
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CatalogueEntry",
+            "description": "The logical catalogue entry, flattened so the frontend `DataEntry` is a\nstructural superset of `CatalogueEntry` (reuses `ArtifactCard` as-is)."
           },
-          "category": {
-            "type": "string"
-          },
-          "content_hash": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "copies": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DataCopy"
-            },
-            "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "entry_id": {
-            "type": [
-              "string",
-              "null"
+          {
+            "type": "object",
+            "required": [
+              "copies"
             ],
-            "format": "uuid",
-            "description": "Catalogue surrogate id; `None` for an uncatalogued (index-only) row."
-          },
-          "mime_type": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "size_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
+            "properties": {
+              "copies": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DataCopy"
+                },
+                "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
+              }
+            }
           }
-        }
+        ],
+        "description": "A unified Data-browser row: the full catalogue entry (so the browser can\nrender the same rich artifact card, lineage/provenance/download, schema and\nmetadata the catalogue page did) PLUS its physical copies. The bridge\n`content_hash` is surfaced navigably here — the whole point of consolidating\nthe catalogue + inventory split worlds into one surface."
       },
       "DeleteConfig": {
         "type": "object",
@@ -20297,65 +20260,28 @@
           "items": {
             "type": "array",
             "items": {
-              "type": "object",
-              "description": "A unified Data-browser row: the logical entry (catalogued content) plus its\nphysical copies. The bridge `content_hash` is surfaced navigably here — the\nwhole point of consolidating the catalogue + inventory split worlds.",
-              "required": [
-                "name",
-                "category",
-                "created_at",
-                "catalogued",
-                "copies"
-              ],
-              "properties": {
-                "catalogued": {
-                  "type": "boolean",
-                  "description": "True when backed by a `catalogue_entries` row (logical identity exists)."
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/CatalogueEntry",
+                  "description": "The logical catalogue entry, flattened so the frontend `DataEntry` is a\nstructural superset of `CatalogueEntry` (reuses `ArtifactCard` as-is)."
                 },
-                "category": {
-                  "type": "string"
-                },
-                "content_hash": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "copies": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DataCopy"
-                  },
-                  "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
-                },
-                "created_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "entry_id": {
-                  "type": [
-                    "string",
-                    "null"
+                {
+                  "type": "object",
+                  "required": [
+                    "copies"
                   ],
-                  "format": "uuid",
-                  "description": "Catalogue surrogate id; `None` for an uncatalogued (index-only) row."
-                },
-                "mime_type": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "name": {
-                  "type": "string"
-                },
-                "size_bytes": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "format": "int64"
+                  "properties": {
+                    "copies": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DataCopy"
+                      },
+                      "description": "Physical copies (from `file_inventory`, joined by `content_hash`)."
+                    }
+                  }
                 }
-              }
+              ],
+              "description": "A unified Data-browser row: the full catalogue entry (so the browser can\nrender the same rich artifact card, lineage/provenance/download, schema and\nmetadata the catalogue page did) PLUS its physical copies. The bridge\n`content_hash` is surfaced navigably here — the whole point of consolidating\nthe catalogue + inventory split worlds into one surface."
             }
           },
           "page": {
@@ -24655,6 +24581,37 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UncataloguedFile": {
+        "type": "object",
+        "description": "An index-only file: observed physically on a server but with no logical\ncatalogue identity yet (no matching `catalogue_entries` row). Surfaced so the\nunified browser shows what's been crawled but not registered/hashed.",
+        "required": [
+          "name",
+          "first_seen",
+          "copies"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "copies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataCopy"
+            },
+            "description": "The physical copy this file was observed as."
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

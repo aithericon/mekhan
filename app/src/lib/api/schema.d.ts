@@ -5526,7 +5526,7 @@ export interface components {
          */
         DataEntriesResponse: components["schemas"]["Paginated_DataEntry"] & {
             /** @description Index-only files with no logical catalogue identity yet (capped peek). */
-            uncatalogued: components["schemas"]["DataEntry"][];
+            uncatalogued: components["schemas"]["UncataloguedFile"][];
             /**
              * Format: int64
              * @description Total number of uncatalogued physical copies (not just the peek).
@@ -5534,28 +5534,15 @@ export interface components {
             uncatalogued_count: number;
         };
         /**
-         * @description A unified Data-browser row: the logical entry (catalogued content) plus its
-         *     physical copies. The bridge `content_hash` is surfaced navigably here — the
-         *     whole point of consolidating the catalogue + inventory split worlds.
+         * @description A unified Data-browser row: the full catalogue entry (so the browser can
+         *     render the same rich artifact card, lineage/provenance/download, schema and
+         *     metadata the catalogue page did) PLUS its physical copies. The bridge
+         *     `content_hash` is surfaced navigably here — the whole point of consolidating
+         *     the catalogue + inventory split worlds into one surface.
          */
-        DataEntry: {
-            /** @description True when backed by a `catalogue_entries` row (logical identity exists). */
-            catalogued: boolean;
-            category: string;
-            content_hash?: string | null;
+        DataEntry: components["schemas"]["CatalogueEntry"] & {
             /** @description Physical copies (from `file_inventory`, joined by `content_hash`). */
             copies: components["schemas"]["DataCopy"][];
-            /** Format: date-time */
-            created_at: string;
-            /**
-             * Format: uuid
-             * @description Catalogue surrogate id; `None` for an uncatalogued (index-only) row.
-             */
-            entry_id?: string | null;
-            mime_type?: string | null;
-            name: string;
-            /** Format: int64 */
-            size_bytes?: number | null;
         };
         DeleteConfig: {
             ignore_missing?: boolean;
@@ -8044,25 +8031,10 @@ export interface components {
         Paginated_DataEntry: {
             has_next: boolean;
             has_previous: boolean;
-            items: {
-                /** @description True when backed by a `catalogue_entries` row (logical identity exists). */
-                catalogued: boolean;
-                category: string;
-                content_hash?: string | null;
+            items: (components["schemas"]["CatalogueEntry"] & {
                 /** @description Physical copies (from `file_inventory`, joined by `content_hash`). */
                 copies: components["schemas"]["DataCopy"][];
-                /** Format: date-time */
-                created_at: string;
-                /**
-                 * Format: uuid
-                 * @description Catalogue surrogate id; `None` for an uncatalogued (index-only) row.
-                 */
-                entry_id?: string | null;
-                mime_type?: string | null;
-                name: string;
-                /** Format: int64 */
-                size_bytes?: number | null;
-            }[];
+            })[];
             /** Format: int64 */
             page: number;
             /** Format: int64 */
@@ -10268,6 +10240,19 @@ export interface components {
             scopes: {
                 [key: string]: components["schemas"]["ScopeEntryDto"][];
             };
+        };
+        /**
+         * @description An index-only file: observed physically on a server but with no logical
+         *     catalogue identity yet (no matching `catalogue_entries` row). Surfaced so the
+         *     unified browser shows what's been crawled but not registered/hashed.
+         */
+        UncataloguedFile: {
+            content_hash?: string | null;
+            /** @description The physical copy this file was observed as. */
+            copies: components["schemas"]["DataCopy"][];
+            /** Format: date-time */
+            first_seen: string;
+            name: string;
         };
         /**
          * @description An inventory `file_server_id` string observed in `file_inventory` that has

@@ -22,6 +22,9 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Link2Off from '@lucide/svelte/icons/link-2-off';
 
+	// When set (a server link was clicked in Entries/Copies), highlight that row.
+	let { focusKey }: { focusKey?: string | null } = $props();
+
 	let servers = $state<FileServerView[]>([]);
 	let unregistered = $state<UnregisteredServer[]>([]);
 	let loading = $state(true);
@@ -167,7 +170,10 @@
 		<div class="space-y-1.5">
 			{#each servers as s (s.key)}
 				{@const Icon = kindIcon(s.kind)}
-				<div class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3" data-testid="server-row">
+				<div
+					class="flex items-center gap-3 rounded-lg border bg-card px-4 py-3 transition-colors {focusKey === s.key ? 'border-primary ring-1 ring-primary/30' : 'border-border'}"
+					data-testid="server-row"
+				>
 					<Icon class="size-5 shrink-0 text-muted-foreground" />
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center gap-2">
@@ -208,7 +214,10 @@
 			<p class="mb-2 text-sm text-muted-foreground">Server names seen in inventory with no entity yet — adopt to manage and crawl them.</p>
 			<div class="space-y-1.5">
 				{#each unregistered as u (u.key)}
-					<div class="flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-2.5" data-testid="server-unregistered">
+					<div
+						class="flex items-center gap-3 rounded-lg border border-dashed px-4 py-2.5 {focusKey === u.key ? 'border-primary ring-1 ring-primary/30' : 'border-border'}"
+						data-testid="server-unregistered"
+					>
 						<Server class="size-4 shrink-0 text-muted-foreground/60" />
 						<span class="min-w-0 flex-1 truncate font-mono text-sm text-foreground">{u.key}</span>
 						<span class="shrink-0 text-sm tabular-nums text-muted-foreground">{u.file_count.toLocaleString()} files · {fmtSize(u.total_size_bytes)}</span>

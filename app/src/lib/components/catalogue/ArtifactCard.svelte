@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { catalogueDownloadUrl, type CatalogueEntry } from '$lib/api/client';
+	import type { DataCopy } from '$lib/api/data';
 	import { Badge } from '$lib/components/ui/badge';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -7,6 +8,9 @@
 	import Hash from '@lucide/svelte/icons/hash';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Workflow from '@lucide/svelte/icons/workflow';
+	import Server from '@lucide/svelte/icons/server';
+	import Star from '@lucide/svelte/icons/star';
+	import Layers from '@lucide/svelte/icons/layers';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
@@ -14,17 +18,34 @@
 		entry,
 		expanded = false,
 		highlighted = false,
+		copies = [],
 		onToggle,
 		onSchemaClick,
-		onNetClick
+		onNetClick,
+		onViewServer
 	}: {
 		entry: CatalogueEntry;
 		expanded?: boolean;
 		highlighted?: boolean;
+		/** Physical copies of this entry's content (unified Data browser). */
+		copies?: DataCopy[];
 		onToggle?: () => void;
 		onSchemaClick?: (digest: string) => void;
 		onNetClick?: (net: string) => void;
+		/** Jump to a file server (Servers tab) by its inventory key. */
+		onViewServer?: (key: string) => void;
 	} = $props();
+
+	const statusColors: Record<string, string> = {
+		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+		verified: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+		registered: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+		copied: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
+		deleted: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+		mismatch: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+	};
+	const copyStatusColor = (s: string) =>
+		statusColors[s] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
 
 	const categoryColors: Record<string, string> = {
 		model: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
@@ -67,7 +88,8 @@
 	const hasDetails = $derived(
 		(columns && columns.length > 0) ||
 		Object.keys(um).length > 0 ||
-		!!schema || !!checksum || !!contentHash || !!entry.entry_id
+		!!schema || !!checksum || !!contentHash || !!entry.entry_id ||
+		copies.length > 0
 	);
 </script>
 
@@ -101,6 +123,18 @@
 						</Tooltip.Trigger>
 						<Tooltip.Content>
 							<span class="font-mono text-sm">Content hash (SHA-256): {contentHash}</span>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+				{#if copies.length > 0}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Badge variant="outline" class="gap-1 text-sm text-muted-foreground">
+								<Layers class="size-3" />{copies.length}
+							</Badge>
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							{copies.length} physical {copies.length === 1 ? 'copy' : 'copies'} across file servers
 						</Tooltip.Content>
 					</Tooltip.Root>
 				{/if}
@@ -205,6 +239,48 @@
 							<span class="font-mono break-all">{entry.entry_id}</span>
 						</div>
 					{/if}
+				</div>
+			{/if}
+
+			<!-- Physical copies (unified Data browser: where the bytes live) -->
+			{#if copies.length > 0}
+				<div>
+					<p class="mb-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+						Physical copies ({copies.length})
+					</p>
+					<div class="space-y-1">
+						{#each copies as c}
+							<div class="flex items-center gap-2 text-sm">
+								{#if c.is_canonical}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<Star class="size-3 shrink-0 fill-amber-400 text-amber-400" />
+										</Tooltip.Trigger>
+										<Tooltip.Content>Canonical copy</Tooltip.Content>
+									</Tooltip.Root>
+								{/if}
+								{#if onViewServer}
+									<button
+										class="inline-flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+										onclick={() => onViewServer?.(c.file_server_id)}
+										title="View server {c.file_server_id}"
+									>
+										<Server class="size-3" />
+										<span class="font-medium">{c.server_display_name ?? c.file_server_id}</span>
+										{#if c.server_kind}<Badge variant="outline" class="px-1 py-0 text-[10px]">{c.server_kind}</Badge>{/if}
+									</button>
+								{:else}
+									<span class="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
+										<Server class="size-3" />
+										<span class="font-medium">{c.server_display_name ?? c.file_server_id}</span>
+										{#if c.server_kind}<Badge variant="outline" class="px-1 py-0 text-[10px]">{c.server_kind}</Badge>{/if}
+									</span>
+								{/if}
+								<span class="truncate font-mono text-muted-foreground" title={c.path}>{c.path}</span>
+								<Badge class={copyStatusColor(c.status)} variant="secondary">{c.status}</Badge>
+							</div>
+						{/each}
+					</div>
 				</div>
 			{/if}
 

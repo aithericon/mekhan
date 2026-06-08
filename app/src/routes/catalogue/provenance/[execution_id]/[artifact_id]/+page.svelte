@@ -58,7 +58,7 @@
 <div class="flex h-screen flex-col">
 	<!-- Header -->
 	<div class="flex items-center gap-3 border-b px-4 py-3">
-		<Button variant="ghost" size="icon" href="/catalogue">
+		<Button variant="ghost" size="icon" href="/data">
 			<ArrowLeft class="h-4 w-4" />
 		</Button>
 

@@ -108,11 +108,11 @@
 
 		<!-- Back link -->
 		<a
-			href="/catalogue"
+			href="/data"
 			class="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
 		>
 			<ArrowLeft class="size-4" />
-			Back to catalogue
+			Back to Data
 		</a>
 
 		<!-- Header -->

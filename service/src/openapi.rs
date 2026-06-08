@@ -319,6 +319,7 @@ use utoipa::OpenApi;
             // Unified Data browser read-model.
             crate::data::model::DataCopy,
             crate::data::model::DataEntry,
+            crate::data::model::UncataloguedFile,
             crate::data::model::DataEntriesResponse,
         ),
     ),

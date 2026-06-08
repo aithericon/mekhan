@@ -116,13 +116,14 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
         .expect("data list");
 
     // The catalogued entry carries its physical copy with the server resolved.
+    // `entry` is the flattened catalogue row + copies.
     let entry = resp
         .page
         .items
         .iter()
-        .find(|e| e.content_hash.as_deref() == Some(hash.as_str()))
+        .find(|e| e.entry.content_hash.as_deref() == Some(hash.as_str()))
         .expect("catalogued entry present");
-    assert!(entry.catalogued);
+    assert!(entry.entry.entry_id.is_some(), "logical identity exists");
     assert_eq!(entry.copies.len(), 1, "one physical copy");
     let copy = &entry.copies[0];
     assert_eq!(copy.file_server_id, server);
@@ -134,7 +135,7 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
     assert!(
         resp.uncatalogued
             .iter()
-            .any(|u| !u.catalogued && u.copies.iter().any(|c| c.file_server_id == unreg)),
+            .any(|u| u.copies.iter().any(|c| c.file_server_id == unreg)),
         "uncatalogued peek includes the indexed file"
     );
     assert!(

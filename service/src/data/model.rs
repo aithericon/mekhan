@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::catalogue::model::CatalogueEntry;
 use crate::query::pagination::Paginated;
 
 /// One physical copy of an entry's content, with its file server resolved.
@@ -17,22 +18,30 @@ pub struct DataCopy {
     pub server_kind: Option<String>,
 }
 
-/// A unified Data-browser row: the logical entry (catalogued content) plus its
-/// physical copies. The bridge `content_hash` is surfaced navigably here — the
-/// whole point of consolidating the catalogue + inventory split worlds.
+/// A unified Data-browser row: the full catalogue entry (so the browser can
+/// render the same rich artifact card, lineage/provenance/download, schema and
+/// metadata the catalogue page did) PLUS its physical copies. The bridge
+/// `content_hash` is surfaced navigably here — the whole point of consolidating
+/// the catalogue + inventory split worlds into one surface.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct DataEntry {
-    /// Catalogue surrogate id; `None` for an uncatalogued (index-only) row.
-    pub entry_id: Option<uuid::Uuid>,
-    pub content_hash: Option<String>,
-    pub name: String,
-    pub category: String,
-    pub mime_type: Option<String>,
-    pub size_bytes: Option<i64>,
-    pub created_at: DateTime<Utc>,
-    /// True when backed by a `catalogue_entries` row (logical identity exists).
-    pub catalogued: bool,
+    /// The logical catalogue entry, flattened so the frontend `DataEntry` is a
+    /// structural superset of `CatalogueEntry` (reuses `ArtifactCard` as-is).
+    #[serde(flatten)]
+    pub entry: CatalogueEntry,
     /// Physical copies (from `file_inventory`, joined by `content_hash`).
+    pub copies: Vec<DataCopy>,
+}
+
+/// An index-only file: observed physically on a server but with no logical
+/// catalogue identity yet (no matching `catalogue_entries` row). Surfaced so the
+/// unified browser shows what's been crawled but not registered/hashed.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UncataloguedFile {
+    pub name: String,
+    pub content_hash: Option<String>,
+    pub first_seen: DateTime<Utc>,
+    /// The physical copy this file was observed as.
     pub copies: Vec<DataCopy>,
 }
 
@@ -44,7 +53,7 @@ pub struct DataEntriesResponse {
     #[serde(flatten)]
     pub page: Paginated<DataEntry>,
     /// Index-only files with no logical catalogue identity yet (capped peek).
-    pub uncatalogued: Vec<DataEntry>,
+    pub uncatalogued: Vec<UncataloguedFile>,
     /// Total number of uncatalogued physical copies (not just the peek).
     pub uncatalogued_count: i64,
 }
