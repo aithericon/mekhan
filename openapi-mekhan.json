@@ -4376,7 +4376,7 @@
         "tags": [
           "models"
         ],
-        "summary": "`PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a\ncurated model. The policy used to be its own `model_policy` resource; it now\nlives as nullable columns on the model's `model_states` row. `mode` must be one\nof `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live\n`node_pool` resource in the workspace (else 400). 404 if the model isn't curated\nyet. Returns the projected view. Session/human authed, workspace-scoped.",
+        "summary": "`PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a\ncurated model. The policy used to be its own `model_policy` resource; it now\nlives as nullable columns on the model's `model_states` row. `mode` must be one\nof `manual` | `scale_to_zero` | `keep_warm`. 404 if the model isn't curated yet.\nReturns the projected view. Session/human authed, workspace-scoped.",
         "operationId": "set_model_policy",
         "parameters": [
           {
@@ -4411,7 +4411,7 @@
             }
           },
           "400": {
-            "description": "Invalid mode or unknown node_pool",
+            "description": "Invalid mode",
             "content": {
               "application/json": {
                 "schema": {
@@ -4436,7 +4436,7 @@
         "tags": [
           "models"
         ],
-        "summary": "`DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy\n(NULL out the policy columns + `dedicated=FALSE`) AND drop the model's\nreconciliation row. 404 if the model isn't curated. Returns the projected view.\nSession/human authed, workspace-scoped.",
+        "summary": "`DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy\n(NULL out the policy columns) AND drop the model's reconciliation row. 404 if\nthe model isn't curated. Returns the projected view. Session/human authed,\nworkspace-scoped.",
         "operationId": "clear_model_policy",
         "parameters": [
           {
@@ -4684,30 +4684,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/node-replicas": {
-      "get": {
-        "tags": [
-          "models"
-        ],
-        "summary": "`GET /api/v1/node-replicas` — list every node-pool replica row in the workspace.",
-        "operationId": "list_node_replicas",
-        "responses": {
-          "200": {
-            "description": "Per-pool node-replica reconciliation rows",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/NodeReplicaRow"
-                  }
                 }
               }
             }
@@ -11675,10 +11651,9 @@
       },
       "AutoscalePolicyInput": {
         "type": "object",
-        "description": "`PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy\nthe operator sets on a curated model. `mode` + `node_pool` are required; the\nrest are optional knobs.",
+        "description": "`PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy\nthe operator sets on a curated model. `mode` is required; the rest are optional\nknobs.",
         "required": [
-          "mode",
-          "node_pool"
+          "mode"
         ],
         "properties": {
           "cooldown_secs": {
@@ -11690,20 +11665,13 @@
             "description": "Cooldown between actuations (seconds).",
             "minimum": 0
           },
-          "dedicated": {
-            "type": [
-              "boolean",
-              "null"
-            ],
-            "description": "Dedicated single-model fallback flag."
-          },
           "desired_replicas": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int32",
-            "description": "Demand-slot ceiling / manual seed.",
+            "description": "Target number of runners to spread this model across / manual seed.",
             "minimum": 0
           },
           "idle_evict": {
@@ -11717,16 +11685,12 @@
             "type": "string",
             "description": "One of `manual` | `scale_to_zero` | `keep_warm`."
           },
-          "node_pool": {
-            "type": "string",
-            "description": "Alias of the `node_pool` resource this model packs onto (required, must\nresolve to a live `node_pool` resource)."
-          },
           "residency_zone": {
             "type": [
               "string",
               "null"
             ],
-            "description": "HARD residency zone requirement (GDPR §11)."
+            "description": "HARD residency zone requirement (GDPR §11) — matched against each runner's\nadvertised zone."
           },
           "scale_down_threshold": {
             "type": [
@@ -11751,7 +11715,6 @@
         "description": "The folded-in per-model autoscale policy, projected onto [`ModelSetView`]. The\npolicy used to be its own `model_policy` resource; it now lives as nullable\ncolumns on `model_states` (the config half) joined with the per-model\n`model_replicas` reconciliation row (the live half — `desired_count` / `status`\n/ `last_error`).",
         "required": [
           "mode",
-          "dedicated",
           "idle_evict"
         ],
         "properties": {
@@ -11762,10 +11725,6 @@
             ],
             "format": "int64",
             "description": "Cooldown between actuations (seconds)."
-          },
-          "dedicated": {
-            "type": "boolean",
-            "description": "When `true`, the model gets its own single-model dedicated job."
           },
           "desired_count": {
             "type": [
@@ -11781,7 +11740,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Demand-slot ceiling / manual seed."
+            "description": "Target number of runners to spread across / manual seed."
           },
           "idle_evict": {
             "type": "boolean",
@@ -11797,13 +11756,6 @@
           "mode": {
             "type": "string",
             "description": "One of `manual` | `scale_to_zero` | `keep_warm`."
-          },
-          "node_pool": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Alias of the `node_pool` resource this model packs onto."
           },
           "residency_zone": {
             "type": [
@@ -18017,12 +17969,11 @@
       },
       "ModelReplicaRow": {
         "type": "object",
-        "description": "One `model_replicas` row — the durable reconciliation target + Control-Plane\nread. `desired_count`/`observed_count` are stored `INT`; the loop works in\n`u32` and converts at the edges.",
+        "description": "One `model_replicas` row — the durable placement reconciliation/status row +\nControl-Plane read. `desired_count`/`observed_count` are stored `INT`; the\nplacement controller works in `u32` and converts at the edges.",
         "required": [
           "id",
           "workspace_id",
           "model_id",
-          "datacenter_resource_id",
           "desired_count",
           "observed_count",
           "status",
@@ -18034,15 +17985,10 @@
             "type": "string",
             "format": "date-time"
           },
-          "datacenter_resource_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "Resolved `datacenter` resource UUID (the policy carries an alias; the loop\nresolves it before the upsert)."
-          },
           "desired_count": {
             "type": "integer",
             "format": "int32",
-            "description": "Last desired COUNT the loop drove (or the scale endpoint's manual override)."
+            "description": "Target number of runners to spread across (the placement controller's\n`desired_replicas`, or the scale endpoint's manual override)."
           },
           "id": {
             "type": "string",
@@ -18068,14 +18014,7 @@
           "observed_count": {
             "type": "integer",
             "format": "int32",
-            "description": "Live count from the fleet roster (runners advertising `model_id`). NOT the\nstaging effect result — that only proves \"registered\", not \"serving\"."
-          },
-          "replica_slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Native job NAME registered on the cluster (Nomad service-job id). `None`\nuntil first actuation."
+            "description": "Live count from the fleet roster (runners advertising `model_id`)."
           },
           "residency_zone": {
             "type": [
@@ -18457,97 +18396,6 @@
             "type": "string",
             "format": "uuid",
             "description": "The runner (node) id."
-          }
-        }
-      },
-      "NodeReplicaRow": {
-        "type": "object",
-        "description": "One `node_replicas` row — Loop 1's durable reconciliation target + Control-Plane\nread. `desired_nodes`/`observed_nodes`/`observed_slots` are stored `INT`; the\nloop works in `u32` and converts at the edges.\n\n`observed_nodes` is the live head-count of present pool nodes; `observed_slots`\nis the C-weighted aggregate (`Σ present-node C`) from FleetLiveness — the\ncapacity Loop 1 scales against (DERIVED-B). Both are roster-driven; the outcome\nprojector NEVER writes them.",
-        "required": [
-          "id",
-          "workspace_id",
-          "pool_resource_id",
-          "datacenter_resource_id",
-          "desired_nodes",
-          "observed_nodes",
-          "observed_slots",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "datacenter_resource_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "Resolved `datacenter` resource UUID (the pool carries an alias; the loop\nresolves it before the upsert)."
-          },
-          "desired_nodes": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Last desired NODE count the loop drove."
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "last_actuated_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "Anchors the durable cooldown gate (survives a mekhan restart)."
-          },
-          "last_error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "node_slug": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Native job NAME registered on the cluster (Nomad service-job id for the\ngeneric engine fleet). `None` until first actuation."
-          },
-          "observed_nodes": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Live count of present pool nodes (head-count from FleetLiveness)."
-          },
-          "observed_slots": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Live C-weighted capacity (`Σ present-node C`) from FleetLiveness — the\naggregate Loop 1 scales against (DERIVED-B)."
-          },
-          "pool_resource_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The `node_pool` resource this row reconciles (UNIQUE — one row/pool)."
-          },
-          "residency_zone": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "HARD residency zone recorded for the Control-Plane read + audit (the SINGLE\nzone source — DERIVED-A)."
-          },
-          "status": {
-            "type": "string",
-            "description": "One of `status::*`."
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "workspace_id": {
-            "type": "string",
-            "format": "uuid"
           }
         }
       },

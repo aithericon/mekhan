@@ -189,12 +189,9 @@ pub struct ModelSetView {
 pub struct AutoscaleView {
     /// One of `manual` | `scale_to_zero` | `keep_warm`.
     pub mode: String,
-    /// Demand-slot ceiling / manual seed.
+    /// Target number of runners to spread across / manual seed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desired_replicas: Option<i32>,
-    /// Alias of the `node_pool` resource this model packs onto.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_pool: Option<String>,
     /// HARD residency zone requirement (GDPR §11).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub residency_zone: Option<String>,
@@ -207,8 +204,6 @@ pub struct AutoscaleView {
     /// Cooldown between actuations (seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cooldown_secs: Option<i64>,
-    /// When `true`, the model gets its own single-model dedicated job.
-    pub dedicated: bool,
     /// When `true`, the placement controller may idle-EVICT (vLLM `/sleep`) the
     /// resident base once demand drops to zero past the cooldown.
     pub idle_evict: bool,
@@ -225,19 +220,17 @@ pub struct AutoscaleView {
 }
 
 /// `PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy
-/// the operator sets on a curated model. `mode` + `node_pool` are required; the
-/// rest are optional knobs.
+/// the operator sets on a curated model. `mode` is required; the rest are optional
+/// knobs.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AutoscalePolicyInput {
     /// One of `manual` | `scale_to_zero` | `keep_warm`.
     pub mode: String,
-    /// Demand-slot ceiling / manual seed.
+    /// Target number of runners to spread this model across / manual seed.
     #[serde(default)]
     pub desired_replicas: Option<u32>,
-    /// Alias of the `node_pool` resource this model packs onto (required, must
-    /// resolve to a live `node_pool` resource).
-    pub node_pool: String,
-    /// HARD residency zone requirement (GDPR §11).
+    /// HARD residency zone requirement (GDPR §11) — matched against each runner's
+    /// advertised zone.
     #[serde(default)]
     pub residency_zone: Option<String>,
     /// L2 reactive scale-up demand threshold.
@@ -249,9 +242,6 @@ pub struct AutoscalePolicyInput {
     /// Cooldown between actuations (seconds).
     #[serde(default)]
     pub cooldown_secs: Option<u64>,
-    /// Dedicated single-model fallback flag.
-    #[serde(default)]
-    pub dedicated: Option<bool>,
     /// Idle-eviction opt-in: allow the placement controller to sleep this model's
     /// resident base on zero demand past the cooldown. Defaults to `false`.
     #[serde(default)]
@@ -276,9 +266,7 @@ pub struct ModelStateRow {
     pub scale_up_threshold: Option<f64>,
     pub scale_down_threshold: Option<f64>,
     pub cooldown_secs: Option<i64>,
-    pub node_pool: Option<String>,
     pub residency_zone: Option<String>,
-    pub dedicated: bool,
     pub idle_evict: bool,
 }
 
@@ -298,12 +286,10 @@ impl ModelStateRow {
         let autoscale = self.autoscale_mode.map(|mode| AutoscaleView {
             mode,
             desired_replicas: self.desired_replicas,
-            node_pool: self.node_pool,
             residency_zone: self.residency_zone,
             scale_up_threshold: self.scale_up_threshold,
             scale_down_threshold: self.scale_down_threshold,
             cooldown_secs: self.cooldown_secs,
-            dedicated: self.dedicated,
             idle_evict: self.idle_evict,
             // The reconciliation row (when present) owns the live count + status;
             // with no row yet, fall back to the policy's `desired_replicas`.
@@ -403,9 +389,7 @@ mod tests {
             scale_up_threshold: None,
             scale_down_threshold: None,
             cooldown_secs: None,
-            node_pool: None,
             residency_zone: None,
-            dedicated: false,
             idle_evict: false,
         };
         let view = row.clone().into_view(1, None);

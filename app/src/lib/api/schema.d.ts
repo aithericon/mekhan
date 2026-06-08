@@ -1603,17 +1603,16 @@ export interface paths {
          * `PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a
          *     curated model. The policy used to be its own `model_policy` resource; it now
          *     lives as nullable columns on the model's `model_states` row. `mode` must be one
-         *     of `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live
-         *     `node_pool` resource in the workspace (else 400). 404 if the model isn't curated
-         *     yet. Returns the projected view. Session/human authed, workspace-scoped.
+         *     of `manual` | `scale_to_zero` | `keep_warm`. 404 if the model isn't curated yet.
+         *     Returns the projected view. Session/human authed, workspace-scoped.
          */
         put: operations["set_model_policy"];
         post?: never;
         /**
          * `DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy
-         *     (NULL out the policy columns + `dedicated=FALSE`) AND drop the model's
-         *     reconciliation row. 404 if the model isn't curated. Returns the projected view.
-         *     Session/human authed, workspace-scoped.
+         *     (NULL out the policy columns) AND drop the model's reconciliation row. 404 if
+         *     the model isn't curated. Returns the projected view. Session/human authed,
+         *     workspace-scoped.
          */
         delete: operations["clear_model_policy"];
         options?: never;
@@ -1700,23 +1699,6 @@ export interface paths {
          *     projected view (a synthesized `draining` view when no row exists).
          */
         post: operations["unload_model"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/node-replicas": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** `GET /api/v1/node-replicas` — list every node-pool replica row in the workspace. */
-        get: operations["list_node_replicas"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4234,8 +4216,8 @@ export interface components {
         };
         /**
          * @description `PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy
-         *     the operator sets on a curated model. `mode` + `node_pool` are required; the
-         *     rest are optional knobs.
+         *     the operator sets on a curated model. `mode` is required; the rest are optional
+         *     knobs.
          */
         AutoscalePolicyInput: {
             /**
@@ -4243,11 +4225,9 @@ export interface components {
              * @description Cooldown between actuations (seconds).
              */
             cooldown_secs?: number | null;
-            /** @description Dedicated single-model fallback flag. */
-            dedicated?: boolean | null;
             /**
              * Format: int32
-             * @description Demand-slot ceiling / manual seed.
+             * @description Target number of runners to spread this model across / manual seed.
              */
             desired_replicas?: number | null;
             /**
@@ -4258,11 +4238,9 @@ export interface components {
             /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
             mode: string;
             /**
-             * @description Alias of the `node_pool` resource this model packs onto (required, must
-             *     resolve to a live `node_pool` resource).
+             * @description HARD residency zone requirement (GDPR §11) — matched against each runner's
+             *     advertised zone.
              */
-            node_pool: string;
-            /** @description HARD residency zone requirement (GDPR §11). */
             residency_zone?: string | null;
             /**
              * Format: double
@@ -4288,8 +4266,6 @@ export interface components {
              * @description Cooldown between actuations (seconds).
              */
             cooldown_secs?: number | null;
-            /** @description When `true`, the model gets its own single-model dedicated job. */
-            dedicated: boolean;
             /**
              * Format: int32
              * @description The reconciliation row's last desired COUNT (falls back to the policy's
@@ -4298,7 +4274,7 @@ export interface components {
             desired_count?: number | null;
             /**
              * Format: int32
-             * @description Demand-slot ceiling / manual seed.
+             * @description Target number of runners to spread across / manual seed.
              */
             desired_replicas?: number | null;
             /**
@@ -4310,8 +4286,6 @@ export interface components {
             last_error?: string | null;
             /** @description One of `manual` | `scale_to_zero` | `keep_warm`. */
             mode: string;
-            /** @description Alias of the `node_pool` resource this model packs onto. */
-            node_pool?: string | null;
             /** @description HARD residency zone requirement (GDPR §11). */
             residency_zone?: string | null;
             /**
@@ -7178,22 +7152,17 @@ export interface components {
             temperature?: number | null;
         };
         /**
-         * @description One `model_replicas` row — the durable reconciliation target + Control-Plane
-         *     read. `desired_count`/`observed_count` are stored `INT`; the loop works in
-         *     `u32` and converts at the edges.
+         * @description One `model_replicas` row — the durable placement reconciliation/status row +
+         *     Control-Plane read. `desired_count`/`observed_count` are stored `INT`; the
+         *     placement controller works in `u32` and converts at the edges.
          */
         ModelReplicaRow: {
             /** Format: date-time */
             created_at: string;
             /**
-             * Format: uuid
-             * @description Resolved `datacenter` resource UUID (the policy carries an alias; the loop
-             *     resolves it before the upsert).
-             */
-            datacenter_resource_id: string;
-            /**
              * Format: int32
-             * @description Last desired COUNT the loop drove (or the scale endpoint's manual override).
+             * @description Target number of runners to spread across (the placement controller's
+             *     `desired_replicas`, or the scale endpoint's manual override).
              */
             desired_count: number;
             /** Format: uuid */
@@ -7207,15 +7176,9 @@ export interface components {
             model_id: string;
             /**
              * Format: int32
-             * @description Live count from the fleet roster (runners advertising `model_id`). NOT the
-             *     staging effect result — that only proves "registered", not "serving".
+             * @description Live count from the fleet roster (runners advertising `model_id`).
              */
             observed_count: number;
-            /**
-             * @description Native job NAME registered on the cluster (Nomad service-job id). `None`
-             *     until first actuation.
-             */
-            replica_slug?: string | null;
             /** @description HARD residency zone recorded for the Control-Plane read + audit. */
             residency_zone?: string | null;
             /** @description One of `status::*`. */
@@ -7419,71 +7382,6 @@ export interface components {
              * @description The runner (node) id.
              */
             runner_id: string;
-        };
-        /**
-         * @description One `node_replicas` row — Loop 1's durable reconciliation target + Control-Plane
-         *     read. `desired_nodes`/`observed_nodes`/`observed_slots` are stored `INT`; the
-         *     loop works in `u32` and converts at the edges.
-         *
-         *     `observed_nodes` is the live head-count of present pool nodes; `observed_slots`
-         *     is the C-weighted aggregate (`Σ present-node C`) from FleetLiveness — the
-         *     capacity Loop 1 scales against (DERIVED-B). Both are roster-driven; the outcome
-         *     projector NEVER writes them.
-         */
-        NodeReplicaRow: {
-            /** Format: date-time */
-            created_at: string;
-            /**
-             * Format: uuid
-             * @description Resolved `datacenter` resource UUID (the pool carries an alias; the loop
-             *     resolves it before the upsert).
-             */
-            datacenter_resource_id: string;
-            /**
-             * Format: int32
-             * @description Last desired NODE count the loop drove.
-             */
-            desired_nodes: number;
-            /** Format: uuid */
-            id: string;
-            /**
-             * Format: date-time
-             * @description Anchors the durable cooldown gate (survives a mekhan restart).
-             */
-            last_actuated_at?: string | null;
-            last_error?: string | null;
-            /**
-             * @description Native job NAME registered on the cluster (Nomad service-job id for the
-             *     generic engine fleet). `None` until first actuation.
-             */
-            node_slug?: string | null;
-            /**
-             * Format: int32
-             * @description Live count of present pool nodes (head-count from FleetLiveness).
-             */
-            observed_nodes: number;
-            /**
-             * Format: int32
-             * @description Live C-weighted capacity (`Σ present-node C`) from FleetLiveness — the
-             *     aggregate Loop 1 scales against (DERIVED-B).
-             */
-            observed_slots: number;
-            /**
-             * Format: uuid
-             * @description The `node_pool` resource this row reconciles (UNIQUE — one row/pool).
-             */
-            pool_resource_id: string;
-            /**
-             * @description HARD residency zone recorded for the Control-Plane read + audit (the SINGLE
-             *     zone source — DERIVED-A).
-             */
-            residency_zone?: string | null;
-            /** @description One of `status::*`. */
-            status: string;
-            /** Format: date-time */
-            updated_at: string;
-            /** Format: uuid */
-            workspace_id: string;
         };
         /** @description A single crawl-observed item: metadata only, no hash. */
         ObservedItem: {
@@ -14294,7 +14192,7 @@ export interface operations {
                     "application/json": components["schemas"]["ModelSetView"];
                 };
             };
-            /** @description Invalid mode or unknown node_pool */
+            /** @description Invalid mode */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -14500,26 +14398,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    list_node_replicas: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Per-pool node-replica reconciliation rows */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NodeReplicaRow"][];
                 };
             };
         };

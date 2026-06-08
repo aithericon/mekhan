@@ -187,6 +187,37 @@ pub(crate) async fn serving_runner_pulled(
         .collect()
 }
 
+/// The full present-runner catalogs in a workspace — `(runner_id, catalog)` for
+/// every PRESENT runner with a parseable interface row. The placement controller
+/// reads this single scan to derive everything it needs per runner at once: the
+/// residency zone (`catalog.residency_zone`), the resident base/LoRA engines
+/// (`catalog.models`), and the pulled-to-disk set (`catalog.pulled`) — avoiding
+/// three separate `presence ∩ catalog` joins. Same fail-soft posture as
+/// [`serving_runner_inventory`]: a DB error yields an empty list, an unparseable
+/// catalog row is dropped.
+pub(crate) async fn serving_runner_catalogs(
+    db: &sqlx::PgPool,
+    runner_presence: &crate::runners_presence::RunnerPresence,
+    workspace_id: Uuid,
+) -> Vec<(Uuid, RunnerInterfaceCatalog)> {
+    let present: HashSet<Uuid> = runner_presence
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| s.present)
+        .map(|s| s.runner_id)
+        .collect();
+
+    let catalogs: Vec<(Uuid, serde_json::Value)> =
+        sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_all(db)
+            .await
+            .unwrap_or_default();
+
+    present_catalogs(&present, catalogs)
+}
+
 /// The PUBLIC, all-workspace model-serving inventory (docs/29 GAP A) — the
 /// inference router's live-replica source. Unlike [`serving_runner_inventory`]
 /// (workspace-scoped, returns per-node `ModelEntry`s for the operator views),
@@ -776,9 +807,8 @@ async fn project_model(
 /// `PUT /api/v1/models/{model_id}/policy` — set the folded-in autoscale policy on a
 /// curated model. The policy used to be its own `model_policy` resource; it now
 /// lives as nullable columns on the model's `model_states` row. `mode` must be one
-/// of `manual` | `scale_to_zero` | `keep_warm`; `node_pool` must resolve to a live
-/// `node_pool` resource in the workspace (else 400). 404 if the model isn't curated
-/// yet. Returns the projected view. Session/human authed, workspace-scoped.
+/// of `manual` | `scale_to_zero` | `keep_warm`. 404 if the model isn't curated yet.
+/// Returns the projected view. Session/human authed, workspace-scoped.
 #[utoipa::path(
     put,
     path = "/api/v1/models/{model_id}/policy",
@@ -786,7 +816,7 @@ async fn project_model(
     request_body = AutoscalePolicyInput,
     responses(
         (status = 200, description = "Policy set; the projected view", body = ModelSetView),
-        (status = 400, description = "Invalid mode or unknown node_pool", body = ErrorResponse),
+        (status = 400, description = "Invalid mode", body = ErrorResponse),
         (status = 404, description = "No such model in this workspace", body = ErrorResponse),
     ),
     tag = "models",
@@ -805,33 +835,12 @@ pub async fn set_model_policy(
             req.mode
         )));
     }
-    if req.node_pool.trim().is_empty() {
-        return Err(ApiError::bad_request("node_pool must not be empty"));
-    }
-
-    // The referenced node_pool must exist (resolve like resolve_pool_net_id).
-    let pool_exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM resources \
-         WHERE resource_type = 'node_pool' AND workspace_id = $1 AND path = $2 \
-           AND deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&req.node_pool)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("node_pool lookup: {e}")))?;
-    if pool_exists.is_none() {
-        return Err(ApiError::bad_request(format!(
-            "node_pool '{}' not found",
-            req.node_pool
-        )));
-    }
 
     let res = sqlx::query(
         "UPDATE model_states SET \
             autoscale_mode = $3, desired_replicas = $4, scale_up_threshold = $5, \
-            scale_down_threshold = $6, cooldown_secs = $7, node_pool = $8, \
-            residency_zone = $9, dedicated = $10, idle_evict = $11 \
+            scale_down_threshold = $6, cooldown_secs = $7, \
+            residency_zone = $8, idle_evict = $9 \
          WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)
@@ -841,9 +850,7 @@ pub async fn set_model_policy(
     .bind(req.scale_up_threshold)
     .bind(req.scale_down_threshold)
     .bind(req.cooldown_secs.map(|v| v as i64))
-    .bind(&req.node_pool)
     .bind(&req.residency_zone)
-    .bind(req.dedicated.unwrap_or(false))
     .bind(req.idle_evict.unwrap_or(false))
     .execute(&state.db)
     .await
@@ -857,9 +864,9 @@ pub async fn set_model_policy(
 }
 
 /// `DELETE /api/v1/models/{model_id}/policy` — clear the folded-in autoscale policy
-/// (NULL out the policy columns + `dedicated=FALSE`) AND drop the model's
-/// reconciliation row. 404 if the model isn't curated. Returns the projected view.
-/// Session/human authed, workspace-scoped.
+/// (NULL out the policy columns) AND drop the model's reconciliation row. 404 if
+/// the model isn't curated. Returns the projected view. Session/human authed,
+/// workspace-scoped.
 #[utoipa::path(
     delete,
     path = "/api/v1/models/{model_id}/policy",
@@ -880,8 +887,8 @@ pub async fn clear_model_policy(
     let res = sqlx::query(
         "UPDATE model_states SET \
             autoscale_mode = NULL, desired_replicas = NULL, scale_up_threshold = NULL, \
-            scale_down_threshold = NULL, cooldown_secs = NULL, node_pool = NULL, \
-            residency_zone = NULL, dedicated = FALSE, idle_evict = FALSE \
+            scale_down_threshold = NULL, cooldown_secs = NULL, \
+            residency_zone = NULL, idle_evict = FALSE \
          WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)

@@ -13,7 +13,6 @@
  */
 import createClient, { type Middleware } from 'openapi-fetch';
 import type { components, paths } from './schema';
-import { listResources, type ResourceSummary } from './resources';
 
 const sessionExpiryMiddleware: Middleware = {
 	async onResponse({ response, request }) {
@@ -59,10 +58,8 @@ export type FleetEnginesResponse = components['schemas']['FleetEnginesResponse']
 export type NodeInventory = components['schemas']['NodeInventory'];
 /** One base engine on a node: base id, C, headroom, loaded adapters. */
 export type NodeEngine = components['schemas']['NodeEngine'];
-/** Per-policy model-replica autoscaler row (docs/29 §6'). */
+/** Per-model placement reconciliation/status row. */
 export type ModelReplicaRow = components['schemas']['ModelReplicaRow'];
-/** Per-pool node-replica autoscaler row (docs/31 Loop 1). */
-export type NodeReplicaRow = components['schemas']['NodeReplicaRow'];
 /** The load/unload/pull command wire envelope. */
 export type ModelCommand = components['schemas']['ModelCommand'];
 
@@ -213,9 +210,8 @@ export async function listModelReplicas(): Promise<ModelReplicaRow[]> {
 
 /**
  * PUT /api/v1/models/{model_id}/policy — set the folded-in autoscale policy on a
- * curated model. `mode` + `node_pool` are required (the node_pool alias must
- * resolve to a live `node_pool` resource, else 400); 404 if the model isn't
- * curated. Returns the projected `ModelSetView` with `autoscale` populated.
+ * curated model. `mode` is required; 404 if the model isn't curated. Returns the
+ * projected `ModelSetView` with `autoscale` populated.
  */
 export async function setModelPolicy(
 	modelId: string,
@@ -257,21 +253,6 @@ export async function scaleModel(
 			body: { desired_replicas }
 		})
 	);
-}
-
-/**
- * The node pools the autoscaler packs models onto — `node_pool` resources. Thin
- * wrapper over `listResources` so the SET-tab policy editor can populate its
- * pool picker without reaching into the resources API directly.
- */
-export async function listNodePools(): Promise<ResourceSummary[]> {
-	const page = await listResources({ resource_type: 'node_pool', perPage: 100 });
-	return page.items;
-}
-
-/** GET /api/v1/node-replicas — per-pool node-replica autoscaler rows. */
-export async function listNodeReplicas(): Promise<NodeReplicaRow[]> {
-	return unwrap(await client.GET('/api/v1/node-replicas', {}));
 }
 
 /**

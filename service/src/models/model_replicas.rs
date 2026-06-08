@@ -1,19 +1,16 @@
-//! Model-pool P4 (docs/29 §6') — the replica-autoscaler row + DTOs + the PURE
+//! Model-pool — the placement reconciliation/status row + DTOs + the PURE
 //! decision math.
 //!
-//! The autoscaler control loop (`crate::autoscaler`) reconciles ONE
+//! The placement controller (`crate::autoscaler::placement`) upserts ONE
 //! [`ModelReplicaRow`] per (workspace, model): each tick it reads the per-model
-//! policy (folded onto `model_states`),
-//! computes a desired replica COUNT ([`compute_target`]) — gated by a
-//! durable cooldown ([`in_cooldown`]) anchored on `last_actuated_at` — observes
-//! the live count from the FLEET ROSTER (live runners advertising the model_id,
-//! NOT the staging effect result), actuates via a generated `model-replica-<id>`
-//! one-shot net, and upserts the row. The row is ALSO the Control-Plane read
-//! source (`GET /api/v1/models/replicas`).
+//! policy (folded onto `model_states`), places the model onto registered runners,
+//! and records the row `status`/`observed_count`. `last_actuated_at` anchors the
+//! durable idle-evict cooldown ([`in_cooldown`]). The row is ALSO the
+//! Control-Plane read source (`GET /api/v1/models/replicas`).
 //!
 //! The decision functions here are pure + table-driven-testable: no DB, no clock
-//! beyond the `now` passed in. The loop supplies `now = Utc::now()` and the
-//! manual override (the row's `desired_count`, written by the scale endpoint).
+//! beyond the `now` passed in. [`compute_target`] is the count math the scale
+//! endpoint + reactive modes use; the loop supplies `now = Utc::now()`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -36,24 +33,18 @@ pub mod status {
     pub const SLEEPING: &str = "sleeping";
 }
 
-/// One `model_replicas` row — the durable reconciliation target + Control-Plane
-/// read. `desired_count`/`observed_count` are stored `INT`; the loop works in
-/// `u32` and converts at the edges.
+/// One `model_replicas` row — the durable placement reconciliation/status row +
+/// Control-Plane read. `desired_count`/`observed_count` are stored `INT`; the
+/// placement controller works in `u32` and converts at the edges.
 #[derive(Clone, Debug, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct ModelReplicaRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
     pub model_id: String,
-    /// Resolved `datacenter` resource UUID (the policy carries an alias; the loop
-    /// resolves it before the upsert).
-    pub datacenter_resource_id: Uuid,
-    /// Native job NAME registered on the cluster (Nomad service-job id). `None`
-    /// until first actuation.
-    pub replica_slug: Option<String>,
-    /// Last desired COUNT the loop drove (or the scale endpoint's manual override).
+    /// Target number of runners to spread across (the placement controller's
+    /// `desired_replicas`, or the scale endpoint's manual override).
     pub desired_count: i32,
-    /// Live count from the fleet roster (runners advertising `model_id`). NOT the
-    /// staging effect result — that only proves "registered", not "serving".
+    /// Live count from the fleet roster (runners advertising `model_id`).
     pub observed_count: i32,
     /// One of `status::*`.
     pub status: String,
@@ -92,24 +83,20 @@ pub fn in_cooldown(
 }
 
 /// The PURE desired-COUNT decision, clamped to `[0, desired_replicas]` (the
-/// demand-slot ceiling — `desired_replicas == None` ⇒ no upper clamp).
+/// runner-count target — `desired_replicas == None` ⇒ no upper clamp).
 ///
-/// After the docs/31 OQ-1 reframe `model_policy` no longer owns `min_replicas` /
-/// `max_replicas` (engine provisioning moved onto the `node_pool`); the only
-/// per-model COUNT bound left is `desired_replicas`, reinterpreted as the
-/// demand-slot ceiling. This count drives the `dedicated=true` fallback (the
-/// single-model Nomad job) and the demand-bucket the placement controller raises.
+/// `desired_replicas` is the per-model runner-count target (how many registered
+/// runners the model should spread across); this helper maps a mode + optional
+/// demand signal to that count.
 ///
 /// - `manual` ⇒ the `manual_override` (the row's `desired_count`) if present,
-///   else the policy's `desired_replicas`. `None` only when neither is set (no
-///   decision yet — the loop no-ops).
+///   else the policy's `desired_replicas`. `None` only when neither is set.
 /// - `scale_to_zero` ⇒ needs `demand`: `Some` demand `> 0` scales to ≥1 (clamped),
 ///   `== 0` scales to 0. `demand == None` (L1 — router not wired) ⇒ `None` (no
 ///   decision; this mode is HARD-BLOCKED on the router `/metrics`).
 /// - `keep_warm` ⇒ floors at 0; with `demand` it lifts toward `ceil(demand)`.
-///   `demand == None` ⇒ `Some(0)` (no signal → no floor under the reframe; the
-///   `keep_warm` floor now belongs to the node pool's `min_nodes`).
-/// - unknown mode ⇒ `None` (no decision; the loop logs + skips).
+///   `demand == None` ⇒ `Some(0)`.
+/// - unknown mode ⇒ `None`.
 ///
 /// `demand` is `None` for all of L1. The thresholds on the policy are read only
 /// by the L2 reactive path (see [`crate::autoscaler::demand`]).
@@ -160,9 +147,7 @@ mod tests {
             scale_up_threshold: None,
             scale_down_threshold: None,
             cooldown_secs: None,
-            node_pool: "dev-pool".to_string(),
             base: None,
-            dedicated: None,
             idle_evict: None,
         }
     }

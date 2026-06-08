@@ -256,17 +256,15 @@ async fn main() -> anyhow::Result<()> {
     // handle stored in AppState.
     mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone());
 
-    // Model-pool replica autoscaler (P4, docs/29 §6'). A reconcile loop that
-    // drives the model-server replica COUNT per `model_policy` resource on its
-    // target datacenter (residency-aware, GDPR fail-closed), observing the live
-    // count off the fleet roster. Inference never touches the engine net or the
-    // presence net — the loop only provisions via the staging plane (a generated
-    // `model-replica-<row>` net firing `stage_template`).
+    // Model-pool placement autoscaler. A reconcile loop that decides WHICH models
+    // are loaded and how they are spread across the already-registered LLM runners,
+    // publishing NATS load/unload to enrolled runners (no node provisioning).
+    // Inference never touches the engine net or the presence net.
     //
     // `AUTOSCALER_DEMAND_URL` (the Router base) flips it from L1 manual mode to
     // L2 reactive: a `PrometheusDemandSource` scrapes the router `/metrics`
     // per-model demand so `scale_to_zero`/`keep_warm` policies react to load.
-    // Unset ⇒ L1 (`demand = None`, only `manual` policies actuate).
+    // Unset ⇒ L1 (`demand = None`, only `manual` policies place).
     let demand: Option<std::sync::Arc<dyn mekhan_service::autoscaler::demand::DemandSource>> =
         std::env::var("AUTOSCALER_DEMAND_URL")
             .ok()
@@ -280,32 +278,9 @@ async fn main() -> anyhow::Result<()> {
             });
     mekhan_service::autoscaler::spawn_autoscaler(
         db.clone(),
-        petri.clone(),
         mekhan_nats.clone(),
         runner_presence.clone(),
-        fleet.clone(),
         demand,
-    );
-
-    // Model-replicas projection (PETRI_GLOBAL → model_replicas). Folds each
-    // `model-replica-<row>` net's terminal `stage_template` effect into its row's
-    // status/replica_slug/last_error (observed_count stays roster-driven).
-    tokio::spawn(
-        mekhan_service::projections::model_replicas::start_model_replicas_ingest(
-            mekhan_nats.clone(),
-            db.clone(),
-        ),
-    );
-
-    // Node-replicas projection (PETRI_GLOBAL → node_replicas). Folds each
-    // `node-pool-<row>-<gen>` net's terminal `stage_template` effect into its row's
-    // status/node_slug/last_error (observed_nodes/observed_slots stay
-    // FleetLiveness-driven, docs/31 Loop 1).
-    tokio::spawn(
-        mekhan_service::projections::node_replicas::start_node_replicas_ingest(
-            mekhan_nats.clone(),
-            db.clone(),
-        ),
     );
 
     // Inference-metering audit ledger (INFERENCE_METERING → inference_request_log).

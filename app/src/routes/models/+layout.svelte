@@ -8,7 +8,6 @@
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import LibraryBig from '@lucide/svelte/icons/library-big';
 	import Boxes from '@lucide/svelte/icons/boxes';
-	import Network from '@lucide/svelte/icons/network';
 	import Activity from '@lucide/svelte/icons/activity';
 
 	let { children } = $props();
@@ -17,8 +16,9 @@
 
 	type TabDef = { href: string; match: string; label: string; icon: typeof Cpu; title: string };
 	// Ordered to follow the operator workflow: discover a model (Catalog) →
-	// curate + run it (Set) → give it capacity (Pools) → watch it live
-	// (Engines) → observe inference (Telemetry).
+	// curate + run it (Set) → watch it live (Engines) → observe inference
+	// (Telemetry). Autoscaling places models across registered runners — there
+	// is no node provisioning, so no separate capacity tab.
 	const tabs: TabDef[] = [
 		{
 			href: '/models/catalog',
@@ -33,13 +33,6 @@
 			label: 'Set',
 			icon: Boxes,
 			title: 'The operator-curated model set + lifecycle — load / unload / autoscale'
-		},
-		{
-			href: '/models/placement',
-			match: 'placement',
-			label: 'Pools',
-			icon: Network,
-			title: 'Node pools — engine capacity the autoscaler fills'
 		},
 		{
 			href: '/models/engines',

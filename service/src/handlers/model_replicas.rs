@@ -22,8 +22,6 @@ use axum::{
 };
 use uuid::Uuid;
 
-use aithericon_resources::types::NodePoolPolicy;
-
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::model_replicas::{status, ModelReplicaRow, ModelReplicaScaleRequest};
@@ -117,8 +115,8 @@ pub async fn scale_model_replica(
     // Source the policy from the model's `model_states` row (the policy is folded
     // onto the model SET, no longer its own resource). 404 if the model isn't
     // curated; 409 if it has no autoscale policy.
-    let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT autoscale_mode, node_pool, residency_zone FROM model_states \
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT autoscale_mode, residency_zone FROM model_states \
          WHERE workspace_id = $1 AND model_id = $2",
     )
     .bind(workspace_id)
@@ -127,48 +125,12 @@ pub async fn scale_model_replica(
     .await
     .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
-    let (autoscale_mode, node_pool, residency_zone) =
+    let (autoscale_mode, residency_zone) =
         row.ok_or_else(|| ApiError::not_found("no such model in this workspace"))?;
 
     if autoscale_mode.is_none() {
         return Err(ApiError::conflict("autoscaling not enabled for this model"));
     }
-    let node_pool = node_pool
-        .ok_or_else(|| ApiError::conflict("autoscaling not enabled for this model"))?;
-
-    // Resolve the referenced node_pool config, then its datacenter alias → uuid.
-    let pool_cfg: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT rv.public_config FROM resources r \
-         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 AND r.resource_type = 'node_pool' AND r.path = $2 \
-           AND r.deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&node_pool)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("node_pool lookup: {e}")))?;
-    let (pool_config,) = pool_cfg
-        .ok_or_else(|| ApiError::not_found(format!("node_pool alias '{node_pool}' not found")))?;
-    let pool: NodePoolPolicy = serde_json::from_value(pool_config)
-        .map_err(|e| ApiError::internal(format!("unparseable node_pool config: {e}")))?;
-
-    // Resolve the pool's datacenter alias → resource uuid.
-    let dc: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM resources WHERE workspace_id = $1 AND resource_type = 'datacenter' \
-           AND path = $2 AND deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&pool.datacenter_resource_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("datacenter alias lookup: {e}")))?;
-    let dc_uuid = dc.map(|(id,)| id).ok_or_else(|| {
-        ApiError::not_found(format!(
-            "datacenter alias '{}' not found",
-            pool.datacenter_resource_id
-        ))
-    })?;
 
     let residency = residency_zone.filter(|z| !z.trim().is_empty());
     let initial_status = if req.desired_replicas > 0 {
@@ -178,13 +140,12 @@ pub async fn scale_model_replica(
     };
 
     // Upsert the desired_count ONLY (on conflict don't clobber observed/status/
-    // last_actuated — the loop owns those). On first insert, seed a sensible
-    // status; the loop reconciles it.
+    // last_actuated — the placement controller owns those). On first insert, seed a
+    // sensible status; the loop reconciles it.
     let row: ModelReplicaRow = sqlx::query_as(
         "INSERT INTO model_replicas \
-            (workspace_id, model_id, datacenter_resource_id, \
-             desired_count, observed_count, status, residency_zone) \
-         VALUES ($1, $2, $3, $4, 0, $5, $6) \
+            (workspace_id, model_id, desired_count, observed_count, status, residency_zone) \
+         VALUES ($1, $2, $3, 0, $4, $5) \
          ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
             desired_count = EXCLUDED.desired_count, \
             updated_at = NOW() \
@@ -192,7 +153,6 @@ pub async fn scale_model_replica(
     )
     .bind(workspace_id)
     .bind(&model_id)
-    .bind(dc_uuid)
     .bind(req.desired_replicas as i32)
     .bind(initial_status)
     .bind(residency)
