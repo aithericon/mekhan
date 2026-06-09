@@ -881,6 +881,136 @@ pub async fn serve_local_mount(
     (status, resp_headers, Body::from_stream(stream)).into_response()
 }
 
+/// Why a `local_mount` read (the NATS relay) couldn't be completed. Distinct
+/// from [`RemoteReadError`] because the transport (NATS frames) is different,
+/// but it carries the same key distinction Phase-4 reconcile needs: `NotFound`
+/// (the endpoint lacks the file — a coverage gap, NOT a failure) vs everything
+/// else (a real read/transport error).
+#[derive(Debug, thiserror::Error)]
+pub enum LocalReadError {
+    /// The endpoint has no `group_id` to dispatch the serve request to.
+    #[error("local_mount endpoint has no group_id to dispatch to")]
+    NoGroup,
+    /// The runner reported the file is absent (not_found / path_jail) — the
+    /// endpoint does not cover this canonical path.
+    #[error("file not found on local_mount: {0}")]
+    NotFound(String),
+    /// A read / IO error on the runner side, or a transport/timeout/protocol
+    /// failure draining the reply stream.
+    #[error("local_mount read failed: {0}")]
+    Io(String),
+}
+
+/// **Reusable local_mount read** (docs/32 Phase 4 entry point, mirror of
+/// [`read_remote`] for the NATS transport).
+///
+/// Issue the *same* [`ServeRequest`] `serve_local_mount` uses to
+/// `fileserve.<group>.read`, but instead of relaying frames into an HTTP body,
+/// drain OPEN → CHUNK* → CLOSE and COLLECT the bytes into a `Vec<u8>`. Acks each
+/// chunk for flow control exactly as the serve path does (the protocol is the
+/// same — this does NOT duplicate it, it shares the frame helpers). A
+/// `not_found` / `path_jail` ERROR maps to [`LocalReadError::NotFound`] so the
+/// caller can treat it as a coverage gap rather than a failure.
+///
+/// Always reads the WHOLE object (no range) — reconcile must hash full bytes.
+pub async fn read_local_bytes(
+    client: &async_nats::Client,
+    group: &str,
+    root: &str,
+    canonical_path: &str,
+    workspace_id: &str,
+) -> Result<Vec<u8>, LocalReadError> {
+    if group.is_empty() {
+        return Err(LocalReadError::NoGroup);
+    }
+
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let reply = client.new_inbox();
+
+    // Subscribe BEFORE publishing so no frame is missed.
+    let mut frames = client
+        .subscribe(reply.clone())
+        .await
+        .map_err(|e| LocalReadError::Io(format!("subscribe reply inbox: {e}")))?;
+
+    let request = ServeRequest {
+        req_id: req_id.clone(),
+        root: root.to_string(),
+        canonical_path: canonical_path.to_string(),
+        offset: None,
+        length: None,
+        workspace_id: workspace_id.to_string(),
+    };
+    let payload =
+        serde_json::to_vec(&request).map_err(|e| LocalReadError::Io(format!("serialize: {e}")))?;
+
+    let subject = fileserve_subject(group);
+    client
+        .publish_with_reply(subject, reply.clone(), payload.into())
+        .await
+        .map_err(|e| LocalReadError::Io(format!("publish: {e}")))?;
+
+    // (1) First frame: OPEN (begin) or ERROR (terminal).
+    let first = match tokio::time::timeout(FIRST_FRAME_TIMEOUT, frames.next_frame()).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return Err(LocalReadError::Io("reply stream closed before any frame".into())),
+        Err(_) => {
+            return Err(LocalReadError::Io(
+                "timed out waiting for serving runner (group has no live worker?)".into(),
+            ))
+        }
+    };
+    match first {
+        ReplyFrame::Open { .. } => {}
+        ReplyFrame::Error { kind, message, .. } => {
+            return Err(local_error_frame(kind, &message));
+        }
+        other => {
+            return Err(LocalReadError::Io(format!(
+                "serve protocol error: expected OPEN, got {other:?}"
+            )))
+        }
+    }
+
+    // (2) Drain CHUNK* → CLOSE, acking each consumed chunk.
+    let ack_subject = ack_subject(&reply);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut consumed: u64 = 0;
+    loop {
+        match tokio::time::timeout(FRAME_IDLE_TIMEOUT, frames.next_frame()).await {
+            Ok(Some(ReplyFrame::Chunk { seq, bytes, .. })) => {
+                buf.extend_from_slice(&bytes);
+                consumed = consumed.max(seq);
+                let ack =
+                    serde_json::to_vec(&ServeAck { seq: consumed }).expect("ServeAck serializes");
+                let _ = client.publish(ack_subject.clone(), ack.into()).await;
+            }
+            Ok(Some(ReplyFrame::Close { .. })) => break,
+            Ok(Some(ReplyFrame::Error { kind, message, .. })) => {
+                return Err(local_error_frame(kind, &message));
+            }
+            // A second OPEN is a protocol error; stop.
+            Ok(Some(ReplyFrame::Open { .. })) => {
+                return Err(LocalReadError::Io("unexpected second OPEN frame".into()))
+            }
+            Ok(None) => return Err(LocalReadError::Io("reply stream closed mid-read".into())),
+            Err(_) => return Err(LocalReadError::Io("serve stream idle (runner gone)".into())),
+        }
+    }
+    Ok(buf)
+}
+
+/// Map a terminal ERROR frame to a [`LocalReadError`] — `not_found`/`path_jail`
+/// become `NotFound` (coverage gap), the rest become `Io`.
+fn local_error_frame(kind: ServeErrorKind, message: &str) -> LocalReadError {
+    match kind {
+        ServeErrorKind::NotFound | ServeErrorKind::PathJail => {
+            LocalReadError::NotFound(message.to_string())
+        }
+        ServeErrorKind::ReadError | ServeErrorKind::Io => LocalReadError::Io(message.to_string()),
+    }
+}
+
 /// Map a pre-first-byte ERROR frame to the right HTTP status.
 fn error_frame_to_response(kind: ServeErrorKind, message: &str) -> Response {
     match kind {

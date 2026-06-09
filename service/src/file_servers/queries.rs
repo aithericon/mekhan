@@ -521,6 +521,81 @@ struct ServeCandidateRow {
     endpoint: FileServerEndpoint,
 }
 
+/// One inventory copy sampled for reconcile: its server-relative `path` plus the
+/// recorded `content_hash` (the REFERENCE the probe compares a re-read against).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ReconcileSample {
+    pub path: String,
+    pub content_hash: String,
+}
+
+/// All canonical-path candidates for a server's reconcile sample: every
+/// `file_inventory` copy of that `file_server_id` that carries a `content_hash`
+/// (rows with no hash can't be a reference). `is_canonical` rows are preferred
+/// but not required — any hashed copy gives a `(path, expected_hash)` pair the
+/// probe can re-read through a candidate endpoint. Ordered for determinism.
+pub async fn reconcile_candidates(
+    pool: &PgPool,
+    file_server_key: &str,
+) -> Result<Vec<ReconcileSample>, QueryError> {
+    let rows = sqlx::query_as::<_, ReconcileSample>(
+        "SELECT path, content_hash FROM file_inventory \
+         WHERE file_server_id = $1 \
+           AND content_hash IS NOT NULL \
+           AND content_hash <> '' \
+         ORDER BY is_canonical DESC, path",
+    )
+    .bind(file_server_key)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Set an endpoint's `verification_status` + `last_verified`, stashing the probe
+/// result detail (counts + mismatch/conflict examples) under `config.verification`
+/// so the UI can surface offending paths. Scoped to the parent server id; returns
+/// the updated row, or `None` if no such endpoint.
+pub async fn set_verification(
+    pool: &PgPool,
+    file_server_id: Uuid,
+    endpoint_id: Uuid,
+    status: &str,
+    detail: &serde_json::Value,
+) -> Result<Option<FileServerEndpoint>, QueryError> {
+    let ep = sqlx::query_as::<_, FileServerEndpoint>(
+        "UPDATE file_server_endpoints SET \
+            verification_status = $3, \
+            last_verified       = NOW(), \
+            config              = jsonb_set(COALESCE(config, '{}'::jsonb), '{verification}', $4, true), \
+            updated_at          = NOW() \
+         WHERE file_server_id = $1 AND id = $2 RETURNING *",
+    )
+    .bind(file_server_id)
+    .bind(endpoint_id)
+    .bind(status)
+    .bind(detail)
+    .fetch_optional(pool)
+    .await?;
+    Ok(ep)
+}
+
+/// Fetch one endpoint by id (scoped to its parent server). Used by the on-demand
+/// verify handler to load the target before probing.
+pub async fn get_endpoint(
+    pool: &PgPool,
+    file_server_id: Uuid,
+    endpoint_id: Uuid,
+) -> Result<Option<FileServerEndpoint>, QueryError> {
+    let ep = sqlx::query_as::<_, FileServerEndpoint>(
+        "SELECT * FROM file_server_endpoints WHERE file_server_id = $1 AND id = $2",
+    )
+    .bind(file_server_id)
+    .bind(endpoint_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(ep)
+}
+
 /// Idempotently seed the built-in platform object store as a `file_servers` row
 /// PLUS one `object_store` endpoint (called at startup). `key` is the platform
 /// S3 bucket; the endpoint has no `resource_ref` (it uses platform config).
