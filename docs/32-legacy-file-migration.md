@@ -64,6 +64,12 @@ Three design refinements from planning (reflected in §4 below):
 - `legacy_delete_queue` (97k honored deletions): `key PK, hash, size, modified`.
 
 ### 4.1 File servers as first-class entities (`file_servers`)
+> **Evolved → multi-endpoint (§4.3).** §4.1 below describes the original
+> single-transport shape (transport `kind` + `base_path` + `resource_ref` ON the
+> entity). That model has since split: the **entity is identity-only** and the
+> *ways to reach it* are N typed child **endpoints** (`file_server_endpoints`).
+> §4.3 is the authoritative shipped description.
+
 Until this landed, `file_inventory.file_server_id` was a bare `TEXT` string the
 control plane only knew by the name echoed back in inventory rows. `file_servers`
 (`20240159000000_file_servers.sql`) makes each storage backend a real, manageable
@@ -100,6 +106,109 @@ its physical `copies` (file-server names resolved) plus a peek + count of
 uncatalogued (index-only) files. The `/data` page renders this as one browser
 with **Entries** and **Servers** tabs; Catalogue + Inventory are dropped from the
 nav (their lineage/provenance deep routes remain reachable).
+
+### 4.3 Multi-endpoint file servers (identity + N typed endpoints)
+The §4.1 entity carried a single transport (`kind` + `base_path` + `resource_ref`).
+That bakes in one assumption that breaks for a real lab NAS: a backend is
+reachable *one way*. The same physical server is often reachable several ways at
+once — a co-located runner sees it as a `local_mount`, a remote worker over `sftp`,
+a downstream job via its S3 gateway. So the model split into a **parent identity**
+plus **N typed endpoints**:
+
+- **`file_servers`** is now **identity + topology only** — `key` (== the inventory
+  `file_server_id`, soft join, no FK), `display_name`, `status`, `config`,
+  workspace-scoped (`UNIQUE(workspace_id, key)`). **No transport, no secrets.**
+- **`file_server_endpoints`** (child rows, FK + cascade) are the ways to reach it.
+  Each has an `access_method` ∈ `{object_store, s3, sftp, local_mount}`, a `root`
+  prefix (the endpoint-namespace anchor mapping onto the server's canonical,
+  server-relative paths), an optional `resource_ref` (the workspace `resource`
+  holding connection + credentials in **Vault** — never on the row), a `group_id`
+  (the capacity-group UUID a `local_mount` is reachable from), its own `status`,
+  `priority` (operator routing override), and a `verification_status` /
+  `last_verified` reconcile lifecycle. The built-in platform `object_store` bucket
+  auto-seeds as one identity-only server + one `object_store` endpoint (no
+  `resource_ref` → platform config).
+- **Canonical paths** are server-relative: a copy's `file_inventory.path` is
+  anchored under whatever endpoint `root` is used to reach it. `adopt` stamps the
+  crawl-recorded `provenance.endpoint_root` onto the adopted endpoint so its `root`
+  matches where the crawl anchored the paths.
+
+HTTP: `GET/POST/PUT/DELETE /api/v1/file-servers`, `POST …/adopt`, the endpoint
+sub-resource `GET/POST/PUT/DELETE /api/v1/file-servers/{key}/endpoints[/{id}]`,
+and the on-demand probe `POST …/endpoints/{id}/verify` (§4.3.3).
+
+#### 4.3.1 Read execution — owned by `access_method`
+The serve bridge (`service/src/data/serve.rs`, handler
+`GET /api/v1/data/entries/{content_hash}/content`) resolves a logical entry to its
+physical copies × endpoints, routes (§4.3.2), and reads by method:
+
+- **`local_mount`** — mekhan is **cred-free**. The bytes live on a filesystem mount
+  reachable only from the capacity group's co-located runner, so mekhan publishes a
+  `ServeRequest` to the runner over NATS and relays the reply frames into the HTTP
+  body. The transport is a **streamed-reply protocol** on `fileserve.<group>.read`:
+  the runner answers a request inbox with `OPEN → CHUNK* → CLOSE` (or a terminal
+  `ERROR{kind}`) frames; mekhan cumulative-**acks** each consumed CHUNK on
+  `<reply>.ack` to hold an in-flight **window** (back-pressure), and **path-jails**
+  every read under the endpoint `root` on the runner side (an escape is an
+  `ERROR{path_jail}`). The wire structs are mirrored byte-for-byte in mekhan and
+  `executor-worker/src/fileserve.rs` (separate workspaces; serde shape is the
+  contract). Ranges seek from an absolute offset (`bytes=START-[END]`; no suffix).
+- **`object_store` / `s3`** — mekhan owns the read: presign a GET URL and **302**
+  the browser straight to the store (default; bytes never transit mekhan), or
+  **proxy** the bytes in-process when `config.proxy_s3_reads` is set (single-origin
+  / firewalled). External `s3` (`resource_ref`) resolves its creds from Vault first.
+- **`sftp`** — mekhan streams in-process through an opendal sftp Operator built from
+  the resource's Vault creds (sftp has no presign).
+
+#### 4.3.2 Cost-first, verification-gated read routing (+ fallback-on-miss)
+`serve::route_candidates` replaces the old static method-preference order. It
+**filters** to *routable* endpoints (`status ∈ {online, unknown}` AND
+`verification_status ∉ {mismatch, conflict}` — proven-bad endpoints are excluded;
+`unverified` is allowed, merely *less preferred*, so serve isn't bricked before a
+probe runs — a strict-mode could additionally exclude `unverified`), then **orders**
+by: (1) `priority` DESC (operator override wins), (2) effective transport **cost**
+ASC (s3-presigned = cheapest since a 302 doesn't transit mekhan; `local_mount`; then
+sftp — and when `proxy_s3_reads` flips s3 to a proxy it sorts *below* `local_mount`),
+(3) `verified` before `unverified`, (4) stable. `?endpoint=<uuid>` **force-selects**
+a single endpoint, bypassing the routable filter.
+
+The handler tries the ordered list and the **first to start streaming wins**: a
+candidate that reports the file *missing before the first byte* (local_mount
+`ERROR{not_found|path_jail}`; s3/sftp `NotFound`/404) is skipped and the next is
+tried (`ServeMiss::NotFound`); a non-recoverable error returns immediately
+(`ServeMiss::Fatal`). No routable candidate at all → **409** ("no servable
+endpoint … all offline/mismatch"); copies exist but every candidate missed → **404**.
+
+#### 4.3.3 Hash-probe reconcile (`verified | mismatch | conflict`, missing-ok)
+An endpoint *claims* to reach the same canonical files a crawl recorded. Reconcile
+(`service/src/file_servers/reconcile.rs`) **verifies** the claim by re-reading a
+sample of the server's recorded canonical paths *through* the endpoint and
+comparing the fresh SHA-256 (bare lowercase hex — the `file_inventory.content_hash`
+shape) against the inventory reference:
+- present & hash == reference → **pass**;
+- present & hash != reference → **`mismatch`** (the endpoint's `root` is mis-mapped —
+  it serves the wrong bytes for that canonical path), with offending
+  `(path, expected, got)` examples;
+- two endpoints that each establish a *different* hash for the **same** canonical
+  path → **`conflict`** (the copies genuinely diverge);
+- `not_found` for a sampled path → a **coverage gap**, reported informationally,
+  **never a failure** (an endpoint may legitimately hold only a subset). All sampled
+  *present* paths passing → **`verified`** (a probe that saw only misses is
+  vacuously verified). The crawl-source `local_mount` self-verifies — probing it
+  re-reads the bytes that produced the reference hash.
+
+Sampling is a **stratified random sample of K ≈ 50** of the server's inventory
+paths, grouped by top-level path prefix and round-robined so a per-subtree
+mis-mount can't slip through a flat sample (≤ K paths → probe all; a cap is logged).
+Triggers: an **auto-probe** is `tokio::spawn`ed (non-blocking — never delays the
+HTTP response) on endpoint **create / adopt / PUT**; the **on-demand**
+`POST …/endpoints/{id}/verify` blocks and returns a `VerifyResult`
+`{ verification_status, sampled, passed, mismatched, missing, examples[] }`. The
+verdict + detail persist to `verification_status` / `last_verified` /
+`config.verification`. Periodic re-verification is deferred. The probe transport is
+abstracted (`ProbeReader`) so the verdict semantics are unit-tested with an
+in-memory fake; the live reader reuses the exact `read_local_bytes` /
+`read_remote` the serve path uses.
 
 ### Bulk-register HTTP API (`service`)
 New `service/src/inventory/` module (mirrors `catalogue/`: `mod/model/queries/repository/handlers`)
