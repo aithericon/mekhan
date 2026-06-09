@@ -6873,6 +6873,16 @@
               }
             }
           },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Member is already enrolled in this capacity",
             "content": {
@@ -7010,6 +7020,16 @@
           "204": {
             "description": "Roster member revoked"
           },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Roster member not found",
             "content": {
@@ -7063,6 +7083,16 @@
           },
           "400": {
             "description": "Caps fail validation against the capability registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
             "content": {
               "application/json": {
                 "schema": {
@@ -11975,6 +12005,59 @@
           }
         ],
         "description": "Authentication configuration."
+      },
+      "AuthUser": {
+        "type": "object",
+        "description": "An authenticated principal. The domain core works in terms of this type,\nnever in terms of JWTs or provider-specific claims.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "org_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).\nMetadata only — the authoritative tenant is `workspace_id`, looked up\nfrom `workspaces.zitadel_org_id` by `DbPrincipalResolver`."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subject": {
+            "type": "string",
+            "description": "OIDC `sub` claim. Stable per identity within an issuer."
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Mekhan workspace the principal is currently acting in. Populated by\n`DbPrincipalResolver` from the user's `workspace_members` row (auto-\nprovisioned from `org_id` when a matching `workspaces.zitadel_org_id`\nexists; otherwise the seeded default workspace if the user is a\nmember there). `None` only when no DB handle is available (unit\ntests + legacy session rows; `#[serde(default)]` keeps deserialize\nof old session JSON working)."
+          },
+          "workspace_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's role (`owner`|`admin`|`editor`|`viewer`) in their resolved\n`workspace_id`. Populated everywhere `workspace_id` is set — from the\nactive-workspace override, the resolver's default pick, or the dev-noop\nseed. `None` when no membership backs the workspace (or no DB handle in\nunit tests). Lets the SPA gate admin-only affordances client-side\nwithout a second round-trip; the server still enforces via `require_role`."
+          }
+        }
       },
       "AutoscalePolicyInput": {
         "type": "object",
@@ -20202,7 +20285,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Compact list-row shape. Returned by the roster list endpoint.",
+              "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `user_profiles`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
               "required": [
                 "id",
                 "capacity_id",
@@ -20230,6 +20313,20 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "member_display_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Human-readable name from `user_profiles`; None when no profile row."
+                },
+                "member_email": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Member email from `user_profiles`; None when no profile row."
                 },
                 "member_user_id": {
                   "type": "string",
@@ -22700,7 +22797,7 @@
       },
       "RosterMemberSummary": {
         "type": "object",
-        "description": "Compact list-row shape. Returned by the roster list endpoint.",
+        "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `user_profiles`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
         "required": [
           "id",
           "capacity_id",
@@ -22728,6 +22825,20 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "member_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable name from `user_profiles`; None when no profile row."
+          },
+          "member_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Member email from `user_profiles`; None when no profile row."
           },
           "member_user_id": {
             "type": "string",
@@ -26996,6 +27107,19 @@
           "added_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable identity, LEFT JOINed from `user_profiles` (populated by\nthe auth extractor on each authenticated request). `None` for a member\nwho was added by `subject` but has never logged into mekhan."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "role": {
             "type": "string"

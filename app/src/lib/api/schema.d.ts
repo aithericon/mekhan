@@ -4308,6 +4308,43 @@ export interface components {
             value_env?: string | null;
         };
         /**
+         * @description An authenticated principal. The domain core works in terms of this type,
+         *     never in terms of JWTs or provider-specific claims.
+         */
+        AuthUser: {
+            display_name?: string | null;
+            email?: string | null;
+            /**
+             * @description Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).
+             *     Metadata only — the authoritative tenant is `workspace_id`, looked up
+             *     from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
+             */
+            org_id?: string | null;
+            roles?: string[];
+            /** @description OIDC `sub` claim. Stable per identity within an issuer. */
+            subject: string;
+            /**
+             * Format: uuid
+             * @description Mekhan workspace the principal is currently acting in. Populated by
+             *     `DbPrincipalResolver` from the user's `workspace_members` row (auto-
+             *     provisioned from `org_id` when a matching `workspaces.zitadel_org_id`
+             *     exists; otherwise the seeded default workspace if the user is a
+             *     member there). `None` only when no DB handle is available (unit
+             *     tests + legacy session rows; `#[serde(default)]` keeps deserialize
+             *     of old session JSON working).
+             */
+            workspace_id?: string | null;
+            /**
+             * @description The caller's role (`owner`|`admin`|`editor`|`viewer`) in their resolved
+             *     `workspace_id`. Populated everywhere `workspace_id` is set — from the
+             *     active-workspace override, the resolver's default pick, or the dev-noop
+             *     seed. `None` when no membership backs the workspace (or no DB handle in
+             *     unit tests). Lets the SPA gate admin-only affordances client-side
+             *     without a second round-trip; the server still enforces via `require_role`.
+             */
+            workspace_role?: string | null;
+        };
+        /**
          * @description `PUT /api/v1/models/{model_id}/policy` body — the folded-in autoscale policy
          *     the operator sets on a curated model. `mode` is required; the rest are optional
          *     knobs.
@@ -8002,6 +8039,10 @@ export interface components {
                 enrolled_at: string;
                 /** Format: uuid */
                 id: string;
+                /** @description Human-readable name from `user_profiles`; None when no profile row. */
+                member_display_name?: string | null;
+                /** @description Member email from `user_profiles`; None when no profile row. */
+                member_email?: string | null;
                 /** Format: uuid */
                 member_user_id: string;
             }[];
@@ -9218,7 +9259,12 @@ export interface components {
             /** Format: date-time */
             revoked_at?: string | null;
         };
-        /** @description Compact list-row shape. Returned by the roster list endpoint. */
+        /**
+         * @description Compact list-row shape. Returned by the roster list endpoint. The
+         *     `member_display_name` / `member_email` are joined from `user_profiles`
+         *     (LEFT JOIN — absent when the member has no profile row yet) so the UI can
+         *     render a person instead of a raw `member_user_id`.
+         */
         RosterMemberSummary: {
             available: boolean;
             /** Format: uuid */
@@ -9229,6 +9275,10 @@ export interface components {
             enrolled_at: string;
             /** Format: uuid */
             id: string;
+            /** @description Human-readable name from `user_profiles`; None when no profile row. */
+            member_display_name?: string | null;
+            /** @description Member email from `user_profiles`; None when no profile row. */
+            member_email?: string | null;
             /** Format: uuid */
             member_user_id: string;
         };
@@ -11303,6 +11353,13 @@ export interface components {
         WorkspaceMember: {
             /** Format: date-time */
             added_at: string;
+            /**
+             * @description Human-readable identity, LEFT JOINed from `user_profiles` (populated by
+             *     the auth extractor on each authenticated request). `None` for a member
+             *     who was added by `subject` but has never logged into mekhan.
+             */
+            display_name?: string | null;
+            email?: string | null;
             role: string;
             /** Format: uuid */
             user_id: string;
@@ -16266,6 +16323,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Member is already enrolled in this capacity */
             409: {
                 headers: {
@@ -16379,6 +16445,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Roster member not found */
             404: {
                 headers: {
@@ -16417,6 +16492,15 @@ export interface operations {
             };
             /** @description Caps fail validation against the capability registry */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

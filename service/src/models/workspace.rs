@@ -30,6 +30,13 @@ pub struct WorkspaceMember {
     pub user_id: Uuid,
     pub role: String,
     pub added_at: DateTime<Utc>,
+    /// Human-readable identity, LEFT JOINed from `user_profiles` (populated by
+    /// the auth extractor on each authenticated request). `None` for a member
+    /// who was added by `subject` but has never logged into mekhan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

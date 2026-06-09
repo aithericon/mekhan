@@ -57,6 +57,7 @@ impl PrincipalResolver for StaticPrincipalResolver {
             roles,
             org_id,
             workspace_id: None,
+            workspace_role: None,
         })
     }
 }
@@ -119,6 +120,10 @@ impl PrincipalResolver for DbPrincipalResolver {
             if let Some(ws_id) = lookup_workspace_by_zitadel_org(&self.db, zitadel_org_id).await? {
                 upsert_member(&self.db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
                 user.workspace_id = Some(ws_id);
+                // Re-read rather than trust DEFAULT_AUTOPROVISION_ROLE: the
+                // upsert is `DO NOTHING`, so an existing member keeps whatever
+                // role admins assigned, not `editor`.
+                user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
                 return Ok(user);
             }
         }
@@ -129,6 +134,9 @@ impl PrincipalResolver for DbPrincipalResolver {
         // are not). Prefer a non-system workspace so the picker doesn't
         // land on `demos` for users who *also* belong to a real tenant.
         user.workspace_id = membership_workspace(&self.db, user_id).await?;
+        if let Some(ws_id) = user.workspace_id {
+            user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
+        }
         Ok(user)
     }
 }
@@ -193,6 +201,25 @@ async fn upsert_member(
     .await
     .map_err(|e| AuthError::Internal(format!("workspace membership upsert: {e}")))?;
     Ok(())
+}
+
+/// Fetch the caller's `role` in a specific workspace, if any. Drives
+/// `AuthUser.workspace_role` so the SPA can gate admin-only affordances
+/// (server still enforces via `require_role`).
+async fn lookup_role(
+    db: &PgPool,
+    workspace_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<String>, AuthError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AuthError::Internal(format!("workspace role lookup: {e}")))?;
+    Ok(row.map(|(r,)| r))
 }
 
 /// Returns the user's default "active" workspace. Preference order:

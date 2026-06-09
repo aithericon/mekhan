@@ -133,6 +133,11 @@ use utoipa::OpenApi;
             crate::models::roster::EnrollMemberRequest,
             crate::models::roster::UpdateRosterMemberRequest,
             crate::models::roster::AvailabilityRequest,
+            // Resolved principal returned by `GET /api/auth/session`. That endpoint
+            // is an unversioned `/api/auth/*` BFF sibling (not a `#[utoipa::path]`
+            // route), so register the DTO explicitly for frontend codegen — the SPA
+            // reads `workspace_role` off it to gate admin-only affordances client-side.
+            crate::auth::AuthUser,
             // Phase A (Grouped + Enrolled Workers) — the worker identity plane:
             // enroll / registration-token / list-detail DTOs. The list/get bodies
             // refer to the summaries via PaginatedResponse<_>, which utoipa's

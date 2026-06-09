@@ -144,6 +144,7 @@ fn user(subject: &str) -> AuthUser {
         roles: Vec::new(),
         org_id: None,
         workspace_id: None,
+        workspace_role: None,
     }
 }
 

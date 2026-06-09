@@ -12,7 +12,7 @@ pub const SUBJECT_UUID_NAMESPACE: Uuid = Uuid::from_u128(0x6d65_6b68_616e_5f73_7
 
 /// An authenticated principal. The domain core works in terms of this type,
 /// never in terms of JWTs or provider-specific claims.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuthUser {
     /// OIDC `sub` claim. Stable per identity within an issuer.
     pub subject: String,
@@ -33,6 +33,14 @@ pub struct AuthUser {
     /// of old session JSON working).
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
+    /// The caller's role (`owner`|`admin`|`editor`|`viewer`) in their resolved
+    /// `workspace_id`. Populated everywhere `workspace_id` is set — from the
+    /// active-workspace override, the resolver's default pick, or the dev-noop
+    /// seed. `None` when no membership backs the workspace (or no DB handle in
+    /// unit tests). Lets the SPA gate admin-only affordances client-side
+    /// without a second round-trip; the server still enforces via `require_role`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_role: Option<String>,
 }
 
 impl AuthUser {

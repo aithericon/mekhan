@@ -37,6 +37,7 @@
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import Boxes from '@lucide/svelte/icons/boxes';
+	import Users from '@lucide/svelte/icons/users';
 	import SchemaFields, {
 		deriveFieldSpecs,
 		type FieldSpec
@@ -48,10 +49,10 @@
 		listResourceTypes,
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
-	import type { CapacitySummary, CapacityBackend } from '$lib/api/capacities';
+	import type { CapacitySummary } from '$lib/api/capacities';
+	import { resolveEditKind, type Kind } from './new-capacity-kind';
 
 	// ── Kind switcher ───────────────────────────────────────────────────────────
-	type Kind = 'runner_group' | 'limit' | 'worker' | 'cluster';
 
 	type Props = {
 		open: boolean;
@@ -65,17 +66,6 @@
 	};
 
 	let { open = $bindable(), types: typesProp = [], editing = null, onsaved }: Props = $props();
-
-	// The dispatch backend → which create kind authored it. `deferred` (the
-	// not-yet-dispatchable `consume` path) has no dedicated kind; it edits
-	// name-only under the worker branch (its config/axes are never re-sent).
-	const BACKEND_KIND: Record<CapacityBackend, Kind> = {
-		presence: 'runner_group',
-		tokens: 'limit',
-		queue: 'worker',
-		scheduler: 'cluster',
-		deferred: 'worker'
-	};
 
 	const isEdit = $derived(editing !== null);
 	const KINDS: { kind: Kind; label: string; preset?: string; hint: string }[] = [
@@ -101,13 +91,20 @@
 			kind: 'cluster',
 			label: 'Cluster',
 			hint: 'A scheduler datacenter (Slurm / Nomad / HTTP) leasing allocations.'
+		},
+		{
+			kind: 'human',
+			label: 'Human pool',
+			preset: 'human',
+			hint: 'Self-claiming pool of people — offer-dispatched. Enroll members after creating.'
 		}
 	];
 	const KIND_ICON: Record<Kind, typeof Server> = {
 		runner_group: Server,
 		limit: KeyRound,
 		worker: Cpu,
-		cluster: Boxes
+		cluster: Boxes,
+		human: Users
 	};
 
 	let kind = $state<Kind>('runner_group');
@@ -159,7 +156,9 @@
 		const target = editing;
 		error = null;
 		// Reset the form each open (create defaults; overwritten below on edit).
-		kind = target ? BACKEND_KIND[target.backend] : 'runner_group';
+		// `presence` is ambiguous — runner groups AND human pools share it — so
+		// `resolveEditKind` peeks at the dispatch axis (`offer` ⇒ human).
+		kind = target ? resolveEditKind(target) : 'runner_group';
 		path = target ? target.path : '';
 		displayName = target ? target.display_name : '';
 		// Limit count: the seeded N is already on the summary's live facet.

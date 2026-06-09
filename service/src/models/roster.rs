@@ -102,7 +102,10 @@ impl RosterMemberRow {
 
 // ── Wire DTOs ──────────────────────────────────────────────────────────────
 
-/// Compact list-row shape. Returned by the roster list endpoint.
+/// Compact list-row shape. Returned by the roster list endpoint. The
+/// `member_display_name` / `member_email` are joined from `user_profiles`
+/// (LEFT JOIN — absent when the member has no profile row yet) so the UI can
+/// render a person instead of a raw `member_user_id`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RosterMemberSummary {
     pub id: Uuid,
@@ -111,8 +114,18 @@ pub struct RosterMemberSummary {
     pub concurrency: i32,
     pub available: bool,
     pub enrolled_at: DateTime<Utc>,
+    /// Human-readable name from `user_profiles`; None when no profile row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_display_name: Option<String>,
+    /// Member email from `user_profiles`; None when no profile row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_email: Option<String>,
 }
 
+/// `RosterMemberRow` carries no identity columns, so a bare-row conversion can't
+/// fill the joined name/email — they default to `None`. The list endpoint uses
+/// [`RosterMemberSummaryRow`] (which carries the JOIN columns) instead; this
+/// `From` stays for any caller that only has a base row.
 impl From<RosterMemberRow> for RosterMemberSummary {
     fn from(r: RosterMemberRow) -> Self {
         Self {
@@ -122,6 +135,40 @@ impl From<RosterMemberRow> for RosterMemberSummary {
             concurrency: r.concurrency,
             available: r.available,
             enrolled_at: r.enrolled_at,
+            member_display_name: None,
+            member_email: None,
+        }
+    }
+}
+
+/// List-query row: the summary's base columns plus the `user_profiles` JOIN
+/// (`display_name`, `email`). Built by `handlers::roster::list_roster`'s
+/// `SELECT … LEFT JOIN user_profiles` so the identity fields ride along without
+/// a second lookup. Kept off `RosterMemberRow` because those columns aren't on
+/// `roster_members`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RosterMemberSummaryRow {
+    pub id: Uuid,
+    pub capacity_id: Uuid,
+    pub member_user_id: Uuid,
+    pub concurrency: i32,
+    pub available: bool,
+    pub enrolled_at: DateTime<Utc>,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+}
+
+impl From<RosterMemberSummaryRow> for RosterMemberSummary {
+    fn from(r: RosterMemberSummaryRow) -> Self {
+        Self {
+            id: r.id,
+            capacity_id: r.capacity_id,
+            member_user_id: r.member_user_id,
+            concurrency: r.concurrency,
+            available: r.available,
+            enrolled_at: r.enrolled_at,
+            member_display_name: r.display_name,
+            member_email: r.email,
         }
     }
 }
@@ -285,6 +332,39 @@ mod tests {
         );
         assert_eq!(detail.availability.ttl_secs, 600);
         assert_eq!(detail.availability.grace_secs, 60);
+    }
+
+    #[test]
+    fn summary_omits_identity_fields_when_none() {
+        // A bare-row conversion leaves member_display_name/member_email None;
+        // `skip_serializing_if` must then drop them from the wire shape entirely.
+        let summary = RosterMemberSummary::from(sample_row(serde_json::json!({})));
+        assert!(summary.member_display_name.is_none());
+        assert!(summary.member_email.is_none());
+        let v = serde_json::to_value(&summary).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("member_display_name"));
+        assert!(!obj.contains_key("member_email"));
+    }
+
+    #[test]
+    fn summary_carries_identity_fields_from_join_row() {
+        let row = RosterMemberSummaryRow {
+            id: Uuid::new_v4(),
+            capacity_id: Uuid::new_v4(),
+            member_user_id: Uuid::new_v4(),
+            concurrency: 2,
+            available: true,
+            enrolled_at: Utc::now(),
+            display_name: Some("Dev User".into()),
+            email: Some("dev@local".into()),
+        };
+        let summary = RosterMemberSummary::from(row);
+        assert_eq!(summary.member_display_name.as_deref(), Some("Dev User"));
+        assert_eq!(summary.member_email.as_deref(), Some("dev@local"));
+        let v = serde_json::to_value(&summary).unwrap();
+        assert_eq!(v["member_display_name"], serde_json::json!("Dev User"));
+        assert_eq!(v["member_email"], serde_json::json!("dev@local"));
     }
 
     fn sample_row(availability: serde_json::Value) -> RosterMemberRow {

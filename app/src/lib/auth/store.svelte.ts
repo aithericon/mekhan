@@ -20,6 +20,7 @@ interface SessionUserDto {
 	roles?: string[];
 	org_id?: string | null;
 	workspace_id?: string | null;
+	workspace_role?: string | null;
 }
 
 function toUser(dto: SessionUserDto): AuthUser {
@@ -29,7 +30,8 @@ function toUser(dto: SessionUserDto): AuthUser {
 		displayName: dto.display_name ?? undefined,
 		roles: dto.roles ?? [],
 		orgId: dto.org_id ?? undefined,
-		workspaceId: dto.workspace_id ?? undefined
+		workspaceId: dto.workspace_id ?? undefined,
+		workspaceRole: dto.workspace_role ?? undefined
 	};
 }
 
@@ -47,6 +49,15 @@ class AuthStore {
 
 	get isAuthenticated(): boolean {
 		return this.#session != null;
+	}
+
+	/**
+	 * Whether the caller is an `owner` or `admin` in their resolved workspace.
+	 * Gates admin-only control-plane UI (e.g. roster enroll / edit / revoke).
+	 */
+	get isWorkspaceAdmin(): boolean {
+		const role = this.#session?.user.workspaceRole;
+		return role === 'owner' || role === 'admin';
 	}
 
 	/**
