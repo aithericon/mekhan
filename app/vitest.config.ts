@@ -26,6 +26,13 @@ export default defineConfig({
 			'$app/environment': new URL(
 				'./src/lib/testing/app-environment-stub.ts',
 				import.meta.url
+			).pathname,
+			// `$app/navigation` is likewise virtual; route pages reachable from
+			// tests (e.g. the tasks inbox) call `goto`. Point it at a no-op stub
+			// so the unit lane can import them; tests may still vi.mock it.
+			'$app/navigation': new URL(
+				'./src/lib/testing/app-navigation-stub.ts',
+				import.meta.url
 			).pathname
 		}
 	}
