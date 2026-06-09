@@ -36,13 +36,19 @@ job "mailpit" {
     }
 
     network {
+      # Host mode (like loki/alertmanager) so the static ports bind on the
+      # NODE IP and Consul registers a routable host address. With the default
+      # (non-host) mode, the service registers the alloc IP while the port is
+      # forwarded on the host → cross-node connects get "connection refused".
+      mode = "host"
+
       # Static SMTP port so the `mail` resource can target a stable host:port
       # (the smtp resource has no SRV/dynamic-port resolution).
       port "smtp" {
         static = ${smtp_port}
       }
       port "ui" {
-        to = 8025
+        static = 8025
       }
     }
 
@@ -50,8 +56,8 @@ job "mailpit" {
       driver = "docker"
 
       config {
-        image = "${image}"
-        ports = ["smtp", "ui"]
+        image        = "${image}"
+        network_mode = "host"
       }
 
       env {
