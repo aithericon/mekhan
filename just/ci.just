@@ -268,6 +268,11 @@ build-frontend:
     # on macOS. With CI=true pnpm silently purges + reinstalls cleanly.
     export CI=true
     pnpm install --frozen-lockfile
+    # Raise Node's old-space heap: `vite build` transforms 6400+ modules and
+    # OOMs against Node's ~2 GiB default ("Ineffective mark-compacts near heap
+    # limit"). 4 GiB fits inside the CI node's 6 GiB cap with room for the
+    # parallel Rust build. Overridable via the step env.
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=4096"
     pnpm run build
     if [ ! -f build/index.html ]; then
       echo "✗ Frontend build failed — app/build/index.html not produced" >&2
