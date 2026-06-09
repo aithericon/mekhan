@@ -29,6 +29,7 @@
 mod common;
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -70,6 +71,34 @@ impl DemandSource for ConstDemand {
     }
 }
 
+/// A demand source the test FLIPS between ticks, modelling the real
+/// `PrometheusDemandSource` whose per-model demand is a momentary value (in-flight
+/// + the one-shot starved-counter delta): a burst of starved requests reads `> 0`
+/// on ONE scrape, then `0` on the next once the delta is consumed. Lets a test
+/// reproduce "woken by a transient demand edge, then the very next tick reads 0"
+/// — the exact shape that used to flap a `scale_to_zero` model straight back to
+/// sleep before it could serve.
+struct SwitchableDemand(Mutex<f64>);
+
+impl SwitchableDemand {
+    fn new(initial: f64) -> Self {
+        Self(Mutex::new(initial))
+    }
+    fn set(&self, v: f64) {
+        *self.0.lock().unwrap() = v;
+    }
+}
+
+#[async_trait]
+impl DemandSource for SwitchableDemand {
+    async fn demand_for(&self, _model_id: &str) -> Option<f64> {
+        Some(*self.0.lock().unwrap())
+    }
+    async fn inflight_for(&self, _model_id: &str) -> Option<f64> {
+        None
+    }
+}
+
 // ── local helpers ────────────────────────────────────────────────────────────
 
 /// Connect a `MekhanNats` for the service-under-test to publish on, plus a raw
@@ -105,6 +134,36 @@ async fn make_base_resident(db: &PgPool, runner_id: Uuid, model_id: &str, c: u32
         .execute(db)
         .await
         .expect("update runner catalog to resident");
+}
+
+/// Count of `Unload{Base}` commands captured for `base` (idle-eviction sleeps).
+fn unload_base_count(captured: &[CapturedCommand], base: &str) -> usize {
+    captured
+        .iter()
+        .filter(|c| {
+            matches!(
+                &c.command,
+                ModelCommand::Unload { target: LoadTarget::Base { model_id } } if model_id == base
+            )
+        })
+        .count()
+}
+
+/// Force the model's `last_actuated_at` (the warm-window anchor) into the past so a
+/// subsequent zero-demand tick is no longer inside the warm window — the offline
+/// stand-in for "the warm window has elapsed" (we can't wait the real 120s).
+async fn backdate_last_actuated(db: &PgPool, workspace_id: Uuid, model_id: &str, secs_ago: i64) {
+    let ts = chrono::Utc::now() - chrono::Duration::seconds(secs_ago);
+    sqlx::query(
+        "UPDATE model_replicas SET last_actuated_at = $3 \
+         WHERE workspace_id = $1 AND model_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(model_id)
+    .bind(ts)
+    .execute(db)
+    .await
+    .expect("backdate last_actuated_at");
 }
 
 /// All `LoadBase` commands captured for `base`, grouped by target runner.
@@ -421,4 +480,163 @@ async fn s3_spread_to_two_then_only_shortfall_gets_new_load() {
         .expect("model_replicas row after shortfall tick");
     assert_eq!(desired, 2);
     assert_eq!(observed, 1, "the now-resident runner is observed");
+}
+
+// ── S4 SCALE-FROM-ZERO: WAKE THEN HOLD WARM (regression for the flap) ─────────
+
+/// The bug this locks: a `scale_to_zero` model with `idle_evict` is woken by a
+/// momentary demand edge (a burst of starved requests → `demand > 0` on ONE
+/// scrape), then the NEXT tick reads `demand == 0` (the one-shot starved delta is
+/// consumed). Pre-fix, that zero tick idle-evicted the model RIGHT BACK to sleep —
+/// it flapped and could never stay resident long enough to serve the client's
+/// cold-start retries. Post-fix, the WARM WINDOW (default 120s, anchored on the
+/// placement's `last_actuated_at`) holds it resident: tick 2 must NOT publish an
+/// `Unload`, and the row must stay `active`, not `sleeping`.
+///
+/// The previous tests all used a CONSTANT non-zero demand, so they never returned
+/// to zero and never exercised idle-eviction at all — which is exactly why the
+/// harness missed this.
+#[tokio::test]
+async fn s4_scale_to_zero_wake_then_holds_warm_no_immediate_evict() {
+    let db = common::create_test_db().await;
+    let presence = RunnerPresence::new();
+    let (nats, spy_client) = connect_nats().await;
+    let spy = NatsCommandSpy::start(spy_client).await;
+
+    let ws = Uuid::new_v4();
+
+    // A runner with the base RESIDENT (the woken state); scale_to_zero + idle_evict.
+    let runner = seed_model_runner(
+        &db,
+        &presence,
+        SeedRunnerSpec {
+            workspace_id: ws,
+            models: vec![SeedModel::base(LLAMA, 8)],
+            pulled: vec![LLAMA.to_string()],
+            residency_zone: Some(ZONE.to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    seed_model_policy(
+        &db,
+        SeedPolicySpec {
+            idle_evict: true, // opt in to idle-eviction — the thing that flapped
+            ..SeedPolicySpec::base(ws, LLAMA, "scale_to_zero", ZONE, 1)
+        },
+    )
+    .await;
+
+    // Demand spikes once (the starved-from-zero edge), then decays to zero.
+    let demand = SwitchableDemand::new(1.0);
+
+    // ── Tick 1: demand > 0 → wake/place, stamp the warm-window anchor ──────────
+    reconcile_placement(&db, &nats, &presence, Some(&demand))
+        .await
+        .expect("reconcile tick 1 (wake)");
+    let _ = spy.wait_for(1, Duration::from_secs(1)).await;
+    let t1 = spy.drain().await;
+    for rid in load_base_runners(&t1, LLAMA) {
+        assert_eq!(rid, runner.runner_id, "wake targets the resident runner");
+    }
+    let (status, _desired, _observed) = read_replica_status(&db, ws, LLAMA)
+        .await
+        .expect("model_replicas row after wake");
+    assert_eq!(status, "active", "demand>0 places the model active");
+
+    // ── Tick 2: demand decays to 0 (edge consumed) → WARM WINDOW must hold ─────
+    demand.set(0.0);
+    reconcile_placement(&db, &nats, &presence, Some(&demand))
+        .await
+        .expect("reconcile tick 2 (zero demand, within warm window)");
+    // Give any (erroneous) Unload time to land before we assert its absence.
+    let _ = spy.wait_for(1, Duration::from_millis(500)).await;
+    let t2 = spy.drain().await;
+    assert_eq!(
+        unload_base_count(&t2, LLAMA),
+        0,
+        "a just-woken scale_to_zero model must NOT be idle-evicted within the warm window"
+    );
+    let (status, _desired, _observed) = read_replica_status(&db, ws, LLAMA)
+        .await
+        .expect("model_replicas row after the zero-demand tick");
+    assert_eq!(
+        status, "active",
+        "the model stays resident (active) through the warm window, not sleeping"
+    );
+}
+
+// ── S5 WARM WINDOW EXPIRES → idle-evict sleeps the model ──────────────────────
+
+/// The complement of S4: once the warm window has actually elapsed and demand is
+/// still zero, idle-eviction DOES fire — the model is genuinely idle, so it sleeps
+/// (an `Unload{Base}` is published and the row goes `sleeping`). Proves the warm
+/// window is a finite hold, not a permanent pin, and that the eviction path itself
+/// still works.
+#[tokio::test]
+async fn s5_scale_to_zero_evicts_after_warm_window_elapses() {
+    let db = common::create_test_db().await;
+    let presence = RunnerPresence::new();
+    let (nats, spy_client) = connect_nats().await;
+    let spy = NatsCommandSpy::start(spy_client).await;
+
+    let ws = Uuid::new_v4();
+
+    let runner = seed_model_runner(
+        &db,
+        &presence,
+        SeedRunnerSpec {
+            workspace_id: ws,
+            models: vec![SeedModel::base(LLAMA, 8)],
+            pulled: vec![LLAMA.to_string()],
+            residency_zone: Some(ZONE.to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    seed_model_policy(
+        &db,
+        SeedPolicySpec {
+            idle_evict: true,
+            ..SeedPolicySpec::base(ws, LLAMA, "scale_to_zero", ZONE, 1)
+        },
+    )
+    .await;
+
+    // Place once under demand to create the row + warm-window anchor.
+    let demand = SwitchableDemand::new(1.0);
+    reconcile_placement(&db, &nats, &presence, Some(&demand))
+        .await
+        .expect("reconcile tick 1 (wake)");
+    let _ = spy.wait_for(1, Duration::from_secs(1)).await;
+    spy.drain().await;
+
+    // Age the warm-window anchor well past the default 120s window.
+    backdate_last_actuated(&db, ws, LLAMA, 600).await;
+
+    // ── Zero demand + elapsed warm window → idle-evict sleeps the model ────────
+    demand.set(0.0);
+    reconcile_placement(&db, &nats, &presence, Some(&demand))
+        .await
+        .expect("reconcile tick 2 (zero demand, warm window elapsed)");
+    let captured = spy
+        .wait_for(1, Duration::from_secs(2))
+        .await
+        .expect("an Unload published once genuinely idle past the warm window");
+    assert_eq!(
+        unload_base_count(&captured, LLAMA),
+        1,
+        "exactly one idle-eviction Unload{{Base}} once the warm window has elapsed"
+    );
+    // The Unload targets the resident runner.
+    assert!(
+        captured.iter().any(|c| c.runner_id == runner.runner_id),
+        "the idle-eviction targets the resident runner"
+    );
+    let (status, _desired, _observed) = read_replica_status(&db, ws, LLAMA)
+        .await
+        .expect("model_replicas row after eviction");
+    assert_eq!(status, "sleeping", "the idle model is slept");
 }

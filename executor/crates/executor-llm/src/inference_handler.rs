@@ -205,7 +205,10 @@ pub(crate) async fn run_completion(
 
     let completion = port.complete(&completion_req, env).await.map_err(|e| {
         let msg = match &e {
-            LlmError::Config(s) | LlmError::Api(s) | LlmError::Parse(s) => s.clone(),
+            LlmError::Config(s)
+            | LlmError::Api(s)
+            | LlmError::Retryable(s)
+            | LlmError::Parse(s) => s.clone(),
         };
         (StatusCode::UNPROCESSABLE_ENTITY, msg)
     })?;
@@ -405,6 +408,7 @@ mod tests {
                 }),
                 Err(LlmError::Api(s)) => Err(LlmError::Api(s.clone())),
                 Err(LlmError::Config(s)) => Err(LlmError::Config(s.clone())),
+                Err(LlmError::Retryable(s)) => Err(LlmError::Retryable(s.clone())),
                 Err(LlmError::Parse(s)) => Err(LlmError::Parse(s.clone())),
             }
         }
