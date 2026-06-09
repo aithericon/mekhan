@@ -1522,11 +1522,13 @@ async fn backend_crawl_streams_batches() {
     assert_eq!(result.outputs["batches"], serde_json::json!(3));
     assert_eq!(result.outputs["cancelled"], serde_json::json!(false));
 
-    // -- close: exactly one, count == file count --
+    // -- close: exactly one, count == batch count (a `join: gather` consumer
+    // sizes its barrier on items/batches emitted, NOT the file total; see
+    // crawl::execute) --
     let closes = stream.closes.lock().unwrap().clone();
     assert_eq!(closes.len(), 1, "expected exactly one close call");
     assert_eq!(closes[0].channel, "crawl");
-    assert_eq!(closes[0].count, expected_files);
+    assert_eq!(closes[0].count, 3);
 
     // -- items: 3 batches, all sharing the close's episode_uid --
     let items = stream.items.lock().unwrap().clone();
