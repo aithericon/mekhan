@@ -2316,6 +2316,37 @@ async fn register_catalogue_entry(
     )
     .await?;
 
+    // Producer edge — records THIS (content, producing-run) pair regardless of
+    // whether the catalogue INSERT above deduped on content_hash. Without it a
+    // re-run emitting byte-identical artifacts loses its provenance (the row
+    // keeps the first producer's source_net/process_id) and its instance/process
+    // view shows zero artifacts. Idempotent per (content_hash, execution_id);
+    // DO UPDATE refreshes the resolved process_id if causality tags arrived late.
+    sqlx::query(
+        r#"
+        INSERT INTO catalogue_producers (
+            content_hash, source_net, execution_id, job_id, process_id,
+            process_step, signal_key, source_event_sequence, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (content_hash, execution_id) DO UPDATE SET
+            source_net   = EXCLUDED.source_net,
+            process_id   = COALESCE(EXCLUDED.process_id, catalogue_producers.process_id),
+            process_step = COALESCE(EXCLUDED.process_step, catalogue_producers.process_step),
+            signal_key   = COALESCE(EXCLUDED.signal_key, catalogue_producers.signal_key)
+        "#,
+    )
+    .bind(&content_hash)
+    .bind(net_id)
+    .bind(&cmd.execution_id)
+    .bind(&cmd.job_id)
+    .bind(&process_id)
+    .bind(&step)
+    .bind(&cmd.signal_key)
+    .bind(event_seq)
+    .bind(cmd.created_at)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     if newly_catalogued {

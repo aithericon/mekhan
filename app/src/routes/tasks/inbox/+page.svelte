@@ -3,6 +3,8 @@
 	import { listTaskInbox, claimTask } from '$lib/api/client';
 	import { getMyEnrollments, setAvailability, type RosterMemberDetail } from '$lib/api/roster';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
+	import { connectSse, type SseConnection } from '$lib/net/sse';
+	import { authFetch } from '$lib/auth/fetch';
 	import type { HumanTask } from '$lib/types/tasks';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -114,6 +116,35 @@
 			loading = false;
 		})();
 
+		// Holding the task stream open is the human's SESSION liveness source.
+		// The server publishes `human.{member}.presence` on connect and on every
+		// 10s ping; the presence controller renews `session`-mode availability
+		// (TTL 45s) off those heartbeats. Without an open stream a `session`
+		// toggle would be admitted then reaped by the TTL sweep ~45s later — i.e.
+		// the inbox toggle silently lapses. (`sticky` mode is admitted on intent
+		// alone and is unaffected.) Live task events also refresh the inbox
+		// faster than the poll fallback below.
+		let sse: SseConnection | null = connectSse('/api/v1/tasks/stream', {
+			fetchImpl: authFetch,
+			maxRetries: 5,
+			initialRetryMs: 1000,
+			// Terminal client error (auth/gone): stop cleanly, the poll still runs.
+			onTerminal: () => {
+				sse?.close();
+				sse = null;
+			},
+			onEvent: ({ event }) => {
+				if (
+					event === 'task_created' ||
+					event === 'task_completed' ||
+					event === 'task_failed' ||
+					event === 'task_cancelled'
+				) {
+					refresh();
+				}
+			}
+		});
+
 		const timer = setInterval(() => {
 			if (!alive) return;
 			refresh();
@@ -122,6 +153,7 @@
 		return () => {
 			alive = false;
 			clearInterval(timer);
+			sse?.close();
 		};
 	});
 </script>

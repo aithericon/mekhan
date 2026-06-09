@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 71 },
+      "position": { "x": 0, "y": 80 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -14,7 +14,7 @@
     {
       "id": "producer",
       "type": "automated_step",
-      "position": { "x": 190, "y": 24 },
+      "position": { "x": 190, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Producer",
@@ -33,7 +33,7 @@
     {
       "id": "transform",
       "type": "automated_step",
-      "position": { "x": 756, "y": 11 },
+      "position": { "x": 756, "y": 15 },
       "data": {
         "type": "automated_step",
         "label": "Uppercase Transform",
@@ -76,7 +76,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1632, "y": 41 },
+      "position": { "x": 1632, "y": 48 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -56,6 +56,15 @@ use crate::runners_presence::RunnerPresence;
 
 use super::demand::DemandSource;
 
+/// Default WARM WINDOW (seconds) for a reactive (`scale_to_zero` / `keep_warm`)
+/// model whose policy sets no explicit `cooldown_secs`. After a wake the model is
+/// held resident for at least this long before idle-eviction may sleep it again,
+/// so it survives the cold-load + client cold-start-retry window instead of
+/// flapping on the one-shot starved-demand edge. An explicit `cooldown_secs`
+/// overrides it. 120s comfortably covers a small-model cold load plus a few
+/// exponential-backoff client retries.
+const DEFAULT_REACTIVE_WARM_SECS: u64 = 120;
+
 /// One base engine resident on one in-zone runner, with its computed headroom +
 /// the adapters already loaded on it. Derived from the runner catalog ∩ the
 /// in-zone filter, headroom layered from the router in-flight gauge.
@@ -583,6 +592,12 @@ async fn apply_plan(
                     .await
                     .map_err(|e| format!("publish load: {e}"))?;
             }
+            // Stamp `last_actuated_at` on the placement: a wake (or a steady-
+            // demand re-assertion) starts/refreshes the WARM-WINDOW clock that
+            // `apply_idle_eviction` reads. Without this, a `scale_to_zero` model
+            // woken by a one-shot starved-demand edge is re-evicted on the very
+            // next zero-demand tick (the edge is gone) — it flaps and never stays
+            // resident long enough to drain the client's cold-start retries.
             upsert_status(
                 db,
                 workspace_id,
@@ -591,7 +606,7 @@ async fn apply_plan(
                 Some(desired_n),
                 Some(observed),
                 status::ACTIVE,
-                None,
+                Some(Utc::now()),
                 None,
             )
             .await;
@@ -624,7 +639,15 @@ async fn apply_idle_eviction(
     .flatten();
 
     let now = Utc::now();
-    let cooled = in_cooldown(last_actuated, policy.cooldown_secs, now);
+    // Reactive models with NO explicit cooldown still get a default WARM WINDOW:
+    // a model just woken from sleep must stay resident long enough to finish a
+    // cold load and absorb the client's cold-start retries before we let it idle
+    // back to zero. `cooldown_secs = NULL` previously meant `in_cooldown` always
+    // returned false → the model was re-evicted the instant demand read 0 (the
+    // one-shot starved edge), so it could never serve. An operator-set
+    // `cooldown_secs` still wins.
+    let warm_secs = policy.cooldown_secs.or(Some(DEFAULT_REACTIVE_WARM_SECS));
+    let cooled = in_cooldown(last_actuated, warm_secs, now);
 
     let Some((runner_id, base)) = plan_idle_eviction(policy, slots, true, cooled) else {
         return Ok(());

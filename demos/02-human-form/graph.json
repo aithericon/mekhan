@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 40 },
+      "position": { "x": 0, "y": 46 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -18,7 +18,7 @@
     {
       "id": "ask",
       "type": "human_task",
-      "position": { "x": 190, "y": 20 },
+      "position": { "x": 190, "y": 27 },
       "data": {
         "type": "human_task",
         "label": "Ask Operator",

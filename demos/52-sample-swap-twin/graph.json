@@ -4,10 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": {
-        "x": 0,
-        "y": 320
-      },
+      "position": { "x": 0, "y": 446 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -23,12 +20,9 @@
       "id": "lease",
       "type": "lease_scope",
       "slug": "cell",
-      "position": {
-        "x": 190,
-        "y": 0
-      },
-      "width": 3520,
-      "height": 700,
+      "position": { "x": 190, "y": 0 },
+      "width": 4172,
+      "height": 936,
       "data": {
         "type": "lease_scope",
         "label": "xArm Sample Cell",
@@ -52,10 +46,7 @@
       "id": "split",
       "type": "parallel_split",
       "parentId": "lease",
-      "position": {
-        "x": 16,
-        "y": 320
-      },
+      "position": { "x": 16, "y": 565 },
       "data": {
         "type": "parallel_split",
         "label": "Fork (monitor ‖ work)",
@@ -67,10 +58,7 @@
       "type": "automated_step",
       "slug": "monitor_scene",
       "parentId": "lease",
-      "position": {
-        "x": 320,
-        "y": 120
-      },
+      "position": { "x": 2474, "y": 716 },
       "data": {
         "type": "automated_step",
         "label": "Monitor Scene (live twin · whole run)",
@@ -124,10 +112,7 @@
       "type": "automated_step",
       "slug": "twin_view",
       "parentId": "lease",
-      "position": {
-        "x": 620,
-        "y": 120
-      },
+      "position": { "x": 3676, "y": 716 },
       "data": {
         "type": "automated_step",
         "label": "Twin view (drain planning-scene stream)",
@@ -180,10 +165,7 @@
       "type": "automated_step",
       "slug": "reset_scene",
       "parentId": "lease",
-      "position": {
-        "x": 320,
-        "y": 460
-      },
+      "position": { "x": 256, "y": 272 },
       "data": {
         "type": "automated_step",
         "label": "Reset Scene (clear move_group)",
@@ -261,10 +243,7 @@
       "type": "automated_step",
       "slug": "add_table",
       "parentId": "lease",
-      "position": {
-        "x": 470,
-        "y": 600
-      },
+      "position": { "x": 566, "y": 286 },
       "data": {
         "type": "automated_step",
         "label": "Add Work Surface to Scene",
@@ -368,10 +347,7 @@
       "type": "automated_step",
       "slug": "home_arm",
       "parentId": "lease",
-      "position": {
-        "x": 620,
-        "y": 460
-      },
+      "position": { "x": 876, "y": 286 },
       "data": {
         "type": "automated_step",
         "label": "Home Arm (reference config)",
@@ -454,12 +430,9 @@
       "type": "map",
       "slug": "seed_inventory",
       "parentId": "lease",
-      "position": {
-        "x": 920,
-        "y": 440
-      },
+      "position": { "x": 1186, "y": 262 },
       "width": 272,
-      "height": 172,
+      "height": 189,
       "data": {
         "type": "map",
         "label": "Seed Inventory into Scene",
@@ -492,10 +465,7 @@
       "type": "automated_step",
       "slug": "add_sample",
       "parentId": "seed_inv",
-      "position": {
-        "x": 16,
-        "y": 32
-      },
+      "position": { "x": 16, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Add Sample to Scene",
@@ -583,10 +553,7 @@
       "type": "automated_step",
       "slug": "load_jobs",
       "parentId": "lease",
-      "position": {
-        "x": 1280,
-        "y": 460
-      },
+      "position": { "x": 1528, "y": 272 },
       "data": {
         "type": "automated_step",
         "label": "Load Jobs → array",
@@ -641,12 +608,9 @@
       "type": "loop",
       "slug": "job_loop",
       "parentId": "lease",
-      "position": {
-        "x": 1600,
-        "y": 300
-      },
-      "width": 1240,
-      "height": 360,
+      "position": { "x": 1838, "y": 32 },
+      "width": 1512,
+      "height": 648,
       "data": {
         "type": "loop",
         "label": "Handle Jobs (sequential)",
@@ -661,10 +625,7 @@
       "type": "automated_step",
       "slug": "home_job",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 16,
-        "y": 10
-      },
+      "position": { "x": 16, "y": 262 },
       "data": {
         "type": "automated_step",
         "label": "Home Arm (per-job reset)",
@@ -747,10 +708,7 @@
       "type": "automated_step",
       "slug": "resolve_poses",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 16,
-        "y": 120
-      },
+      "position": { "x": 326, "y": 194 },
       "data": {
         "type": "automated_step",
         "label": "Resolve Job Poses",
@@ -826,10 +784,7 @@
       "type": "decision",
       "slug": "op_gate",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 326,
-        "y": 160
-      },
+      "position": { "x": 636, "y": 274 },
       "data": {
         "type": "decision",
         "label": "Dispatch on op",
@@ -849,10 +804,7 @@
       "type": "sub_workflow",
       "slug": "do_pick",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 636,
-        "y": 60
-      },
+      "position": { "x": 946, "y": 350 },
       "data": {
         "type": "sub_workflow",
         "label": "Pick (37)",
@@ -900,10 +852,7 @@
       "type": "sub_workflow",
       "slug": "do_place",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 636,
-        "y": 220
-      },
+      "position": { "x": 946, "y": 32 },
       "data": {
         "type": "sub_workflow",
         "label": "Place (38)",
@@ -945,10 +894,7 @@
       "type": "automated_step",
       "slug": "mark_done",
       "parentId": "handle_jobs",
-      "position": {
-        "x": 946,
-        "y": 160
-      },
+      "position": { "x": 1256, "y": 262 },
       "data": {
         "type": "automated_step",
         "label": "Mark Job Done",
@@ -988,10 +934,7 @@
       "type": "automated_step",
       "slug": "stop_monitor",
       "parentId": "lease",
-      "position": {
-        "x": 1280,
-        "y": 820
-      },
+      "position": { "x": 3676, "y": 316 },
       "data": {
         "type": "automated_step",
         "label": "Stop Monitor (signal work done)",
@@ -1039,10 +982,7 @@
       "id": "join",
       "type": "join",
       "parentId": "lease",
-      "position": {
-        "x": 3360,
-        "y": 320
-      },
+      "position": { "x": 3986, "y": 547 },
       "data": {
         "type": "join",
         "label": "Join (monitor + work)",
@@ -1054,10 +994,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 3780,
-        "y": 300
-      },
+      "position": { "x": 4432, "y": 387 },
       "data": {
         "type": "end",
         "label": "Done",

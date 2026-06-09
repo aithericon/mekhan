@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 80 },
+      "position": { "x": 0, "y": 89 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "seed_nas",
       "type": "automated_step",
       "slug": "seed",
-      "position": { "x": 300, "y": 80 },
+      "position": { "x": 290, "y": 59 },
       "data": {
         "type": "automated_step",
         "label": "Seed a synthetic NAS",
@@ -59,7 +59,7 @@
       "id": "crawl",
       "type": "automated_step",
       "slug": "crawl",
-      "position": { "x": 620, "y": 80 },
+      "position": { "x": 600, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Crawl the file tree (file-ops crawl)",
@@ -98,7 +98,7 @@
       "id": "fold",
       "type": "automated_step",
       "slug": "fold",
-      "position": { "x": 940, "y": 80 },
+      "position": { "x": 910, "y": 59 },
       "data": {
         "type": "automated_step",
         "label": "Fold the crawl batches",
@@ -130,7 +130,7 @@
       "id": "register",
       "type": "automated_step",
       "slug": "register",
-      "position": { "x": 1260, "y": 80 },
+      "position": { "x": 1220, "y": 72 },
       "data": {
         "type": "automated_step",
         "label": "Register each file BY REFERENCE (log_artifact upload=False)",
@@ -160,7 +160,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1900, "y": 100 },
+      "position": { "x": 1530, "y": 62 },
       "data": {
         "type": "end",
         "label": "Done",

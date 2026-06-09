@@ -18,7 +18,50 @@ use aithericon_executor_backend_configs::llm::ResolvedOpenAiResource;
 
 use crate::adapters;
 use crate::config::{ImageInput, LlmConfig};
-use crate::port::{CompletionRequest, ImageData, ResponseFormat};
+use crate::port::{
+    CompletionPort, CompletionRequest, CompletionResponse, ImageData, LlmError, ResponseFormat,
+};
+
+/// Bounded retry for a TRANSIENT router error (`LlmError::Retryable`: 503 no-live-
+/// replica while the pool scales from zero, or 429 all-replicas-saturated). The
+/// model-pool autoscaler reacts to the router's demand signal and brings a replica
+/// up within its reconcile (≤15s) + cold-load window, so riding it out here keeps a
+/// SINGLE execution alive instead of fast-failing and forcing an engine resubmit.
+/// Exponential backoff (1s, 2s, 4s, …) capped per-sleep; the step timeout is the
+/// hard outer bound (these retries race it in the execute `select!`).
+const TRANSIENT_RETRY_MAX_ATTEMPTS: u32 = 8;
+const TRANSIENT_RETRY_BASE_MS: u64 = 1_000;
+const TRANSIENT_RETRY_CAP_MS: u64 = 15_000;
+
+/// Call the adapter, retrying `LlmError::Retryable` with bounded exponential
+/// backoff. A non-retryable error (or success) returns immediately; exhausting the
+/// retry budget downgrades the last transient error to `LlmError::Api` so it
+/// surfaces as a normal backend error rather than looping forever.
+async fn complete_with_retry(
+    adapter: &std::sync::Arc<dyn CompletionPort>,
+    request: &CompletionRequest,
+    env: &HashMap<String, String>,
+) -> Result<CompletionResponse, LlmError> {
+    let mut attempt: u32 = 0;
+    loop {
+        match adapter.complete(request, env).await {
+            Err(LlmError::Retryable(msg)) if attempt < TRANSIENT_RETRY_MAX_ATTEMPTS => {
+                let backoff_ms =
+                    (TRANSIENT_RETRY_BASE_MS << attempt.min(6)).min(TRANSIENT_RETRY_CAP_MS);
+                attempt += 1;
+                warn!(
+                    attempt,
+                    backoff_ms,
+                    model = %request.model,
+                    "LLM transient error (pool scaling from zero / saturated); retrying: {msg}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+            Err(LlmError::Retryable(msg)) => return Err(LlmError::Api(msg)),
+            other => return other,
+        }
+    }
+}
 
 /// Backend that executes LLM completions via direct HTTP calls — no rig dependency.
 pub struct LlmBackend;
@@ -218,7 +261,7 @@ impl ExecutionBackend for LlmBackend {
                     None,
                 ))
             },
-            result = adapter.complete(&request, &env) => {
+            result = complete_with_retry(&adapter, &request, &env) => {
                 let duration = start.elapsed();
                 match result {
                     Ok(resp) => {
@@ -518,4 +561,129 @@ fn guess_media_type(path: &str) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use aithericon_executor_domain::{LlmStopReason, LlmUsage};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    /// An adapter that returns `Retryable` for its first `fail_n` calls, then `Ok`.
+    /// Counts calls so the test can assert how many attempts were made.
+    struct FlakyAdapter {
+        fail_n: u32,
+        calls: AtomicU32,
+    }
+
+    #[async_trait]
+    impl CompletionPort for FlakyAdapter {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+            _env: &HashMap<String, String>,
+        ) -> Result<CompletionResponse, LlmError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_n {
+                Err(LlmError::Retryable(format!(
+                    "no live replica serves model (attempt {n})"
+                )))
+            } else {
+                Ok(CompletionResponse {
+                    content: "ok".into(),
+                    usage: LlmUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                    },
+                    model: "test-model".into(),
+                    stop_reason: LlmStopReason::EndTurn,
+                    structured_output: None,
+                    tool_calls: vec![],
+                })
+            }
+        }
+        fn name(&self) -> &str {
+            "flaky"
+        }
+    }
+
+    fn req() -> CompletionRequest {
+        CompletionRequest {
+            model: "llama3.2:1b".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            reasoning: None,
+            response_format: ResponseFormat::Text,
+            tools: vec![],
+        }
+    }
+
+    /// A transient router error (503 no-live-replica while the pool scales from
+    /// zero) is retried with backoff and SUCCEEDS once a replica comes up — the
+    /// whole execution rides out the cold start instead of fast-failing. `start_paused`
+    /// auto-advances the backoff sleeps so the test is instant.
+    #[tokio::test(start_paused = true)]
+    async fn retries_transient_then_succeeds() {
+        let flaky = Arc::new(FlakyAdapter {
+            fail_n: 3, // 503 three times, then a replica is live
+            calls: AtomicU32::new(0),
+        });
+        let adapter: Arc<dyn CompletionPort> = flaky.clone();
+        let env = HashMap::new();
+        let resp = complete_with_retry(&adapter, &req(), &env)
+            .await
+            .expect("a transient 503 must be retried until a replica is live");
+        assert_eq!(resp.content, "ok");
+        // 3 transient failures + 1 success = 4 attempts.
+        assert_eq!(flaky.calls.load(Ordering::SeqCst), 4);
+    }
+
+    /// A persistently transient error eventually exhausts the bounded budget and is
+    /// downgraded to a normal `Api` error (a clean backend failure), NOT retried
+    /// forever.
+    #[tokio::test(start_paused = true)]
+    async fn exhausts_then_downgrades_to_api_error() {
+        let adapter: Arc<dyn CompletionPort> = Arc::new(FlakyAdapter {
+            fail_n: u32::MAX, // never recovers
+            calls: AtomicU32::new(0),
+        });
+        let env = HashMap::new();
+        let err = complete_with_retry(&adapter, &req(), &env)
+            .await
+            .expect_err("a never-recovering transient error must eventually fail");
+        // Downgraded to Api (not Retryable) so the caller treats it as terminal.
+        assert!(
+            matches!(err, LlmError::Api(_)),
+            "exhausted retries downgrade to Api, got {err:?}"
+        );
+    }
+
+    /// A NON-transient error (e.g. a 400/parse) is returned immediately — no retry.
+    #[tokio::test(start_paused = true)]
+    async fn non_transient_is_not_retried() {
+        struct HardFail(AtomicU32);
+        #[async_trait]
+        impl CompletionPort for HardFail {
+            async fn complete(
+                &self,
+                _r: &CompletionRequest,
+                _e: &HashMap<String, String>,
+            ) -> Result<CompletionResponse, LlmError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(LlmError::Api("bad request".into()))
+            }
+            fn name(&self) -> &str {
+                "hard"
+            }
+        }
+        let adapter: Arc<dyn CompletionPort> = Arc::new(HardFail(AtomicU32::new(0)));
+        let env = HashMap::new();
+        let err = complete_with_retry(&adapter, &req(), &env)
+            .await
+            .expect_err("non-transient error surfaces");
+        assert!(matches!(err, LlmError::Api(_)));
+    }
 }

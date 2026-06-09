@@ -1711,6 +1711,7 @@ mod tests {
             roles: vec![],
             org_id: None,
             workspace_id: Some(ws),
+            workspace_role: None,
         }
     }
 

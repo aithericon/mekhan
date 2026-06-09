@@ -56,5 +56,6 @@ pub async fn verify_runner_token(db: &PgPool, bearer: &str) -> Result<AuthUser, 
         roles: vec![RUNNER_ROLE.to_string()],
         org_id: None,
         workspace_id: Some(row.workspace_id),
+        workspace_role: None,
     })
 }

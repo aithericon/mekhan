@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 54 },
+      "position": { "x": 0, "y": 71 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -85,15 +85,15 @@
     {
       "id": "classify",
       "type": "agent",
-      "position": { "x": 600, "y": 0 },
+      "position": { "x": 600, "y": 3 },
       "data": {
         "type": "agent",
         "label": "Classify (LLM)",
         "description": "Borrows extract_text.content inline via {{ extract_text.content }} — compiler stages it as a Raw input, runner interpolates it into the prompt at dispatch time. `content` is kreuzberg's native key for the extracted text. Dispatches against the local Ollama daemon (`just dev ollama-up`); model must match the one Ollama has pulled (recipe default qwen3.5:9b — override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 emits `<think>...</think>` blocks before the JSON answer by default; downstream consumers must tolerate the prefix.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 256
         },
@@ -126,7 +126,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 930, "y": 44 },
+      "position": { "x": 930, "y": 57 },
       "data": {
         "type": "end",
         "label": "Done",

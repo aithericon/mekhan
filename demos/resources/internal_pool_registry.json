@@ -12,6 +12,10 @@
       {
         "model_id": "llama3.2:1b",
         "provider": "openai"
+      },
+      {
+        "model_id": "llama3.2-vision:11b",
+        "provider": "openai"
       }
     ]
   }

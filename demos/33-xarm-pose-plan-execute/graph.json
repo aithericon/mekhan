@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 133 },
+      "position": { "x": 0, "y": 153 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -15,7 +15,7 @@
       "id": "plan_pose",
       "type": "automated_step",
       "slug": "plan_pose",
-      "position": { "x": 190, "y": 49 },
+      "position": { "x": 190, "y": 50 },
       "data": {
         "type": "automated_step",
         "label": "Plan to Pose (MoveIt)",
@@ -76,7 +76,7 @@
       "id": "gate",
       "type": "decision",
       "slug": "gate",
-      "position": { "x": 500, "y": 95 },
+      "position": { "x": 500, "y": 117 },
       "data": {
         "type": "decision",
         "label": "Plan acceptable?",
@@ -95,7 +95,7 @@
       "id": "execute",
       "type": "automated_step",
       "slug": "execute",
-      "position": { "x": 810, "y": 172 },
+      "position": { "x": 810, "y": 198 },
       "data": {
         "type": "automated_step",
         "label": "Execute Trajectory (Path B)",
@@ -139,7 +139,7 @@
       "id": "read_state",
       "type": "automated_step",
       "slug": "read_state",
-      "position": { "x": 1120, "y": 132 },
+      "position": { "x": 1120, "y": 144 },
       "data": {
         "type": "automated_step",
         "label": "Read Joint State",
@@ -181,7 +181,7 @@
     {
       "id": "end-done",
       "type": "end",
-      "position": { "x": 1430, "y": 136 },
+      "position": { "x": 1430, "y": 147 },
       "data": {
         "type": "end",
         "label": "Done",

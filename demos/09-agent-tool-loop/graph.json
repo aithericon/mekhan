@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 10, "y": 108 },
+      "position": { "x": 10, "y": 138 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -32,9 +32,9 @@
         "label": "Triage Agent",
         "description": "Reads the customer's message and decides whether to (a) look up an order via the `lookup_order` tool, and/or (b) collect structured input from a human via the `collect_feedback` tool. Both tools are SubWorkflows wired via the `tools` handle; the agent compiler derives each tool's input schema from its child's Start contract and emits the dispatch/collect transitions automatically. `collect_feedback` is the dynamic-form-as-agent-tool case: the agent DESIGNS the form by passing a `steps` array (TaskStepConfig[]) as the tool args; the child's Start declares `steps` (with the TaskStepConfig[] schema inline, so the LLM is told the exact grammar), a HumanTask renders it via `stepsRef = \"start.steps\"`, and the operator's answers come back as the tool result.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0
         },
         "systemPrompt": "You are a concise customer-service agent who ALWAYS uses tools rather than guessing. Tools: lookup_order(order_id) fetches the current shipping status for an order id; collect_feedback(steps) renders a form to collect input from the human — DESIGN it by passing a `steps` array where each step is {id, title, blocks} and each block is either {type:\"mdsvex\", content} for display text or {type:\"input\", field:{name, label, kind, required}} with kind text|textarea|number|select|checkbox|radio|date. Rules: (1) if the message already contains an order id (e.g. ORD-42), call lookup_order with it immediately; (2) if the customer asks about an order but gives NO order id, you MUST call collect_feedback to ask for it — design a one-field text input named `order_id`; do NOT just ask in plain text, use the tool; (3) after collect_feedback returns answers, read the order id from them and call lookup_order with it; (4) once you have the shipping status, reply in one sentence.",
@@ -46,7 +46,7 @@
     {
       "id": "lookup_order",
       "type": "sub_workflow",
-      "position": { "x": 0, "y": 240 },
+      "position": { "x": 0, "y": 282 },
       "data": {
         "type": "sub_workflow",
         "label": "lookup_order",
@@ -67,7 +67,7 @@
     {
       "id": "collect_feedback",
       "type": "sub_workflow",
-      "position": { "x": 0, "y": 420 },
+      "position": { "x": 0, "y": 546 },
       "data": {
         "type": "sub_workflow",
         "label": "collect_feedback",
@@ -87,7 +87,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 640, "y": 98 },
+      "position": { "x": 640, "y": 125 },
       "data": {
         "type": "end",
         "label": "Done",

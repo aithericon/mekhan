@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 40 },
+      "position": { "x": 0, "y": 27 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "review",
       "type": "human_task",
       "slug": "review",
-      "position": { "x": 220, "y": 20 },
+      "position": { "x": 290, "y": 41 },
       "data": {
         "type": "human_task",
         "label": "Reviewer Decision",
@@ -40,7 +40,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 480, "y": 0 },
+      "position": { "x": 560, "y": 0 },
       "data": {
         "type": "end",
         "label": "Reviewed",

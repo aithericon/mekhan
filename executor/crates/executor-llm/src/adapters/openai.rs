@@ -384,7 +384,19 @@ async fn openai_complete(
             .text()
             .await
             .unwrap_or_else(|_| "<failed to read body>".into());
-        return Err(LlmError::Api(format!("OpenAI returned {status}: {body}")));
+        let msg = format!("OpenAI returned {status}: {body}");
+        // 503 (no live replica — the pool is scaling from zero) and 429 (all
+        // replicas saturated — the pool wants more capacity) are TRANSIENT: the
+        // inference router emits a demand signal the autoscaler reacts to, so the
+        // caller should retry with backoff rather than fail the execution. The
+        // router tags these `router_error`; match the status to stay robust if a
+        // genuine upstream provider (not our router) returns a 503/429 too.
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            return Err(LlmError::Retryable(msg));
+        }
+        return Err(LlmError::Api(msg));
     }
 
     let resp: OpenAiChatResponse = response

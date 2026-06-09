@@ -5,7 +5,7 @@
       "type": "scope",
       "position": { "x": 0, "y": 0 },
       "width": 942,
-      "height": 324,
+      "height": 360,
       "data": {
         "type": "scope",
         "label": "High-Value Review"
@@ -14,7 +14,7 @@
     {
       "id": "trigger-invoice-api",
       "type": "trigger",
-      "position": { "x": 381, "y": 360 },
+      "position": { "x": 381, "y": 396 },
       "data": {
         "type": "trigger",
         "label": "API Call",
@@ -39,7 +39,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 1012, "y": 340 },
+      "position": { "x": 1012, "y": 369 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -68,7 +68,7 @@
     {
       "id": "review",
       "type": "human_task",
-      "position": { "x": 1302, "y": 360 },
+      "position": { "x": 1302, "y": 396 },
       "data": {
         "type": "human_task",
         "label": "Review Invoice",
@@ -80,7 +80,7 @@
     {
       "id": "extract",
       "type": "automated_step",
-      "position": { "x": 1572, "y": 306 },
+      "position": { "x": 1572, "y": 326 },
       "data": {
         "type": "automated_step",
         "label": "Extract Data",
@@ -132,7 +132,7 @@
     {
       "id": "check-amount",
       "type": "decision",
-      "position": { "x": 1882, "y": 342 },
+      "position": { "x": 1882, "y": 379 },
       "data": {
         "type": "decision",
         "label": "Amount Check",
@@ -151,7 +151,7 @@
       "id": "split",
       "type": "parallel_split",
       "parentId": "scope-parallel",
-      "position": { "x": 16, "y": 172 },
+      "position": { "x": 16, "y": 195 },
       "data": {
         "type": "parallel_split",
         "label": "Dual Review"
@@ -161,7 +161,7 @@
       "id": "manager-approval",
       "type": "human_task",
       "parentId": "scope-parallel",
-      "position": { "x": 276, "y": 232 },
+      "position": { "x": 276, "y": 263 },
       "data": {
         "type": "human_task",
         "label": "Manager Approval",
@@ -221,7 +221,7 @@
       "id": "join",
       "type": "join",
       "parentId": "scope-parallel",
-      "position": { "x": 566, "y": 154 },
+      "position": { "x": 566, "y": 176 },
       "data": {
         "type": "join",
         "label": "Merge Results",
@@ -232,7 +232,7 @@
       "id": "end-approved",
       "type": "end",
       "parentId": "scope-parallel",
-      "position": { "x": 806, "y": 174 },
+      "position": { "x": 806, "y": 195 },
       "data": {
         "type": "end",
         "label": "Approved"
@@ -241,7 +241,7 @@
     {
       "id": "end-processed",
       "type": "end",
-      "position": { "x": 2192, "y": 380 },
+      "position": { "x": 2192, "y": 415 },
       "data": {
         "type": "end",
         "label": "Processed"

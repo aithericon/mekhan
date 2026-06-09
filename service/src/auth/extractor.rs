@@ -27,6 +27,37 @@ use crate::AppState;
 use super::authenticator::SESSION_COOKIE;
 use super::model::{AuthError, AuthUser};
 
+/// Best-effort mirror of the caller's human-readable identity into
+/// `user_profiles`, keyed by `subject_as_uuid()`. Lets member-admin and roster
+/// listings LEFT JOIN a name/email onto the raw UUID without a second IdP
+/// round-trip. Fire-and-forget: any DB error is logged and swallowed so a
+/// transient `user_profiles` failure never 500s an otherwise-valid request.
+/// No-op when the principal carries neither email nor display name (runner /
+/// worker control-plane tokens, anonymous probes).
+async fn upsert_user_profile(db: &sqlx::PgPool, user: &AuthUser) {
+    if user.email.is_none() && user.display_name.is_none() {
+        return;
+    }
+    let res = sqlx::query(
+        "INSERT INTO user_profiles (user_id, email, display_name) \
+              VALUES ($1, $2, $3) \
+         ON CONFLICT (user_id) DO UPDATE \
+            SET email = EXCLUDED.email, \
+                display_name = EXCLUDED.display_name, \
+                updated_at = now() \
+          WHERE user_profiles.email IS DISTINCT FROM EXCLUDED.email \
+             OR user_profiles.display_name IS DISTINCT FROM EXCLUDED.display_name",
+    )
+    .bind(user.subject_as_uuid())
+    .bind(user.email.as_deref())
+    .bind(user.display_name.as_deref())
+    .execute(db)
+    .await;
+    if let Err(e) = res {
+        tracing::debug!(error = %e, "user_profiles upsert failed (non-fatal)");
+    }
+}
+
 /// HTTP-layer view of `AuthError` — maps each domain variant onto a status
 /// code and uses the project-wide `ErrorResponse` body shape.
 impl IntoResponse for AuthError {
@@ -76,6 +107,10 @@ where
             .authenticate(&parts.headers, &jar)
             .await?;
         super::active_workspace::apply_override(&state.db, &mut user, &parts.headers).await;
+        // Covers routes mounted OUTSIDE `require_auth_middleware` — notably
+        // `/api/auth/session`, the SPA's identity probe — where the middleware
+        // upsert never ran. Best-effort, non-blocking.
+        upsert_user_profile(&state.db, &user).await;
         Ok(user)
     }
 }
@@ -207,6 +242,9 @@ pub async fn require_auth_middleware(
         .authenticate(req.headers(), &jar)
         .await?;
     super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
+    // Mirror identity into `user_profiles` on the hot path — every gated
+    // `/api/v1/*` request flows through here. Best-effort, non-blocking.
+    upsert_user_profile(&state.db, &user).await;
     // Stash the user on the request so downstream handlers can pick it up via
     // an `Extension<AuthUser>` if they don't want to re-extract.
     req.extensions_mut().insert(user);

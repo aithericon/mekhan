@@ -218,6 +218,22 @@ fn should_admit(e: &HumanPresenceEntry, now: Instant, ttl: Duration) -> bool {
         }
 }
 
+/// Whether the TTL sweep should REAP this entry now. A FREE pure function (like
+/// [`should_admit`]) so the sweep's gate is unit-testable without NATS.
+///
+/// Reaping requires all three: the member is currently ADMITTED (`present` — a
+/// not-yet-present entry has nothing to reap), the source is TTL-governed (a
+/// [`LivenessSource::None`]/durable entry is NEVER swept — only an
+/// `available=false` toggle expires it), and the per-entry window has elapsed
+/// since the last renewal (`now - last_seen > ttl`). The `> ttl` here is the
+/// exact complement of the `<= ttl` admit gate in [`should_admit`], so a
+/// `session` member at the boundary is consistently classified by both.
+fn should_sweep(e: &HumanPresenceEntry, now: Instant) -> bool {
+    e.present
+        && e.liveness_source != LivenessSource::None
+        && now.duration_since(e.last_seen) > e.ttl
+}
+
 /// Inject ONE slot's `presence_acquire` unit into the pool net's
 /// `presence_acquire` bridge_in place via
 /// `petri.bridge.<pool_net_id>.presence_acquire`.
@@ -654,11 +670,7 @@ pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: Human
             let mut map = presence.lock().await;
             let mut out = Vec::new();
             for (key, entry) in map.iter_mut() {
-                let ttl_governed = entry.liveness_source != LivenessSource::None;
-                if entry.present
-                    && ttl_governed
-                    && now.duration_since(entry.last_seen) > entry.ttl
-                {
+                if should_sweep(entry, now) {
                     entry.present = false;
                     out.push((key.1, entry.pool_net_id.clone(), entry.concurrency));
                 }
@@ -715,6 +727,14 @@ mod tests {
             workspace_id: Uuid::new_v4(),
             member_user_id: Uuid::new_v4(),
         }
+    }
+
+    /// An ADMITTED entry (`present = true`) with the given source + last renewal,
+    /// for exercising the TTL sweep gate.
+    fn present_entry(source: LivenessSource, last_seen: Instant) -> HumanPresenceEntry {
+        let mut e = entry(true, source, last_seen);
+        e.present = true;
+        e
     }
 
     #[test]
@@ -791,6 +811,50 @@ mod tests {
             &entry(true, LivenessSource::External, just_over),
             now,
             ttl
+        ));
+    }
+
+    #[test]
+    fn should_sweep_truth_table() {
+        let now = Instant::now();
+        let fresh = now; // last_seen == now → 0 elapsed
+        let just_over = now - Duration::from_secs(46); // > 45s ttl
+        let just_under = now - Duration::from_secs(44); // <= 45s ttl
+
+        // A not-yet-admitted entry has nothing to reap, even if stale.
+        let mut absent = present_entry(LivenessSource::Session, just_over);
+        absent.present = false;
+        assert!(!should_sweep(&absent, now));
+
+        // Session/External + present + stale → swept.
+        assert!(should_sweep(
+            &present_entry(LivenessSource::Session, just_over),
+            now
+        ));
+        assert!(should_sweep(
+            &present_entry(LivenessSource::External, just_over),
+            now
+        ));
+
+        // Session + present but FRESH (within ttl) → not swept. Boundary: the
+        // `> ttl` sweep gate is the exact complement of `should_admit`'s `<= ttl`.
+        assert!(!should_sweep(
+            &present_entry(LivenessSource::Session, fresh),
+            now
+        ));
+        assert!(!should_sweep(
+            &present_entry(LivenessSource::Session, just_under),
+            now
+        ));
+
+        // None (durable) is NEVER swept, however stale — only a toggle expires it.
+        assert!(!should_sweep(
+            &present_entry(LivenessSource::None, just_over),
+            now
+        ));
+        assert!(!should_sweep(
+            &present_entry(LivenessSource::None, now - Duration::from_secs(86_400)),
+            now
         ));
     }
 }

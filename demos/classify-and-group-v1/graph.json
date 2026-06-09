@@ -3,7 +3,7 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 0, "y": 64 },
+      "position": { "x": 0, "y": 81 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -28,7 +28,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 250, "y": 44 },
+      "position": { "x": 250, "y": 54 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -57,7 +57,7 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": { "x": 540, "y": 20 },
+      "position": { "x": 540, "y": 24 },
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
@@ -113,9 +113,9 @@
         "label": "Group & classify (vision LLM)",
         "description": "Vision MoE looks at the document image and the OCR text together. Groups pages into logical documents and assigns each group one of the canonical document classes. Single LLM call — the model owns both the grouping decision and the per-group classification (mirrors online-clinic's `assemble_and_classify`).",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "llama3.2-vision:11b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 1024
         },
@@ -138,7 +138,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 1180, "y": 34 },
+      "position": { "x": 1180, "y": 41 },
       "data": {
         "type": "end",
         "label": "Done",

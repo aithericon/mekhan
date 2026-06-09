@@ -1,13 +1,13 @@
 {
   "nodes": [
-    { "id": "start", "type": "start", "position": { "x": 0, "y": 66 },
+    { "id": "start", "type": "start", "position": { "x": 0, "y": 72 },
       "data": { "type": "start", "label": "Start", "processName": "Asset ref demo",
         "initial": { "id": "in", "label": "Trigger", "fields": [ { "name": "note", "label": "Note", "kind": "text", "required": false } ] } } },
-    { "id": "route", "type": "decision", "position": { "x": 290, "y": 58 },
+    { "id": "route", "type": "decision", "position": { "x": 290, "y": 68 },
       "data": { "type": "decision", "label": "By Yield", "description": "Route on the steel_spec asset's yield strength (constant-inlined at publish).",
         "conditions": [ { "edgeId": "branch-strong", "label": "Strong (>=300)", "guard": "steel_spec.yield_strength >= 300" } ],
         "defaultBranch": "default" } },
-    { "id": "end-strong", "type": "end", "position": { "x": 600, "y": 132 },
+    { "id": "end-strong", "type": "end", "position": { "x": 600, "y": 144 },
       "data": { "type": "end", "label": "Strong", "resultMapping": [ { "targetField": "grade_class", "expression": "\"strong\"" } ] } },
     { "id": "end-mild", "type": "end", "position": { "x": 600, "y": 0 },
       "data": { "type": "end", "label": "Mild", "resultMapping": [ { "targetField": "grade_class", "expression": "\"mild\"" } ] } }

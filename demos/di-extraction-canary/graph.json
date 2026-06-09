@@ -3,7 +3,7 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 0, "y": 94 },
+      "position": { "x": 0, "y": 125 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -28,7 +28,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 250, "y": 74 },
+      "position": { "x": 250, "y": 98 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -57,15 +57,15 @@
     {
       "id": "extract",
       "type": "agent",
-      "position": { "x": 540, "y": 30 },
+      "position": { "x": 540, "y": 44 },
       "data": {
         "type": "agent",
         "label": "Extract (vision-only, single call)",
         "description": "Classification + extraction in ONE vision call. No OCR layer, no per-field citations, no bbox grounding. Mirrors the clinic's `t_extract` transition (Vision, qwen3.6:35b-a3b). Locally we use llama3.2-vision:11b as the vision substitute — swap to the heavier MoE for parity benchmarks.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "llama3.2-vision:11b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 4096
         },
@@ -164,7 +164,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 1180, "y": 14 },
+      "position": { "x": 1180, "y": 17 },
       "data": {
         "type": "end",
         "label": "Done",

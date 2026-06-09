@@ -140,6 +140,10 @@ impl Default for NoopAuthenticator {
                 // would return for this subject; we shortcut the lookup since
                 // NoopAuthenticator bypasses the resolver path entirely.
                 workspace_id: Some(uuid::Uuid::nil()),
+                // Dev user is seeded as `owner` of the default workspace by
+                // migration 20240123; mirror that here so the SPA's admin
+                // affordances light up offline.
+                workspace_role: Some("owner".to_string()),
             },
         }
     }

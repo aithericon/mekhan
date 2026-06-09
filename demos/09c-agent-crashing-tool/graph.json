@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 10, "y": 108 },
+      "position": { "x": 10, "y": 138 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -26,9 +26,9 @@
         "label": "Worker Agent",
         "description": "Calls the do_work tool; the tool always crashes. With onToolError=feedback the failure comes back as a tool error the agent must read and report — it must NOT crash the agent.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0
         },
         "systemPrompt": "You are a worker. You MUST call the `do_work` tool exactly once, passing the user's request as `payload`. The tool may fail. If the tool returns an error, do NOT call it again — reply in one sentence stating that the tool failed and quote the failure reason. Otherwise reply with the tool's summary.",
@@ -40,7 +40,7 @@
     {
       "id": "do_work",
       "type": "sub_workflow",
-      "position": { "x": 0, "y": 240 },
+      "position": { "x": 0, "y": 282 },
       "data": {
         "type": "sub_workflow",
         "label": "do_work",
@@ -60,7 +60,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 640, "y": 98 },
+      "position": { "x": 640, "y": 125 },
       "data": {
         "type": "end",
         "label": "Done",

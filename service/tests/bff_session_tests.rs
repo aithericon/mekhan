@@ -33,6 +33,7 @@ fn test_user(subject: &str) -> AuthUser {
         roles: vec!["editor".to_string()],
         org_id: Some("org-1".to_string()),
         workspace_id: None,
+        workspace_role: None,
     }
 }
 

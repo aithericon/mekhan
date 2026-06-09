@@ -21,6 +21,13 @@ export interface AuthUser {
 	 * via the `mekhan_active_workspace` cookie set by `POST /api/v1/me/active-workspace`.
 	 */
 	workspaceId?: string;
+	/**
+	 * The caller's role (`owner` | `admin` | `editor` | `viewer`) in their
+	 * RESOLVED `workspaceId`. Populated by the resolver from the same
+	 * `workspace_members` row. Drives admin-only UI gating (roster enroll /
+	 * edit / revoke). Absent when no membership backs the workspace.
+	 */
+	workspaceRole?: string;
 }
 
 export interface AuthSession {

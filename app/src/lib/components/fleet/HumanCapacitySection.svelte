@@ -8,21 +8,42 @@
 	// `GET /api/v1/human-presence` (which members mekhan currently considers in
 	// their pool), joined to the durable `roster_members` enrollment list. A
 	// member can be enrolled-but-offline (no presence row, or `present:false`).
+	//
+	// Workspace admins also get the enrollment controls here — enroll a member,
+	// edit caps/concurrency/availability, or revoke — all gated on
+	// `auth.isWorkspaceAdmin` (hidden for everyone else). They drive a single
+	// shared HumanEnrollSheet instance.
 	import type { CapacitySummary } from '$lib/api/capacities';
 	import {
 		getHumanPresence,
 		listRoster,
+		revokeMember,
 		type HumanPresenceSnapshot,
 		type RosterMemberSummary
 	} from '$lib/api/roster';
+	import { auth } from '$lib/auth/store.svelte';
 	import StatusDot from '$lib/components/fleet/StatusDot.svelte';
+	import HumanEnrollSheet from '$lib/components/fleet/HumanEnrollSheet.svelte';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 	import Users from '@lucide/svelte/icons/users';
+	import UserPlus from '@lucide/svelte/icons/user-plus';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { toast } from 'svelte-sonner';
 
 	let { capacities }: { capacities: CapacitySummary[] } = $props();
 
+	const isAdmin = $derived(auth.isWorkspaceAdmin);
+
 	let presence = $state<HumanPresenceSnapshot[]>([]);
 	let members = $state<RosterMemberSummary[]>([]);
+
+	// ── Enroll/edit sheet state (single shared instance) ───────────────────────
+	let sheetOpen = $state(false);
+	let sheetCapacityId = $state('');
+	let sheetCapacityName = $state('');
+	let sheetMember = $state<RosterMemberSummary | null>(null);
 
 	async function poll() {
 		const [p, m] = await Promise.all([
@@ -39,8 +60,40 @@
 		return () => clearInterval(t);
 	});
 
+	function openEnroll(cap: CapacitySummary) {
+		sheetMember = null;
+		sheetCapacityId = cap.id;
+		sheetCapacityName = cap.display_name;
+		sheetOpen = true;
+	}
+
+	function openEdit(cap: CapacitySummary, m: RosterMemberSummary) {
+		sheetMember = m;
+		sheetCapacityId = cap.id;
+		sheetCapacityName = cap.display_name;
+		sheetOpen = true;
+	}
+
+	async function handleRevoke(m: RosterMemberSummary) {
+		const who = m.member_display_name ?? m.member_email ?? short(m.member_user_id);
+		if (!confirm(`Revoke ${who} from this pool? They will stop receiving offers.`)) return;
+		try {
+			await revokeMember(m.id);
+			toast.success('Member revoked.');
+			await poll();
+		} catch (e) {
+			toast.error(`Revoke failed: ${e instanceof Error ? e.message : e}`);
+		}
+	}
+
 	function membersFor(capId: string): RosterMemberSummary[] {
 		return members.filter((m) => m.capacity_id === capId);
+	}
+
+	/** Member user-ids already enrolled into a capacity — fed to the enroll picker
+	 *  so it excludes them. */
+	function memberIdsFor(capId: string): string[] {
+		return membersFor(capId).map((m) => m.member_user_id);
 	}
 
 	function presentFor(capId: string, memberId: string): HumanPresenceSnapshot | undefined {
@@ -95,33 +148,88 @@
 							<div class="truncate text-sm font-semibold text-foreground">{cap.display_name}</div>
 							<div class="truncate font-mono text-xs text-muted-foreground">{cap.path}</div>
 						</div>
-						<Badge variant="outline" class="shrink-0 rounded-full">
-							{online} / {roster.length} online
-						</Badge>
+						<div class="flex shrink-0 items-center gap-2">
+							<Badge variant="outline" class="rounded-full">
+								{online} / {roster.length} online
+							</Badge>
+							{#if isAdmin}
+								<Button
+									variant="outline"
+									size="sm"
+									class="h-7 gap-1 px-2 text-xs"
+									onclick={() => openEnroll(cap)}
+									data-testid="human-enroll-btn"
+								>
+									<UserPlus class="size-3.5" />
+									Enroll
+								</Button>
+							{/if}
+						</div>
 					</div>
 
 					<div class="mt-3 space-y-1.5">
 						{#if roster.length === 0}
-							<p class="text-xs text-muted-foreground">No members enrolled</p>
+							<div class="flex flex-col items-start gap-1.5">
+								<p class="text-xs text-muted-foreground">No members enrolled</p>
+								{#if isAdmin}
+									<Button
+										variant="outline"
+										size="sm"
+										class="h-7 gap-1 px-2 text-xs"
+										onclick={() => openEnroll(cap)}
+									>
+										<UserPlus class="size-3.5" />
+										Enroll member
+									</Button>
+								{/if}
+							</div>
 						{:else}
 							{#each roster as m (m.id)}
 								{@const live = presentFor(cap.id, m.member_user_id)}
 								<div class="flex items-center justify-between gap-2 text-sm">
 									<div class="flex min-w-0 items-center gap-2">
 										<StatusDot tone={live?.present ? 'live' : 'idle'} />
-										<span class="truncate font-mono text-xs text-foreground">
-											{short(m.member_user_id)}
+										<span class="truncate text-xs text-foreground">
+											{#if m.member_display_name}
+												{m.member_display_name}
+											{:else if m.member_email}
+												{m.member_email}
+											{:else}
+												<span class="font-mono">{short(m.member_user_id)}</span>
+											{/if}
 										</span>
 									</div>
-									<span class="shrink-0 text-xs text-muted-foreground">
-										{#if live?.present}
-											{lastSeen(live.last_seen_ms_ago)}
-										{:else if m.available}
-											available (no liveness)
-										{:else}
-											offline
+									<div class="flex shrink-0 items-center gap-2">
+										<span class="text-xs text-muted-foreground">
+											{#if live?.present}
+												{lastSeen(live.last_seen_ms_ago)}
+											{:else if m.available}
+												available (no liveness)
+											{:else}
+												offline
+											{/if}
+										</span>
+										{#if isAdmin}
+											<button
+												type="button"
+												class="text-muted-foreground/60 hover:text-foreground"
+												title="Edit member"
+												aria-label="Edit member"
+												onclick={() => openEdit(cap, m)}
+											>
+												<Pencil class="size-3.5" />
+											</button>
+											<button
+												type="button"
+												class="text-muted-foreground/60 hover:text-destructive"
+												title="Revoke member"
+												aria-label="Revoke member"
+												onclick={() => handleRevoke(m)}
+											>
+												<Trash2 class="size-3.5" />
+											</button>
 										{/if}
-									</span>
+									</div>
 								</div>
 							{/each}
 						{/if}
@@ -129,5 +237,16 @@
 				</div>
 			{/each}
 		</div>
+	{/if}
+
+	{#if isAdmin}
+		<HumanEnrollSheet
+			bind:open={sheetOpen}
+			capacityId={sheetCapacityId}
+			capacityName={sheetCapacityName}
+			member={sheetMember}
+			existingMemberIds={memberIdsFor(sheetCapacityId)}
+			ondone={() => void poll()}
+		/>
 	{/if}
 </section>

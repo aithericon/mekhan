@@ -88,8 +88,11 @@ pub async fn apply_override(db: &PgPool, user: &mut AuthUser, headers: &HeaderMa
     .bind(user_id)
     .fetch_optional(db)
     .await;
-    if let Ok(Some(_)) = row {
+    if let Ok(Some((role,))) = row {
         user.workspace_id = Some(requested);
+        // The override moves the caller into a different workspace — their
+        // role there differs from the resolver's default pick, so refresh it.
+        user.workspace_role = Some(role);
     }
 }
 

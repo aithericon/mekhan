@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 74 },
+      "position": { "x": 0, "y": 90 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +27,7 @@
       "id": "stream",
       "type": "automated_step",
       "slug": "stream",
-      "position": { "x": 290, "y": 3 },
+      "position": { "x": 290, "y": 2 },
       "data": {
         "type": "automated_step",
         "label": "Stream clip as fragmented MP4 (PyAV)",
@@ -114,7 +114,7 @@
       "id": "summary",
       "type": "automated_step",
       "slug": "summary",
-      "position": { "x": 1166, "y": 10 },
+      "position": { "x": 1166, "y": 6 },
       "data": {
         "type": "automated_step",
         "label": "Summarize detections",
@@ -149,7 +149,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1476, "y": 24 },
+      "position": { "x": 1476, "y": 23 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -239,12 +239,12 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
-                // Carry `executor_namespace` (+ `feed_chunks`) through to the
-                // failure token so a downstream retry re-dispatches to the SAME
-                // worker-group namespace. Without this, the unified-dispatch
-                // model's grouped namespace is lost and the resubmit falls back
-                // to the bare `executor` namespace (no consumer) → orphaned
-                // retry → net hangs.
+                // `executor_namespace` (+ `feed_chunks`) MUST ride through to the
+                // failure token: the retry topology re-submits off this token, and
+                // a dropped namespace falls back to the bare `executor` effect
+                // namespace that no group consumer drains — black-holing the retry
+                // (the instance then hangs). `()` when a step has none → null →
+                // submit handler's default. Mirrors `_`-prefix metadata in t_success.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -270,6 +270,14 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
+                // `executor_namespace` (the group-partitioned / lease-scoped
+                // dispatch queue stamped on the job token at prepare) MUST ride
+                // through to the failure token: the retry topology re-submits off
+                // this token, and a dropped namespace falls back to the bare
+                // `executor` effect namespace that no group consumer drains —
+                // black-holing the retry (the instance then hangs). `()` when a
+                // step has none → null → submit handler's default. Mirrors the
+                // `_`-prefix metadata preservation in `t_success`.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -291,6 +299,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("out", &timed_out)
             .logic(
+                // See `t_failed`: the dispatch namespace must survive into the
+                // timeout token so the retry re-submits onto the same group queue.
                 r#"#{
                     out: #{
                         job_id: job.job_id,
@@ -311,6 +321,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("out", &timed_out)
             .logic(
+                // See `t_failed`: the dispatch namespace must survive into the
+                // timeout token so the retry re-submits onto the same group queue.
                 r#"#{
                     out: #{
                         job_id: job.job_id,

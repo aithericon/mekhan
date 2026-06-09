@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 94 },
+      "position": { "x": 0, "y": 116 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -54,7 +54,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 500, "y": 44 },
+      "position": { "x": 500, "y": 57 },
       "data": {
         "type": "end",
         "label": "Done",

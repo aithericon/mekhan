@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 66 },
+      "position": { "x": 0, "y": 72 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -20,7 +20,7 @@
     {
       "id": "call_child",
       "type": "sub_workflow",
-      "position": { "x": 290, "y": 52 },
+      "position": { "x": 290, "y": 12 },
       "data": {
         "type": "sub_workflow",
         "label": "Call Crashing Child",
@@ -42,7 +42,7 @@
     {
       "id": "handle_fail",
       "type": "failure",
-      "position": { "x": 615, "y": 10 },
+      "position": { "x": 615, "y": 14 },
       "data": {
         "type": "failure",
         "label": "Handle Child Failure",
@@ -55,7 +55,7 @@
     {
       "id": "end_ok",
       "type": "end",
-      "position": { "x": 600, "y": 122 },
+      "position": { "x": 600, "y": 131 },
       "data": {
         "type": "end",
         "label": "Done (Happy Path)",

@@ -3,7 +3,7 @@
     {
       "id": "trg_document_pipeline_branching_v1",
       "type": "trigger",
-      "position": { "x": 0, "y": 104 },
+      "position": { "x": 0, "y": 119 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -22,7 +22,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 250, "y": 84 },
+      "position": { "x": 250, "y": 92 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -51,7 +51,7 @@
     {
       "id": "render",
       "type": "automated_step",
-      "position": { "x": 540, "y": 60 },
+      "position": { "x": 540, "y": 62 },
       "data": {
         "type": "automated_step",
         "label": "Render (PDF → page PNGs, Python)",
@@ -82,7 +82,7 @@
     {
       "id": "classify",
       "type": "automated_step",
-      "position": { "x": 850, "y": 70 },
+      "position": { "x": 850, "y": 75 },
       "data": {
         "type": "automated_step",
         "label": "Classify (vision LLM, raw file)",
@@ -147,7 +147,7 @@
     {
       "id": "route-by-class",
       "type": "decision",
-      "position": { "x": 1160, "y": 86 },
+      "position": { "x": 1160, "y": 101 },
       "data": {
         "type": "decision",
         "label": "Route by class",
@@ -165,7 +165,7 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": { "x": 1470, "y": 130 },
+      "position": { "x": 1470, "y": 137 },
       "data": {
         "type": "automated_step",
         "label": "OCR (Surya, per-word boxes)",
@@ -192,7 +192,7 @@
     {
       "id": "extract-bloodwork",
       "type": "automated_step",
-      "position": { "x": 2090, "y": 160 },
+      "position": { "x": 2090, "y": 177 },
       "data": {
         "type": "automated_step",
         "label": "Extract — Bloodwork (vision + OCR text)",
@@ -231,7 +231,7 @@
     {
       "id": "ocr-layout",
       "type": "automated_step",
-      "position": { "x": 1780, "y": 160 },
+      "position": { "x": 1780, "y": 177 },
       "data": {
         "type": "automated_step",
         "label": "OCR layout (Python)",
@@ -260,7 +260,7 @@
     {
       "id": "resolve-bbox",
       "type": "automated_step",
-      "position": { "x": 2400, "y": 160 },
+      "position": { "x": 2400, "y": 177 },
       "data": {
         "type": "automated_step",
         "label": "Resolve bbox (Python)",
@@ -329,7 +329,7 @@
       "id": "merge-extraction",
       "type": "join",
       "slug": "extraction",
-      "position": { "x": 2710, "y": 104 },
+      "position": { "x": 2710, "y": 119 },
       "data": {
         "type": "join",
         "label": "Merge branches",
@@ -347,7 +347,7 @@
     {
       "id": "validate",
       "type": "automated_step",
-      "position": { "x": 2950, "y": 70 },
+      "position": { "x": 2950, "y": 75 },
       "data": {
         "type": "automated_step",
         "label": "Validate (shape coerce, Python)",
@@ -377,7 +377,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 3260, "y": 74 },
+      "position": { "x": 3260, "y": 78 },
       "data": {
         "type": "end",
         "label": "Done",

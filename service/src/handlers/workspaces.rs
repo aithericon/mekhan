@@ -102,9 +102,12 @@ pub async fn list_members(
         .await
         .map_err(map_to_api_error)?;
     let rows: Vec<WorkspaceMember> = sqlx::query_as(
-        "SELECT workspace_id, user_id, role, added_at \
-           FROM workspace_members WHERE workspace_id = $1 \
-          ORDER BY added_at",
+        "SELECT m.workspace_id, m.user_id, m.role, m.added_at, \
+                up.display_name, up.email \
+           FROM workspace_members m \
+           LEFT JOIN user_profiles up ON up.user_id = m.user_id \
+          WHERE m.workspace_id = $1 \
+          ORDER BY m.added_at",
     )
     .bind(id)
     .fetch_all(&state.db)

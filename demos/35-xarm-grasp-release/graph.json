@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 118 },
+      "position": { "x": 0, "y": 133 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -15,7 +15,7 @@
       "id": "add_object",
       "type": "automated_step",
       "slug": "add_object",
-      "position": { "x": 190, "y": 74 },
+      "position": { "x": 190, "y": 84 },
       "data": {
         "type": "automated_step",
         "label": "Add Sample Object (MoveIt scene)",
@@ -74,7 +74,7 @@
       "id": "plan_pose",
       "type": "automated_step",
       "slug": "plan_pose",
-      "position": { "x": 500, "y": 34 },
+      "position": { "x": 500, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Plan to Grasp Pose (MoveIt)",
@@ -135,7 +135,7 @@
       "id": "gate",
       "type": "decision",
       "slug": "gate",
-      "position": { "x": 810, "y": 80 },
+      "position": { "x": 810, "y": 97 },
       "data": {
         "type": "decision",
         "label": "Grasp plan acceptable?",
@@ -154,7 +154,7 @@
       "id": "execute",
       "type": "automated_step",
       "slug": "execute",
-      "position": { "x": 1120, "y": 142 },
+      "position": { "x": 1120, "y": 161 },
       "data": {
         "type": "automated_step",
         "label": "Execute Grasp Trajectory (Path B)",
@@ -198,7 +198,7 @@
       "id": "grasp",
       "type": "automated_step",
       "slug": "grasp",
-      "position": { "x": 1430, "y": 132 },
+      "position": { "x": 1430, "y": 148 },
       "data": {
         "type": "automated_step",
         "label": "Grasp (atomic close + attach)",
@@ -251,7 +251,7 @@
       "id": "plan_place",
       "type": "automated_step",
       "slug": "plan_place",
-      "position": { "x": 1740, "y": 102 },
+      "position": { "x": 1740, "y": 107 },
       "data": {
         "type": "automated_step",
         "label": "Plan to Place / Retract Pose (MoveIt)",
@@ -312,7 +312,7 @@
       "id": "gate2",
       "type": "decision",
       "slug": "gate2",
-      "position": { "x": 2050, "y": 148 },
+      "position": { "x": 2050, "y": 174 },
       "data": {
         "type": "decision",
         "label": "Place plan acceptable?",
@@ -331,7 +331,7 @@
       "id": "execute2",
       "type": "automated_step",
       "slug": "execute2",
-      "position": { "x": 2360, "y": 152 },
+      "position": { "x": 2360, "y": 171 },
       "data": {
         "type": "automated_step",
         "label": "Execute Place Trajectory (Path B)",
@@ -375,7 +375,7 @@
       "id": "release",
       "type": "automated_step",
       "slug": "release",
-      "position": { "x": 2670, "y": 142 },
+      "position": { "x": 2670, "y": 158 },
       "data": {
         "type": "automated_step",
         "label": "Release (atomic open + detach)",
@@ -426,7 +426,7 @@
       "id": "read_state",
       "type": "automated_step",
       "slug": "read_state",
-      "position": { "x": 2980, "y": 112 },
+      "position": { "x": 2980, "y": 117 },
       "data": {
         "type": "automated_step",
         "label": "Read Joint State",
@@ -469,7 +469,7 @@
       "id": "cleanup",
       "type": "automated_step",
       "slug": "cleanup",
-      "position": { "x": 3290, "y": 142 },
+      "position": { "x": 3290, "y": 158 },
       "data": {
         "type": "automated_step",
         "label": "Clear Planning Scene",
@@ -507,7 +507,7 @@
     {
       "id": "end-done",
       "type": "end",
-      "position": { "x": 3600, "y": 116 },
+      "position": { "x": 3600, "y": 120 },
       "data": {
         "type": "end",
         "label": "Done",

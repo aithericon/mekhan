@@ -27,12 +27,12 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{map_to_api_error, require_role, AuthUser, Role};
 use crate::models::capability::{load_known_capabilities, validate_caps_against_types};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::roster::{
     AvailabilityRequest, EnrollMemberRequest, RosterMemberDetail, RosterMemberRow,
-    RosterMemberSummary, UpdateRosterMemberRequest,
+    RosterMemberSummary, RosterMemberSummaryRow, UpdateRosterMemberRequest,
 };
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
@@ -84,6 +84,7 @@ fn default_per_page() -> i64 {
     responses(
         (status = 201, description = "Member enrolled into the human capacity", body = RosterMemberDetail),
         (status = 400, description = "Caps fail validation against the capability registry", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
         (status = 409, description = "Member is already enrolled in this capacity", body = ErrorResponse),
     ),
     tag = "roster",
@@ -94,6 +95,9 @@ pub async fn enroll_member(
     Json(req): Json<EnrollMemberRequest>,
 ) -> Result<(StatusCode, Json<RosterMemberDetail>), ApiError> {
     let workspace_id = caller_workspace(&user);
+    require_role(&state.db, &user, workspace_id, Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
 
     // Type the admin-assigned caps against the workspace's capability registry
     // before inserting — the same gate `runners::enroll_runner` applies. An empty
@@ -163,12 +167,17 @@ pub async fn list_roster(
     let offset = (params.page - 1) * params.per_page;
 
     // `capacity_id` is an optional filter: a NULL bind makes the
-    // `($N IS NULL OR capacity_id = $N)` clause match every row.
-    let rows = sqlx::query_as::<_, RosterMemberRow>(
-        "SELECT * FROM roster_members \
-         WHERE workspace_id = $1 AND revoked_at IS NULL \
-           AND ($2::uuid IS NULL OR capacity_id = $2) \
-         ORDER BY enrolled_at DESC LIMIT $3 OFFSET $4",
+    // `($N IS NULL OR capacity_id = $N)` clause match every row. The LEFT JOIN
+    // into `user_profiles` surfaces the member's human-readable name + email on
+    // the summary row — a missing profile leaves both NULL (→ None on the DTO).
+    let rows = sqlx::query_as::<_, RosterMemberSummaryRow>(
+        "SELECT rm.id, rm.capacity_id, rm.member_user_id, rm.concurrency, \
+                rm.available, rm.enrolled_at, up.display_name, up.email \
+           FROM roster_members rm \
+           LEFT JOIN user_profiles up ON up.user_id = rm.member_user_id \
+          WHERE rm.workspace_id = $1 AND rm.revoked_at IS NULL \
+            AND ($2::uuid IS NULL OR rm.capacity_id = $2) \
+          ORDER BY rm.enrolled_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(workspace_id)
     .bind(params.capacity_id)
@@ -316,6 +325,7 @@ pub async fn get_roster_member(
     responses(
         (status = 200, description = "Updated roster member detail", body = RosterMemberDetail),
         (status = 400, description = "Caps fail validation against the capability registry", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
         (status = 404, description = "Roster member not found", body = ErrorResponse),
     ),
     tag = "roster",
@@ -327,6 +337,9 @@ pub async fn update_roster_member(
     Json(req): Json<UpdateRosterMemberRequest>,
 ) -> Result<Json<RosterMemberDetail>, ApiError> {
     let workspace_id = caller_workspace(&user);
+    require_role(&state.db, &user, workspace_id, Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
 
     // Re-validate caps against the registry whenever they're being written — a
     // PATCH must not be a back door around the enroll-time typing gate.
@@ -374,6 +387,7 @@ pub async fn update_roster_member(
     params(("id" = Uuid, Path, description = "Roster member id")),
     responses(
         (status = 204, description = "Roster member revoked"),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
         (status = 404, description = "Roster member not found", body = ErrorResponse),
     ),
     tag = "roster",
@@ -384,6 +398,9 @@ pub async fn revoke_roster_member(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let workspace_id = caller_workspace(&user);
+    require_role(&state.db, &user, workspace_id, Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
     let updated = sqlx::query(
         "UPDATE roster_members SET revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",

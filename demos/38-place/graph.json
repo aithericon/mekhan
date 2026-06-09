@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 68 },
+      "position": { "x": 0, "y": 74 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -23,7 +23,7 @@
       "id": "plan_pose",
       "type": "automated_step",
       "slug": "plan_pose",
-      "position": { "x": 290, "y": 34 },
+      "position": { "x": 290, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Plan to Approach Pose (MoveIt)",
@@ -81,7 +81,7 @@
       "id": "gate",
       "type": "decision",
       "slug": "gate",
-      "position": { "x": 600, "y": 80 },
+      "position": { "x": 600, "y": 97 },
       "data": {
         "type": "decision",
         "label": "Place plan acceptable?",
@@ -100,7 +100,7 @@
       "id": "execute",
       "type": "automated_step",
       "slug": "execute",
-      "position": { "x": 910, "y": 144 },
+      "position": { "x": 910, "y": 167 },
       "data": {
         "type": "automated_step",
         "label": "Execute Trajectory (Path B)",
@@ -144,7 +144,7 @@
       "id": "descend_plan",
       "type": "automated_step",
       "slug": "descend_plan",
-      "position": { "x": 1220, "y": 94 },
+      "position": { "x": 1220, "y": 100 },
       "data": {
         "type": "automated_step",
         "label": "Plan Cartesian Descent to Insert Pose",
@@ -204,7 +204,7 @@
       "id": "descend_gate",
       "type": "decision",
       "slug": "descend_gate",
-      "position": { "x": 1530, "y": 150 },
+      "position": { "x": 1530, "y": 180 },
       "data": {
         "type": "decision",
         "label": "Descent plan acceptable?",
@@ -223,7 +223,7 @@
       "id": "descend_exec",
       "type": "automated_step",
       "slug": "descend_exec",
-      "position": { "x": 1840, "y": 154 },
+      "position": { "x": 1840, "y": 177 },
       "data": {
         "type": "automated_step",
         "label": "Execute Descent Trajectory (Path B)",
@@ -267,7 +267,7 @@
       "id": "release",
       "type": "automated_step",
       "slug": "release",
-      "position": { "x": 2150, "y": 144 },
+      "position": { "x": 2150, "y": 164 },
       "data": {
         "type": "automated_step",
         "label": "Release (atomic open + detach)",
@@ -318,7 +318,7 @@
       "id": "retract_plan",
       "type": "automated_step",
       "slug": "retract_plan",
-      "position": { "x": 2460, "y": 114 },
+      "position": { "x": 2460, "y": 123 },
       "data": {
         "type": "automated_step",
         "label": "Plan Retract to Approach (MoveIt)",
@@ -376,7 +376,7 @@
       "id": "retract_gate",
       "type": "decision",
       "slug": "retract_gate",
-      "position": { "x": 2770, "y": 160 },
+      "position": { "x": 2770, "y": 190 },
       "data": {
         "type": "decision",
         "label": "Retract plan acceptable?",
@@ -395,7 +395,7 @@
       "id": "retract_exec",
       "type": "automated_step",
       "slug": "retract_exec",
-      "position": { "x": 3080, "y": 199 },
+      "position": { "x": 3080, "y": 226 },
       "data": {
         "type": "automated_step",
         "label": "Execute Retract Trajectory (Path B)",
@@ -438,7 +438,7 @@
     {
       "id": "end-done",
       "type": "end",
-      "position": { "x": 3390, "y": 158 },
+      "position": { "x": 3390, "y": 180 },
       "data": {
         "type": "end",
         "label": "Placed",

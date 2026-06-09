@@ -71,6 +71,15 @@
 	const store = useStore();
 	const zoom = $derived(store.viewport.zoom);
 
+	// 3D-twin render resolution. xyflow scales the whole pane with a CSS transform,
+	// which the WebGL canvas buffer can't see (ResizeObserver ignores transforms), so
+	// a buffer sized once at mount blurs when the graph is zoomed in. Track the zoom
+	// in the pixel ratio so the buffer matches the on-screen size; clamp so a deep
+	// zoom on a retina display doesn't allocate an enormous buffer.
+	const twinDpr = $derived(
+		Math.min((typeof window !== 'undefined' ? window.devicePixelRatio : 1) * Math.max(zoom, 1), 4)
+	);
+
 	// Presentation lifecycle (idle / live / ended). LIVE is driven by the PRODUCER
 	// STEP being `running` — NOT `runtime.opened` — because a data channel's bytes
 	// flow out-of-band, so per-element tokens never enter the net marking (the open
@@ -459,11 +468,23 @@
 				<img bind:this={imgEl} class="media" alt={`Live ${feed.channelName}`} />
 			{:else if isUrdf}
 				<div bind:this={urdfEl} class="media urdf">
-					<RobotArmTwin robotModel={feed.robotModel} frame={urdfFrame} {frozen} />
+					<RobotArmTwin
+							robotModel={feed.robotModel}
+							frame={urdfFrame}
+							{frozen}
+							viewKey={feed.edgeId}
+							dpr={twinDpr}
+						/>
 				</div>
 			{:else if isScene}
 				<div bind:this={sceneEl} class="media urdf">
-					<SceneTwin robotModel={feed.robotModel} frame={sceneFrame} {frozen} />
+					<SceneTwin
+							robotModel={feed.robotModel}
+							frame={sceneFrame}
+							{frozen}
+							viewKey={feed.edgeId}
+							dpr={twinDpr}
+						/>
 				</div>
 			{:else if isAudio}
 				<canvas

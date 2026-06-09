@@ -93,3 +93,53 @@ export async function listRoster(capacityId?: string): Promise<RosterMemberSumma
 	) as { items?: RosterMemberSummary[] };
 	return data.items ?? [];
 }
+
+/**
+ * POST /api/v1/roster — admin-enroll a workspace member into a human capacity.
+ * Caps are validated against the workspace's `CapabilityType`s (400 on mismatch);
+ * a repeat (capacity, member) enrollment → 409. Returns the full detail row.
+ */
+export async function enrollMember(input: {
+	capacity_id: string;
+	member_user_id: string;
+	concurrency?: number;
+	caps?: Record<string, unknown>;
+	availability?: AvailabilityConfig;
+}): Promise<RosterMemberDetail> {
+	return unwrap(await client.POST('/api/v1/roster', { body: input }));
+}
+
+/**
+ * PATCH /api/v1/roster/{id} — admin update of a member's caps / concurrency /
+ * availability. Every field optional; only the supplied ones are written. When
+ * `caps` is supplied it is re-validated against the registry (400 on mismatch).
+ */
+export async function updateRosterMember(
+	id: string,
+	input: {
+		concurrency?: number;
+		caps?: Record<string, unknown>;
+		availability?: AvailabilityConfig;
+	}
+): Promise<RosterMemberDetail> {
+	return unwrap(
+		await client.PATCH('/api/v1/roster/{id}', {
+			params: { path: { id } },
+			body: input
+		})
+	);
+}
+
+/**
+ * DELETE /api/v1/roster/{id} — revoke a member (soft delete; sets `revoked_at`).
+ * 204 No Content on success.
+ */
+export async function revokeMember(id: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/roster/{id}', {
+		params: { path: { id } }
+	});
+	if (res.response.status >= 400) {
+		const detail = res.error ? JSON.stringify(res.error) : '';
+		throw new Error(`API error ${res.response.status}: ${detail}`);
+	}
+}

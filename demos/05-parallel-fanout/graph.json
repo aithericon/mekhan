@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 94 },
+      "position": { "x": 0, "y": 105 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -20,13 +20,13 @@
     {
       "id": "split",
       "type": "parallel_split",
-      "position": { "x": 290, "y": 122 },
+      "position": { "x": 290, "y": 137 },
       "data": { "type": "parallel_split", "label": "Fork" }
     },
     {
       "id": "work_a",
       "type": "automated_step",
-      "position": { "x": 530, "y": 160 },
+      "position": { "x": 530, "y": 177 },
       "data": {
         "type": "automated_step",
         "label": "Branch A — Uppercase",
@@ -84,7 +84,7 @@
     {
       "id": "join",
       "type": "join",
-      "position": { "x": 840, "y": 104 },
+      "position": { "x": 840, "y": 119 },
       "data": {
         "type": "join",
         "label": "Join",
@@ -95,7 +95,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1080, "y": 84 },
+      "position": { "x": 1080, "y": 92 },
       "data": {
         "type": "end",
         "label": "Done",

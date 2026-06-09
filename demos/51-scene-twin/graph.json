@@ -4,10 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": {
-        "x": 0,
-        "y": 262
-      },
+      "position": { "x": 0, "y": 104 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -23,12 +20,9 @@
       "id": "lease",
       "type": "lease_scope",
       "slug": "cell",
-      "position": {
-        "x": 190,
-        "y": 0
-      },
-      "width": 3300,
-      "height": 560,
+      "position": { "x": 190, "y": 0 },
+      "width": 3008,
+      "height": 252,
       "data": {
         "type": "lease_scope",
         "label": "xArm Scene Cell",
@@ -53,10 +47,7 @@
       "type": "automated_step",
       "slug": "reset_scene",
       "parentId": "lease",
-      "position": {
-        "x": 16,
-        "y": 216
-      },
+      "position": { "x": 16, "y": 50 },
       "data": {
         "type": "automated_step",
         "label": "Reset Scene (clear move_group)",
@@ -134,10 +125,7 @@
       "type": "automated_step",
       "slug": "add_sample_a",
       "parentId": "lease",
-      "position": {
-        "x": 326,
-        "y": 216
-      },
+      "position": { "x": 636, "y": 64 },
       "data": {
         "type": "automated_step",
         "label": "Add Sample A to Scene",
@@ -240,10 +228,7 @@
       "type": "automated_step",
       "slug": "add_sample_b",
       "parentId": "lease",
-      "position": {
-        "x": 636,
-        "y": 216
-      },
+      "position": { "x": 946, "y": 64 },
       "data": {
         "type": "automated_step",
         "label": "Add Sample B to Scene",
@@ -346,10 +331,7 @@
       "type": "automated_step",
       "slug": "exec_reach",
       "parentId": "lease",
-      "position": {
-        "x": 1256,
-        "y": 216
-      },
+      "position": { "x": 1256, "y": 64 },
       "data": {
         "type": "automated_step",
         "label": "Reach over sample_a (fixed joints \u00b7 deterministic)",
@@ -447,10 +429,7 @@
       "type": "automated_step",
       "slug": "grasp",
       "parentId": "lease",
-      "position": {
-        "x": 1566,
-        "y": 216
-      },
+      "position": { "x": 1566, "y": 50 },
       "data": {
         "type": "automated_step",
         "label": "Grasp Sample A (atomic close + attach)",
@@ -536,10 +515,7 @@
       "type": "automated_step",
       "slug": "exec_lift",
       "parentId": "lease",
-      "position": {
-        "x": 2186,
-        "y": 216
-      },
+      "position": { "x": 1876, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Lift (carry grasped sample \u00b7 live scene twin)",
@@ -649,10 +625,7 @@
       "type": "automated_step",
       "slug": "twin_view",
       "parentId": "lease",
-      "position": {
-        "x": 2496,
-        "y": 216
-      },
+      "position": { "x": 2442, "y": 32 },
       "data": {
         "type": "automated_step",
         "label": "Twin view (drain planning-scene stream)",
@@ -705,10 +678,7 @@
       "type": "automated_step",
       "slug": "release",
       "parentId": "lease",
-      "position": {
-        "x": 2806,
-        "y": 216
-      },
+      "position": { "x": 2752, "y": 50 },
       "data": {
         "type": "automated_step",
         "label": "Release Sample A (detach to world)",
@@ -784,10 +754,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 3560,
-        "y": 222
-      },
+      "position": { "x": 3268, "y": 72 },
       "data": {
         "type": "end",
         "label": "Done",
@@ -804,10 +771,7 @@
       "type": "automated_step",
       "slug": "home_arm",
       "parentId": "lease",
-      "position": {
-        "x": 1216,
-        "y": 396
-      },
+      "position": { "x": 326, "y": 64 },
       "data": {
         "type": "automated_step",
         "label": "Home arm (all-zeros, clean start)",
