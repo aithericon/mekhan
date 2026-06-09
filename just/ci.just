@@ -89,7 +89,11 @@ check-rust:
 # so the bins compile without a live DB.
 test-unit-rust:
     #!/usr/bin/env bash
+    set -euo pipefail
     cd ..
+    # debuginfo=0 + jobs cap + sccache — same budget as the integration/e2e
+    # lanes, so linking on the capped ARM node doesn't OOM-kill `ld`.
+    source just/scripts/ci-cargo-env.sh
     SQLX_OFFLINE=true cargo test --workspace --lib --bins --no-fail-fast
 
 # Whole-workspace cargo test (unit + integration targets). Requires a live

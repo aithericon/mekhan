@@ -13,50 +13,8 @@
 # =============================================================================
 
 
-export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
-export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
-
-# ── Compiler cache (sccache) ─────────────────────────────────────────────────
-# CARGO_TARGET_DIR caches compiled artifacts, but Woodpecker re-clones the repo
-# every run → fresh source mtimes → cargo's mtime-based fingerprint rebuilds our
-# OWN crates (executor/crates/*, shared/*, mekhan, engine) even when the bytes
-# are identical. sccache keys on source CONTENT, so those become cache hits
-# across clones. CARGO_INCREMENTAL=0 is required (sccache won't cache
-# incremental artifacts). All of this is opportunistic: any failure leaves the
-# build working, just without the extra cache.
-_cache_root="$(dirname "${CARGO_HOME:-$HOME/.cargo}")"   # /var/lib/ci-jobs/cache in CI
-_sccache=""
-if command -v sccache >/dev/null 2>&1; then
-  _sccache="$(command -v sccache)"
-else
-  # Fetch a static musl binary ONCE into the persistent cache dir.
-  _bin="$_cache_root/bin/sccache"
-  if [ -x "$_bin" ]; then
-    _sccache="$_bin"
-  else
-    _ver="v0.8.2"
-    _arch="$(uname -m)"                                  # aarch64 on the worker
-    _pkg="sccache-${_ver}-${_arch}-unknown-linux-musl"
-    echo "  · fetching sccache ${_ver} (${_arch})…"
-    mkdir -p "$_cache_root/bin"
-    if curl -fsSL "https://github.com/mozilla/sccache/releases/download/${_ver}/${_pkg}.tar.gz" \
-         | tar -xz -C "$_cache_root/bin" --strip-components=1 "${_pkg}/sccache" 2>/dev/null \
-       && chmod +x "$_bin"; then
-      _sccache="$_bin"
-    else
-      echo "  · sccache fetch failed — building without it" >&2
-    fi
-  fi
-fi
-if [ -n "$_sccache" ]; then
-  export RUSTC_WRAPPER="$_sccache"
-  export SCCACHE_DIR="${SCCACHE_DIR:-$_cache_root/sccache}"
-  export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
-  export CARGO_INCREMENTAL=0
-  "$_sccache" --start-server >/dev/null 2>&1 || true
-  echo "  · sccache: $_sccache (SCCACHE_DIR=$SCCACHE_DIR)"
-fi
+# Cargo linker-memory budget + sccache — shared with the test-unit-rust lane.
+source just/scripts/ci-cargo-env.sh
 
 # Deterministic, per-pipeline project name → predictable network name and
 # clean teardown. CI_PIPELINE_NUMBER is set by Woodpecker; falls back for local.
