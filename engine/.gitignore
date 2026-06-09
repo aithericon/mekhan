@@ -1,7 +1,8 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock committed (application workspace) → reproducible + `--locked` Docker
+# builds reuse the dep cache instead of re-resolving every build.
 
 # IDE
 .idea/

@@ -79,7 +79,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/build/engine/target \
     set -eux; \
     cd /build/engine; \
-    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release \
+    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release --locked \
         -p core-engine; \
     mkdir -p /out; \
     cp target/release/core-engine /out/core-engine; \
