@@ -24,13 +24,19 @@
 
 use std::time::Duration;
 
+use aithericon_executor_storage::build_operator;
+use aithericon_executor_storage_types::{StorageBackend, StorageConfig, StorageCredentials};
+use aithericon_secrets::SecretStore;
 use axum::body::{Body, Bytes};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use opendal::Operator;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use uuid::Uuid;
 
-use crate::file_servers::queries::ServeCandidate;
 use crate::file_servers::model::FileServerEndpoint;
+use crate::file_servers::queries::ServeCandidate;
 
 // ---------------------------------------------------------------------------
 // Wire contract — MUST match executor-worker/src/fileserve.rs (Phase 3a).
@@ -177,6 +183,516 @@ pub fn pick_endpoint(candidates: &[ServeCandidate]) -> Option<&ServeCandidate> {
     }
     // Fall back to the single highest-priority candidate of any (unknown) method.
     candidates.first()
+}
+
+// ---------------------------------------------------------------------------
+// Remote endpoints (s3 / sftp): Vault-cred resolution + opendal operator.
+// ---------------------------------------------------------------------------
+
+/// Why a remote endpoint couldn't be served / read. Maps cleanly onto HTTP
+/// statuses ([`RemoteReadError::into_response`]) and is the error type Phase 4
+/// reconcile sees from [`read_remote`].
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteReadError {
+    /// The endpoint has no `resource_ref` but its `access_method` needs one
+    /// (external s3 / sftp), or the ref is empty.
+    #[error("endpoint {method} has no resource_ref to resolve credentials from")]
+    MissingResourceRef { method: String },
+    /// The `resource_ref` path doesn't resolve to a live resource/version in
+    /// this workspace.
+    #[error("resource_ref {path:?} did not resolve in this workspace")]
+    ResourceNotFound { path: String },
+    /// A required credential / config field was absent from Vault or the
+    /// version's `public_config`.
+    #[error("missing field {field:?} for endpoint resource {path:?}")]
+    MissingField { path: String, field: String },
+    /// Reading the secret from the backend failed (Vault unreachable / denied).
+    #[error("secret read failed for {field:?}: {source}")]
+    Secret {
+        field: String,
+        #[source]
+        source: aithericon_secrets::SecretError,
+    },
+    /// The opendal operator could not be built (bad config / missing feature).
+    #[error("operator build failed: {0}")]
+    Operator(String),
+    /// The object/file was not found on the backend.
+    #[error("object not found at {0:?}")]
+    NotFound(String),
+    /// Any other backend I/O failure.
+    #[error("remote read failed: {0}")]
+    Io(String),
+    /// A DB error resolving the resource row.
+    #[error("database error: {0}")]
+    Db(String),
+}
+
+impl RemoteReadError {
+    /// Map to the HTTP status the serve handler should return when the failure
+    /// happens BEFORE any byte is sent.
+    pub fn status(&self) -> StatusCode {
+        match self {
+            RemoteReadError::MissingResourceRef { .. }
+            | RemoteReadError::ResourceNotFound { .. }
+            | RemoteReadError::NotFound(_) => StatusCode::NOT_FOUND,
+            RemoteReadError::MissingField { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            RemoteReadError::Secret { .. }
+            | RemoteReadError::Operator(_)
+            | RemoteReadError::Io(_)
+            | RemoteReadError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn into_response(self) -> Response {
+        let status = self.status();
+        let msg = self.to_string();
+        if status == StatusCode::NOT_FOUND {
+            crate::models::error::ApiError::not_found(msg).into_response()
+        } else {
+            crate::models::error::ApiError::internal(msg).into_response()
+        }
+    }
+}
+
+/// The resolved credential/config envelope for a remote endpoint, in the
+/// `StorageConfig` shape the file-ops backend's `build_operator` consumes.
+///
+/// For `s3` the resource carries `endpoint`/`region`/`bucket`/`access_key_id`/
+/// `secret_access_key` (+ optional `force_path_style`); the endpoint `root` is a
+/// key prefix inside the bucket. For `sftp` the resource carries only auth
+/// (`username`/`private_key`/`known_hosts`); the SSH host lives on the endpoint
+/// (`config.host`) and the endpoint `root` is the base path on the server.
+#[derive(Debug, Clone)]
+pub struct RemoteTarget {
+    /// The `StorageConfig` to hand to `build_operator`. `prefix` is empty —
+    /// the per-read path is composed explicitly via [`RemoteTarget::object_path`].
+    pub storage: StorageConfig,
+    /// Logical root inside the backend (bucket key prefix for s3; base path for
+    /// sftp). Joined with the copy's server-relative path at read time.
+    pub root: String,
+}
+
+impl RemoteTarget {
+    /// Compose the full backend path for a copy's server-relative
+    /// `canonical_path` under this endpoint's `root`, normalising the single
+    /// boundary slash. `root` empty → the path verbatim.
+    pub fn object_path(&self, canonical_path: &str) -> String {
+        let root = self.root.trim_end_matches('/');
+        let rel = canonical_path.trim_start_matches('/');
+        if root.is_empty() {
+            rel.to_string()
+        } else {
+            format!("{root}/{rel}")
+        }
+    }
+}
+
+/// One field read from a resource version: either a public (non-secret) value
+/// taken from `public_config`, or a secret read from Vault via the version's
+/// `vault_path`.
+enum FieldSource {
+    /// Public field name — looked up in `public_config`.
+    Public(&'static str),
+    /// Secret field name — read as `<vault_path>#<field>`.
+    Secret(&'static str),
+}
+
+/// Resolve an endpoint's `resource_ref` (a resource `path`) into a
+/// [`RemoteTarget`] by joining the resource row → its latest version's
+/// `vault_path` + `public_config`, then reading each credential field from the
+/// secret store. `access_method` selects the field set (`s3` vs `sftp`).
+///
+/// This is the cred-chain Phase 3 left unwired: it does for the serve/reconcile
+/// read path what `resource_resolver` does for the publish path, but it reads
+/// the ACTUAL secret values (the resolver only emits `{{secret:…}}` templates
+/// for the engine to expand at firing time).
+pub async fn resolve_remote_target(
+    db: &PgPool,
+    secrets: &dyn SecretStore,
+    workspace_id: Uuid,
+    endpoint: &FileServerEndpoint,
+) -> Result<RemoteTarget, RemoteReadError> {
+    let resource_ref = endpoint
+        .resource_ref
+        .as_deref()
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| RemoteReadError::MissingResourceRef {
+            method: endpoint.access_method.clone(),
+        })?;
+
+    // resource path → (id, latest_version) within the workspace (live only).
+    let row: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT id, latest_version FROM resources \
+         WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(resource_ref)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| RemoteReadError::Db(e.to_string()))?;
+
+    let (resource_id, version) = row.ok_or_else(|| RemoteReadError::ResourceNotFound {
+        path: resource_ref.to_string(),
+    })?;
+
+    // (vault_path, public_config) for the pinned version.
+    let vrow: Option<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT vault_path, public_config FROM resource_versions \
+         WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| RemoteReadError::Db(e.to_string()))?;
+
+    let (vault_path, public_config) =
+        vrow.ok_or_else(|| RemoteReadError::ResourceNotFound {
+            path: resource_ref.to_string(),
+        })?;
+
+    // Read one field — public from `public_config`, secret from Vault.
+    let read_field =
+        |src: FieldSource| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RemoteReadError>> + Send>> {
+            let public_config = public_config.clone();
+            let vault_path = vault_path.clone();
+            let path = resource_ref.to_string();
+            Box::pin(async move {
+                match src {
+                    FieldSource::Public(name) => public_config
+                        .get(name)
+                        .map(|v| match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .ok_or(RemoteReadError::MissingField {
+                            path,
+                            field: name.to_string(),
+                        }),
+                    FieldSource::Secret(name) => {
+                        let key = format!("{vault_path}#{name}");
+                        secrets.get(&key).await.map_err(|e| match e {
+                            aithericon_secrets::SecretError::NotFound(_) => {
+                                RemoteReadError::MissingField {
+                                    path,
+                                    field: name.to_string(),
+                                }
+                            }
+                            source => RemoteReadError::Secret {
+                                field: name.to_string(),
+                                source,
+                            },
+                        })
+                    }
+                }
+            })
+        };
+
+    match endpoint.access_method.as_str() {
+        "s3" => {
+            let s3_endpoint = read_field(FieldSource::Public("endpoint")).await?;
+            let region = read_field(FieldSource::Public("region")).await?;
+            let bucket = read_field(FieldSource::Public("bucket")).await?;
+            let access_key = read_field(FieldSource::Secret("access_key_id")).await?;
+            let secret_key = read_field(FieldSource::Secret("secret_access_key")).await?;
+
+            let storage = StorageConfig {
+                backend: StorageBackend::S3,
+                endpoint: s3_endpoint,
+                bucket,
+                region: Some(region),
+                prefix: String::new(),
+                credentials: StorageCredentials {
+                    access_key,
+                    secret_key,
+                },
+                retry: Default::default(),
+                resource_alias: None,
+            };
+            Ok(RemoteTarget {
+                storage,
+                root: endpoint.root.clone(),
+            })
+        }
+        "sftp" => {
+            let username = read_field(FieldSource::Public("username")).await?;
+            let private_key = read_field(FieldSource::Secret("private_key")).await?;
+            // known_hosts policy is optional; default "Accept" (matches the
+            // file-ops backend's sftp builder default for a curated NAS).
+            let strategy = public_config
+                .get("known_hosts")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(capitalize_strategy)
+                .unwrap_or_else(|| "Accept".to_string());
+            // The SSH host lives on the ENDPOINT (the sftp resource holds auth
+            // only). `config.host` is the canonical key; fall back to `config.endpoint`.
+            let host = endpoint
+                .config
+                .get("host")
+                .or_else(|| endpoint.config.get("endpoint"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| RemoteReadError::MissingField {
+                    path: resource_ref.to_string(),
+                    field: "config.host".to_string(),
+                })?
+                .to_string();
+
+            let storage = StorageConfig {
+                backend: StorageBackend::Sftp,
+                endpoint: host,
+                bucket: String::new(),
+                // `region` doubles as the known-hosts strategy in the file-ops
+                // sftp builder (see executor-storage::build_operator).
+                region: Some(strategy),
+                prefix: String::new(),
+                credentials: StorageCredentials {
+                    access_key: username,
+                    secret_key: private_key,
+                },
+                retry: Default::default(),
+                resource_alias: None,
+            };
+            Ok(RemoteTarget {
+                storage,
+                // The sftp operator roots at "/", so the endpoint root is part
+                // of the per-read path (see RemoteTarget::object_path).
+                root: endpoint.root.clone(),
+            })
+        }
+        other => Err(RemoteReadError::Operator(format!(
+            "resolve_remote_target called for non-remote access_method {other:?}"
+        ))),
+    }
+}
+
+/// Normalise a known-hosts policy string from `public_config` into the
+/// PascalCase variant opendal's sftp builder expects (`Strict`/`Accept`/`Add`).
+fn capitalize_strategy(s: &str) -> String {
+    let lower = s.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "strict" => "Strict".to_string(),
+        "add" => "Add".to_string(),
+        // Anything else (incl. "accept") → Accept (the pragmatic default).
+        _ => "Accept".to_string(),
+    }
+}
+
+/// The bytes + metadata of a remote read. `stream` yields `io::Result<Bytes>`
+/// directly consumable by [`Body::from_stream`].
+pub struct RemoteRead {
+    pub content_type: String,
+    /// Total object size (full object), or `None` when the backend doesn't
+    /// report it. For a ranged read this is still the FULL size (the stream is
+    /// the capped slice).
+    pub size: Option<u64>,
+    pub stream: opendal::FuturesBytesStream,
+}
+
+/// Build the opendal [`Operator`] for a resolved remote target. Public so Phase
+/// 4 reconcile can reuse the exact operator the serve path uses.
+pub fn build_remote_operator(target: &RemoteTarget) -> Result<Operator, RemoteReadError> {
+    build_operator(&target.storage).map_err(|e| RemoteReadError::Operator(e.to_string()))
+}
+
+/// **Reusable remote read** (docs/32 Phase 4 entry point).
+///
+/// Resolve an endpoint's creds, build the operator, and open a (optionally
+/// ranged) byte stream for `canonical_path` — for BOTH `s3` and `sftp`. Returns
+/// the content-type, full object size, and a `Stream<Item = io::Result<Bytes>>`.
+///
+/// Phase 4 reconcile calls this to read + hash a remote endpoint's copy: drain
+/// the stream through a hasher. `range = None` reads the whole object;
+/// `Some((offset, len))` reads `len` bytes from `offset` (`len = None` → to EOF).
+pub async fn read_remote(
+    db: &PgPool,
+    secrets: &dyn SecretStore,
+    workspace_id: Uuid,
+    endpoint: &FileServerEndpoint,
+    canonical_path: &str,
+    range: Option<(u64, Option<u64>)>,
+) -> Result<RemoteRead, RemoteReadError> {
+    let target = resolve_remote_target(db, secrets, workspace_id, endpoint).await?;
+    let operator = build_remote_operator(&target)?;
+    let object_path = target.object_path(canonical_path);
+
+    // stat() up front for content-type + total size, and to surface a clean
+    // NotFound before we start a body.
+    let meta = operator.stat(&object_path).await.map_err(map_opendal_err)?;
+    let size = Some(meta.content_length());
+    let content_type = meta
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let reader = operator
+        .reader_with(&object_path)
+        .await
+        .map_err(map_opendal_err)?;
+
+    // Translate the parsed HTTP Range into an opendal byte range.
+    let total = meta.content_length();
+    let stream = match range {
+        Some((offset, Some(len))) => {
+            let end = offset.saturating_add(len).min(total);
+            reader.into_bytes_stream(offset..end).await
+        }
+        Some((offset, None)) => reader.into_bytes_stream(offset..total).await,
+        None => reader.into_bytes_stream(0..total).await,
+    }
+    .map_err(map_opendal_err)?;
+
+    Ok(RemoteRead {
+        content_type,
+        size,
+        stream,
+    })
+}
+
+/// Mint a presigned GET URL for a resolved s3 target's object. Only valid for
+/// `s3` (opendal sftp has no presign). `expires` caps the URL validity.
+pub async fn presign_s3(
+    target: &RemoteTarget,
+    canonical_path: &str,
+    expires: Duration,
+) -> Result<String, RemoteReadError> {
+    let operator = build_remote_operator(target)?;
+    let object_path = target.object_path(canonical_path);
+    let req = operator
+        .presign_read(&object_path, expires)
+        .await
+        .map_err(map_opendal_err)?;
+    Ok(req.uri().to_string())
+}
+
+fn map_opendal_err(e: opendal::Error) -> RemoteReadError {
+    match e.kind() {
+        opendal::ErrorKind::NotFound => RemoteReadError::NotFound(e.to_string()),
+        _ => RemoteReadError::Io(e.to_string()),
+    }
+}
+
+/// Serve an external `s3` endpoint: presign + 302 by default, or proxy the bytes
+/// in-process when `proxy_s3_reads` is set. Mirrors the built-in object_store
+/// behaviour but against the endpoint's own resolved creds.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_s3_endpoint(
+    db: &PgPool,
+    secrets: &dyn SecretStore,
+    workspace_id: Uuid,
+    endpoint: &FileServerEndpoint,
+    canonical_path: &str,
+    filename: &str,
+    proxy: bool,
+    range: Option<(u64, Option<u64>)>,
+) -> Response {
+    let target = match resolve_remote_target(db, secrets, workspace_id, endpoint).await {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+
+    if proxy {
+        return stream_remote(&target, canonical_path, filename, range).await;
+    }
+
+    // Default: presigned 302 — bytes never transit mekhan. (A Range request
+    // can't be honoured through a presign redirect; the client re-issues the
+    // Range against the store directly, so we still 302.)
+    match presign_s3(&target, canonical_path, Duration::from_secs(300)).await {
+        Ok(url) => match header::HeaderValue::from_str(&url) {
+            Ok(loc) => (StatusCode::FOUND, [(header::LOCATION, loc)]).into_response(),
+            Err(_) => {
+                crate::models::error::ApiError::internal("presigned URL was not a valid header value")
+                    .into_response()
+            }
+        },
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Serve an `sftp` endpoint: always streamed in-process through opendal (sftp
+/// has no presign). Honours Range where opendal supports the ranged read.
+pub async fn serve_sftp_endpoint(
+    db: &PgPool,
+    secrets: &dyn SecretStore,
+    workspace_id: Uuid,
+    endpoint: &FileServerEndpoint,
+    canonical_path: &str,
+    filename: &str,
+    range: Option<(u64, Option<u64>)>,
+) -> Response {
+    let target = match resolve_remote_target(db, secrets, workspace_id, endpoint).await {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+    stream_remote(&target, canonical_path, filename, range).await
+}
+
+/// Shared in-process streamer for a resolved remote target (proxied s3 + sftp).
+/// Opens a (ranged) opendal byte stream and relays it into the HTTP body.
+async fn stream_remote(
+    target: &RemoteTarget,
+    canonical_path: &str,
+    filename: &str,
+    range: Option<(u64, Option<u64>)>,
+) -> Response {
+    let operator = match build_remote_operator(target) {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let object_path = target.object_path(canonical_path);
+
+    let meta = match operator.stat(&object_path).await {
+        Ok(m) => m,
+        Err(e) => return map_opendal_err(e).into_response(),
+    };
+    let total = meta.content_length();
+    let content_type = meta
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let reader = match operator.reader_with(&object_path).await {
+        Ok(r) => r,
+        Err(e) => return map_opendal_err(e).into_response(),
+    };
+
+    // The number of bytes the body will carry (Content-Length).
+    let (body_len, byte_range) = match range {
+        Some((offset, Some(len))) => {
+            let end = offset.saturating_add(len).min(total);
+            (end.saturating_sub(offset), offset..end)
+        }
+        Some((offset, None)) => (total.saturating_sub(offset), offset..total),
+        None => (total, 0..total),
+    };
+
+    let stream = match reader.into_bytes_stream(byte_range).await {
+        Ok(s) => s,
+        Err(e) => return map_opendal_err(e).into_response(),
+    };
+
+    let mut resp_headers = HeaderMap::new();
+    if let Ok(v) = header::HeaderValue::from_str(&content_type) {
+        resp_headers.insert(header::CONTENT_TYPE, v);
+    }
+    if let Ok(v) = header::HeaderValue::from_str(&body_len.to_string()) {
+        resp_headers.insert(header::CONTENT_LENGTH, v);
+    }
+    resp_headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+    let disposition = format!("inline; filename=\"{}\"", sanitize_filename(filename));
+    if let Ok(v) = header::HeaderValue::from_str(&disposition) {
+        resp_headers.insert(header::CONTENT_DISPOSITION, v);
+    }
+
+    let status = if range.is_some() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    (status, resp_headers, Body::from_stream(stream)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -609,5 +1125,122 @@ mod tests {
         assert_eq!(r.into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
         let r = error_frame_to_response(ServeErrorKind::ReadError, "rd");
         assert_eq!(r.into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // -----------------------------------------------------------------------
+    // Remote (s3 / sftp) cred-resolution + presign + branch selection.
+    // -----------------------------------------------------------------------
+
+    fn s3_target(root: &str) -> RemoteTarget {
+        RemoteTarget {
+            storage: StorageConfig {
+                backend: StorageBackend::S3,
+                endpoint: "http://minio.local:9000".into(),
+                bucket: "lab-data".into(),
+                region: Some("us-east-1".into()),
+                prefix: String::new(),
+                credentials: StorageCredentials {
+                    access_key: "AKIAEXAMPLE".into(),
+                    secret_key: "secret".into(),
+                },
+                retry: Default::default(),
+                resource_alias: None,
+            },
+            root: root.to_string(),
+        }
+    }
+
+    #[test]
+    fn object_path_joins_root_and_relative_with_single_slash() {
+        let t = s3_target("datasets/2024");
+        assert_eq!(t.object_path("runs/a.h5"), "datasets/2024/runs/a.h5");
+        // Trailing root slash + leading path slash collapse to one.
+        let t = s3_target("datasets/2024/");
+        assert_eq!(t.object_path("/runs/a.h5"), "datasets/2024/runs/a.h5");
+    }
+
+    #[test]
+    fn object_path_empty_root_is_verbatim() {
+        let t = s3_target("");
+        assert_eq!(t.object_path("runs/a.h5"), "runs/a.h5");
+        assert_eq!(t.object_path("/runs/a.h5"), "runs/a.h5");
+    }
+
+    #[test]
+    fn capitalize_strategy_normalises_known_hosts_policy() {
+        assert_eq!(capitalize_strategy("strict"), "Strict");
+        assert_eq!(capitalize_strategy("STRICT"), "Strict");
+        assert_eq!(capitalize_strategy("add"), "Add");
+        assert_eq!(capitalize_strategy("accept"), "Accept");
+        // Unknown / empty → the pragmatic Accept default.
+        assert_eq!(capitalize_strategy("whatever"), "Accept");
+        assert_eq!(capitalize_strategy(""), "Accept");
+    }
+
+    #[test]
+    fn remote_read_error_status_mapping() {
+        assert_eq!(
+            RemoteReadError::MissingResourceRef { method: "s3".into() }.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            RemoteReadError::ResourceNotFound { path: "p".into() }.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            RemoteReadError::NotFound("x".into()).status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            RemoteReadError::MissingField {
+                path: "p".into(),
+                field: "bucket".into()
+            }
+            .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            RemoteReadError::Operator("boom".into()).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// Presigning is local request-signing (no network) — exercising the s3
+    /// presign path against a static target proves the operator builds and the
+    /// minted URL embeds the object key + bucket + a signature query.
+    #[tokio::test]
+    async fn presign_s3_mints_signed_url_for_object_key() {
+        let t = s3_target("datasets");
+        let url = presign_s3(&t, "runs/a.h5", Duration::from_secs(120))
+            .await
+            .expect("presign mints a URL");
+        // Path-style endpoint → host + bucket + composed key in the path.
+        assert!(url.starts_with("http://minio.local:9000"), "url: {url}");
+        assert!(url.contains("lab-data"), "bucket in url: {url}");
+        assert!(url.contains("datasets/runs/a.h5"), "composed key in url: {url}");
+        // AWS SigV4 query params present → it's actually signed.
+        assert!(
+            url.contains("X-Amz-Signature") && url.contains("X-Amz-Expires"),
+            "signed query: {url}"
+        );
+    }
+
+    /// The default (non-proxy) external-s3 branch returns a 302 redirect to the
+    /// presigned URL; the proxy branch streams 200/206. We drive only the
+    /// presign half here (no live store) but assert the redirect shape.
+    #[tokio::test]
+    async fn presign_redirect_branch_is_302_with_location() {
+        use axum::response::IntoResponse;
+        let t = s3_target("");
+        let url = presign_s3(&t, "a.txt", Duration::from_secs(60))
+            .await
+            .unwrap();
+        // Reconstruct the same response the default serve branch builds.
+        let resp = match header::HeaderValue::from_str(&url) {
+            Ok(loc) => (StatusCode::FOUND, [(header::LOCATION, loc)]).into_response(),
+            Err(_) => unreachable!("minted URL is a valid header value"),
+        };
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        assert!(resp.headers().contains_key(header::LOCATION));
     }
 }

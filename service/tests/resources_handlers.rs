@@ -86,6 +86,9 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: resource_store.clone(),
+        secret_store: Arc::new(aithericon_secrets::InMemorySecretStore::new(
+            std::collections::HashMap::new(),
+        )),
         resource_resolver: Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),

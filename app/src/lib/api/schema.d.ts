@@ -816,8 +816,10 @@ export interface paths {
          *     * `local_mount` → NATS relay through the co-located runner that owns the
          *       mount (mekhan is cred-free; the runner path-jails + streams).
          *     * `object_store` / `s3` → presigned 302 (default) or proxied bytes
-         *       (`config.proxy_s3_reads`). External `s3` (`resource_ref`) is deferred.
-         *     * `sftp` → deferred (Phase 5 — needs the resource-secret read chain).
+         *       (`config.proxy_s3_reads`). External `s3` (`resource_ref`) resolves the
+         *       endpoint's resource creds via Vault, then presigns/proxies the same way.
+         *     * `sftp` → resolves auth via Vault, builds the opendal sftp Operator, and
+         *       streams the file in-process (sftp has no presign).
          *
          *     Honours `Range: bytes=START-[END]` (single range) → 206 with the capped read.
          */

@@ -60,8 +60,10 @@ pub async fn entries(
 /// * `local_mount` → NATS relay through the co-located runner that owns the
 ///   mount (mekhan is cred-free; the runner path-jails + streams).
 /// * `object_store` / `s3` → presigned 302 (default) or proxied bytes
-///   (`config.proxy_s3_reads`). External `s3` (`resource_ref`) is deferred.
-/// * `sftp` → deferred (Phase 5 — needs the resource-secret read chain).
+///   (`config.proxy_s3_reads`). External `s3` (`resource_ref`) resolves the
+///   endpoint's resource creds via Vault, then presigns/proxies the same way.
+/// * `sftp` → resolves auth via Vault, builds the opendal sftp Operator, and
+///   streams the file in-process (sftp has no presign).
 ///
 /// Honours `Range: bytes=START-[END]` (single range) → 206 with the capped read.
 #[utoipa::path(
@@ -142,22 +144,39 @@ pub async fn entry_content(
         }
         "s3" => {
             if chosen.endpoint.resource_ref.is_some() {
-                // External S3 needs the endpoint's resource secrets resolved via
-                // Vault — the read-side secret chain isn't wired into AppState yet.
-                ApiError::new(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "serving external s3 endpoints (resource_ref creds) is deferred to Phase 5",
+                // External S3: resolve the endpoint's resource creds via Vault,
+                // mint a presigned 302 (default) or proxy the bytes in-process
+                // when `proxy_s3_reads` is set (single-origin / firewalled).
+                serve::serve_s3_endpoint(
+                    &state.db,
+                    state.secret_store.as_ref(),
+                    ws,
+                    &chosen.endpoint,
+                    &chosen.path,
+                    &filename,
+                    state.config.proxy_s3_reads,
+                    range,
                 )
-                .into_response()
+                .await
             } else {
+                // No resource_ref → the built-in platform bucket.
                 serve_object_store(&state, &chosen.path, &filename).await
             }
         }
-        "sftp" => ApiError::new(
-            StatusCode::NOT_IMPLEMENTED,
-            "serving sftp endpoints is deferred to Phase 5 (needs the resource-secret read chain + opendal)",
-        )
-        .into_response(),
+        "sftp" => {
+            // External SFTP: resolve auth via Vault, build the opendal sftp
+            // Operator, and stream the file in-process (sftp has no presign).
+            serve::serve_sftp_endpoint(
+                &state.db,
+                state.secret_store.as_ref(),
+                ws,
+                &chosen.endpoint,
+                &chosen.path,
+                &filename,
+                range,
+            )
+            .await
+        }
         other => ApiError::new(
             StatusCode::NOT_IMPLEMENTED,
             format!("unsupported access_method {other:?}"),

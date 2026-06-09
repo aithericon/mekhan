@@ -200,11 +200,14 @@ pub async fn index_reconcile(
     info!(file_server_id, root, batch_size, "index-reconcile: crawl + fold");
 
     // The storage prefix ("") is what the file-ops dispatch passes to the op as
-    // the path-resolution prefix; pass the same here.
+    // the path-resolution prefix; pass the same here. `endpoint_root` is the
+    // canonical root stamped into each row's provenance — for the synthetic-NAS
+    // driver that's the crawl `root` (an NFS mount stand-in).
     aithericon_executor_file_ops::ops::crawl::execute(
         &config,
         &operator,
         &storage.prefix,
+        root,
         Some(sink.clone() as Arc<dyn EventStream>),
         &cancel,
     )

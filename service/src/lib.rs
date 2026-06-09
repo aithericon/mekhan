@@ -116,6 +116,14 @@ pub struct AppState {
     /// engine's wrap path still reads through the existing `SecretStore`
     /// path — this trait is write-only by design.
     pub resource_store: Arc<dyn aithericon_resources::ResourceSecretStore>,
+    /// READ-side secret backend used by the file-server serve bridge
+    /// (`data::serve`) to resolve an endpoint's `resource_ref` → the s3/sftp
+    /// credential fields stored in Vault (keyed `<vault_path>#<field>`).
+    /// `VaultSecretStore` when VAULT_ADDR/VAULT_TOKEN are set; an empty
+    /// `InMemorySecretStore` (dev/test) otherwise. Distinct from
+    /// `resource_store` (write-only): the engine's wrap path and this serve
+    /// read path both go through the same `SecretStore::get` contract.
+    pub secret_store: Arc<dyn aithericon_secrets::SecretStore>,
     /// Publish-time resource resolver. Reads workspace resources +
     /// per-version public config, runs ACL + audit, and returns the JSON
     /// envelope the publish handler splices into the AIR before
