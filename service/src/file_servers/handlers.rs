@@ -1,10 +1,11 @@
 //! HTTP handlers for the `file_servers` entity (docs/32 §4.1).
 //!
-//! File servers are the first-class storage backends the platform tracks files
-//! on. Secrets never live on the entity — `resource_ref` points at a workspace
-//! `resource` that holds connection + credentials in Vault. The built-in
-//! platform object store is auto-seeded at startup; external `s3` / `sftp`
-//! servers are created here referencing a resource.
+//! A file server is the identity-only logical backend the platform tracks files
+//! on. The *ways to reach it* are N child `file_server_endpoints` (object_store
+//! / s3 / sftp / local_mount), each with its own `root`, optional `resource_ref`
+//! (secrets stay in Vault via the resource), and status / verification. The
+//! built-in platform object store is auto-seeded at startup with one
+//! `object_store` endpoint; external servers add endpoints here.
 //!
 //! No real workspace concept exists in v1 — a missing workspace resolves to
 //! `Uuid::nil()` (mirrors `handlers::resources`).
@@ -25,8 +26,8 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
 }
 
-/// GET /api/v1/file-servers — registered servers (with derived rollups) plus
-/// unregistered inventory keys (adopt candidates).
+/// GET /api/v1/file-servers — registered servers (with endpoints + derived
+/// rollups) plus unregistered inventory keys (adopt candidates).
 #[utoipa::path(
     get,
     path = "/api/v1/file-servers",
@@ -49,7 +50,7 @@ pub async fn list(
     Ok(Json(resp))
 }
 
-/// GET /api/v1/file-servers/{key} — one server with rollups.
+/// GET /api/v1/file-servers/{key} — one server with endpoints + rollups.
 #[utoipa::path(
     get,
     path = "/api/v1/file-servers/{key}",
@@ -73,7 +74,8 @@ pub async fn get(
     Ok(Json(view))
 }
 
-/// POST /api/v1/file-servers — register a new file server.
+/// POST /api/v1/file-servers — register a new file server (optionally with a
+/// first inline endpoint).
 #[utoipa::path(
     post,
     path = "/api/v1/file-servers",
@@ -96,7 +98,8 @@ pub async fn create(
 
 /// POST /api/v1/file-servers/adopt — promote an inventory `file_server_id`
 /// string (seen in `file_inventory` but with no backing entity) into a real
-/// file server. Identical to create, but the key MUST exist in inventory.
+/// file server. Identical to create, but the key MUST exist in inventory; if no
+/// endpoint is supplied a default `local_mount` endpoint at the root is created.
 #[utoipa::path(
     post,
     path = "/api/v1/file-servers/adopt",
@@ -111,7 +114,7 @@ pub async fn create(
 pub async fn adopt(
     State(state): State<AppState>,
     user: AuthUser,
-    Json(req): Json<CreateFileServerRequest>,
+    Json(mut req): Json<CreateFileServerRequest>,
 ) -> Result<Json<FileServer>, ApiError> {
     let ws = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let in_inv = queries::key_in_inventory(&state.db, &req.key)
@@ -122,6 +125,18 @@ pub async fn adopt(
             "cannot adopt {:?}: no inventory rows reference it (use POST /api/v1/file-servers to register a fresh server)",
             req.key
         )));
+    }
+    // Adopting a crawled key: default its first access method to local_mount
+    // (the co-located-runner transport) unless the caller supplied one.
+    if req.endpoint.is_none() {
+        req.endpoint = Some(CreateEndpointRequest {
+            access_method: "local_mount".to_string(),
+            root: None,
+            resource_ref: None,
+            group_id: None,
+            priority: None,
+            config: None,
+        });
     }
     insert_server(&state, ws, &req).await
 }
@@ -148,7 +163,7 @@ async fn insert_server(
     Ok(Json(server))
 }
 
-/// PUT /api/v1/file-servers/{key} — update mutable fields.
+/// PUT /api/v1/file-servers/{key} — update mutable parent fields.
 #[utoipa::path(
     put,
     path = "/api/v1/file-servers/{key}",
@@ -178,7 +193,8 @@ pub async fn update(
     Ok(Json(server))
 }
 
-/// DELETE /api/v1/file-servers/{key} — drop the entity (inventory untouched).
+/// DELETE /api/v1/file-servers/{key} — drop the entity (endpoints cascade;
+/// inventory untouched).
 #[utoipa::path(
     delete,
     path = "/api/v1/file-servers/{key}",
@@ -202,5 +218,143 @@ pub async fn delete(
         Ok(axum::http::StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!("file server {key:?} not found")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint sub-resource: /api/v1/file-servers/{key}/endpoints[/{endpoint_id}]
+// ---------------------------------------------------------------------------
+
+/// Resolve the parent server id from its key, 404ing if absent.
+async fn resolve_server_id(state: &AppState, ws: Uuid, key: &str) -> Result<Uuid, ApiError> {
+    queries::server_id(&state.db, ws, key)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("file server {key:?} not found")))
+}
+
+/// GET /api/v1/file-servers/{key}/endpoints — list a server's endpoints.
+#[utoipa::path(
+    get,
+    path = "/api/v1/file-servers/{key}/endpoints",
+    params(("key" = String, Path, description = "File-server key")),
+    responses(
+        (status = 200, description = "Endpoints", body = [FileServerEndpoint]),
+        (status = 404, description = "Server not found", body = ErrorResponse),
+    ),
+    tag = "file_servers",
+)]
+pub async fn list_endpoints(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(key): Path<String>,
+) -> Result<Json<Vec<FileServerEndpoint>>, ApiError> {
+    let ws = caller_workspace(&user);
+    let server_id = resolve_server_id(&state, ws, &key).await?;
+    let endpoints = queries::list_endpoints(&state.db, server_id)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(endpoints))
+}
+
+/// POST /api/v1/file-servers/{key}/endpoints — add an endpoint to a server.
+#[utoipa::path(
+    post,
+    path = "/api/v1/file-servers/{key}/endpoints",
+    params(("key" = String, Path, description = "File-server key")),
+    request_body = CreateEndpointRequest,
+    responses(
+        (status = 200, description = "Created endpoint", body = FileServerEndpoint),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "Server not found", body = ErrorResponse),
+        (status = 409, description = "Duplicate (access_method, root) for this server", body = ErrorResponse),
+    ),
+    tag = "file_servers",
+)]
+pub async fn create_endpoint(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(key): Path<String>,
+    Json(req): Json<CreateEndpointRequest>,
+) -> Result<Json<FileServerEndpoint>, ApiError> {
+    let ws = caller_workspace(&user);
+    let server_id = resolve_server_id(&state, ws, &key).await?;
+    let ep = queries::create_endpoint(&state.db, server_id, &req)
+        .await
+        .map_err(|e| {
+            tracing::warn!("file-server endpoint create: {e}");
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(ep))
+}
+
+/// PUT /api/v1/file-servers/{key}/endpoints/{endpoint_id} — update an endpoint.
+#[utoipa::path(
+    put,
+    path = "/api/v1/file-servers/{key}/endpoints/{endpoint_id}",
+    params(
+        ("key" = String, Path, description = "File-server key"),
+        ("endpoint_id" = String, Path, description = "Endpoint id (UUID)"),
+    ),
+    request_body = UpdateEndpointRequest,
+    responses(
+        (status = 200, description = "Updated endpoint", body = FileServerEndpoint),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "Server or endpoint not found", body = ErrorResponse),
+    ),
+    tag = "file_servers",
+)]
+pub async fn update_endpoint(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((key, endpoint_id)): Path<(String, Uuid)>,
+    Json(req): Json<UpdateEndpointRequest>,
+) -> Result<Json<FileServerEndpoint>, ApiError> {
+    let ws = caller_workspace(&user);
+    let server_id = resolve_server_id(&state, ws, &key).await?;
+    let ep = queries::update_endpoint(&state.db, server_id, endpoint_id, &req)
+        .await
+        .map_err(|e| {
+            tracing::warn!("file-server endpoint update: {e}");
+            ApiError::bad_request(e.to_string())
+        })?
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "endpoint {endpoint_id} not found on file server {key:?}"
+            ))
+        })?;
+    Ok(Json(ep))
+}
+
+/// DELETE /api/v1/file-servers/{key}/endpoints/{endpoint_id} — remove an endpoint.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/file-servers/{key}/endpoints/{endpoint_id}",
+    params(
+        ("key" = String, Path, description = "File-server key"),
+        ("endpoint_id" = String, Path, description = "Endpoint id (UUID)"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "Server or endpoint not found", body = ErrorResponse),
+    ),
+    tag = "file_servers",
+)]
+pub async fn delete_endpoint(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((key, endpoint_id)): Path<(String, Uuid)>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let ws = caller_workspace(&user);
+    let server_id = resolve_server_id(&state, ws, &key).await?;
+    let removed = queries::delete_endpoint(&state.db, server_id, endpoint_id)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if removed {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(format!(
+            "endpoint {endpoint_id} not found on file server {key:?}"
+        )))
     }
 }

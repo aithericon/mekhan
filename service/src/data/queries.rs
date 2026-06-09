@@ -17,13 +17,20 @@ use super::model::*;
 /// Max uncatalogued rows returned inline (the UI gets a count for the rest).
 const UNCATALOGUED_PEEK: i64 = 50;
 
-/// Resolve `file_server_id` → (display_name, kind) for a workspace's servers.
+/// Resolve `file_server_id` (== `file_servers.key`) → (display_name, kind) for a
+/// workspace's servers. `kind` now lives on the child endpoints, so we surface
+/// the highest-priority endpoint's `access_method` as the server's effective
+/// transport kind (NULL when the server has no endpoints yet).
 async fn server_lookup(
     pool: &PgPool,
     workspace_id: Uuid,
-) -> Result<HashMap<String, (String, String)>, sqlx::Error> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT key, display_name, kind FROM file_servers WHERE workspace_id = $1",
+) -> Result<HashMap<String, (String, Option<String>)>, sqlx::Error> {
+    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT fs.key, fs.display_name, \
+                (SELECT e.access_method FROM file_server_endpoints e \
+                 WHERE e.file_server_id = fs.id \
+                 ORDER BY e.priority DESC, e.access_method, e.root LIMIT 1) AS kind \
+         FROM file_servers fs WHERE fs.workspace_id = $1",
     )
     .bind(workspace_id)
     .fetch_all(pool)
@@ -34,10 +41,10 @@ async fn server_lookup(
         .collect())
 }
 
-fn to_copy(inv: InventoryEntry, servers: &HashMap<String, (String, String)>) -> DataCopy {
+fn to_copy(inv: InventoryEntry, servers: &HashMap<String, (String, Option<String>)>) -> DataCopy {
     let (display, kind) = servers
         .get(&inv.file_server_id)
-        .map(|(d, k)| (Some(d.clone()), Some(k.clone())))
+        .map(|(d, k)| (Some(d.clone()), k.clone()))
         .unwrap_or((None, None));
     DataCopy {
         file_server_id: inv.file_server_id,

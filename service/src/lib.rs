@@ -399,6 +399,15 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             file_servers::handlers::update,
             file_servers::handlers::delete
         ))
+        // N access-method endpoints per server (object_store|s3|sftp|local_mount).
+        .routes(routes!(
+            file_servers::handlers::list_endpoints,
+            file_servers::handlers::create_endpoint
+        ))
+        .routes(routes!(
+            file_servers::handlers::update_endpoint,
+            file_servers::handlers::delete_endpoint
+        ))
         // Unified Data browser read-model — catalogued entries + nested physical
         // copies (server names resolved) + uncatalogued peek.
         .routes(routes!(data::handlers::entries))
