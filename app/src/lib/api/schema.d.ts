@@ -997,6 +997,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify — on-demand
+         *     hash-probe reconcile of one endpoint. Re-reads a stratified sample of the
+         *     server's recorded canonical paths THROUGH this endpoint and compares each
+         *     fresh SHA-256 against the inventory reference, persisting the verdict
+         *     (`verified`/`mismatch`/`conflict`) and returning the breakdown. A `not_found`
+         *     for a sampled path is a coverage gap, not a failure. Blocks until the probe
+         *     completes (it reads sampled files end to end), unlike the auto-probe spawned
+         *     on create/adopt/PUT.
+         */
+        post: operations["verify_endpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -10634,6 +10660,32 @@ export interface components {
              */
             catalog_version?: string | null;
         };
+        /** @description One offending path surfaced in a [`VerifyResult`]. */
+        VerifyExample: {
+            /**
+             * @description The reference hash (inventory `content_hash`) for `mismatch`, or the hash
+             *     some *other* endpoint established for `conflict`.
+             */
+            expected: string;
+            /** @description The hash this endpoint re-read for the path. */
+            got: string;
+            path: string;
+        };
+        /** @description The result of probing one endpoint. */
+        VerifyResult: {
+            /** @description Up to a handful of offending paths (mismatch + conflict), for the UI. */
+            examples: components["schemas"]["VerifyExample"][];
+            /** @description Present paths whose re-read hash differed from the reference. */
+            mismatched: number;
+            /** @description Sampled paths the endpoint did not have (coverage gaps). */
+            missing: number;
+            /** @description Present paths whose re-read hash matched the reference. */
+            passed: number;
+            /** @description How many canonical paths were sampled (probed). */
+            sampled: number;
+            /** @description `verified` | `mismatch` | `conflict`. */
+            verification_status: string;
+        };
         /**
          * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
          *     tagged on the wire: `{"mode":"latest"}` or `{"mode":"pinned","version":3}`.
@@ -13716,6 +13768,49 @@ export interface operations {
             };
             /** @description Server or endpoint not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    verify_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+                /** @description Endpoint id (UUID) */
+                endpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Verification result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerifyResult"];
+                };
+            };
+            /** @description Server or endpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Probe transport / read error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

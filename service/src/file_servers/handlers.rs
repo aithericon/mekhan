@@ -19,11 +19,41 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::file_servers::model::*;
 use crate::file_servers::queries;
+use crate::file_servers::reconcile;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
 fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
+}
+
+/// Fire a non-blocking auto-probe for one endpoint (see
+/// [`reconcile::spawn_auto_probe`]). Used after an endpoint is created / adopted
+/// / updated; never blocks the HTTP response.
+fn auto_probe(state: &AppState, ws: Uuid, server_key: &str, endpoint: FileServerEndpoint) {
+    reconcile::spawn_auto_probe(
+        state.db.clone(),
+        state.secret_store.clone(),
+        state.nats.client().clone(),
+        ws,
+        server_key.to_string(),
+        endpoint.file_server_id,
+        endpoint,
+    );
+}
+
+/// Auto-probe every endpoint of a freshly created / adopted server (a create may
+/// carry an inline first endpoint). Loads the just-written endpoints and spawns a
+/// probe per row.
+async fn auto_probe_all(state: &AppState, ws: Uuid, server_key: &str, server_id: Uuid) {
+    match queries::list_endpoints(&state.db, server_id).await {
+        Ok(endpoints) => {
+            for ep in endpoints {
+                auto_probe(state, ws, server_key, ep);
+            }
+        }
+        Err(e) => tracing::warn!(server = server_key, error = %e, "auto-probe: list endpoints failed"),
+    }
 }
 
 /// GET /api/v1/file-servers — registered servers (with endpoints + derived
@@ -176,6 +206,9 @@ async fn insert_server(
         tracing::warn!("file-server create: {e}");
         ApiError::bad_request(e.to_string())
     })?;
+    // Auto-probe any inline endpoint (non-blocking). A local_mount crawl source
+    // self-verifies; external endpoints get a verdict before first serve.
+    auto_probe_all(state, ws, &req.key, server.id).await;
     Ok(Json(server))
 }
 
@@ -301,6 +334,8 @@ pub async fn create_endpoint(
             tracing::warn!("file-server endpoint create: {e}");
             ApiError::bad_request(e.to_string())
         })?;
+    // Non-blocking hash-probe so the new endpoint gets a verification verdict.
+    auto_probe(&state, ws, &key, ep.clone());
     Ok(Json(ep))
 }
 
@@ -339,6 +374,8 @@ pub async fn update_endpoint(
                 "endpoint {endpoint_id} not found on file server {key:?}"
             ))
         })?;
+    // A PUT can change root / resource_ref / group_id → re-probe (non-blocking).
+    auto_probe(&state, ws, &key, ep.clone());
     Ok(Json(ep))
 }
 
@@ -373,4 +410,61 @@ pub async fn delete_endpoint(
             "endpoint {endpoint_id} not found on file server {key:?}"
         )))
     }
+}
+
+/// POST /api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify — on-demand
+/// hash-probe reconcile of one endpoint. Re-reads a stratified sample of the
+/// server's recorded canonical paths THROUGH this endpoint and compares each
+/// fresh SHA-256 against the inventory reference, persisting the verdict
+/// (`verified`/`mismatch`/`conflict`) and returning the breakdown. A `not_found`
+/// for a sampled path is a coverage gap, not a failure. Blocks until the probe
+/// completes (it reads sampled files end to end), unlike the auto-probe spawned
+/// on create/adopt/PUT.
+#[utoipa::path(
+    post,
+    path = "/api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify",
+    params(
+        ("key" = String, Path, description = "File-server key"),
+        ("endpoint_id" = String, Path, description = "Endpoint id (UUID)"),
+    ),
+    responses(
+        (status = 200, description = "Verification result", body = crate::file_servers::reconcile::VerifyResult),
+        (status = 404, description = "Server or endpoint not found", body = ErrorResponse),
+        (status = 500, description = "Probe transport / read error", body = ErrorResponse),
+    ),
+    tag = "file_servers",
+)]
+pub async fn verify_endpoint(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((key, endpoint_id)): Path<(String, Uuid)>,
+) -> Result<Json<reconcile::VerifyResult>, ApiError> {
+    let ws = caller_workspace(&user);
+    let server_id = resolve_server_id(&state, ws, &key).await?;
+    let endpoint = queries::get_endpoint(&state.db, server_id, endpoint_id)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "endpoint {endpoint_id} not found on file server {key:?}"
+            ))
+        })?;
+
+    let result = reconcile::verify_endpoint(
+        &state.db,
+        state.secret_store.as_ref(),
+        state.nats.client(),
+        ws,
+        &key,
+        server_id,
+        &endpoint,
+        reconcile::DEFAULT_SAMPLE_SIZE,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(server = key, endpoint = %endpoint_id, error = e, "verify endpoint failed");
+        ApiError::internal(e)
+    })?;
+
+    Ok(Json(result))
 }

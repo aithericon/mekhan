@@ -416,6 +416,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             file_servers::handlers::update_endpoint,
             file_servers::handlers::delete_endpoint
         ))
+        // On-demand hash-probe reconcile of one endpoint (docs/32 §4 Phase 4).
+        .routes(routes!(file_servers::handlers::verify_endpoint))
         // Unified Data browser read-model — catalogued entries + nested physical
         // copies (server names resolved) + uncatalogued peek.
         .routes(routes!(data::handlers::entries))

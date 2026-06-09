@@ -2981,6 +2981,67 @@
         }
       }
     },
+    "/api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify": {
+      "post": {
+        "tags": [
+          "file_servers"
+        ],
+        "summary": "POST /api/v1/file-servers/{key}/endpoints/{endpoint_id}/verify — on-demand\nhash-probe reconcile of one endpoint. Re-reads a stratified sample of the\nserver's recorded canonical paths THROUGH this endpoint and compares each\nfresh SHA-256 against the inventory reference, persisting the verdict\n(`verified`/`mismatch`/`conflict`) and returning the breakdown. A `not_found`\nfor a sampled path is a coverage gap, not a failure. Blocks until the probe\ncompletes (it reads sampled files end to end), unlike the auto-probe spawned\non create/adopt/PUT.",
+        "operationId": "verify_endpoint",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "File-server key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "Endpoint id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Server or endpoint not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Probe transport / read error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -25798,6 +25859,73 @@
               "null"
             ],
             "description": "Optional runner-reported catalog version/hash (e.g. a content hash or a\nROS distro tag)."
+          }
+        }
+      },
+      "VerifyExample": {
+        "type": "object",
+        "description": "One offending path surfaced in a [`VerifyResult`].",
+        "required": [
+          "path",
+          "expected",
+          "got"
+        ],
+        "properties": {
+          "expected": {
+            "type": "string",
+            "description": "The reference hash (inventory `content_hash`) for `mismatch`, or the hash\nsome *other* endpoint established for `conflict`."
+          },
+          "got": {
+            "type": "string",
+            "description": "The hash this endpoint re-read for the path."
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "VerifyResult": {
+        "type": "object",
+        "description": "The result of probing one endpoint.",
+        "required": [
+          "verification_status",
+          "sampled",
+          "passed",
+          "mismatched",
+          "missing",
+          "examples"
+        ],
+        "properties": {
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifyExample"
+            },
+            "description": "Up to a handful of offending paths (mismatch + conflict), for the UI."
+          },
+          "mismatched": {
+            "type": "integer",
+            "description": "Present paths whose re-read hash differed from the reference.",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "description": "Sampled paths the endpoint did not have (coverage gaps).",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "integer",
+            "description": "Present paths whose re-read hash matched the reference.",
+            "minimum": 0
+          },
+          "sampled": {
+            "type": "integer",
+            "description": "How many canonical paths were sampled (probed).",
+            "minimum": 0
+          },
+          "verification_status": {
+            "type": "string",
+            "description": "`verified` | `mismatch` | `conflict`."
           }
         }
       },
