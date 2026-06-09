@@ -249,6 +249,11 @@ pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEnt
                JOIN causality_process_tags pt ON pt.token_id = et.token_id
                WHERE pt.process_id = $1
            )
+           OR content_hash IN (
+               SELECT cp.content_hash FROM catalogue_producers cp
+               WHERE cp.process_id = $1
+                  OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1)
+           )
         ORDER BY created_at ASC
         "#,
     ))
@@ -295,6 +300,11 @@ pub async fn lineage_filtered(
                  AND et.event_seq = cl.egress_seq
                 JOIN causality_process_tags pt ON pt.token_id = et.token_id
                 WHERE pt.process_id = $1
+            )
+            OR content_hash IN (
+                SELECT cp.content_hash FROM catalogue_producers cp
+                WHERE cp.process_id = $1
+                   OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1)
             )
         )
         AND ($3::text[] IS NULL OR category = ANY($3))

@@ -169,7 +169,11 @@ pub async fn get_process_detail(
                JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
                  AND et.event_seq = cl.egress_seq \
                JOIN causality_process_tags pt ON pt.token_id = et.token_id \
-               WHERE pt.process_id = $1)",
+               WHERE pt.process_id = $1) \
+            OR content_hash IN (\
+               SELECT cp.content_hash FROM catalogue_producers cp \
+               WHERE cp.process_id = $1 \
+                  OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1))",
     )
     .bind(process_id)
     .fetch_one(pool)
@@ -571,7 +575,14 @@ pub async fn list_process_artifacts(
             WHERE pt.process_id = ",
         );
         qb.push_bind(process_id.to_string());
-        qb.push("))");
+        // ...OR the content was produced by this process / its net (producer edge):
+        // recovers re-runs whose catalogue row deduped on content_hash.
+        qb.push(") OR content_hash IN (\
+            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push(" OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push(")))");
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
@@ -596,7 +607,14 @@ pub async fn list_process_artifacts(
             WHERE pt.process_id = ",
         );
         qb.push_bind(process_id.to_string());
-        qb.push("))");
+        // ...OR the content was produced by this process / its net (producer edge):
+        // recovers re-runs whose catalogue row deduped on content_hash.
+        qb.push(") OR content_hash IN (\
+            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push(" OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = ");
+        qb.push_bind(process_id.to_string());
+        qb.push(")))");
         if let Some(ref filter) = params.filter {
             if !filter.is_empty() {
                 qb.push(" AND ");
