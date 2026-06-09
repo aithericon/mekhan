@@ -1051,6 +1051,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/human-presence/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/human-presence/heartbeat` — the caller renews their LIVE
+         *     presence across ALL of their durably-`available` enrollments. The SPA pings
+         *     this on an interval for the whole time a human member has the app open, which
+         *     is the `session` liveness source: the human presence controller (core-subbed
+         *     to `human.*.presence`) bumps the member's `last_seen` and SELF-HEALS any
+         *     durably-available enrollment whose in-memory entry was lost (e.g. across a
+         *     mekhan restart), re-admitting it WITHOUT a re-toggle.
+         * @description Fire-and-forget on the CORE client (the same channel `set_availability`'s
+         *     intent edge uses); a publish failure is warned-and-swallowed — the next ping
+         *     renews. Returns 204 (no body) since the live state is read via
+         *     `GET /human-presence`. NOT gated to enrolled members: a non-human caller's
+         *     heartbeat finds no available enrollments and is a controller no-op.
+         */
+        post: operations["human_presence_heartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/requests": {
         parameters: {
             query?: never;
@@ -13637,6 +13667,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HumanPresenceSnapshot"][];
                 };
+            };
+        };
+    };
+    human_presence_heartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Presence heartbeat published */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

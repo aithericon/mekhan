@@ -54,6 +54,7 @@ use futures::StreamExt;
 use crate::compiler::well_known;
 use crate::models::roster::{AvailabilityConfig, LivenessSource};
 use crate::nats::MekhanNats;
+use crate::petri::client::PetriClient;
 
 /// Default presence TTL when a roster row carries none: a `session`/`external`
 /// member missing this long is reaped. Overridable via
@@ -343,16 +344,57 @@ async fn publish_jetstream(
     }
 }
 
+/// Count how many pool units the engine net currently holds for `member` — the
+/// `runner_id`-matching tokens in BOTH the FREE (`pool`) and HELD (`in_use`)
+/// places. This is the leak-free authority for the acquire top-up: the engine
+/// net is the source of truth for admitted slots, NOT mekhan's in-memory map
+/// (which is wiped on a mekhan restart while the engine retains its units).
+///
+/// Returns `None` on any engine error or unexpected marking shape — callers
+/// treat `None` as "assume already at capacity" (inject NOTHING) so a transient
+/// engine blip can never DOUBLE-admit. The marking shape is
+/// `marking.tokens.{pool,in_use}[].color.value.runner_id`.
+async fn count_member_units(petri: &PetriClient, pool_net_id: &str, member: Uuid) -> Option<u32> {
+    let state = petri.try_get_state(pool_net_id).await?;
+    let marking = serde_json::to_value(&state.marking).ok()?;
+    Some(count_units_in_marking(&marking, &member.to_string()))
+}
+
+/// Pure token-counter over an engine marking JSON: the number of `pool` + `in_use`
+/// tokens whose `color.value.runner_id` equals `member`. Free function so the
+/// shape-parsing is unit-testable without an engine.
+fn count_units_in_marking(marking: &serde_json::Value, member: &str) -> u32 {
+    let tokens = &marking["tokens"];
+    let mut n = 0u32;
+    for place in ["pool", "in_use"] {
+        if let Some(arr) = tokens[place].as_array() {
+            for tok in arr {
+                if tok["color"]["value"]["runner_id"].as_str() == Some(member) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
 /// Reconcile ONE member's admission against the pool net. Computes
-/// [`should_admit`] and drives the edge: on the absent→present edge inject `C`
-/// acquire units and flip `present=true`; on the present→absent edge inject `C`
-/// expire signals and flip `present=false`. A steady state (no edge) injects
-/// nothing.
+/// [`should_admit`] and drives the edge: on the absent→present edge TOP UP the
+/// member's pool slots to `C` (inject only `C - existing`, where `existing` is
+/// the engine's CURRENT unit count — so a re-admit after a mekhan restart that
+/// left the engine's units intact does NOT double-admit), and flip
+/// `present=true`; on the present→absent edge inject `C` expire signals and flip
+/// `present=false`. A steady state (no edge) injects nothing.
 ///
 /// The entry's facets (pool_net_id, concurrency, caps, member) are snapshotted
-/// under the lock and the injection runs OUTSIDE it so a slow JetStream publish
-/// never holds the map.
-async fn reconcile(nats: &MekhanNats, presence: &HumanPresenceMap, key: HumanKey) {
+/// under the lock and the injection (incl. the engine count query) runs OUTSIDE
+/// it so a slow JetStream publish / engine round-trip never holds the map.
+async fn reconcile(
+    petri: &PetriClient,
+    nats: &MekhanNats,
+    presence: &HumanPresenceMap,
+    key: HumanKey,
+) {
     let now = Instant::now();
     // Decide the edge under the lock, snapshot what we need to inject, flip the
     // `present` flag in the same critical section so a concurrent renewal can't
@@ -412,12 +454,22 @@ async fn reconcile(nats: &MekhanNats, presence: &HumanPresenceMap, key: HumanKey
             epoch,
             caps,
         } => {
-            for slot in 0..concurrency {
+            // Top up to C against the engine's CURRENT count (the leak-free
+            // authority). `None` (engine error) is treated as "already at C" so a
+            // blip never double-admits; the next edge reconciles. A member whose
+            // engine slots survived a mekhan restart counts as `existing == C` →
+            // inject 0 (we just re-track them in-memory), the case that previously
+            // double-admitted.
+            let existing = count_member_units(petri, &pool_net_id, member)
+                .await
+                .unwrap_or(concurrency);
+            let need = concurrency.saturating_sub(existing);
+            for slot in 0..need {
                 inject_acquire(nats, &pool_net_id, member, slot, epoch, &caps).await;
             }
             tracing::info!(
-                %member, pool_net_id, concurrency,
-                "human presence acquired (member admitted to pool with C slots)"
+                %member, pool_net_id, concurrency, existing, need,
+                "human presence acquired (topped member's pool slots up to C)"
             );
         }
         Edge::Expire {
@@ -482,6 +534,7 @@ async fn load_roster_row(
 /// `available=false` clear the intent and reconcile (which expires it).
 async fn handle_availability(
     db: &PgPool,
+    petri: &PetriClient,
     nats: &MekhanNats,
     presence: &HumanPresenceMap,
     member: Uuid,
@@ -550,30 +603,121 @@ async fn handle_availability(
         }
     }
 
-    reconcile(nats, presence, key).await;
+    reconcile(petri, nats, presence, key).await;
+}
+
+/// One durably-`available` enrollment of a member — the trusted facets needed to
+/// (re)admit them, read from the `roster_members` source of truth.
+struct AvailableEnrollment {
+    capacity_id: Uuid,
+    workspace_id: Uuid,
+    caps: serde_json::Value,
+    concurrency: u32,
+    ttl: Duration,
+    cfg: AvailabilityConfig,
+}
+
+/// Load a member's currently-`available` (durable intent ON), non-revoked
+/// enrollments. The durable `available` column is the source of truth the
+/// heartbeat self-heal re-admits from after the in-memory map is lost (a mekhan
+/// restart) or never had the entry (reconnect on a non-inbox page).
+async fn load_available_enrollments_for_member(
+    db: &PgPool,
+    member: Uuid,
+) -> Vec<AvailableEnrollment> {
+    let rows: Vec<(Uuid, Uuid, serde_json::Value, i32, serde_json::Value)> =
+        sqlx::query_as(
+            "SELECT workspace_id, capacity_id, caps, concurrency, availability \
+             FROM roster_members \
+             WHERE member_user_id = $1 AND available = TRUE AND revoked_at IS NULL",
+        )
+        .bind(member)
+        .fetch_all(db)
+        .await
+        .unwrap_or_default();
+
+    rows.into_iter()
+        .map(|(workspace_id, capacity_id, caps, concurrency, availability)| {
+            let cfg: AvailabilityConfig = serde_json::from_value(availability).unwrap_or_default();
+            let ttl = if cfg.ttl_secs > 0 {
+                Duration::from_secs(cfg.ttl_secs)
+            } else {
+                default_presence_ttl()
+            };
+            AvailableEnrollment {
+                capacity_id,
+                workspace_id,
+                caps,
+                concurrency: concurrency.max(0) as u32,
+                ttl,
+                cfg,
+            }
+        })
+        .collect()
 }
 
 /// Handle one `human.*.presence` (LIVENESS) heartbeat. The payload is
-/// empty/ignored — the member is the SUBJECT. Bump `last_seen` for ALL of that
-/// member's tracked entries (a member may be enrolled in several pools) and
-/// reconcile each (so a `session` entry that just lapsed is cleanly re-admitted).
-async fn handle_heartbeat(nats: &MekhanNats, presence: &HumanPresenceMap, member: Uuid) {
+/// empty/ignored — the member is the SUBJECT.
+///
+/// Two jobs: (1) bump `last_seen` for ALL of that member's tracked entries (a
+/// member may be enrolled in several pools) so a `session` entry stays live, and
+/// (2) SELF-HEAL — ensure every durably-`available` enrollment is tracked with
+/// intent ON, seeding it from the `roster_members` source of truth if the
+/// in-memory entry is missing. This is what re-onlines a member after a mekhan
+/// restart (map wiped, durable `available` still TRUE) or a reconnect on a
+/// non-inbox page — WITHOUT a re-toggle. Reconcile then tops their pool slots up
+/// to `C` against the engine's CURRENT count, so a self-heal NEVER double-admits.
+async fn handle_heartbeat(
+    db: &PgPool,
+    petri: &PetriClient,
+    nats: &MekhanNats,
+    presence: &HumanPresenceMap,
+    member: Uuid,
+) {
     let now = Instant::now();
-    // Collect this member's keys + bump last_seen under the lock; reconcile each
-    // outside it.
+    // Durable source of truth for this member's available enrollments (read
+    // before taking the lock — `await` must not be held across the std Mutex).
+    let available = load_available_enrollments_for_member(db, member).await;
+
     let keys: Vec<HumanKey> = {
         let mut map = presence.lock().await;
-        let mut out = Vec::new();
+        // (1) bump every tracked entry of this member (a live session renewal).
         for (key, entry) in map.iter_mut() {
             if key.1 == member {
                 entry.last_seen = now;
-                out.push(*key);
             }
         }
-        out
+        // (2) self-heal: ensure each durably-available enrollment is tracked with
+        //     intent ON + fresh facets. `or_insert` seeds a missing entry (the
+        //     post-restart / reconnect case); reconcile then admits via top-up.
+        for a in &available {
+            let key: HumanKey = (a.capacity_id, member);
+            let pool_net_id = well_known::pool_net_id(a.capacity_id);
+            let entry = map.entry(key).or_insert_with(|| HumanPresenceEntry {
+                last_seen: now,
+                intent_available: false,
+                present: false,
+                concurrency: a.concurrency,
+                pool_net_id: pool_net_id.clone(),
+                caps: a.caps.clone(),
+                liveness_source: a.cfg.liveness_source,
+                ttl: a.ttl,
+                workspace_id: a.workspace_id,
+                member_user_id: member,
+            });
+            entry.last_seen = now;
+            entry.intent_available = true;
+            entry.concurrency = a.concurrency;
+            entry.caps = a.caps.clone();
+            entry.liveness_source = a.cfg.liveness_source;
+            entry.ttl = a.ttl;
+            entry.pool_net_id = pool_net_id;
+            entry.workspace_id = a.workspace_id;
+        }
+        map.keys().filter(|k| k.1 == member).copied().collect()
     };
     for key in keys {
-        reconcile(nats, presence, key).await;
+        reconcile(petri, nats, presence, key).await;
     }
 }
 
@@ -597,6 +741,7 @@ fn member_from_subject(subject: &str, expect_suffix: &str) -> Option<Uuid> {
 pub(crate) async fn start_human_presence_subscriber(
     nats: MekhanNats,
     db: PgPool,
+    petri: PetriClient,
     presence: HumanPresenceMap,
 ) {
     let mut availability = match nats.client().subscribe("human.*.availability").await {
@@ -626,7 +771,7 @@ pub(crate) async fn start_human_presence_subscriber(
                     tracing::debug!(subject = %msg.subject, "ignoring non-availability subject");
                     continue;
                 };
-                handle_availability(&db, &nats, &presence, member, &msg.payload).await;
+                handle_availability(&db, &petri, &nats, &presence, member, &msg.payload).await;
             }
             msg = heartbeat.next() => {
                 let Some(msg) = msg else {
@@ -637,7 +782,7 @@ pub(crate) async fn start_human_presence_subscriber(
                     tracing::debug!(subject = %msg.subject, "ignoring non-presence subject");
                     continue;
                 };
-                handle_heartbeat(&nats, &presence, member).await;
+                handle_heartbeat(&db, &petri, &nats, &presence, member).await;
             }
         }
     }
@@ -699,12 +844,20 @@ pub(crate) fn new_human_presence_map() -> HumanPresenceMap {
 /// Spawn BOTH human presence tasks (the dual-subscription subscriber + the sweep)
 /// sharing one presence map. Called from the Wire phase. The `presence` handle is
 /// the SHARED one also stored in [`crate::AppState`] so a read API observes the
-/// very map the tasks mutate. The controller drives the pool net purely over NATS
-/// (bridge + signal), so no engine HTTP client is needed.
-pub fn spawn_human_presence_controller(presence: HumanPresence, nats: MekhanNats, db: PgPool) {
+/// very map the tasks mutate. Admission edges drive the pool net over NATS
+/// (bridge + signal); the `petri` client is used READ-ONLY on the acquire edge to
+/// count the member's current engine units so a re-admit tops up to `C` instead
+/// of double-injecting (the leak-free reconcile).
+pub fn spawn_human_presence_controller(
+    presence: HumanPresence,
+    nats: MekhanNats,
+    db: PgPool,
+    petri: PetriClient,
+) {
     tokio::spawn(start_human_presence_subscriber(
         nats.clone(),
         db,
+        petri,
         presence.map().clone(),
     ));
     tokio::spawn(start_human_presence_sweep(nats, presence.map().clone()));
@@ -735,6 +888,38 @@ mod tests {
         let mut e = entry(true, source, last_seen);
         e.present = true;
         e
+    }
+
+    #[test]
+    fn counts_member_units_in_marking() {
+        let me = "3bb26085-29f3-5fbf-8a8c-a2e485a1f55b";
+        let other = "00000000-0000-0000-0000-000000000aaa";
+        // Real engine marking shape: marking.tokens.{place}[].color.value.runner_id.
+        let marking = serde_json::json!({
+            "tokens": {
+                "pool": [
+                    { "id": "u1", "color": { "type": "Data", "value": { "runner_id": me, "unit_id": "x#0@1" } } },
+                    { "id": "u2", "color": { "type": "Data", "value": { "runner_id": me, "unit_id": "x#1@1" } } },
+                    { "id": "u3", "color": { "type": "Data", "value": { "runner_id": other, "unit_id": "y#0@1" } } }
+                ],
+                "in_use": [
+                    { "id": "h1", "color": { "type": "Data", "value": { "runner_id": me, "unit_id": "x#2@1" } } }
+                ],
+                "presence_acquire": [],
+                "done": [
+                    // a reaped token for `me` must NOT count (not a live pool/in_use slot)
+                    { "id": "d1", "color": { "type": "Data", "value": { "runner_id": me, "outcome": "reaped_free" } } }
+                ]
+            }
+        });
+        // 2 free (pool) + 1 held (in_use) = 3 live units for `me`; `done` excluded.
+        assert_eq!(count_units_in_marking(&marking, me), 3);
+        // The other member has exactly its 1 free unit.
+        assert_eq!(count_units_in_marking(&marking, other), 1);
+        // An unknown member has none.
+        assert_eq!(count_units_in_marking(&marking, "deadbeef"), 0);
+        // A degenerate/empty marking is 0, never a panic.
+        assert_eq!(count_units_in_marking(&serde_json::json!({}), me), 0);
     }
 
     #[test]

@@ -82,6 +82,17 @@ export async function getHumanPresence(): Promise<HumanPresenceSnapshot[]> {
 }
 
 /**
+ * POST /api/v1/human-presence/heartbeat — renew the caller's LIVE presence across
+ * all their durably-available enrollments. Pinged on an interval while a human
+ * member has the app open (the `session` liveness source); the controller bumps
+ * their `last_seen` and self-heals any enrollment whose in-memory entry was lost.
+ * Fire-and-forget: a failed ping is swallowed (the next one renews).
+ */
+export async function sendPresenceHeartbeat(): Promise<void> {
+	await client.POST('/api/v1/human-presence/heartbeat', {});
+}
+
+/**
  * GET /api/v1/roster — workspace-scoped list of enrolled members, optionally
  * filtered to one human capacity. Live-only (revoked excluded).
  */

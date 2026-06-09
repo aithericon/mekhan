@@ -499,6 +499,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::roster::my_enrollments))
         .routes(routes!(handlers::roster::set_availability))
         .routes(routes!(handlers::roster::human_presence))
+        .routes(routes!(handlers::roster::human_presence_heartbeat))
         .routes(routes!(
             handlers::roster::get_roster_member,
             handlers::roster::update_roster_member,

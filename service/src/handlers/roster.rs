@@ -488,3 +488,38 @@ pub async fn set_availability(
 
     Ok(StatusCode::OK)
 }
+
+/// `POST /api/v1/human-presence/heartbeat` — the caller renews their LIVE
+/// presence across ALL of their durably-`available` enrollments. The SPA pings
+/// this on an interval for the whole time a human member has the app open, which
+/// is the `session` liveness source: the human presence controller (core-subbed
+/// to `human.*.presence`) bumps the member's `last_seen` and SELF-HEALS any
+/// durably-available enrollment whose in-memory entry was lost (e.g. across a
+/// mekhan restart), re-admitting it WITHOUT a re-toggle.
+///
+/// Fire-and-forget on the CORE client (the same channel `set_availability`'s
+/// intent edge uses); a publish failure is warned-and-swallowed — the next ping
+/// renews. Returns 204 (no body) since the live state is read via
+/// `GET /human-presence`. NOT gated to enrolled members: a non-human caller's
+/// heartbeat finds no available enrollments and is a controller no-op.
+#[utoipa::path(
+    post,
+    path = "/api/v1/human-presence/heartbeat",
+    responses(
+        (status = 204, description = "Presence heartbeat published"),
+    ),
+    tag = "roster",
+)]
+pub async fn human_presence_heartbeat(State(state): State<AppState>, user: AuthUser) -> StatusCode {
+    let member = user.subject_as_uuid();
+    let subject = format!("human.{member}.presence");
+    if let Err(e) = state
+        .nats
+        .client()
+        .publish(subject, Vec::new().into())
+        .await
+    {
+        tracing::warn!(%member, "could not publish presence heartbeat: {e}");
+    }
+    StatusCode::NO_CONTENT
+}

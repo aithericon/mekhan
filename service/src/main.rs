@@ -247,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
         human_presence.clone(),
         mekhan_nats.clone(),
         db.clone(),
+        petri.clone(),
     );
 
     // Worker liveness tasks (worker-pool feature). Subscribe to

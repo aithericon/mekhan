@@ -12,8 +12,18 @@
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
 	import { loadBackends } from '$lib/editor/backend-registry.svelte';
 	import { loadNodeTypes } from '$lib/editor/node-registry.svelte';
+	import { startPresenceHeartbeat } from '$lib/presence/heartbeat';
 
 	let { children } = $props();
+
+	// Keep the human member's `session` presence alive for the WHOLE time the app
+	// is open (not just on the inbox/tasks pages) — see $lib/presence/heartbeat.
+	// Re-runs when auth flips; the returned stop fn clears the interval on
+	// sign-out / teardown.
+	$effect(() => {
+		if (!auth.isAuthenticated) return;
+		return startPresenceHeartbeat();
+	});
 
 	// Data/asset views grouped out of the primary nav.
 	const libraryItems: NavMenuItem[] = [

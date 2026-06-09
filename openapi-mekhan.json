@@ -2972,6 +2972,21 @@
         }
       }
     },
+    "/api/v1/human-presence/heartbeat": {
+      "post": {
+        "tags": [
+          "roster"
+        ],
+        "summary": "`POST /api/v1/human-presence/heartbeat` — the caller renews their LIVE\npresence across ALL of their durably-`available` enrollments. The SPA pings\nthis on an interval for the whole time a human member has the app open, which\nis the `session` liveness source: the human presence controller (core-subbed\nto `human.*.presence`) bumps the member's `last_seen` and SELF-HEALS any\ndurably-available enrollment whose in-memory entry was lost (e.g. across a\nmekhan restart), re-admitting it WITHOUT a re-toggle.",
+        "description": "Fire-and-forget on the CORE client (the same channel `set_availability`'s\nintent edge uses); a publish failure is warned-and-swallowed — the next ping\nrenews. Returns 204 (no body) since the live state is read via\n`GET /human-presence`. NOT gated to enrolled members: a non-human caller's\nheartbeat finds no available enrollments and is a controller no-op.",
+        "operationId": "human_presence_heartbeat",
+        "responses": {
+          "204": {
+            "description": "Presence heartbeat published"
+          }
+        }
+      }
+    },
     "/api/v1/inference/requests": {
       "get": {
         "tags": [
