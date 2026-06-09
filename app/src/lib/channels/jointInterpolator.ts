@@ -63,6 +63,16 @@ export function createJointInterpolator(rate = 12): JointInterpolator {
 			}
 		},
 		start(robot) {
+			// Pose the robot at the latest known angles SYNCHRONOUSLY, before the first
+			// paint. A freshly (re)built URDFRobot starts at its all-zeros home pose; if
+			// we waited for the first rAF tick (~16ms) it would paint one frame at home —
+			// the visible "flicker back to home" when the twin remounts (gate/lifecycle
+			// churn) while a pose is already known. Snap `current` to any pending target
+			// and apply, so the first painted frame is already correct. On a true cold
+			// start (no frame yet) target is empty → nothing applied → home is right.
+			stepAngles(current, target, 1);
+			for (const [name, value] of current) robot.setJointValue(name, value);
+
 			let raf = 0;
 			let stopped = false;
 			let last = performance.now();
