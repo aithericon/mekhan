@@ -239,6 +239,14 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
+                // `executor_namespace` (the group-partitioned / lease-scoped
+                // dispatch queue stamped on the job token at prepare) MUST ride
+                // through to the failure token: the retry topology re-submits off
+                // this token, and a dropped namespace falls back to the bare
+                // `executor` effect namespace that no group consumer drains —
+                // black-holing the retry (the instance then hangs). `()` when a
+                // step has none → null → submit handler's default. Mirrors the
+                // `_`-prefix metadata preservation in `t_success`.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -247,7 +255,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace
                     }
                 }"#,
             );
@@ -262,6 +271,14 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
+                // `executor_namespace` (the group-partitioned / lease-scoped
+                // dispatch queue stamped on the job token at prepare) MUST ride
+                // through to the failure token: the retry topology re-submits off
+                // this token, and a dropped namespace falls back to the bare
+                // `executor` effect namespace that no group consumer drains —
+                // black-holing the retry (the instance then hangs). `()` when a
+                // step has none → null → submit handler's default. Mirrors the
+                // `_`-prefix metadata preservation in `t_success`.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -270,7 +287,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace
                     }
                 }"#,
             );
@@ -281,6 +299,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("out", &timed_out)
             .logic(
+                // See `t_failed`: the dispatch namespace must survive into the
+                // timeout token so the retry re-submits onto the same group queue.
                 r#"#{
                     out: #{
                         job_id: job.job_id,
@@ -288,7 +308,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace
                     }
                 }"#,
             );
@@ -299,6 +320,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("out", &timed_out)
             .logic(
+                // See `t_failed`: the dispatch namespace must survive into the
+                // timeout token so the retry re-submits onto the same group queue.
                 r#"#{
                     out: #{
                         job_id: job.job_id,
@@ -306,7 +329,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace
                     }
                 }"#,
             );

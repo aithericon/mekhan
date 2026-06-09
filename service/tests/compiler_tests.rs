@@ -4795,6 +4795,53 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
 }
 
 #[test]
+fn automated_step_retry_preserves_executor_namespace() {
+    // Regression: the group-partitioned dispatch `executor_namespace` stamped on
+    // the job token at `prepare` MUST survive the failure → retry → resubmit chain.
+    // It used to be dropped at three rebuild points (the lifecycle `t_failed`/
+    // `t_timeout`, the compiler's `on_failed`/`on_timeout`, and the `resubmit`
+    // map), so a RETRY fell back to the bare `executor` effect namespace that no
+    // group consumer drains — the retry job was black-holed and the instance hung.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Executor {
+                    capacity: None,
+                    group: None,
+                },
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect("executor dispatch should compile");
+    let air_str = serde_json::to_string(&air).unwrap();
+
+    // 1) The lifecycle's failure/timeout rebuilds carry it off the job token.
+    assert!(
+        air_str.contains("executor_namespace: job.executor_namespace"),
+        "lifecycle t_failed/t_timeout must preserve executor_namespace: {air_str}"
+    );
+    // 2) The compiler's on_failed/on_timeout carry it from the failure event `e`.
+    assert!(
+        air_str.contains("executor_namespace: e.executor_namespace"),
+        "on_failed/on_timeout must carry executor_namespace into the failure token: {air_str}"
+    );
+    // 3) The resubmit map carries it onto the re-dispatched job token.
+    assert!(
+        air_str.contains("executor_namespace: f.executor_namespace"),
+        "the retry resubmit must restamp executor_namespace: {air_str}"
+    );
+}
+
+#[test]
 fn automated_step_executor_group_stamps_partition_namespace() {
     // A `group` on the default-inline executor path narrows the pull namespace to
     // `executor-<wire>/<group>` (a competing pull pool of enrolled group workers),

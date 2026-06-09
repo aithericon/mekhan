@@ -110,6 +110,17 @@ pub enum LlmError {
     #[error("LLM API error: {0}")]
     Api(String),
 
+    /// A TRANSIENT upstream condition the caller should retry with backoff:
+    /// the inference router has no live replica for the model yet (it is
+    /// scaling from zero — HTTP 503 `router_error`), or every replica is
+    /// saturated (HTTP 429). The model-pool autoscaler reacts to the demand
+    /// signal and brings a replica up within its reconcile + cold-load window,
+    /// so a bounded retry rides out the cold start instead of fast-failing the
+    /// whole execution (which used to hang the instance via a black-holed
+    /// engine resubmit).
+    #[error("LLM transient error (retryable): {0}")]
+    Retryable(String),
+
     #[error("response parse error: {0}")]
     Parse(String),
 }
