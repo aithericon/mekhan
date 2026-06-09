@@ -2290,6 +2290,74 @@
         }
       }
     },
+    "/api/v1/data/entries/{content_hash}/content": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "GET /api/v1/data/entries/{content_hash}/content",
+        "description": "Serve the bytes of a logical entry, resolving it to a physical copy and a\nservable endpoint (docs/32 Phase 3b — multi-endpoint file-servers). The\nendpoint's `access_method` determines the transport:\n\n* `local_mount` → NATS relay through the co-located runner that owns the\n  mount (mekhan is cred-free; the runner path-jails + streams).\n* `object_store` / `s3` → presigned 302 (default) or proxied bytes\n  (`config.proxy_s3_reads`). External `s3` (`resource_ref`) is deferred.\n* `sftp` → deferred (Phase 5 — needs the resource-secret read chain).\n\nHonours `Range: bytes=START-[END]` (single range) → 206 with the capped read.",
+        "operationId": "data_entry_content",
+        "parameters": [
+          {
+            "name": "content_hash",
+            "in": "path",
+            "description": "Content hash (bare hex) of the logical entry to serve",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes (full)",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "Partial content (Range request)",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "302": {
+            "description": "Redirect to a presigned object-store URL"
+          },
+          "404": {
+            "description": "No servable copy / endpoint for this hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Endpoint transport not yet supported by the bridge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Serving runner unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
       "get": {
         "tags": [

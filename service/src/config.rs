@@ -41,6 +41,15 @@ pub struct AppConfig {
     /// returns 503. Parsed from `MEKHAN__LIVEKIT__*`.
     #[serde(default)]
     pub livekit: Option<LiveKitConfig>,
+    /// File-server serve bridge (docs/32 — multi-endpoint file-servers, Phase 3b).
+    /// Controls how `GET /api/v1/data/entries/{content_hash}/content` serves an
+    /// `s3` endpoint: `false` (default) → mint a presigned GET URL and 302 the
+    /// browser straight to the object store (mekhan never touches the bytes);
+    /// `true` → proxy the bytes through mekhan (single-origin, no presign leak,
+    /// at the cost of bandwidth through the control plane). Parsed from
+    /// `MEKHAN__PROXY_S3_READS`.
+    #[serde(default)]
+    pub proxy_s3_reads: bool,
 }
 
 /// LiveKit server connection + API credentials. `url` is the WebSocket signalling

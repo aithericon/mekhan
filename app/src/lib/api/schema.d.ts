@@ -800,6 +800,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/entries/{content_hash}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/data/entries/{content_hash}/content
+         * @description Serve the bytes of a logical entry, resolving it to a physical copy and a
+         *     servable endpoint (docs/32 Phase 3b — multi-endpoint file-servers). The
+         *     endpoint's `access_method` determines the transport:
+         *
+         *     * `local_mount` → NATS relay through the co-located runner that owns the
+         *       mount (mekhan is cred-free; the runner path-jails + streams).
+         *     * `object_store` / `s3` → presigned 302 (default) or proxied bytes
+         *       (`config.proxy_s3_reads`). External `s3` (`resource_ref`) is deferred.
+         *     * `sftp` → deferred (Phase 5 — needs the resource-secret read chain).
+         *
+         *     Honours `Range: bytes=START-[END]` (single range) → 206 with the capped read.
+         */
+        get: operations["data_entry_content"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
         parameters: {
             query?: never;
@@ -13144,6 +13174,72 @@ export interface operations {
             };
             /** @description Invalid query DSL */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    data_entry_content: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Content hash (bare hex) of the logical entry to serve */
+                content_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File bytes (full) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial content (Range request) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Redirect to a presigned object-store URL */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No servable copy / endpoint for this hash */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Endpoint transport not yet supported by the bridge */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Serving runner unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

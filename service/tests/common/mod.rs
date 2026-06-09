@@ -102,6 +102,8 @@ pub fn test_config() -> AppConfig {
         frontend_dir: None,
         // Tests don't mint LiveKit viewer tokens; the endpoint returns 503 unset.
         livekit: None,
+        // Default to presigned-302 serving (tests don't exercise the proxy path).
+        proxy_s3_reads: false,
         auth: AuthConfig::default(),
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.

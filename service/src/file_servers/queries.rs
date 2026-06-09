@@ -462,6 +462,65 @@ pub async fn delete_endpoint(
     Ok(r.rows_affected() > 0)
 }
 
+/// One servable physical copy: an inventory row joined to ONE endpoint of its
+/// backing server. The serve bridge (`data::serve`) resolves a content hash to
+/// these candidates and picks one by `access_method` preference.
+#[derive(Debug, Clone)]
+pub struct ServeCandidate {
+    /// The physical path on the server (server-relative under the endpoint root).
+    pub path: String,
+    /// The endpoint to reach it through.
+    pub endpoint: FileServerEndpoint,
+}
+
+/// Resolve every physical copy of `content_hash` in this workspace into its
+/// servable endpoints. Joins `file_inventory` (the physical copies, by hash) →
+/// `file_servers` (identity, by `key`) → `file_server_endpoints` (the transports).
+///
+/// Returns one [`ServeCandidate`] per (copy × endpoint). Only copies whose
+/// server is registered in THIS workspace are returned — an unregistered
+/// `file_server_id` has no endpoints to serve through. Endpoints come back
+/// priority-ordered (highest first); the caller picks by `access_method`
+/// preference within that order.
+pub async fn serve_candidates(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    content_hash: &str,
+) -> Result<Vec<ServeCandidate>, QueryError> {
+    // (path, endpoint columns) per copy×endpoint, priority-ordered.
+    let rows = sqlx::query_as::<_, ServeCandidateRow>(
+        "SELECT fi.path AS copy_path, e.* \
+         FROM file_inventory fi \
+         JOIN file_servers fs \
+           ON fs.key = fi.file_server_id AND fs.workspace_id = $1 \
+         JOIN file_server_endpoints e \
+           ON e.file_server_id = fs.id \
+         WHERE fi.content_hash = $2 \
+         ORDER BY e.priority DESC, e.access_method, e.root",
+    )
+    .bind(workspace_id)
+    .bind(content_hash)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ServeCandidate {
+            path: r.copy_path,
+            endpoint: r.endpoint,
+        })
+        .collect())
+}
+
+/// Row shape for [`serve_candidates`]: the copy's path plus the flattened
+/// endpoint columns (`#[sqlx(flatten)]` maps `e.*` onto [`FileServerEndpoint`]).
+#[derive(sqlx::FromRow)]
+struct ServeCandidateRow {
+    copy_path: String,
+    #[sqlx(flatten)]
+    endpoint: FileServerEndpoint,
+}
+
 /// Idempotently seed the built-in platform object store as a `file_servers` row
 /// PLUS one `object_store` endpoint (called at startup). `key` is the platform
 /// S3 bucket; the endpoint has no `resource_ref` (it uses platform config).
