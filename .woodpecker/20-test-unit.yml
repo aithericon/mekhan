@@ -18,6 +18,7 @@ when:
 
 labels:
   role: test
+  host: worker-stateful-arm
 
 steps:
   - name: test-unit-rust
