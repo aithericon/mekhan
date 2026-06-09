@@ -308,7 +308,7 @@
 			</a>
 		</div>
 
-		<!-- My inbox preview: tasks to claim + my open work (offer dispatch).
+		<!-- My inbox preview: tasks to claim + my open work (consent acceptance).
 		     Only shown when there's something relevant, so it stays out of the
 		     way for users with no human-task assignments. -->
 		{#if hasInboxPreview}

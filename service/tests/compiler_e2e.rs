@@ -649,13 +649,12 @@ fn prod_gpu_id() -> uuid::Uuid {
 ///   resolves to `Scheduler`; a `postgres` is a non-pool resource).
 fn known_with_prod_gpu(type_name: &str) -> KnownResources {
     let public_config = if type_name == "capacity" {
-        // The `limit` preset's locked axes: seeded · push · hold · fixed(N) ·
+        // The `limit` preset's locked axes: seeded · auto · fixed(N) ·
         // partition → Tokens. `capacity_kind`/`capacity_amount` are the
         // flattened `CapacityAmount::Fixed`.
         serde_json::json!({
             "liveness": "seeded",
-            "dispatch": "push",
-            "exclusivity": "hold",
+            "acceptance": "auto",
             "capacity_kind": "fixed",
             "capacity_amount": 4,
             "eligibility": "partition",

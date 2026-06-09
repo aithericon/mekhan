@@ -72,7 +72,7 @@ fn is_safe_group(group: &str) -> bool {
 /// resource, `instrument` preset) first.
 ///
 /// This is the runner analogue of `workers::worker_group_exists`, which gates on
-/// the WORKER (`competing_consumer` + `pull`) point: a runner group is the PUSH /
+/// the WORKER (`competing_consumer` + `auto`) point: a runner group is the presence- /
 /// presence-admission path, so it gates on `liveness = 'presence'` instead. The
 /// axis lives in the latest version's `public_config`, so this joins `resources`
 /// → `resource_versions` at `latest_version` and matches the presence liveness —

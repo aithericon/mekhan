@@ -1,6 +1,6 @@
-//! S3 — Capacity as a first-class resource: the trait-space axes (doc 23 §3),
-//! create-time cell validation (doc 24 refinement #1), and the named presets
-//! (doc 23 §7 / doc 24 §2).
+//! S3 — Capacity as a first-class resource: the trait-space axes (doc 35 §5,
+//! consolidating doc 23 §3), create-time cell validation (doc 35 §6), and the
+//! named presets (doc 23 §7 / doc 24 §2, re-cut per doc 35).
 //!
 //! A `capacity` resource (registered in `aithericon_resources::types` as a
 //! typed wire kind) stores these axes in its `public_config` JSONB — no DB
@@ -12,26 +12,24 @@
 //!
 //! The discipline mirrors `models/capability.rs`: a single typed model that
 //! both the create handler (cell validation) and the type-descriptor endpoint
-//! (preset surfacing) read, so the legible "worker / limit / instrument"
-//! presets and the holes they sit between cannot drift from each other.
+//! (preset surfacing) read, so the legible "worker / limit / instrument /
+//! human" presets and the holes they sit between cannot drift from each other.
 //!
 //! ## The single dispatch authority
 //! [`CapacityAxes::backend`] is the ONE function every dispatch site (the pool
 //! ensure path, the compiler's deployment-role check) calls to map a point in
-//! the trait-space onto a [`CapacityBackend`] — the dispatch target. The
-//! companion free function [`axes_for_resource`] resolves the axes for ANY pool
-//! resource: a `capacity` parses its `public_config`; a `datacenter` returns
-//! its LOCKED lease axes (so the scheduler kind routes through the SAME
-//! authority, not a kind-string switch). `CapacityBackend::pool_backend` then
-//! hands the three net-backed variants to `aithericon_resources::pool` for the
-//! backend's claim/lease schemas. Clean split: service owns axes → backend;
-//! shared owns backend → schema.
-//!
-//! ## What this slice does NOT do
-//! - `exclusivity = consume` is *accepted + validated but not yet
-//!   dispatchable* (doc 24 §2): the quota/`consume` admission mechanism is
-//!   deferred (doc 23 §9.2), so a `consume` capacity resolves to
-//!   [`CapacityBackend::Deferred`] — a legal descriptor with no backing net yet.
+//! the trait-space onto a [`CapacityBackend`] — the dispatch target. After the
+//! doc 35 re-cut the mapping is **pure liveness, 1:1**: the old `dispatch`
+//! (pull/push/offer) column derived entirely from the backend, and the old
+//! `exclusivity` (`consume`) fork was a traffic-plane property behind the
+//! address — both are deleted (doc 35 §2/§3). The companion free function
+//! [`axes_for_resource`] resolves the axes for ANY pool resource: a `capacity`
+//! parses its `public_config`; a `datacenter` returns its LOCKED lease axes (so
+//! the scheduler kind routes through the SAME authority, not a kind-string
+//! switch). `CapacityBackend::pool_backend` then hands the three net-backed
+//! variants to `aithericon_resources::pool` for the backend's claim/lease
+//! schemas. Clean split: service owns axes → backend; shared owns backend →
+//! schema.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -39,10 +37,9 @@ use utoipa::ToSchema;
 
 use crate::models::error::ApiError;
 
-/// How a capacity proves it is available (doc 23 §3 "liveness"). This is the
-/// axis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the
-/// vocabulary is 1:1 with the backing-net flavour (modulo the `consume`
-/// quota-admission override).
+/// How a capacity proves it is available (doc 35 §5 "liveness source"). This is
+/// the axis the dispatch authority ([`CapacityAxes::backend`]) keys off — the
+/// vocabulary is 1:1 with the backing-net flavour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Liveness {
@@ -51,11 +48,11 @@ pub enum Liveness {
     CompetingConsumer,
     /// A statically-seeded token pool / semaphore: none of
     /// competing_consumer / presence / lease — a fixed count seeded up front,
-    /// push-granted from that count. The concurrency-limit path; dispatches to
+    /// granted from that count. The concurrency-limit path; dispatches to
     /// the `Tokens` backend.
     Seeded,
     /// Presence heartbeat injects/expires a capacity unit (the instrument /
-    /// runner-group path). Dispatches to the `Presence` backend.
+    /// runner-group / human-roster path). Dispatches to the `Presence` backend.
     Presence,
     /// Lease alive — an allocation is running (the HPC / `datacenter` path).
     /// Dispatches to the `Scheduler` backend; this is the LOCKED liveness the
@@ -63,37 +60,29 @@ pub enum Liveness {
     Lease,
 }
 
-/// How work reaches the capacity (doc 23 §3 "dispatch discipline").
+/// The capacity-side half of bilateral eligibility (doc 35 §4):
+/// `match = work-side predicate ∧ capacity-side acceptance`.
+///
+/// This replaces the deleted `Dispatch` axis: pull-vs-push derives from the
+/// backend (doc 35 §2), and what `offer` actually smuggled in was acceptance —
+/// what eligibility *means* when the capacity gets a say.
+///
+/// `policy` — a capacity-side *standing predicate* evaluated by the platform
+/// (maintenance mode, tenant refusal) — is a documented-future third value and
+/// is deliberately NOT a variant here (doc 35 §4/§9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Dispatch {
-    /// The capacity pulls the next message off a broker-balanced queue
-    /// (competing consumers). No matcher, no grant.
-    Pull,
-    /// The platform pushes a matched grant to a specific capacity inbox
-    /// (the presence/lease admission net).
-    Push,
-    /// The platform matches once and PARKS an offer; the binding happens on a
-    /// UNIT-INITIATED self-claim (first-claim-wins, the rest implicitly
-    /// rescinded as the offer token is consumed). Presence/lease only — there
-    /// must be a live unit to do the claiming.
-    Offer,
+pub enum Acceptance {
+    /// Acceptance is always true; matching is unilateral (runners, workers,
+    /// instruments, model replicas).
+    Auto,
+    /// A live, unit-initiated decision at claim time: the match parks an offer,
+    /// the unit binds it (`t_claim`, first-claim-wins). Humans — the old
+    /// "offer mode" (doc 33 topology, unchanged; only its classification moved).
+    Consent,
 }
 
-/// Hold-vs-consume (doc 23 §3 "exclusivity discipline" — the real fork of §5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Exclusivity {
-    /// Claim → grant → hold until release (instrument session, alloc, worker
-    /// per-job). Supports `LeaseScope` warm reuse.
-    Hold,
-    /// Admit-if-under-quota → debit → done; nothing to release (LLM / HTTP).
-    /// Accepted + validated this slice but **not yet dispatchable** — the
-    /// quota admission mechanism is deferred (doc 23 §9.2).
-    Consume,
-}
-
-/// How much concurrent work the capacity offers (doc 23 §3 "capacity amount").
+/// How much concurrent work the capacity offers (doc 35 §5 "capacity amount").
 ///
 /// `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
 /// live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
@@ -113,10 +102,11 @@ pub enum CapacityAmount {
     Elastic,
 }
 
-/// The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate
-/// shape rather than chosen by hand: a single coarse equality (`backend == x`)
-/// IS a partition key (free competing-consumers, no matcher); a richer
-/// conjunction needs the guarded matcher.
+/// The eligibility evaluation strategy (doc 23 §4 — incorporated whole by doc
+/// 35 §5), DERIVED from the predicate shape rather than chosen by hand: a
+/// single coarse equality (`backend == x`) IS a partition key (free
+/// competing-consumers, no matcher); a richer conjunction needs the guarded
+/// matcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Eligibility {
@@ -126,14 +116,18 @@ pub enum Eligibility {
     Predicate,
 }
 
-/// The full point in the trait-space a `capacity` resource names. This is the
-/// typed view of the axes stored as strings in `public_config`; the create
-/// path parses the wire strings into this and runs [`CapacityAxes::validate`].
+/// The full point in the trait-space a `capacity` resource names (doc 35 §5 —
+/// the four surviving axes). This is the typed view of the axes stored as
+/// strings in `public_config`; the create path parses the wire strings into
+/// this and runs [`CapacityAxes::validate`].
+///
+/// `acceptance` is REQUIRED — no serde default. An old persisted row missing it
+/// (a pre-re-cut `dispatch`/`exclusivity`-shaped blob) must FAIL to parse:
+/// fail-closed by design, no backcompat shim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CapacityAxes {
     pub liveness: Liveness,
-    pub dispatch: Dispatch,
-    pub exclusivity: Exclusivity,
+    pub acceptance: Acceptance,
     #[serde(flatten)]
     pub capacity_amount: CapacityAmount,
     pub eligibility: Eligibility,
@@ -141,9 +135,8 @@ pub struct CapacityAxes {
 
 /// The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).
 /// Supersets the shared `aithericon_resources::pool::PoolBackend` (which only
-/// names the three admission-net flavours) with the two **no-admission-net**
-/// cases: `Queue` (a pull worker queue — no grant) and `Deferred` (the
-/// `consume` quota path, whose admission mechanism is not yet built).
+/// names the three admission-net flavours) with the one **no-admission-net**
+/// case: `Queue` (a pull worker queue — no grant).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CapacityBackend {
@@ -158,23 +151,20 @@ pub enum CapacityBackend {
     Presence,
     /// Lease against an external allocator (the `datacenter` adapter net).
     Scheduler,
-    /// Quota/`consume` admission — deferred (doc 23 §9.2). No backing net yet;
-    /// a `consume` capacity is a legal descriptor that does not dispatch.
-    Deferred,
 }
 
 impl CapacityBackend {
     /// Map the three net-backed variants onto the shared
     /// `aithericon_resources::pool::PoolBackend` whose claim/lease schemas the
-    /// compiler reads. `Queue` and `Deferred` have no admission net, hence no
-    /// pool backend — `None`.
+    /// compiler reads. `Queue` has no admission net, hence no pool backend —
+    /// `None`.
     pub fn pool_backend(&self) -> Option<aithericon_resources::pool::PoolBackend> {
         use aithericon_resources::pool::PoolBackend;
         match self {
             CapacityBackend::Tokens => Some(PoolBackend::Tokens),
             CapacityBackend::Presence => Some(PoolBackend::Presence),
             CapacityBackend::Scheduler => Some(PoolBackend::Scheduler),
-            CapacityBackend::Queue | CapacityBackend::Deferred => None,
+            CapacityBackend::Queue => None,
         }
     }
 }
@@ -185,9 +175,11 @@ impl CapacityBackend {
 /// - `"capacity"` ⇒ parse the axis strings out of `public_config` into typed
 ///   [`CapacityAxes`] (the same `serde_json::from_value` the create path runs
 ///   through [`CapacityAxes::validate`]). Returns `None` if unparseable — the
-///   caller treats that as "not a dispatchable pool".
+///   caller treats that as "not a dispatchable pool". NOTE: a pre-re-cut row
+///   (with `dispatch`/`exclusivity`, without `acceptance`) is unparseable on
+///   purpose — fail-closed, not silently re-mapped.
 /// - `"datacenter"` ⇒ the LOCKED lease axes (the old `hpc` point):
-///   `lease · push · hold · elastic · predicate`. The scheduler kind carries no
+///   `lease · auto · elastic · predicate`. The scheduler kind carries no
 ///   capacity axes in its `public_config` (its config is the flavored
 ///   connection), so it dispatches through here by these fixed axes —
 ///   `.backend()` of the result is always [`CapacityBackend::Scheduler`].
@@ -205,8 +197,7 @@ pub fn axes_for_resource(resource_type: &str, public: &Map<String, Value>) -> Op
 fn datacenter_lease_axes() -> CapacityAxes {
     CapacityAxes {
         liveness: Liveness::Lease,
-        dispatch: Dispatch::Push,
-        exclusivity: Exclusivity::Hold,
+        acceptance: Acceptance::Auto,
         capacity_amount: CapacityAmount::Elastic,
         eligibility: Eligibility::Predicate,
     }
@@ -223,7 +214,7 @@ fn datacenter_lease_axes() -> CapacityAxes {
 /// the const table is built by [`presets`].
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CapacityPreset {
-    /// Stable wire id (`worker` / `limit` / `instrument`).
+    /// Stable wire id (`worker` / `limit` / `instrument` / `human`).
     pub name: String,
     /// UI label.
     pub display_name: String,
@@ -233,121 +224,68 @@ pub struct CapacityPreset {
 
 impl CapacityAxes {
     /// THE dispatch authority: map this point in the trait-space onto the
-    /// [`CapacityBackend`] every dispatch site routes through. The `consume`
-    /// exclusivity short-circuits FIRST (quota admission is deferred — doc 23
-    /// §9.2, doc 24 §2); otherwise the `liveness` axis is 1:1 with the backend:
+    /// [`CapacityBackend`] every dispatch site routes through. Pure liveness,
+    /// 1:1 (doc 35 §2 — the old dispatch/exclusivity overrides are deleted):
     ///
-    /// - `consume`            ⇒ `Deferred` (quota admission, no net yet)
     /// - `competing_consumer` ⇒ `Queue`     (pull queue — workers, NO admission net)
     /// - `seeded`             ⇒ `Tokens`    (seeded N — `build_pool_net(Seeded{n})`)
     /// - `presence`           ⇒ `Presence`  (presence-driven admission net)
     /// - `lease`              ⇒ `Scheduler` (datacenter adapter)
     pub fn backend(&self) -> CapacityBackend {
-        match (self.liveness, self.exclusivity) {
-            (_, Exclusivity::Consume) => CapacityBackend::Deferred,
-            (Liveness::CompetingConsumer, _) => CapacityBackend::Queue,
-            (Liveness::Seeded, _) => CapacityBackend::Tokens,
-            (Liveness::Presence, _) => CapacityBackend::Presence,
-            (Liveness::Lease, _) => CapacityBackend::Scheduler,
+        match self.liveness {
+            Liveness::CompetingConsumer => CapacityBackend::Queue,
+            Liveness::Seeded => CapacityBackend::Tokens,
+            Liveness::Presence => CapacityBackend::Presence,
+            Liveness::Lease => CapacityBackend::Scheduler,
         }
     }
 
-    /// Create-time CELL VALIDATION (doc 24 refinement #1). Rejects the
-    /// incoherent corners of the trait-space — combinations that would compile
-    /// into a capacity that silently never grants — with a clear message;
-    /// returns the (non-fatal) WARNINGS for the scale-mismatch cells the
-    /// operator may still legitimately want.
+    /// Create-time CELL VALIDATION (doc 35 §6). The old hand-enumerated
+    /// dispatch holes are now unrepresentable (the `dispatch` axis is gone);
+    /// what remains is the single consent invariant plus one scale-mismatch
+    /// warning:
     ///
-    /// HARD rejects (the pull-only liveness disciplines cannot be
-    /// push-dispatched, and there is no presence to push a grant at):
-    ///   - `elastic × push` *without* a presence/lease liveness — elastic
-    ///     capacity is scheduler-granted, not a thing you push a unit grant at;
-    ///   - presence-less (`competing_consumer`) × `push` — no inbox to push to;
-    ///   - `competing_consumer × push` — competing-consumer liveness is the
-    ///     broker-pull discipline; pushing a grant to it has no addressee;
-    ///   - `seeded × pull` — a seeded token pool is admission-controlled by
-    ///     push-grant from its fixed count (the engine fires a grant out of the
-    ///     seeded place); a pull queue has nothing to grant against.
+    /// HARD rejects:
+    ///   - `consent` × non-`presence` liveness — a consenting capacity needs a
+    ///     live unit to do the consenting. NOTE this also rejects
+    ///     `consent × lease` — a deliberate tightening vs the old offer×lease
+    ///     permissiveness (doc 35 §4: a lease alloc has no one home to consent;
+    ///     speculative lease-offer users re-home under future `policy`).
+    ///   - `consent` × `partition` eligibility — an offer without a matcher is
+    ///     just a queue; consent needs a real matcher to park an offer against.
     ///
-    /// WARN (allowed, returned for the caller to surface): `pull × predicate`
-    /// — a rich match on a pull queue is the scale-mismatch (doc 23 §10 "don't
-    /// run the firehose through the matcher"); legal but rarely intended.
+    /// WARN (allowed, returned for the caller to surface):
+    /// `competing_consumer × predicate` — a rich match on the broker firehose is
+    /// the scale-mismatch (doc 23 §10 "don't run the firehose through the
+    /// matcher"); legal but rarely intended.
     pub fn validate(&self) -> Result<Vec<String>, ApiError> {
-        // A capacity is push-dispatchable only if it has something to grant
-        // against: a presence/lease inbox, or a seeded token count the engine
-        // grants out of. competing_consumer is the pull-only broker discipline.
-        let push_grantable = matches!(
-            self.liveness,
-            Liveness::Seeded | Liveness::Presence | Liveness::Lease
-        );
-
-        if matches!(self.dispatch, Dispatch::Push) {
-            if matches!(self.liveness, Liveness::CompetingConsumer) {
+        if matches!(self.acceptance, Acceptance::Consent) {
+            if !matches!(self.liveness, Liveness::Presence) {
                 return Err(ApiError::bad_request(
-                    "incoherent capacity: `competing_consumer` liveness is pull-only \
-                     (broker-balanced); it has no inbox to push a grant to — use \
-                     `dispatch = pull`, or pick `seeded`/`presence`/`lease` liveness \
-                     for push",
-                ));
-            }
-            if !push_grantable {
-                return Err(ApiError::bad_request(
-                    "incoherent capacity: `push` dispatch requires a grantable \
-                     liveness (`seeded`, `presence`, or `lease`) to address the \
-                     grant at — an anonymous capacity cannot be pushed to",
-                ));
-            }
-        }
-
-        // A seeded token pool is admission-controlled by push-grant from its
-        // fixed count; a pull queue has no grant to make against the seed.
-        if matches!(self.liveness, Liveness::Seeded) && matches!(self.dispatch, Dispatch::Pull) {
-            return Err(ApiError::bad_request(
-                "incoherent capacity: `seeded` liveness is push-granted from its \
-                 fixed count (the engine fires a grant out of the seeded place); a \
-                 `pull` queue has nothing to grant against — use `dispatch = push`",
-            ));
-        }
-
-        // An `offer` is matched-once then PARKED for a unit-initiated self-claim
-        // (first-claim-wins, rest rescinded). It therefore needs (a) a grantable
-        // liveness with a live unit to do the claiming — `presence`/`lease`,
-        // never the pull-only `competing_consumer` — (b) a real matcher to park
-        // a meaningful offer (`predicate`, not a bare `partition` queue name),
-        // and (c) a self-claiming unit, which `seeded` (a static count) lacks.
-        if matches!(self.dispatch, Dispatch::Offer) {
-            if !push_grantable {
-                return Err(ApiError::bad_request(
-                    "incoherent capacity: `offer` dispatch requires a grantable \
-                     liveness (`presence` or `lease`) — there is no unit to bind the \
-                     parked offer when liveness is `competing_consumer`",
-                ));
-            }
-            if matches!(self.liveness, Liveness::Seeded) {
-                return Err(ApiError::bad_request(
-                    "incoherent capacity: `offer` dispatch on `seeded` liveness has \
-                     no self-claiming unit — a seeded count is push-granted from a \
-                     fixed pool, not claimed; use `presence`/`lease`, or \
-                     `dispatch = push`",
+                    "incoherent capacity: `consent` acceptance requires `presence` \
+                     liveness — a consenting capacity needs a live unit to consent \
+                     (a queue subscription, a seeded count, or a lease alloc has no \
+                     one home to claim the parked offer)",
                 ));
             }
             if matches!(self.eligibility, Eligibility::Partition) {
                 return Err(ApiError::bad_request(
-                    "incoherent capacity: `offer` dispatch requires a `predicate` \
-                     eligibility (a matcher to park a matched offer) — an `offer` \
+                    "incoherent capacity: `consent` acceptance requires a `predicate` \
+                     eligibility (a matcher to park a matched offer) — an offer \
                      without a matcher is just a queue; use `eligibility = predicate`",
                 ));
             }
         }
 
         let mut warnings = Vec::new();
-        if matches!(self.dispatch, Dispatch::Pull)
+        if matches!(self.liveness, Liveness::CompetingConsumer)
             && matches!(self.eligibility, Eligibility::Predicate)
         {
             warnings.push(
-                "scale-mismatch: a `predicate` (rich match) eligibility on a `pull` \
-                 queue runs the matcher on every message — prefer `partition` for a \
-                 pull queue, or `push` dispatch for rich matching (doc 23 §10)"
+                "scale-mismatch: a `predicate` (rich match) eligibility on a \
+                 `competing_consumer` queue runs the matcher on every message — \
+                 prefer `partition` for a pull queue, or a `presence`-backed pool \
+                 for rich matching (doc 23 §10)"
                     .to_string(),
             );
         }
@@ -355,19 +293,19 @@ impl CapacityAxes {
     }
 }
 
-/// The named factory presets (doc 23 §7). Each is a coherent point that passes
-/// [`CapacityAxes::validate`] cleanly; the create form prefills the locked axes
-/// and exposes only the free ones.
+/// The named factory presets (doc 23 §7, re-cut per doc 35 §5). Each is a
+/// coherent point that passes [`CapacityAxes::validate`] cleanly; the create
+/// form prefills the locked axes and exposes only the free ones.
 ///
-/// - `worker`     = competing_consumer · pull  · hold · fixed(1)        · partition → Queue
-/// - `limit`      = seeded             · push  · hold · fixed(1)        · partition → Tokens
-/// - `instrument` = presence           · push  · hold · presence_driven · predicate → Presence
-/// - `self_claim` = presence           · offer · hold · presence_driven · predicate → Presence
-/// - `human`      = presence           · offer · hold · presence_driven · predicate → Presence
+/// - `worker`     = competing_consumer · auto    · fixed(1)        · partition → Queue
+/// - `limit`      = seeded             · auto    · fixed(1)        · partition → Tokens
+/// - `instrument` = presence           · auto    · presence_driven · predicate → Presence
+/// - `human`      = presence           · consent · presence_driven · predicate → Presence
 ///
 /// There is no `hpc`/lease preset: lease capacity is the `datacenter` kind (it
 /// dispatches through [`axes_for_resource`]'s locked lease axes), not a
-/// `capacity` preset.
+/// `capacity` preset. The old `self_claim` preset is dropped — `human` is the
+/// one consent-acceptance preset (doc 35 §11).
 pub fn presets() -> Vec<CapacityPreset> {
     vec![
         CapacityPreset {
@@ -375,8 +313,7 @@ pub fn presets() -> Vec<CapacityPreset> {
             display_name: "Worker pool".to_string(),
             axes: CapacityAxes {
                 liveness: Liveness::CompetingConsumer,
-                dispatch: Dispatch::Pull,
-                exclusivity: Exclusivity::Hold,
+                acceptance: Acceptance::Auto,
                 // The free axis on a worker is the unit count; default 1.
                 capacity_amount: CapacityAmount::Fixed(1),
                 eligibility: Eligibility::Partition,
@@ -387,8 +324,7 @@ pub fn presets() -> Vec<CapacityPreset> {
             display_name: "Concurrency limit".to_string(),
             axes: CapacityAxes {
                 liveness: Liveness::Seeded,
-                dispatch: Dispatch::Push,
-                exclusivity: Exclusivity::Hold,
+                acceptance: Acceptance::Auto,
                 // The free axis on a concurrency limit is the seeded count; default 1.
                 capacity_amount: CapacityAmount::Fixed(1),
                 eligibility: Eligibility::Partition,
@@ -399,34 +335,21 @@ pub fn presets() -> Vec<CapacityPreset> {
             display_name: "Instrument station".to_string(),
             axes: CapacityAxes {
                 liveness: Liveness::Presence,
-                dispatch: Dispatch::Push,
-                exclusivity: Exclusivity::Hold,
+                acceptance: Acceptance::Auto,
                 capacity_amount: CapacityAmount::PresenceDriven,
                 eligibility: Eligibility::Predicate,
             },
         },
         CapacityPreset {
-            name: "self_claim".to_string(),
-            display_name: "Self-claim pool".to_string(),
-            axes: CapacityAxes {
-                liveness: Liveness::Presence,
-                dispatch: Dispatch::Offer,
-                exclusivity: Exclusivity::Hold,
-                capacity_amount: CapacityAmount::PresenceDriven,
-                eligibility: Eligibility::Predicate,
-            },
-        },
-        CapacityPreset {
-            // The human-facing relabel of `self_claim`: same offer axes, but a
-            // dedicated entry-point name so the create form reads as a human task
-            // pool. The deploy router keys off `Dispatch::Offer`, not the preset
-            // name, so this routes through the same offer net (docs/33 §3.2).
+            // The consent-acceptance pool: matches park an offer that a live
+            // member binds with a unit-initiated claim (docs/33 §3.2, doc 35
+            // §4). The deploy router keys off `Acceptance::Consent`, not the
+            // preset name.
             name: "human".to_string(),
             display_name: "Human task pool".to_string(),
             axes: CapacityAxes {
                 liveness: Liveness::Presence,
-                dispatch: Dispatch::Offer,
-                exclusivity: Exclusivity::Hold,
+                acceptance: Acceptance::Consent,
                 capacity_amount: CapacityAmount::PresenceDriven,
                 eligibility: Eligibility::Predicate,
             },
@@ -454,14 +377,13 @@ mod tests {
 
     fn axes(
         liveness: Liveness,
-        dispatch: Dispatch,
+        acceptance: Acceptance,
         capacity_amount: CapacityAmount,
         eligibility: Eligibility,
     ) -> CapacityAxes {
         CapacityAxes {
             liveness,
-            dispatch,
-            exclusivity: Exclusivity::Hold,
+            acceptance,
             capacity_amount,
             eligibility,
         }
@@ -482,118 +404,84 @@ mod tests {
         }
     }
 
+    /// The consent invariant (doc 35 §4/§6): `consent ⇒ presence liveness`.
+    /// `competing_consumer`, `seeded`, AND `lease` all reject — the lease case
+    /// is the deliberate tightening vs the old offer×lease permissiveness.
     #[test]
-    fn competing_consumer_push_is_rejected() {
-        let a = axes(
-            Liveness::CompetingConsumer,
-            Dispatch::Push,
-            CapacityAmount::Fixed(4),
-            Eligibility::Partition,
-        );
-        let err = a
-            .validate()
-            .expect_err("competing_consumer × push must reject");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(msg(&err).contains("pull-only"), "wrong message: {err:?}");
-    }
-
-    #[test]
-    fn presence_less_push_is_rejected() {
-        // competing_consumer is the only presence-less liveness; its push is
-        // caught by the pull-only gate first. The presence-less branch is
-        // exercised in concert with the elastic case below; here assert the
-        // anonymous-push class rejects at all.
-        let a = axes(
-            Liveness::CompetingConsumer,
-            Dispatch::Push,
+    fn consent_requires_presence() {
+        for (liveness, amount) in [
+            (Liveness::CompetingConsumer, CapacityAmount::Fixed(4)),
+            (Liveness::Seeded, CapacityAmount::Fixed(4)),
+            (Liveness::Lease, CapacityAmount::Elastic),
+        ] {
+            let a = axes(
+                liveness,
+                Acceptance::Consent,
+                amount,
+                Eligibility::Predicate,
+            );
+            let err = a
+                .validate()
+                .expect_err(&format!("consent × {liveness:?} must reject"));
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
+            assert!(
+                msg(&err).contains("requires `presence` liveness"),
+                "wrong message for {liveness:?}: {err:?}"
+            );
+        }
+        // The one legal consent point: presence liveness.
+        let ok = axes(
+            Liveness::Presence,
+            Acceptance::Consent,
             CapacityAmount::PresenceDriven,
             Eligibility::Predicate,
         );
-        assert!(a.validate().is_err(), "presence-less × push must reject");
-    }
-
-    #[test]
-    fn elastic_push_without_presence_is_rejected() {
-        // Construct elastic × push on competing_consumer: rejected (pull-only
-        // gate fires). The elastic-specific gate is belt-and-suspenders for any
-        // future presence-less liveness value.
-        let a = axes(
-            Liveness::CompetingConsumer,
-            Dispatch::Push,
-            CapacityAmount::Elastic,
-            Eligibility::Predicate,
-        );
-        let err = a
+        assert!(ok
             .validate()
-            .expect_err("elastic × push (presence-less) must reject");
-        // The pull-only message wins (it is the more specific addressee failure).
-        assert!(msg(&err).contains("incoherent capacity"));
+            .expect("consent × presence is legal")
+            .is_empty());
     }
 
+    /// `consent` × `partition` is rejected: an offer without a matcher is just
+    /// a queue.
     #[test]
-    fn elastic_push_with_lease_is_ok() {
-        // The datacenter/lease point: elastic × push is coherent WHEN
-        // lease-backed (the locked axes `axes_for_resource("datacenter", …)`
-        // returns).
+    fn consent_partition_is_rejected() {
         let a = axes(
-            Liveness::Lease,
-            Dispatch::Push,
-            CapacityAmount::Elastic,
-            Eligibility::Predicate,
-        );
-        assert!(
-            a.validate().is_ok(),
-            "elastic × push × lease is the datacenter lease point"
-        );
-    }
-
-    #[test]
-    fn seeded_pull_is_rejected() {
-        // A seeded token pool is push-granted from its fixed count; a pull
-        // queue has nothing to grant against.
-        let a = axes(
-            Liveness::Seeded,
-            Dispatch::Pull,
-            CapacityAmount::Fixed(4),
+            Liveness::Presence,
+            Acceptance::Consent,
+            CapacityAmount::PresenceDriven,
             Eligibility::Partition,
         );
-        let err = a.validate().expect_err("seeded × pull must reject");
+        let err = a.validate().expect_err("consent × partition must reject");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(msg(&err).contains("push-granted"), "wrong message: {err:?}");
-    }
-
-    #[test]
-    fn limit_preset_seeded_push_is_clean() {
-        // The `limit` preset shape: seeded × push validates clean.
-        let a = axes(
-            Liveness::Seeded,
-            Dispatch::Push,
-            CapacityAmount::Fixed(8),
-            Eligibility::Partition,
+        assert!(
+            msg(&err).contains("requires a `predicate`"),
+            "wrong message: {err:?}"
         );
-        assert!(a.validate().expect("limit shape is clean").is_empty());
     }
 
+    /// `competing_consumer × predicate` warns (matcher on the firehose) but
+    /// passes — legal, rarely intended.
     #[test]
-    fn pull_predicate_warns_but_passes() {
+    fn competing_consumer_predicate_warns() {
         let a = axes(
             Liveness::CompetingConsumer,
-            Dispatch::Pull,
+            Acceptance::Auto,
             CapacityAmount::Fixed(2),
             Eligibility::Predicate,
         );
         let warnings = a
             .validate()
-            .expect("pull × predicate must pass (warn only)");
+            .expect("competing_consumer × predicate must pass (warn only)");
         assert_eq!(warnings.len(), 1, "expected one scale-mismatch warning");
         assert!(warnings[0].contains("scale-mismatch"));
     }
 
     #[test]
-    fn worker_preset_pull_partition_is_clean() {
+    fn worker_preset_partition_is_clean() {
         let a = axes(
             Liveness::CompetingConsumer,
-            Dispatch::Pull,
+            Acceptance::Auto,
             CapacityAmount::Fixed(8),
             Eligibility::Partition,
         );
@@ -607,112 +495,15 @@ mod tests {
         assert_eq!(backend_of("worker"), CapacityBackend::Queue);
         assert_eq!(backend_of("limit"), CapacityBackend::Tokens);
         assert_eq!(backend_of("instrument"), CapacityBackend::Presence);
-        // presence · offer routes to the same presence backend (backend() keys
-        // only off liveness, not dispatch).
-        assert_eq!(backend_of("self_claim"), CapacityBackend::Presence);
-        // `human` is the human-facing relabel of `self_claim`: same offer axes,
-        // same presence backend.
+        // `human` (presence · consent) routes to the same presence backend —
+        // backend() keys only off liveness; acceptance selects the offer-net
+        // flavour at deploy, not the backend.
         assert_eq!(backend_of("human"), CapacityBackend::Presence);
         let human = preset_by_name("human").expect("human preset exists").axes;
-        assert_eq!(human.dispatch, Dispatch::Offer);
+        assert_eq!(human.acceptance, Acceptance::Consent);
     }
 
-    /// presence · offer maps to `Presence` — the parked-offer self-claim pool
-    /// dispatches through the presence admission net (backend() ignores the
-    /// dispatch discipline; liveness is the authority).
-    #[test]
-    fn presence_offer_routes_to_presence() {
-        let a = CapacityAxes {
-            liveness: Liveness::Presence,
-            dispatch: Dispatch::Offer,
-            exclusivity: Exclusivity::Hold,
-            capacity_amount: CapacityAmount::PresenceDriven,
-            eligibility: Eligibility::Predicate,
-        };
-        assert_eq!(a.backend(), CapacityBackend::Presence);
-    }
-
-    /// The `self_claim` preset (presence · offer · predicate) validates clean.
-    #[test]
-    fn self_claim_preset_validates_clean() {
-        let a = preset_by_name("self_claim")
-            .expect("self_claim preset exists")
-            .axes;
-        let warnings = a.validate().expect("self_claim preset must validate");
-        assert!(warnings.is_empty(), "expected warn-free, got {warnings:?}");
-    }
-
-    /// `offer` × `competing_consumer` is rejected: no live unit to bind the
-    /// parked offer.
-    #[test]
-    fn offer_competing_consumer_is_rejected() {
-        let a = axes(
-            Liveness::CompetingConsumer,
-            Dispatch::Offer,
-            CapacityAmount::PresenceDriven,
-            Eligibility::Predicate,
-        );
-        let err = a
-            .validate()
-            .expect_err("offer × competing_consumer must reject");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(
-            msg(&err).contains("grantable liveness"),
-            "wrong message: {err:?}"
-        );
-    }
-
-    /// `offer` × `seeded` is rejected: a seeded count has no self-claiming unit.
-    #[test]
-    fn offer_seeded_is_rejected() {
-        let a = axes(
-            Liveness::Seeded,
-            Dispatch::Offer,
-            CapacityAmount::Fixed(4),
-            Eligibility::Predicate,
-        );
-        let err = a.validate().expect_err("offer × seeded must reject");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(
-            msg(&err).contains("no self-claiming unit"),
-            "wrong message: {err:?}"
-        );
-    }
-
-    /// `offer` × `partition` is rejected: an offer without a matcher is just a
-    /// queue.
-    #[test]
-    fn offer_partition_is_rejected() {
-        let a = axes(
-            Liveness::Presence,
-            Dispatch::Offer,
-            CapacityAmount::PresenceDriven,
-            Eligibility::Partition,
-        );
-        let err = a.validate().expect_err("offer × partition must reject");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        assert!(
-            msg(&err).contains("requires a `predicate`"),
-            "wrong message: {err:?}"
-        );
-    }
-
-    /// `consume` exclusivity short-circuits the authority to `Deferred`
-    /// regardless of liveness (quota admission is not yet built).
-    #[test]
-    fn consume_routes_to_deferred() {
-        let a = CapacityAxes {
-            liveness: Liveness::Presence,
-            dispatch: Dispatch::Push,
-            exclusivity: Exclusivity::Consume,
-            capacity_amount: CapacityAmount::PresenceDriven,
-            eligibility: Eligibility::Predicate,
-        };
-        assert_eq!(a.backend(), CapacityBackend::Deferred);
-    }
-
-    /// The three net-backed backends expose a `PoolBackend`; the two
-    /// no-admission-net cases do not.
+    /// The three net-backed backends expose a `PoolBackend`; the queue does not.
     #[test]
     fn backend_pool_backend_mapping() {
         use aithericon_resources::pool::PoolBackend;
@@ -729,7 +520,6 @@ mod tests {
             Some(PoolBackend::Scheduler)
         );
         assert_eq!(CapacityBackend::Queue.pool_backend(), None);
-        assert_eq!(CapacityBackend::Deferred.pool_backend(), None);
     }
 
     /// `axes_for_resource("datacenter", …)` returns the LOCKED lease axes whose
@@ -742,6 +532,7 @@ mod tests {
             .expect("datacenter resolves to locked lease axes");
         assert_eq!(axes.backend(), CapacityBackend::Scheduler);
         assert_eq!(axes.liveness, Liveness::Lease);
+        assert_eq!(axes.acceptance, Acceptance::Auto);
     }
 
     /// `axes_for_resource("capacity", <instrument-shaped map>)` parses the
@@ -750,8 +541,7 @@ mod tests {
     fn capacity_resource_parses_to_backend() {
         let public = serde_json::json!({
             "liveness": "presence",
-            "dispatch": "push",
-            "exclusivity": "hold",
+            "acceptance": "auto",
             "capacity_kind": "presence_driven",
             "eligibility": "predicate",
         });
@@ -776,7 +566,10 @@ mod tests {
     /// `ResourceType`). A mismatch (the enum once used `kind`/`amount`) makes
     /// every `capacity` create 400 with "unknown config field(s)" because the
     /// descriptor's stray-key gate rejects the serialized axes — caught only at
-    /// live e2e. This pins the wire field names to the descriptor.
+    /// live e2e. This pins the wire field names to the descriptor — and, post
+    /// re-cut, pins that `acceptance` is on the wire, the deleted
+    /// `dispatch`/`exclusivity` keys are NOT, and that a legacy-shaped blob
+    /// (with `dispatch`, without `acceptance`) FAILS to parse (fail-closed).
     #[test]
     fn axes_serialize_with_descriptor_field_names() {
         let worker = preset_by_name("worker").unwrap().axes;
@@ -790,13 +583,54 @@ mod tests {
             obj.contains_key("capacity_amount"),
             "missing capacity_amount: {v}"
         );
+        assert!(obj.contains_key("acceptance"), "missing acceptance: {v}");
         assert!(!obj.contains_key("kind"), "stale `kind` key leaked: {v}");
         assert!(
             !obj.contains_key("amount"),
             "stale `amount` key leaked: {v}"
         );
+        assert!(
+            !obj.contains_key("dispatch"),
+            "deleted `dispatch` key leaked: {v}"
+        );
+        assert!(
+            !obj.contains_key("exclusivity"),
+            "deleted `exclusivity` key leaked: {v}"
+        );
         // And the descriptor's allowed public fields all round-trip back.
         let back: CapacityAxes = serde_json::from_value(v).unwrap();
         assert_eq!(back, worker);
+
+        // A legacy-shaped (pre-re-cut) blob — has `dispatch`, lacks
+        // `acceptance` — must FAIL to deserialize: fail-closed, no backcompat.
+        let legacy = serde_json::json!({
+            "liveness": "presence",
+            "dispatch": "push",
+            "exclusivity": "hold",
+            "capacity_kind": "presence_driven",
+            "eligibility": "predicate",
+        });
+        assert!(
+            serde_json::from_value::<CapacityAxes>(legacy).is_err(),
+            "legacy dispatch/exclusivity blob must fail to parse"
+        );
+
+        // Sharper pin: the failure above must come from the MISSING `acceptance`
+        // itself, not from the stray legacy keys (`#[serde(flatten)]` tolerates
+        // unknown keys) — so a minimal blob with no legacy keys but no
+        // `acceptance` must ALSO fail. This is the fail-closed guarantee: a
+        // legacy row can never silently deserialize with an implied
+        // `acceptance = auto` (an old offer/human pool becoming auto-grant).
+        let missing_acceptance = serde_json::json!({
+            "liveness": "presence",
+            "capacity_kind": "presence_driven",
+            "eligibility": "predicate",
+        });
+        let err = serde_json::from_value::<CapacityAxes>(missing_acceptance)
+            .expect_err("blob without `acceptance` must fail to parse");
+        assert!(
+            err.to_string().contains("acceptance"),
+            "error should name the missing `acceptance` field, got: {err}"
+        );
     }
 }

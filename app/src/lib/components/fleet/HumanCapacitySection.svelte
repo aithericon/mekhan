@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The Control-Plane view of the HUMAN capacity pools (docs/33 P4). The human
-	// counterpart to the runner-presence cards: each `offer`-dispatch presence
+	// counterpart to the runner-presence cards: each consent-acceptance presence
 	// capacity is a card showing its enrolled roster members and their LIVE
 	// presence (admitted vs offline), polled alongside the rest of the board.
 	//
@@ -122,7 +122,7 @@
 	<div class="mb-3 flex items-center gap-2">
 		<h2 class="text-lg font-semibold tracking-tight text-foreground">Humans</h2>
 		<Badge variant="outline" class="rounded-full text-xs text-muted-foreground">
-			offer · presence
+			consent · presence
 		</Badge>
 	</div>
 
@@ -133,8 +133,8 @@
 			<Users class="size-10 text-muted-foreground/40" />
 			<p class="mt-2 text-sm text-muted-foreground">No human capacities</p>
 			<p class="text-xs text-muted-foreground">
-				Create a capacity with the <span class="font-mono">offer</span> dispatch to pool human
-				workers, then enroll members into it.
+				Create a capacity with the <span class="font-mono">Human pool</span> preset (consent
+				acceptance) to pool human workers, then enroll members into it.
 			</p>
 		</div>
 	{:else}

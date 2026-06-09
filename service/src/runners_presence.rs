@@ -421,8 +421,8 @@ async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, runner_id: Uuid) {
 
 /// Inject a UNIT-INITIATED `presence_claim { grant_id, runner_id }` token into the
 /// pool net's `presence_claim` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_claim` (the `Dispatch::Offer` claim path,
-/// docs/33).
+/// `petri.bridge.<pool_net_id>.presence_claim` (the `Acceptance::Consent` claim
+/// path, docs/33 + docs/35 §4).
 ///
 /// A claim binds a parked offer to the claiming MEMBER (docs/34 §3): the offer
 /// net's `t_claim` correlates the unit on `runner_id` (= the member id), so the

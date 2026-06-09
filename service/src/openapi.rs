@@ -56,8 +56,7 @@ use utoipa::OpenApi;
             // for the `capacity` type. Reached only through nested `Option<Vec<_>>`,
             // so register them explicitly for frontend codegen.
             crate::models::capacity::Liveness,
-            crate::models::capacity::Dispatch,
-            crate::models::capacity::Exclusivity,
+            crate::models::capacity::Acceptance,
             crate::models::capacity::CapacityAmount,
             crate::models::capacity::Eligibility,
             crate::models::capacity::CapacityAxes,

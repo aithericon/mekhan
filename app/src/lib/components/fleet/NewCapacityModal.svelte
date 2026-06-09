@@ -96,7 +96,7 @@
 			kind: 'human',
 			label: 'Human pool',
 			preset: 'human',
-			hint: 'Self-claiming pool of people — offer-dispatched. Enroll members after creating.'
+			hint: 'Pool of people — members consent to (claim) offered work. Enroll members after creating.'
 		}
 	];
 	const KIND_ICON: Record<Kind, typeof Server> = {
@@ -157,7 +157,7 @@
 		error = null;
 		// Reset the form each open (create defaults; overwritten below on edit).
 		// `presence` is ambiguous — runner groups AND human pools share it — so
-		// `resolveEditKind` peeks at the dispatch axis (`offer` ⇒ human).
+		// `resolveEditKind` peeks at the acceptance axis (`consent` ⇒ human).
 		kind = target ? resolveEditKind(target) : 'runner_group';
 		path = target ? target.path : '';
 		displayName = target ? target.display_name : '';
@@ -267,9 +267,9 @@
 					});
 				}
 			} else {
-				// runner_group / worker / (deferred) — no editable config field. On
-				// edit only the display name changes; never re-send the axes (a
-				// name-only update leaves a deferred/consume capacity untouched).
+				// runner_group / worker / (null-backend) — no editable config field.
+				// On edit only the display name changes; never re-send the axes (a
+				// name-only update leaves a backend-less capacity untouched).
 				if (isEdit && editing) {
 					// The display name is the only mutable field here; the backend
 					// rejects an empty update, so require one.

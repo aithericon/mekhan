@@ -1,7 +1,7 @@
 //! Human presence controller (docs/33 §4/§7 — humans as a capacity).
 //!
 //! The human analogue of [`crate::runners_presence`]. A human `capacity`
-//! resource (`presence · offer · …`) is a capacity-LESS pool
+//! resource (`presence · consent · …`) is a capacity-LESS pool
 //! ([`crate::petri::presence_pool_net`]) whose admission is driven not by a
 //! runner daemon heartbeat but by a roster MEMBER's availability. A person has
 //! no data-plane daemon, so this controller is the generalization point: ONE

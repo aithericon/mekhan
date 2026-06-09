@@ -2,11 +2,11 @@
 	// Capacity-binding section for a HumanTask node (docs/33). A HumanTask is
 	// either UNPOOLED (the historical behaviour — the task is created directly and
 	// any operator can complete it from their inbox) or bound to a `human`-preset
-	// `capacity` (presence · offer dispatch): the task is then OFFERED to every
+	// `capacity` (presence · consent acceptance): the task is then OFFERED to every
 	// available member enrolled in that capacity, and the first to CLAIM it binds
 	// it (first-claim-wins, the rest implicitly rescinded). Placement Requirements
 	// (typed constraints over a member's advertised caps) gate WHO may claim — only
-	// shown once bound, since they only apply on the offer pool's `t_claim` guard.
+	// shown once bound, since they only apply on the consent pool's `t_claim` guard.
 	//
 	// `capacity.alias` is the workspace path of the bound `capacity` resource; the
 	// publish handler resolves it to the backing `pool-<id>` offer net. Selecting
@@ -29,14 +29,14 @@
 	// Sentinel for the "no capacity" option (Select values must be non-empty).
 	const UNPOOLED = '__unpooled__';
 
-	// Only offer-dispatch presence pools are valid HumanTask targets — that is
-	// exactly the `human` preset (presence · offer). A runner group (presence ·
-	// push) has no self-claiming member, and a queue/scheduler can't take a human.
+	// Only consent-acceptance presence pools are valid HumanTask targets — that is
+	// exactly the `human` preset (presence · consent). A runner group (presence ·
+	// auto) has no consenting member, and a queue/scheduler can't take a human.
 	let pools = $state<CapacitySummary[]>([]);
 	onMount(() => {
 		listCapacities()
 			.then((cs) => {
-				pools = cs.filter((c) => c.backend === 'presence' && c.axes?.dispatch === 'offer');
+				pools = cs.filter((c) => c.backend === 'presence' && c.axes?.acceptance === 'consent');
 			})
 			.catch(() => {
 				pools = [];

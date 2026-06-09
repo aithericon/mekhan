@@ -238,9 +238,9 @@ fn expand_capacity_preset(resource_type: &str, config: &mut Value) -> Result<(),
 
 /// Authoritative create/update/rotate validation for `capacity` resources: the
 /// trait-space axes in `public_config` must parse into a coherent point in the
-/// space (doc 24 refinement #1). Rejects incoherent cells (`competing_consumer
-/// × push`, presence-less × push, `elastic × push` without presence) with a
-/// 400; returns the non-fatal scale-mismatch WARNINGS (`pull × predicate`) for
+/// space (doc 35 §6). Rejects the consent-invariant violations (`consent` ×
+/// non-`presence` liveness, `consent × partition`) with a 400; returns the
+/// non-fatal scale-mismatch WARNINGS (`competing_consumer × predicate`) for
 /// the caller to log. No-op for every non-`capacity` kind.
 ///
 /// The `serde(tag = "kind")` flattening on `CapacityAmount` means the typed
@@ -257,8 +257,8 @@ fn validate_capacity_axes(
     let axes: crate::models::capacity::CapacityAxes =
         serde_json::from_value(Value::Object(public.clone())).map_err(|e| {
             ApiError::bad_request(format!(
-                "capacity axes are malformed or missing: {e} — expected liveness / dispatch / \
-                 exclusivity / capacity_kind (+ capacity_amount for fixed) / eligibility"
+                "capacity axes are malformed or missing: {e} — expected liveness / acceptance / \
+                 capacity_kind (+ capacity_amount for fixed) / eligibility"
             ))
         })?;
     axes.validate()
@@ -1101,8 +1101,8 @@ pub(crate) async fn reprovision_resource_secret(
 ///   (the `datacenter` kind: `allocator_url` from `public_config`; the token as a
 ///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
 ///   `vault_path` from `(workspace_id, resource_id, version)`).
-/// - [`CapacityBackend::Queue`] / [`CapacityBackend::Deferred`] → no admission
-///   net (a worker queue has no per-task matcher; `consume` backing is deferred).
+/// - [`CapacityBackend::Queue`] → no admission net (a worker queue has no
+///   per-task matcher — workers subscribe and compete on the broker).
 async fn ensure_pool_net_for_resource(
     state: &AppState,
     resource_type: &str,
@@ -1154,10 +1154,12 @@ async fn ensure_pool_net_for_resource(
             // live runner (presence_acquire) and reaps it on presence-lease expiry
             // (presence_expired). Deploy is idempotent + engine-down-tolerant.
             //
-            // The `dispatch` axis selects the admission discipline: `Offer` parks a
-            // match-once offer that binds on a unit-initiated claim (first-claim-wins,
-            // rest implicitly rescinded); the default direct-assign net binds eagerly.
-            if axes.dispatch == crate::models::capacity::Dispatch::Offer {
+            // The `acceptance` axis selects the admission discipline (doc 35 §4):
+            // `Consent` parks a match-once offer that binds on a unit-initiated claim
+            // (first-claim-wins, rest implicitly rescinded); `Auto` binds eagerly via
+            // the direct-assign net. (The ensure-fn names still say "offer" — the
+            // pool-net acceptance rename is a later phase.)
+            if axes.acceptance == crate::models::capacity::Acceptance::Consent {
                 crate::petri::presence_pool_net::ensure_presence_offer_pool_net_deployed(
                     &state.petri,
                     resource_id,
@@ -1199,10 +1201,9 @@ async fn ensure_pool_net_for_resource(
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
         }
-        CapacityBackend::Queue | CapacityBackend::Deferred => {
+        CapacityBackend::Queue => {
             // A competing_consumer (pull) capacity has NO admission net (it is a
-            // static partition / shared work queue — no per-task matcher); a
-            // `consume` capacity's backing is deferred (doc 24 §4).
+            // static partition / shared work queue — no per-task matcher).
             tracing::debug!(
                 %resource_id,
                 resource_type,

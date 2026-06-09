@@ -511,7 +511,7 @@ pub enum CompileError {
     /// worker-pool `capacity`) competes directly with no admission net; and a
     /// plain credential (`postgres`, …) is no pool at all. `backend` is the human
     /// label of the resolved [`crate::models::capacity::CapacityBackend`]
-    /// (`scheduler` / `queue` / `deferred` / `non-pool`).
+    /// (`scheduler` / `queue` / `non-pool`).
     #[error(
         "node '{node_id}': Executor.capacity alias '{alias}' resolves to a {backend} capacity, \
          not a token/presence pool — {}",

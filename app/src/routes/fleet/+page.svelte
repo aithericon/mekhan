@@ -63,21 +63,22 @@
 
 	// ── Derived: partition by backend ───────────────────────────────────────────
 
-	// Human capacities are ALSO presence-backed — the `offer` dispatch axis is what
-	// distinguishes a self-claiming human pool from a runner group. Split them so
-	// the Presence section stays runner-only and humans get their own roster view.
+	// Human capacities are ALSO presence-backed — the `consent` acceptance axis is
+	// what distinguishes a member-consent human pool from a runner group. Split them
+	// so the Presence section stays runner-only and humans get their own roster view.
 	const humans = $derived(
-		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch === 'offer')
+		capacities.filter((c) => c.backend === 'presence' && c.axes?.acceptance === 'consent')
 	);
 	const presence = $derived(
-		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch !== 'offer')
+		capacities.filter((c) => c.backend === 'presence' && c.axes?.acceptance !== 'consent')
 	);
 	const queue = $derived(capacities.filter((c) => c.backend === 'queue'));
-	// `deferred` shares the Tokens lane (the consume-quota path is a Tokens flavour).
-	const tokens = $derived(
-		capacities.filter((c) => c.backend === 'tokens' || c.backend === 'deferred')
-	);
+	const tokens = $derived(capacities.filter((c) => c.backend === 'tokens'));
 	const scheduler = $derived(capacities.filter((c) => c.backend === 'scheduler'));
+	// backend == null ⇒ the axes failed to parse (a row persisted before the
+	// acceptance re-cut, fail-closed by design — docs/35 §6). Not dispatchable,
+	// but it must stay visible so an admin can recreate or delete it.
+	const undispatchable = $derived(capacities.filter((c) => c.backend == null));
 
 	const summary = $derived(`${capacities.length} capacities across 4 backends`);
 
@@ -311,9 +312,22 @@
 				{#snippet emptyIcon()}<Boxes class="size-10 text-muted-foreground/40" />{/snippet}
 			</CapacitySection>
 
-			<!-- HUMANS — offer-dispatch presence pools (docs/33). Roster members +
+			<!-- HUMANS — consent-acceptance presence pools (docs/33). Roster members +
 				 their live presence; the human counterpart to the runner cards. -->
 			<HumanCapacitySection capacities={humans} />
+
+			<!-- NOT DISPATCHABLE — axes failed to parse (legacy pre-acceptance rows,
+				 fail-closed). Only rendered when such rows exist; cards expose
+				 edit/delete so the row can be recreated or removed. -->
+			{#if undispatchable.length > 0}
+				<CapacitySection
+					title="Not dispatchable"
+					backend={null}
+					capacities={undispatchable}
+					onedit={onEditCapacity}
+					ondelete={onDeleteCapacity}
+				/>
+			{/if}
 
 			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
 				 placement, router/inference-audit) now lives on its own page at
