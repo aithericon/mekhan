@@ -363,6 +363,31 @@ async fn main() -> anyhow::Result<()> {
             }
         };
 
+    // READ-side secret store for the file-server serve bridge (docs/32). Same
+    // Vault-or-fallback posture as `resource_store`: a real `VaultSecretStore`
+    // when VAULT_ADDR/VAULT_TOKEN are set, an empty `InMemorySecretStore`
+    // otherwise. With the in-memory fallback, serving an external s3/sftp
+    // endpoint fails cleanly at credential-read time (the secret isn't there),
+    // never silently — the built-in object_store path needs no creds and is
+    // unaffected.
+    let secret_store: Arc<dyn aithericon_secrets::SecretStore> =
+        match aithericon_secrets::VaultSecretStore::from_env() {
+            Some(vss) => {
+                tracing::info!("secret_store: Vault-backed (VAULT_ADDR set)");
+                Arc::new(vss)
+            }
+            None => {
+                tracing::warn!(
+                    "secret_store: VAULT_ADDR/VAULT_TOKEN unset — falling back to \
+                     empty in-memory store. Serving external s3/sftp file-server \
+                     endpoints (resource_ref creds) will fail until Vault is configured."
+                );
+                Arc::new(aithericon_secrets::InMemorySecretStore::new(
+                    std::collections::HashMap::new(),
+                ))
+            }
+        };
+
     // Publish-time resource resolver. Stateless on construction — every call
     // joins workspace + version + ACL inline. Shared as `Arc` so the publish
     // path can clone it cheaply.
@@ -405,6 +430,7 @@ async fn main() -> anyhow::Result<()> {
         triggers: trigger_dispatcher,
         result_waiters,
         resource_store,
+        secret_store,
         resource_resolver,
         runner_nats_signer,
         runner_presence,

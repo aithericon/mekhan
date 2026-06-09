@@ -239,14 +239,12 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
-                // `executor_namespace` (the group-partitioned / lease-scoped
-                // dispatch queue stamped on the job token at prepare) MUST ride
-                // through to the failure token: the retry topology re-submits off
-                // this token, and a dropped namespace falls back to the bare
-                // `executor` effect namespace that no group consumer drains —
-                // black-holing the retry (the instance then hangs). `()` when a
-                // step has none → null → submit handler's default. Mirrors the
-                // `_`-prefix metadata preservation in `t_success`.
+                // `executor_namespace` (+ `feed_chunks`) MUST ride through to the
+                // failure token: the retry topology re-submits off this token, and
+                // a dropped namespace falls back to the bare `executor` effect
+                // namespace that no group consumer drains — black-holing the retry
+                // (the instance then hangs). `()` when a step has none → null →
+                // submit handler's default. Mirrors `_`-prefix metadata in t_success.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -256,7 +254,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         max_retries: job.max_retries,
                         run: job.run,
                         spec: job.spec,
-                        executor_namespace: job.executor_namespace
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -288,7 +287,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         max_retries: job.max_retries,
                         run: job.run,
                         spec: job.spec,
-                        executor_namespace: job.executor_namespace
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -309,7 +309,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         max_retries: job.max_retries,
                         run: job.run,
                         spec: job.spec,
-                        executor_namespace: job.executor_namespace
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -330,7 +331,8 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         max_retries: job.max_retries,
                         run: job.run,
                         spec: job.spec,
-                        executor_namespace: job.executor_namespace
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );

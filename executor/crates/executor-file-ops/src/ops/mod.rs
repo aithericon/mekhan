@@ -133,7 +133,13 @@ pub async fn dispatch(
         }
         FileOpsConfig::Crawl(c) => {
             let (op, pfx) = build_op(&c.storage)?;
-            crawl::execute(c, &op, &pfx, event_stream, cancel).await
+            // The canonical (server-relative) root the emitted paths are
+            // anchored to — recorded on every batch item + the summary output so
+            // the registered `file_inventory.path` is canonical and `adopt` can
+            // stamp the endpoint root. Zero path arithmetic: OpenDAL already
+            // roots at this, so its yielded paths are root-relative.
+            let endpoint_root = c.storage.endpoint_root();
+            crawl::execute(c, &op, &pfx, &endpoint_root, event_stream, cancel).await
         }
     }
 }

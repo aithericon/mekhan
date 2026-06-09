@@ -2281,12 +2281,30 @@ async fn register_catalogue_entry(
     // (idempotent on (file_server_id, path)) so a catalogue row is never without
     // its inventory copy. is_canonical = true: this is our own authoritative
     // store. This is the other half the projector previously skipped entirely.
-    let provenance = serde_json::json!({
+    // Canonical root the by-reference path is anchored to (from the command, or
+    // a crawl-stamped `endpoint_root` riding in file_metadata). Persisted so an
+    // `adopt` can promote it onto the file-server endpoint's `root`. Fail-soft:
+    // absent for uploaded / non-crawl artifacts.
+    let endpoint_root = cmd
+        .endpoint_root
+        .clone()
+        .filter(|r| !r.trim().is_empty())
+        .or_else(|| {
+            file_metadata
+                .get("endpoint_root")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|r| !r.trim().is_empty())
+        });
+    let mut provenance = serde_json::json!({
         "source": "workflow_artifact",
         "execution_id": cmd.execution_id,
         "artifact_id": cmd.artifact_id,
         "source_net": net_id,
     });
+    if let Some(root) = &endpoint_root {
+        provenance["endpoint_root"] = serde_json::json!(root);
+    }
     crate::inventory::queries::upsert_inventory_copy(
         &mut tx,
         Some(&content_hash),

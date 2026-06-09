@@ -110,7 +110,7 @@ pub fn spawn_model_agent(
         const RETRY_DELAY: Duration = Duration::from_secs(3);
         for attempt in 1..=MAX_ATTEMPTS {
             match probe_and_publish(&adapter, &ma, &runner_id, &mekhan_url, &token, &models).await {
-                Ok(()) => break,
+                Ok(_) => break,
                 Err(e) if attempt < MAX_ATTEMPTS => {
                     warn!(
                         %runner_id, vllm_url = %ma.vllm_url, attempt, error = %e,
@@ -153,15 +153,16 @@ fn read_runner_token(token_path: &std::path::Path) -> Result<String, String> {
     Ok(token)
 }
 
-/// Probe vLLM, build the catalog, publish it, and refresh the live state.
-async fn probe_and_publish(
+/// Probe the runtime and build the interface catalog WITHOUT publishing. Returns
+/// the catalog value plus its derived `(concurrency, model_ids)`. Split out from
+/// [`probe_and_publish`] so the periodic refresh can probe, compare the resident
+/// set to the last-published one, and re-publish ONLY on a change (no 15s POST /
+/// log churn when nothing moved).
+async fn probe_catalog(
     adapter: &ModelBackend,
     ma: &ModelAgentSettings,
     runner_id: &str,
-    mekhan_url: &str,
-    token: &str,
-    models: &LiveModelState,
-) -> Result<(), String> {
+) -> Result<(serde_json::Value, Option<u32>, Vec<String>), String> {
     let loaded = adapter
         .probe_loaded_models()
         .await
@@ -193,9 +194,24 @@ async fn probe_and_publish(
     );
     let concurrency = concurrency_of(&catalog);
     let model_ids = model_ids_of(&catalog);
-    models.set(concurrency, model_ids);
+    Ok((catalog, concurrency, model_ids))
+}
 
-    crate::catalog_publish::publish_catalog(runner_id, mekhan_url, token, &catalog).await
+/// Probe the runtime, build the catalog, publish it, and refresh the live state.
+/// Returns the resident `model_ids` published (so a caller can track the last set
+/// for change-gated periodic refresh).
+async fn probe_and_publish(
+    adapter: &ModelBackend,
+    ma: &ModelAgentSettings,
+    runner_id: &str,
+    mekhan_url: &str,
+    token: &str,
+    models: &LiveModelState,
+) -> Result<Vec<String>, String> {
+    let (catalog, concurrency, model_ids) = probe_catalog(adapter, ma, runner_id).await?;
+    models.set(concurrency, model_ids.clone());
+    crate::catalog_publish::publish_catalog(runner_id, mekhan_url, token, &catalog).await?;
+    Ok(model_ids)
 }
 
 /// The core-NATS command listener: `runner.{id}.load` + `runner.{id}.unload`.
@@ -225,12 +241,61 @@ async fn run_command_listener(
     };
     info!(%runner_id, %subject, "model-pool command listener started (load/unload)");
 
+    // Periodic resident-set re-probe. The catalog (mekhan's `observed_count` /
+    // the "N loaded" surface) was otherwise only refreshed on startup + on a
+    // mekhan load/unload command — so a model the runtime loaded WITHOUT a
+    // command went unseen. The big offender is Ollama: an inference request for
+    // a pulled-but-evicted model AUTO-LOADS it on demand (with the inference
+    // path's own keep_alive), so the model becomes resident and serves while the
+    // control plane still reports it `unloaded` ("serving but 0 loaded"). Re-
+    // probing `/api/ps` on a timer reconciles the catalog with runtime reality,
+    // and lets the autoscaler's idle-eviction actually fire on an auto-loaded
+    // model instead of being blind to it.
+    const REFRESH_SECS: u64 = 15;
+    let mut refresh = tokio::time::interval(Duration::from_secs(REFRESH_SECS));
+    refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    refresh.tick().await; // consume the immediate first tick (startup already published)
+
+    // Last resident set we published, for change-gating the periodic refresh: re-
+    // publish (and log) only when `/api/ps` actually moved, so a steady pool
+    // doesn't POST an identical catalog every 15s. `None` ⇒ unknown (force the
+    // next probe to publish), which is also what we reset to after a command.
+    let mut last_ids: Option<Vec<String>> = None;
+
     loop {
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => {
                 info!(%runner_id, "model-pool command listener shutting down");
                 break;
+            }
+            _ = refresh.tick() => {
+                // Reconcile the advertised resident set with what the runtime
+                // ACTUALLY has loaded (incl. request-triggered auto-loads the
+                // control plane never commanded — the Ollama "serving but 0
+                // loaded" case). Probe first, publish only on a change.
+                match probe_catalog(&adapter, &ma, &runner_id).await {
+                    Ok((catalog, concurrency, model_ids)) => {
+                        if last_ids.as_deref() != Some(model_ids.as_slice()) {
+                            models.set(concurrency, model_ids.clone());
+                            match crate::catalog_publish::publish_catalog(
+                                &runner_id, &mekhan_url, &token, &catalog,
+                            )
+                            .await
+                            {
+                                Ok(()) => last_ids = Some(model_ids),
+                                Err(e) => warn!(
+                                    %runner_id, error = %e,
+                                    "model agent: periodic resident-set re-publish failed"
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => warn!(
+                        %runner_id, error = %e, "model agent: periodic resident-set probe failed"
+                    ),
+                }
+                continue;
             }
             msg = subscription.next() => {
                 let Some(msg) = msg else {
@@ -248,12 +313,17 @@ async fn run_command_listener(
                     Ok(cmd) => {
                         apply_command(&adapter, &cmd).await;
                         // RE-PUSH the catalog + refresh live presence state so
-                        // mekhan + the heartbeat reflect the new vLLM state.
-                        if let Err(e) =
-                            probe_and_publish(&adapter, &ma, &runner_id, &mekhan_url, &token, &models)
-                                .await
+                        // mekhan + the heartbeat reflect the new runtime state.
+                        match probe_and_publish(
+                            &adapter, &ma, &runner_id, &mekhan_url, &token, &models,
+                        )
+                        .await
                         {
-                            warn!(%runner_id, error = %e, "model agent: re-publish after command failed");
+                            Ok(ids) => last_ids = Some(ids),
+                            Err(e) => warn!(
+                                %runner_id, error = %e,
+                                "model agent: re-publish after command failed"
+                            ),
                         }
                     }
                     Err(e) => warn!(

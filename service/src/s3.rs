@@ -225,6 +225,31 @@ impl ArtifactStore {
         Ok((bytes, content_type))
     }
 
+    /// Mint a time-limited presigned GET URL for `key`.
+    ///
+    /// Used by the file-server serve bridge (docs/32 Phase 3b) to 302 a browser
+    /// straight to the object store for an `object_store`/`s3` endpoint, so the
+    /// bytes never transit mekhan. `expires` caps the URL's validity. The URL
+    /// embeds the request signature — anyone holding it can fetch the object
+    /// until it expires, so keep the window short.
+    pub async fn presign_get(
+        &self,
+        key: &str,
+        expires: std::time::Duration,
+    ) -> Result<String, ArtifactStoreError> {
+        let presign_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(expires)
+            .map_err(|e| ArtifactStoreError::S3(format!("presign config: {e}")))?;
+        let req = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(presign_config)
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("presign {key}: {e}")))?;
+        Ok(req.uri().to_string())
+    }
+
     /// Delete every object under `prefix`. Used by the retention sweep to GC
     /// per-instance agent transcript blobs (`instances/{instance_id}/`).
     /// Paginates the listing and deletes objects individually so a partial

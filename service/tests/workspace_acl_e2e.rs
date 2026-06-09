@@ -484,6 +484,9 @@ async fn test_app_with_authenticator_and_petri_url(
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        secret_store: Arc::new(aithericon_secrets::InMemorySecretStore::new(
+            std::collections::HashMap::new(),
+        )),
         resource_resolver: Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),

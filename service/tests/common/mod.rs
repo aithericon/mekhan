@@ -102,6 +102,8 @@ pub fn test_config() -> AppConfig {
         frontend_dir: None,
         // Tests don't mint LiveKit viewer tokens; the endpoint returns 503 unset.
         livekit: None,
+        // Default to presigned-302 serving (tests don't exercise the proxy path).
+        proxy_s3_reads: false,
         auth: AuthConfig::default(),
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.
@@ -123,6 +125,17 @@ fn default_resource_store() -> Arc<dyn aithericon_resources::ResourceSecretStore
     match aithericon_resources::VaultResourceStore::from_env() {
         Some(vrs) => Arc::new(vrs),
         None => Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+    }
+}
+
+/// READ-side secret store for tests — empty in-memory unless Vault env is set.
+/// Mirrors `main.rs`'s selection for `secret_store`.
+fn default_secret_store() -> Arc<dyn aithericon_secrets::SecretStore> {
+    match aithericon_secrets::VaultSecretStore::from_env() {
+        Some(vss) => Arc::new(vss),
+        None => Arc::new(aithericon_secrets::InMemorySecretStore::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 
@@ -176,6 +189,7 @@ pub async fn test_app_with_authenticator(
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -234,6 +248,7 @@ pub async fn test_app_with_introspection(
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -290,6 +305,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -348,6 +364,7 @@ pub async fn test_app() -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -405,6 +422,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -464,6 +482,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -533,6 +552,7 @@ pub async fn test_app_waiters(
         triggers,
         result_waiters: result_waiters.clone(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -602,6 +622,7 @@ pub async fn test_app_with_petri_url_and_triggers(
         triggers: triggers.clone(),
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
+        secret_store: default_secret_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),

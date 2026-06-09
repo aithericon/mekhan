@@ -69,11 +69,16 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
         &CreateFileServerRequest {
             key: server.clone(),
             display_name: Some("Lab NAS".into()),
-            kind: "sftp".into(),
-            resource_ref: None,
-            base_path: None,
             config: None,
             workspace_id: None,
+            endpoint: Some(mekhan_service::file_servers::model::CreateEndpointRequest {
+                access_method: "sftp".into(),
+                root: None,
+                resource_ref: None,
+                group_id: None,
+                priority: None,
+                config: None,
+            }),
         },
     )
     .await

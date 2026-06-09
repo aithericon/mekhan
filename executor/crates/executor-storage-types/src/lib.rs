@@ -160,6 +160,34 @@ fn default_prefix() -> String {
     String::new()
 }
 
+impl StorageConfig {
+    /// The canonical root that emitted (root-stripped) paths are anchored to.
+    ///
+    /// A `crawl`/`list` records this so the registered `file_inventory.path`
+    /// stays *server-relative* and an `adopt` can stamp it onto the file-server
+    /// endpoint's `root`. OpenDAL is built with the local `endpoint` as its
+    /// filesystem root (so `fs`-yielded paths are already relative to it); for
+    /// object stores the in-bucket `prefix` is the logical root. This collapses
+    /// to one string naming that anchor — zero path arithmetic downstream.
+    ///
+    /// * Local / Sftp → the `endpoint` filesystem path (the OpenDAL `fs` root).
+    /// * S3 / Gcs / AzBlob → `<bucket>/<prefix>` (the in-bucket logical root),
+    ///   trailing slash trimmed.
+    pub fn endpoint_root(&self) -> String {
+        match self.backend {
+            StorageBackend::Local | StorageBackend::Sftp => self.endpoint.clone(),
+            StorageBackend::S3 | StorageBackend::Gcs | StorageBackend::AzBlob => {
+                let prefix = self.prefix.trim_matches('/');
+                if prefix.is_empty() {
+                    self.bucket.clone()
+                } else {
+                    format!("{}/{}", self.bucket, prefix)
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +244,28 @@ mod tests {
         assert!(config.region.is_none());
         assert_eq!(config.prefix, "");
         assert_eq!(config.credentials.access_key, "");
+    }
+
+    #[test]
+    fn endpoint_root_local_is_endpoint_path() {
+        let json = r#"{"backend": "local", "endpoint": "/tmp/mekhan-crawl-demo"}"#;
+        let config: StorageConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.endpoint_root(), "/tmp/mekhan-crawl-demo");
+    }
+
+    #[test]
+    fn endpoint_root_s3_joins_bucket_and_prefix() {
+        let json = r#"{"backend": "s3", "endpoint": "https://s3", "bucket": "artifacts", "prefix": "executor/"}"#;
+        let config: StorageConfig = serde_json::from_str(json).unwrap();
+        // Trailing slash on the prefix is trimmed; root is bucket/prefix.
+        assert_eq!(config.endpoint_root(), "artifacts/executor");
+    }
+
+    #[test]
+    fn endpoint_root_s3_bare_bucket_when_no_prefix() {
+        let json = r#"{"backend": "s3", "endpoint": "https://s3", "bucket": "artifacts"}"#;
+        let config: StorageConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.endpoint_root(), "artifacts");
     }
 
     #[test]

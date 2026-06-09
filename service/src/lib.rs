@@ -116,6 +116,14 @@ pub struct AppState {
     /// engine's wrap path still reads through the existing `SecretStore`
     /// path — this trait is write-only by design.
     pub resource_store: Arc<dyn aithericon_resources::ResourceSecretStore>,
+    /// READ-side secret backend used by the file-server serve bridge
+    /// (`data::serve`) to resolve an endpoint's `resource_ref` → the s3/sftp
+    /// credential fields stored in Vault (keyed `<vault_path>#<field>`).
+    /// `VaultSecretStore` when VAULT_ADDR/VAULT_TOKEN are set; an empty
+    /// `InMemorySecretStore` (dev/test) otherwise. Distinct from
+    /// `resource_store` (write-only): the engine's wrap path and this serve
+    /// read path both go through the same `SecretStore::get` contract.
+    pub secret_store: Arc<dyn aithericon_secrets::SecretStore>,
     /// Publish-time resource resolver. Reads workspace resources +
     /// per-version public config, runs ACL + audit, and returns the JSON
     /// envelope the publish handler splices into the AIR before
@@ -399,9 +407,23 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             file_servers::handlers::update,
             file_servers::handlers::delete
         ))
+        // N access-method endpoints per server (object_store|s3|sftp|local_mount).
+        .routes(routes!(
+            file_servers::handlers::list_endpoints,
+            file_servers::handlers::create_endpoint
+        ))
+        .routes(routes!(
+            file_servers::handlers::update_endpoint,
+            file_servers::handlers::delete_endpoint
+        ))
+        // On-demand hash-probe reconcile of one endpoint (docs/32 §4 Phase 4).
+        .routes(routes!(file_servers::handlers::verify_endpoint))
         // Unified Data browser read-model — catalogued entries + nested physical
         // copies (server names resolved) + uncatalogued peek.
         .routes(routes!(data::handlers::entries))
+        // Serve bridge — stream an entry's bytes by resolving it to a physical
+        // copy + endpoint (local_mount NATS relay / s3 presign-or-proxy / sftp).
+        .routes(routes!(data::handlers::entry_content))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

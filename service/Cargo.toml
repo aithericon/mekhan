@@ -33,11 +33,11 @@ required-features = ["migration-driver"]
 # Pulls in the in-process file-ops op invocation + OpenDAL operator builder used
 # by the `legacy-migration-driver` bin. NOT enabled by default — the platform
 # service binary (`mekhan`) and library must stay free of these heavy deps.
+# `aithericon-executor-storage` + `opendal` are now DEFAULT deps (the serve
+# bridge needs them), so the driver feature only adds the file-ops op crates.
 migration-driver = [
     "dep:aithericon-executor-file-ops",
     "dep:aithericon-executor-backend",
-    "dep:aithericon-executor-storage",
-    "dep:opendal",
     "dep:tokio-util",
     "dep:tempfile",
 ]
@@ -178,6 +178,21 @@ aithericon-executor-domain = { path = "../executor/crates/executor-domain", feat
 # family can be registered by full path in the OpenAPI components block.
 aithericon-executor-storage-types = { path = "../executor/crates/executor-storage-types", features = ["schema"] }
 
+# --- file-server serve bridge (docs/32 Phase 3b/4) -------------------------
+# DEFAULT deps (NOT feature-gated): the `data::serve` bridge mints presigned S3
+# URLs and streams external s3/sftp endpoints in-process, and Phase 4 reconcile
+# reads+hashes remote copies — both run in the standard `mekhan` binary. We reuse
+# `executor-storage::build_operator` (the exact operator the file-ops backend
+# builds) for a single s3+sftp code path. Only the s3/sftp opendal service
+# features are pulled (no gcs/azblob) to bound the dep weight.
+aithericon-executor-storage = { path = "../executor/crates/executor-storage", default-features = false, features = ["opendal", "opendal-s3", "opendal-sftp"] }
+opendal = { version = "0.55", default-features = false, features = ["services-s3", "services-sftp"] }
+# Read-side secret store: the serve bridge resolves an endpoint's `resource_ref`
+# → `resource_versions.vault_path` and reads the s3/sftp credential fields via
+# `SecretStore::get("<vault_path>#<field>")`. `VaultSecretStore` when
+# VAULT_ADDR/VAULT_TOKEN are set; `InMemorySecretStore` (dev/test) otherwise.
+aithericon-secrets = { path = "../shared/secrets", features = ["vault"] }
+
 # --- legacy-migration-driver (feature = "migration-driver") ----------------
 # Optional path deps pulled ONLY when the `legacy-migration-driver` bin is
 # built. The driver invokes the REAL crawl/probe ops in-process against a Local
@@ -186,14 +201,12 @@ aithericon-executor-storage-types = { path = "../executor/crates/executor-storag
 # pipeline logic (fold + hash + register) is transport-agnostic.
 aithericon-executor-file-ops = { path = "../executor/crates/executor-file-ops", optional = true }
 aithericon-executor-backend = { path = "../executor/crates/executor-backend", optional = true }
-aithericon-executor-storage = { path = "../executor/crates/executor-storage", features = ["opendal"], optional = true }
 # `ChecksumAlgorithm::Sha256` for the probe op's checksum_algo flag (the
 # reconcile join-key linchpin).
 # Types-only (`default-features = false` → no HDF5/codec/image parser deps): the
 # catalogue read path deserializes stored `file_metadata` JSONB into the real
 # `fmeta` types to build the UI `FileMetadataView` (see catalogue/metadata_view.rs).
 aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", default-features = false }
-opendal = { version = "0.55", default-features = false, optional = true }
 tokio-util = { version = "0.7", optional = true }
 # Synthetic-NAS tempdir tree + probe run_dir. (Also a dev-dep for the test
 # suite; promoted to an optional regular dep so the feature-gated driver lib

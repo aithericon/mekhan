@@ -202,6 +202,7 @@ fn crawl_fields() -> Vec<PortField> {
         pf("count", "File count", FieldKind::Number),
         pf("last_path", "Last path (resume cursor)", FieldKind::Text),
         pf("batches", "Batches emitted", FieldKind::Number),
+        pf("endpoint_root", "Endpoint root (canonical)", FieldKind::Text),
     ]
 }
 
@@ -258,7 +259,10 @@ mod tests {
     #[test]
     fn derive_crawl() {
         let port = derive_output_port(&json!({ "operation": "crawl" }));
-        assert_eq!(names(&port), ["prefix", "count", "last_path", "batches"]);
+        assert_eq!(
+            names(&port),
+            ["prefix", "count", "last_path", "batches", "endpoint_root"]
+        );
     }
 
     #[test]

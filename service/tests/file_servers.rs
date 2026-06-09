@@ -1,13 +1,15 @@
 //! First-class file-server entity (docs/32 §4.1) — data-layer invariants
 //! against the live dev Postgres (queries are runtime-checked; no offline path).
 //!
-//!   - create rejects a bad `kind`;
+//!   - the parent is identity-only; transports are N child endpoints;
+//!   - create-with-inline-endpoint rejects a bad `access_method`;
 //!   - create + get expose DERIVED rollups (file count + summed catalogue size
 //!     + per-status breakdown) joined from `file_inventory` by `key`;
 //!   - list separates registered servers from unregistered inventory keys;
 //!   - adopt's guard (`key_in_inventory`) distinguishes seen vs unseen keys;
-//!   - the built-in object-store seed is idempotent;
-//!   - delete drops the entity without touching inventory.
+//!   - the built-in object-store seed is idempotent (server + one endpoint);
+//!   - endpoint CRUD (add/update/delete) is scoped to the parent;
+//!   - delete drops the entity (endpoints cascade) without touching inventory.
 //!
 //! Gated on `MEKHAN__DATABASE_URL` (skips if unset). Each test owns a unique
 //! `ns` namespace; every key it touches is prefixed `fs-test-{ns}-`, and
@@ -19,7 +21,9 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use mekhan_service::file_servers::model::{CreateFileServerRequest, UpdateFileServerRequest};
+use mekhan_service::file_servers::model::{
+    CreateEndpointRequest, CreateFileServerRequest, UpdateEndpointRequest, UpdateFileServerRequest,
+};
 use mekhan_service::file_servers::queries;
 use mekhan_service::inventory::model::InventoryRegisterRequest;
 use mekhan_service::inventory::queries as inv;
@@ -57,6 +61,7 @@ async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size
 }
 
 /// Scoped cleanup: only rows whose key/server begins with this test's prefix.
+/// Endpoints cascade on file_servers delete.
 async fn cleanup(pool: &PgPool, ws: Uuid, prefix: &str, hashes: &[String]) {
     sqlx::query("DELETE FROM file_servers WHERE workspace_id = $1 AND key LIKE $2")
         .bind(ws)
@@ -78,20 +83,30 @@ async fn cleanup(pool: &PgPool, ws: Uuid, prefix: &str, hashes: &[String]) {
     }
 }
 
-fn create_req(key: &str, kind: &str) -> CreateFileServerRequest {
+fn endpoint(access_method: &str) -> CreateEndpointRequest {
+    CreateEndpointRequest {
+        access_method: access_method.to_string(),
+        root: None,
+        resource_ref: None,
+        group_id: None,
+        priority: None,
+        config: None,
+    }
+}
+
+/// Create body with an inline first endpoint of the given access method.
+fn create_req(key: &str, access_method: &str) -> CreateFileServerRequest {
     CreateFileServerRequest {
         key: key.to_string(),
         display_name: None,
-        kind: kind.to_string(),
-        resource_ref: None,
-        base_path: None,
         config: None,
         workspace_id: None,
+        endpoint: Some(endpoint(access_method)),
     }
 }
 
 #[tokio::test]
-async fn create_rejects_bad_kind() {
+async fn create_rejects_bad_access_method() {
     let Some(_) = db_url() else {
         eprintln!("skip: MEKHAN__DATABASE_URL unset");
         return;
@@ -103,14 +118,14 @@ async fn create_rejects_bad_kind() {
 
     let err = queries::create(&pool, ws, &create_req(&key, "ftp"))
         .await
-        .expect_err("bad kind must be rejected");
+        .expect_err("bad access_method must be rejected");
     assert!(matches!(err, QueryError::InvalidValue { .. }), "got {err:?}");
 
     cleanup(&pool, ws, &prefix, &[]).await;
 }
 
 #[tokio::test]
-async fn create_get_exposes_rollups() {
+async fn create_get_exposes_rollups_and_endpoint() {
     let Some(_) = db_url() else {
         eprintln!("skip: MEKHAN__DATABASE_URL unset");
         return;
@@ -129,13 +144,14 @@ async fn create_get_exposes_rollups() {
     let created = queries::create(&pool, ws, &create_req(&key, "sftp"))
         .await
         .expect("create");
-    assert_eq!(created.kind, "sftp");
     assert_eq!(created.display_name, key, "display_name defaults to key");
 
     let view = queries::get(&pool, ws, &key)
         .await
         .expect("get")
         .expect("present");
+    assert_eq!(view.endpoints.len(), 1, "inline endpoint created");
+    assert_eq!(view.endpoints[0].access_method, "sftp");
     assert_eq!(view.file_count, 2, "two copies");
     assert_eq!(view.total_size_bytes, 30, "summed catalogue size");
     let registered: i64 = view
@@ -145,7 +161,10 @@ async fn create_get_exposes_rollups() {
         .map(|c| c.count)
         .sum();
     assert_eq!(registered, 2, "both copies registered");
-    assert!(!view.resource_resolves, "no resource_ref → false");
+    assert!(
+        view.resource_resolves,
+        "no resource_ref on the endpoint → resolves true"
+    );
 
     cleanup(&pool, ws, &prefix, &[h1, h2]).await;
 }
@@ -234,11 +253,101 @@ async fn builtin_object_store_seed_is_idempotent() {
         .await
         .expect("get")
         .expect("seeded row present");
-    assert_eq!(view.server.kind, "object_store");
+    assert_eq!(view.endpoints.len(), 1, "exactly one endpoint after re-seed");
+    assert_eq!(view.endpoints[0].access_method, "object_store");
     assert!(
-        view.server.resource_ref.is_none(),
-        "object_store has no resource_ref"
+        view.endpoints[0].resource_ref.is_none(),
+        "object_store endpoint has no resource_ref"
     );
+
+    cleanup(&pool, ws, &prefix, &[]).await;
+}
+
+#[tokio::test]
+async fn endpoint_crud_scoped_to_parent() {
+    let Some(_) = db_url() else {
+        eprintln!("skip: MEKHAN__DATABASE_URL unset");
+        return;
+    };
+    let pool = connect().await;
+    let ws = Uuid::nil();
+    let prefix = format!("fs-test-{}-", Uuid::new_v4());
+    let key = format!("{prefix}srv");
+
+    // Identity-only parent (no inline endpoint).
+    queries::create(
+        &pool,
+        ws,
+        &CreateFileServerRequest {
+            key: key.clone(),
+            display_name: None,
+            config: None,
+            workspace_id: None,
+            endpoint: None,
+        },
+    )
+    .await
+    .expect("create parent");
+    let sid = queries::server_id(&pool, ws, &key)
+        .await
+        .expect("server_id")
+        .expect("present");
+
+    // Add an s3 endpoint.
+    let ep = queries::create_endpoint(
+        &pool,
+        sid,
+        &CreateEndpointRequest {
+            access_method: "s3".to_string(),
+            root: Some("data/".to_string()),
+            resource_ref: Some("my_s3".to_string()),
+            group_id: None,
+            priority: Some(5),
+            config: None,
+        },
+    )
+    .await
+    .expect("create endpoint");
+    assert_eq!(ep.access_method, "s3");
+    assert_eq!(ep.root, "data/");
+    assert_eq!(ep.priority, 5);
+
+    // List shows it.
+    let eps = queries::list_endpoints(&pool, sid).await.expect("list eps");
+    assert_eq!(eps.len(), 1);
+
+    // Update: clear resource_ref, bump priority, change verification.
+    let upd = queries::update_endpoint(
+        &pool,
+        sid,
+        ep.id,
+        &UpdateEndpointRequest {
+            access_method: None,
+            root: None,
+            resource_ref: Some(None),
+            group_id: None,
+            status: Some("online".to_string()),
+            verification_status: Some("verified".to_string()),
+            priority: Some(9),
+            config: None,
+        },
+    )
+    .await
+    .expect("update endpoint")
+    .expect("present");
+    assert!(upd.resource_ref.is_none(), "resource_ref cleared");
+    assert_eq!(upd.status, "online");
+    assert_eq!(upd.verification_status, "verified");
+    assert_eq!(upd.priority, 9);
+
+    // Delete it.
+    assert!(queries::delete_endpoint(&pool, sid, ep.id)
+        .await
+        .expect("delete endpoint"));
+    assert!(queries::list_endpoints(&pool, sid)
+        .await
+        .expect("list")
+        .is_empty());
 
     cleanup(&pool, ws, &prefix, &[]).await;
 }
@@ -259,9 +368,6 @@ async fn update_and_delete() {
 
     let upd = UpdateFileServerRequest {
         display_name: Some("Renamed".to_string()),
-        kind: None,
-        resource_ref: Some(Some("my_s3".to_string())),
-        base_path: Some(Some("legacy/".to_string())),
         status: Some("online".to_string()),
         config: None,
     };
@@ -270,10 +376,9 @@ async fn update_and_delete() {
         .expect("update")
         .expect("present");
     assert_eq!(updated.display_name, "Renamed");
-    assert_eq!(updated.resource_ref.as_deref(), Some("my_s3"));
-    assert_eq!(updated.base_path.as_deref(), Some("legacy/"));
     assert_eq!(updated.status, "online");
 
+    // Delete cascades the inline endpoint.
     assert!(queries::delete(&pool, ws, &key).await.expect("delete"));
     assert!(
         queries::get(&pool, ws, &key).await.expect("get").is_none(),
