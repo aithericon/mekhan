@@ -869,12 +869,15 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/v1/file-servers — registered servers (with derived rollups) plus
-         *     unregistered inventory keys (adopt candidates).
+         * GET /api/v1/file-servers — registered servers (with endpoints + derived
+         *     rollups) plus unregistered inventory keys (adopt candidates).
          */
         get: operations["file_servers_list"];
         put?: never;
-        /** POST /api/v1/file-servers — register a new file server. */
+        /**
+         * POST /api/v1/file-servers — register a new file server (optionally with a
+         *     first inline endpoint).
+         */
         post: operations["create"];
         delete?: never;
         options?: never;
@@ -894,7 +897,8 @@ export interface paths {
         /**
          * POST /api/v1/file-servers/adopt — promote an inventory `file_server_id`
          *     string (seen in `file_inventory` but with no backing entity) into a real
-         *     file server. Identical to create, but the key MUST exist in inventory.
+         *     file server. Identical to create, but the key MUST exist in inventory; if no
+         *     endpoint is supplied a default `local_mount` endpoint at the root is created.
          */
         post: operations["adopt"];
         delete?: never;
@@ -910,13 +914,52 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/v1/file-servers/{key} — one server with rollups. */
+        /** GET /api/v1/file-servers/{key} — one server with endpoints + rollups. */
         get: operations["get"];
-        /** PUT /api/v1/file-servers/{key} — update mutable fields. */
+        /** PUT /api/v1/file-servers/{key} — update mutable parent fields. */
         put: operations["update"];
         post?: never;
-        /** DELETE /api/v1/file-servers/{key} — drop the entity (inventory untouched). */
+        /**
+         * DELETE /api/v1/file-servers/{key} — drop the entity (endpoints cascade;
+         *     inventory untouched).
+         */
         delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/file-servers/{key}/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/file-servers/{key}/endpoints — list a server's endpoints. */
+        get: operations["list_endpoints"];
+        put?: never;
+        /** POST /api/v1/file-servers/{key}/endpoints — add an endpoint to a server. */
+        post: operations["create_endpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/file-servers/{key}/endpoints/{endpoint_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** PUT /api/v1/file-servers/{key}/endpoints/{endpoint_id} — update an endpoint. */
+        put: operations["update_endpoint"];
+        post?: never;
+        /** DELETE /api/v1/file-servers/{key}/endpoints/{endpoint_id} — remove an endpoint. */
+        delete: operations["delete_endpoint"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5267,17 +5310,27 @@ export interface components {
             /** @description Capability name, unique within the workspace. */
             name: string;
         };
+        /** @description Create an endpoint under a server. */
+        CreateEndpointRequest: {
+            access_method: string;
+            config?: unknown;
+            group_id?: string | null;
+            /** Format: int32 */
+            priority?: number | null;
+            resource_ref?: string | null;
+            root?: string | null;
+        };
         /**
-         * @description Create / adopt body. `adopt` additionally requires `key` to exist in
-         *     `file_inventory`; otherwise the shape is identical.
+         * @description Create / adopt body. A new server may carry an optional first endpoint
+         *     inline; otherwise it is created identity-only and endpoints are added via the
+         *     `/endpoints` sub-resource. `adopt` additionally requires `key` to exist in
+         *     `file_inventory`.
          */
         CreateFileServerRequest: {
-            base_path?: string | null;
             config?: unknown;
             display_name?: string | null;
+            endpoint?: null | components["schemas"]["CreateEndpointRequest"];
             key: string;
-            kind: string;
-            resource_ref?: string | null;
             /**
              * Format: uuid
              * @description Optional explicit workspace; falls back to the caller's workspace.
@@ -6056,14 +6109,10 @@ export interface components {
         /**
          * @description A first-class storage-backend entity (maps 1:1 to the `file_servers` table).
          *
-         *     Identity + topology only — **secrets never live here**. `resource_ref` points
-         *     at a workspace `resource` (by its `path`) that holds the connection +
-         *     credentials in Vault; it is NULL for the built-in `object_store` (which uses
-         *     platform S3 config). See docs/32 §4.1.
+         *     Identity + topology only — **no transport, no secrets**. The ways to reach
+         *     the backend live in N child [`FileServerEndpoint`] rows. See docs/32 §4.1.
          */
         FileServer: {
-            /** @description Root / prefix within the backend. */
-            base_path?: string | null;
             config: unknown;
             /** Format: date-time */
             created_at: string;
@@ -6072,11 +6121,8 @@ export interface components {
             id: string;
             /** @description Stable slug; equals `file_inventory.file_server_id` (soft join, no FK). */
             key: string;
-            kind: string;
             /** Format: date-time */
             last_seen?: string | null;
-            /** @description Resource `path` holding connection + secrets. NULL for `object_store`. */
-            resource_ref?: string | null;
             status: string;
             /** Format: date-time */
             updated_at: string;
@@ -6084,20 +6130,59 @@ export interface components {
             workspace_id: string;
         };
         /**
-         * @description A registered file server plus its DERIVED rollups (joined from
+         * @description One access method (transport) onto a [`FileServer`] (maps 1:1 to the
+         *     `file_server_endpoints` table). Secrets never live here — `resource_ref`
+         *     points at a workspace `resource` holding connection + credentials in Vault.
+         */
+        FileServerEndpoint: {
+            /** @description `object_store` | `s3` | `sftp` | `local_mount`. */
+            access_method: string;
+            config: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            file_server_id: string;
+            /** @description Capacity-group UUID for `local_mount` dispatch; NULL otherwise. */
+            group_id?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen?: string | null;
+            /** Format: date-time */
+            last_verified?: string | null;
+            /**
+             * Format: int32
+             * @description Operator routing override; higher = preferred.
+             */
+            priority: number;
+            /** @description Resource `path` holding connection + secrets. NULL for `object_store`. */
+            resource_ref?: string | null;
+            /** @description Prefix in this namespace mapping to the server's canonical root. */
+            root: string;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description `unverified` | `verified` | `mismatch` | `conflict`. */
+            verification_status: string;
+        };
+        /**
+         * @description A registered file server plus its endpoints + DERIVED rollups (joined from
          *     `file_inventory` by `key` at read time — never stored).
          */
         FileServerView: components["schemas"]["FileServer"] & {
             /** @description Per-status breakdown of this server's copies. */
             by_status: components["schemas"]["InventoryCount"][];
+            /** @description The access methods onto this backend. */
+            endpoints: components["schemas"]["FileServerEndpoint"][];
             /**
              * Format: int64
              * @description Number of physical copies on this server.
              */
             file_count: number;
             /**
-             * @description Whether `resource_ref` resolves to an existing, non-deleted resource in
-             *     the same workspace (false when NULL or dangling).
+             * @description Whether every endpoint's `resource_ref` resolves to an existing,
+             *     non-deleted resource in the same workspace (NULL refs are treated as
+             *     resolved — the built-in object_store needs none).
              */
             resource_resolves: boolean;
             /**
@@ -6108,8 +6193,8 @@ export interface components {
             total_size_bytes: number;
         };
         /**
-         * @description Response of `GET /api/v1/file-servers`: registered servers (with rollups)
-         *     plus the unregistered inventory keys (so the UI can offer "adopt").
+         * @description Response of `GET /api/v1/file-servers`: registered servers (with endpoints +
+         *     rollups) plus the unregistered inventory keys (so the UI can offer "adopt").
          */
         FileServersResponse: {
             servers: components["schemas"]["FileServerView"][];
@@ -10406,14 +10491,29 @@ export interface components {
              */
             fields?: components["schemas"]["PortField"][] | null;
         };
-        /** @description Update body — all fields optional; `key` and `workspace_id` are immutable. */
+        /**
+         * @description Update an endpoint — all fields optional. `access_method` is mutable but
+         *     still validated. `resource_ref`/`group_id` use double-option so they can be
+         *     explicitly cleared (`Some(None)`) vs left alone (`None`).
+         */
+        UpdateEndpointRequest: {
+            access_method?: string | null;
+            config?: unknown;
+            group_id?: string | null;
+            /** Format: int32 */
+            priority?: number | null;
+            resource_ref?: string | null;
+            root?: string | null;
+            status?: string | null;
+            verification_status?: string | null;
+        };
+        /**
+         * @description Update body for the identity-only parent — all fields optional; `key` and
+         *     `workspace_id` are immutable.
+         */
         UpdateFileServerRequest: {
-            base_path?: string | null;
             config?: unknown;
             display_name?: string | null;
-            kind?: string | null;
-            /** @description Set to `Some(Some(_))` to change, `Some(None)` to clear, omit to keep. */
-            resource_ref?: string | null;
             status?: string | null;
         };
         /**
@@ -13352,6 +13452,171 @@ export interface operations {
                 content?: never;
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_endpoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Endpoints */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServerEndpoint"][];
+                };
+            };
+            /** @description Server not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description Created endpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServerEndpoint"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Duplicate (access_method, root) for this server */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+                /** @description Endpoint id (UUID) */
+                endpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated endpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileServerEndpoint"];
+                };
+            };
+            /** @description Bad request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server or endpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File-server key */
+                key: string;
+                /** @description Endpoint id (UUID) */
+                endpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Server or endpoint not found */
             404: {
                 headers: {
                     [name: string]: unknown;
