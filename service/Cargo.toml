@@ -37,7 +37,6 @@ migration-driver = [
     "dep:aithericon-executor-file-ops",
     "dep:aithericon-executor-backend",
     "dep:aithericon-executor-storage",
-    "dep:aithericon-file-metadata",
     "dep:opendal",
     "dep:tokio-util",
     "dep:tempfile",
@@ -190,7 +189,10 @@ aithericon-executor-backend = { path = "../executor/crates/executor-backend", op
 aithericon-executor-storage = { path = "../executor/crates/executor-storage", features = ["opendal"], optional = true }
 # `ChecksumAlgorithm::Sha256` for the probe op's checksum_algo flag (the
 # reconcile join-key linchpin).
-aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", default-features = false, optional = true }
+# Types-only (`default-features = false` → no HDF5/codec/image parser deps): the
+# catalogue read path deserializes stored `file_metadata` JSONB into the real
+# `fmeta` types to build the UI `FileMetadataView` (see catalogue/metadata_view.rs).
+aithericon-file-metadata = { path = "../shared/file-metadata", package = "fmeta", default-features = false }
 opendal = { version = "0.55", default-features = false, optional = true }
 tokio-util = { version = "0.7", optional = true }
 # Synthetic-NAS tempdir tree + probe run_dir. (Also a dev-dep for the test

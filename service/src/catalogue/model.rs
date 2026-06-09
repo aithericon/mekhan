@@ -36,6 +36,26 @@ pub struct CatalogueEntry {
     pub user_metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub catalogued_at: DateTime<Utc>,
+    /// Normalized, UI-facing projection of `file_metadata` (see
+    /// [`crate::catalogue::metadata_view`]). Computed at read time via
+    /// [`CatalogueEntry::hydrate_view`] — NOT a DB column (`#[sqlx(default)]`).
+    /// `None` for rows whose `file_metadata` can't be parsed as
+    /// `fmeta::FileMetadata` (empty/legacy/pre-probe).
+    #[sqlx(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_view: Option<super::metadata_view::FileMetadataView>,
+}
+
+impl CatalogueEntry {
+    /// Populate [`Self::metadata_view`] from `file_metadata`. Every read path
+    /// that fetches entries for the client MUST call this (the value defaults to
+    /// `None` after `FromRow`). New `query_as::<_, CatalogueEntry>` fetch sites
+    /// need the same `.hydrate_view()` pass — grep for it in `queries.rs`.
+    #[must_use]
+    pub fn hydrate_view(mut self) -> Self {
+        self.metadata_view = super::metadata_view::FileMetadataView::from_raw(&self.file_metadata);
+        self
+    }
 }
 
 /// Aggregate statistics.

@@ -4278,6 +4278,16 @@ export interface components {
             /** @description Optional MIME override; otherwise inferred from `filename` extension. */
             mime?: string | null;
         };
+        /**
+         * @description A file-level attribute, unwrapped from the tagged [`AttributeValue`] into a
+         *     flat display value + a `kind` discriminant for optional styling.
+         */
+        AttributeView: {
+            key: string;
+            /** @description One of `string`/`int`/`float`/`bool`/`bytes`/`list`/`null`. */
+            kind: string;
+            value: string;
+        };
         /** @description Authentication configuration. */
         AuthConfig: {
             token?: string | null;
@@ -4772,6 +4782,7 @@ export interface components {
             filename: string;
             id: string;
             job_id?: string | null;
+            metadata_view?: null | components["schemas"]["FileMetadataView"];
             mime_type?: string | null;
             name: string;
             process_id?: string | null;
@@ -4891,6 +4902,15 @@ export interface components {
             tool_call_id?: string | null;
             /** @description For `role: assistant` — the tool calls the model emitted this turn. */
             tool_calls?: components["schemas"]["LlmToolCall"][];
+        };
+        ChecksumView: {
+            algorithm: string;
+            digest: string;
+        };
+        ClassificationView: {
+            category: string;
+            /** Format: double */
+            confidence: number;
         };
         /** @description Outcome of a lifecycle action (`reconnect` / `drain`). */
         ClusterActionResponse: {
@@ -5034,6 +5054,27 @@ export interface components {
         /** @description `GET /api/v1/clusters` response. */
         ClustersResponse: {
             clusters: components["schemas"]["ClusterSummary"][];
+        };
+        ColumnQualityView: {
+            column_name: string;
+            /** Format: double */
+            completeness: number;
+            /** Format: double */
+            distinctness: number;
+            /** Format: double */
+            score: number;
+        };
+        /**
+         * @description A single column in the file's schema, with the type pre-humanized to a
+         *     display string so the frontend never has to interpret a nested `DataType`.
+         */
+        ColumnView: {
+            /** @description Classification tags (e.g. `email`, `ip_address`) with confidence. */
+            classifications?: components["schemas"]["ClassificationView"][];
+            /** @description Humanized type, e.g. `int64`, `timestamp<UTC>`, `list<float64>`. */
+            data_type: string;
+            name: string;
+            nullable: boolean;
         };
         /**
          * @description Typed flavor-neutral core of a job template version. Every field is optional
@@ -5544,6 +5585,14 @@ export interface components {
             /** @description Physical copies (from `file_inventory`, joined by `content_hash`). */
             copies: components["schemas"]["DataCopy"][];
         };
+        DataQualityView: {
+            columns?: components["schemas"]["ColumnQualityView"][];
+            /**
+             * Format: double
+             * @description Mean completeness across scored columns (0.0–1.0).
+             */
+            completeness: number;
+        };
         DeleteConfig: {
             ignore_missing?: boolean;
             path: string;
@@ -5602,6 +5651,29 @@ export interface components {
             resources?: null | components["schemas"]["ResourceConfig"];
             /** @description `datacenter` resource alias. */
             scheduler?: string | null;
+        };
+        /** @description One scalar fact about the format, ready to render as a labelled chip. */
+        DetailField: {
+            /** @description Human-readable label (underscores → spaces). */
+            label: string;
+            /** @description Optional unit appended after the value (e.g. `Hz`, `px`, `kbps`). */
+            unit?: string | null;
+            value: string;
+        };
+        /**
+         * @description A small table flattened out of a nested array in the format details
+         *     (Parquet row groups, archive entries, Zarr hierarchy, …).
+         */
+        DetailTable: {
+            columns: string[];
+            rows: string[][];
+            title: string;
+        };
+        /** @description A named dimension with its size (rows/cols/width/height/depth/time/…). */
+        DimensionView: {
+            name: string;
+            /** Format: int64 */
+            size?: number | null;
         };
         /**
          * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
@@ -5928,6 +6000,33 @@ export interface components {
             /** @description Name of the target port field this mapping fills. */
             targetField: string;
         };
+        /** @description The full UI-facing view of a file's probe metadata. */
+        FileMetadataView: {
+            attributes?: components["schemas"]["AttributeView"][];
+            checksum?: null | components["schemas"]["ChecksumView"];
+            columns?: components["schemas"]["ColumnView"][];
+            data_quality?: null | components["schemas"]["DataQualityView"];
+            details?: null | components["schemas"]["FormatDetailsView"];
+            dimensions?: components["schemas"]["DimensionView"][];
+            encrypted?: boolean | null;
+            family: components["schemas"]["FormatFamily"];
+            /** @description Normalized format name (`csv`, `hdf5`, `fasta`, …). */
+            format: string;
+            mime_type?: string | null;
+            /** Format: date-time */
+            modified_at?: string | null;
+            /** Format: int64 */
+            num_columns?: number | null;
+            /** Format: int64 */
+            num_rows?: number | null;
+            preview?: null | components["schemas"]["PreviewView"];
+            readonly?: boolean;
+            schema_fingerprint?: null | components["schemas"]["SchemaFingerprintView"];
+            /** Format: int64 */
+            size_bytes?: number | null;
+            /** Format: int32 */
+            unix_mode?: number | null;
+        };
         /** @description Tagged enum of all file operations. */
         FileOpsConfig: (components["schemas"]["ProbeConfig"] & {
             /** @enum {string} */
@@ -6157,6 +6256,21 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /**
+         * @description Normalized format-specific block: a discriminant plus the uniform
+         *     fields/tables decomposition of whatever `format_specific` carried.
+         */
+        FormatDetailsView: {
+            fields?: components["schemas"]["DetailField"][];
+            /** @description The `FormatMetadata` discriminant, snake-cased (`image`, `parquet`, …). */
+            kind: string;
+            tables?: components["schemas"]["DetailTable"][];
+        };
+        /**
+         * @description Coarse format family, for icon choice and renderer dispatch on the frontend.
+         * @enum {string}
+         */
+        FormatFamily: "tabular" | "spreadsheet" | "scientific" | "mesh" | "image" | "audio" | "video" | "archive" | "document" | "config" | "unknown";
         /**
          * @description One holder of a live token grant, best-effort decoded from an `allocations`
          *     row. `instance_id` is the owning workflow instance (NULL for pool-management
@@ -8004,6 +8118,7 @@ export interface components {
                 filename: string;
                 id: string;
                 job_id?: string | null;
+                metadata_view?: null | components["schemas"]["FileMetadataView"];
                 mime_type?: string | null;
                 name: string;
                 process_id?: string | null;
@@ -8443,6 +8558,13 @@ export interface components {
              *     them identically once the trigger is registered.
              */
             source: components["schemas"]["TriggerSource"];
+        };
+        PreviewView: {
+            columns: string[];
+            /** @description Rows as display strings (cells stringified once, server-side). */
+            rows: string[][];
+            /** Format: int64 */
+            total_row_count?: number | null;
         };
         ProbeConfig: {
             /**
@@ -9339,6 +9461,11 @@ export interface components {
             last_seen_at?: string | null;
             name: string;
             status: string;
+        };
+        SchemaFingerprintView: {
+            digest: string;
+            /** Format: int32 */
+            version: number;
         };
         /**
          * @description One reachable, producer-attributed reference the guard picker should

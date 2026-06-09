@@ -615,6 +615,9 @@ pub async fn list_process_artifacts(
         qb.build_query_as::<CatalogueEntry>()
             .fetch_all(pool)
             .await?
+            .into_iter()
+            .map(CatalogueEntry::hydrate_view)
+            .collect()
     };
 
     Ok(Paginated::new(entries, count, &params.page))

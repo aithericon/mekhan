@@ -11861,6 +11861,27 @@
           }
         }
       },
+      "AttributeView": {
+        "type": "object",
+        "description": "A file-level attribute, unwrapped from the tagged [`AttributeValue`] into a\nflat display value + a `kind` discriminant for optional styling.",
+        "required": [
+          "key",
+          "value",
+          "kind"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "One of `string`/`int`/`float`/`bool`/`bytes`/`list`/`null`."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "AuthConfig": {
         "oneOf": [
           {
@@ -12875,6 +12896,17 @@
               "null"
             ]
           },
+          "metadata_view": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FileMetadataView",
+                "description": "Normalized, UI-facing projection of `file_metadata` (see\n[`crate::catalogue::metadata_view`]). Computed at read time via\n[`CatalogueEntry::hydrate_view`] — NOT a DB column (`#[sqlx(default)]`).\n`None` for rows whose `file_metadata` can't be parsed as\n`fmeta::FileMetadata` (empty/legacy/pre-probe)."
+              }
+            ]
+          },
           "mime_type": {
             "type": [
               "string",
@@ -13076,6 +13108,37 @@
               "$ref": "#/components/schemas/LlmToolCall"
             },
             "description": "For `role: assistant` — the tool calls the model emitted this turn."
+          }
+        }
+      },
+      "ChecksumView": {
+        "type": "object",
+        "required": [
+          "algorithm",
+          "digest"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          }
+        }
+      },
+      "ClassificationView": {
+        "type": "object",
+        "required": [
+          "category",
+          "confidence"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -13305,6 +13368,60 @@
             "items": {
               "$ref": "#/components/schemas/ClusterSummary"
             }
+          }
+        }
+      },
+      "ColumnQualityView": {
+        "type": "object",
+        "required": [
+          "column_name",
+          "completeness",
+          "distinctness",
+          "score"
+        ],
+        "properties": {
+          "column_name": {
+            "type": "string"
+          },
+          "completeness": {
+            "type": "number",
+            "format": "double"
+          },
+          "distinctness": {
+            "type": "number",
+            "format": "double"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "ColumnView": {
+        "type": "object",
+        "description": "A single column in the file's schema, with the type pre-humanized to a\ndisplay string so the frontend never has to interpret a nested `DataType`.",
+        "required": [
+          "name",
+          "data_type",
+          "nullable"
+        ],
+        "properties": {
+          "classifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassificationView"
+            },
+            "description": "Classification tags (e.g. `email`, `ip_address`) with confidence."
+          },
+          "data_type": {
+            "type": "string",
+            "description": "Humanized type, e.g. `int64`, `timestamp<UTC>`, `list<float64>`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "nullable": {
+            "type": "boolean"
           }
         }
       },
@@ -14565,6 +14682,25 @@
         ],
         "description": "A unified Data-browser row: the full catalogue entry (so the browser can\nrender the same rich artifact card, lineage/provenance/download, schema and\nmetadata the catalogue page did) PLUS its physical copies. The bridge\n`content_hash` is surfaced navigably here — the whole point of consolidating\nthe catalogue + inventory split worlds into one surface."
       },
+      "DataQualityView": {
+        "type": "object",
+        "required": [
+          "completeness"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ColumnQualityView"
+            }
+          },
+          "completeness": {
+            "type": "number",
+            "format": "double",
+            "description": "Mean completeness across scored columns (0.0–1.0)."
+          }
+        }
+      },
       "DeleteConfig": {
         "type": "object",
         "required": [
@@ -14698,6 +14834,79 @@
           }
         ],
         "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a seeded-token (`liveness=seeded`) capacity admission lives under\n  [`DeploymentModel::Executor`]'s `capacity` (the body runs on our executor\n  pool holding the typed lease — R1–R3 machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
+      },
+      "DetailField": {
+        "type": "object",
+        "description": "One scalar fact about the format, ready to render as a labelled chip.",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Human-readable label (underscores → spaces)."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional unit appended after the value (e.g. `Hz`, `px`, `kbps`)."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "DetailTable": {
+        "type": "object",
+        "description": "A small table flattened out of a nested array in the format details\n(Parquet row groups, archive entries, Zarr hierarchy, …).",
+        "required": [
+          "title",
+          "columns",
+          "rows"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "DimensionView": {
+        "type": "object",
+        "description": "A named dimension with its size (rows/cols/width/height/depth/time/…).",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "Dispatch": {
         "type": "string",
@@ -15426,6 +15635,145 @@
           }
         }
       },
+      "FileMetadataView": {
+        "type": "object",
+        "description": "The full UI-facing view of a file's probe metadata.",
+        "required": [
+          "format",
+          "family"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeView"
+            }
+          },
+          "checksum": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChecksumView"
+              }
+            ]
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ColumnView"
+            }
+          },
+          "data_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DataQualityView"
+              }
+            ]
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FormatDetailsView"
+              }
+            ]
+          },
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionView"
+            }
+          },
+          "encrypted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "family": {
+            "$ref": "#/components/schemas/FormatFamily"
+          },
+          "format": {
+            "type": "string",
+            "description": "Normalized format name (`csv`, `hdf5`, `fasta`, …)."
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "num_columns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "num_rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreviewView"
+              }
+            ]
+          },
+          "readonly": {
+            "type": "boolean"
+          },
+          "schema_fingerprint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SchemaFingerprintView"
+              }
+            ]
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "unix_mode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "FileOpsConfig": {
         "oneOf": [
           {
@@ -16061,6 +16409,48 @@
             "format": "uuid"
           }
         }
+      },
+      "FormatDetailsView": {
+        "type": "object",
+        "description": "Normalized format-specific block: a discriminant plus the uniform\nfields/tables decomposition of whatever `format_specific` carried.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailField"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "description": "The `FormatMetadata` discriminant, snake-cased (`image`, `parquet`, …)."
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailTable"
+            }
+          }
+        }
+      },
+      "FormatFamily": {
+        "type": "string",
+        "description": "Coarse format family, for icon choice and renderer dispatch on the frontend.",
+        "enum": [
+          "tabular",
+          "spreadsheet",
+          "scientific",
+          "mesh",
+          "image",
+          "audio",
+          "video",
+          "archive",
+          "document",
+          "config",
+          "unknown"
+        ]
       },
       "GrantHolder": {
         "type": "object",
@@ -20157,6 +20547,17 @@
                     "null"
                   ]
                 },
+                "metadata_view": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FileMetadataView",
+                      "description": "Normalized, UI-facing projection of `file_metadata` (see\n[`crate::catalogue::metadata_view`]). Computed at read time via\n[`CatalogueEntry::hydrate_view`] — NOT a DB column (`#[sqlx(default)]`).\n`None` for rows whose `file_metadata` can't be parsed as\n`fmeta::FileMetadata` (empty/legacy/pre-probe)."
+                    }
+                  ]
+                },
                 "mime_type": {
                   "type": [
                     "string",
@@ -21162,6 +21563,39 @@
           "source": {
             "$ref": "#/components/schemas/TriggerSource",
             "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
+          }
+        }
+      },
+      "PreviewView": {
+        "type": "object",
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "Rows as display strings (cells stringified once, server-side)."
+          },
+          "total_row_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -22761,6 +23195,23 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "SchemaFingerprintView": {
+        "type": "object",
+        "required": [
+          "digest",
+          "version"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

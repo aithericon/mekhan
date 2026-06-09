@@ -2352,6 +2352,8 @@ async fn register_catalogue_entry(
             user_metadata,
             created_at: cmd.created_at,
             catalogued_at: Utc::now(),
+            // Filter-evaluation only; display view is hydrated on the read path.
+            metadata_view: None,
         };
         let matched = subscription_manager.evaluate_new_artifact(&entry).await;
 

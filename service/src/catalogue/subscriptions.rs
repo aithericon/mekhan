@@ -572,6 +572,8 @@ pub fn command_to_entry(cmd: &CatalogueRegisterCommand) -> CatalogueEntry {
         user_metadata: serde_json::to_value(&cmd.user_metadata).unwrap_or_default(),
         created_at: cmd.created_at,
         catalogued_at: Utc::now(),
+        // Filter-evaluation only; the display view is hydrated on the read path.
+        metadata_view: None,
     }
 }
 

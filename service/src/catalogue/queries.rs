@@ -92,6 +92,9 @@ pub async fn list_entries(
         qb.build_query_as::<CatalogueEntry>()
             .fetch_all(pool)
             .await?
+            .into_iter()
+            .map(CatalogueEntry::hydrate_view)
+            .collect()
     };
 
     Ok(Paginated::new(entries, count, &params.page))
@@ -176,6 +179,7 @@ pub async fn get_entry(
     .bind(id)
     .fetch_optional(pool)
     .await
+    .map(|opt| opt.map(CatalogueEntry::hydrate_view))
 }
 
 /// Aggregate statistics, optionally filtered by the same params.
@@ -252,6 +256,7 @@ pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEnt
     .bind(&job_prefix)
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(CatalogueEntry::hydrate_view).collect())
 }
 
 /// Lineage with optional category / render_hint / time-range / limit filters.
@@ -309,6 +314,7 @@ pub async fn lineage_filtered(
     .bind(limit.clamp(1, 5000))
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(CatalogueEntry::hydrate_view).collect())
 }
 
 /// All artifacts for a given process, grouped by step (campaign lineage).

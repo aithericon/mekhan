@@ -321,6 +321,23 @@ use utoipa::OpenApi;
             crate::data::model::DataEntry,
             crate::data::model::UncataloguedFile,
             crate::data::model::DataEntriesResponse,
+            // Normalized probe (`fmeta`) metadata view — reached only through the
+            // `CatalogueEntry.metadata_view` field; register the tree explicitly
+            // so frontend codegen emits matching TS types (see catalogue/metadata_view.rs).
+            crate::catalogue::metadata_view::FileMetadataView,
+            crate::catalogue::metadata_view::FormatFamily,
+            crate::catalogue::metadata_view::FormatDetailsView,
+            crate::catalogue::metadata_view::DetailField,
+            crate::catalogue::metadata_view::DetailTable,
+            crate::catalogue::metadata_view::ColumnView,
+            crate::catalogue::metadata_view::ClassificationView,
+            crate::catalogue::metadata_view::DimensionView,
+            crate::catalogue::metadata_view::AttributeView,
+            crate::catalogue::metadata_view::ChecksumView,
+            crate::catalogue::metadata_view::SchemaFingerprintView,
+            crate::catalogue::metadata_view::PreviewView,
+            crate::catalogue::metadata_view::DataQualityView,
+            crate::catalogue::metadata_view::ColumnQualityView,
         ),
     ),
     tags(

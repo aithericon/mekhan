@@ -332,6 +332,7 @@ mod tests {
             user_metadata: serde_json::Value::Null,
             created_at: chrono::Utc::now(),
             catalogued_at: chrono::Utc::now(),
+            metadata_view: None,
         }
     }
 

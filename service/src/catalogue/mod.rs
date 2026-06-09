@@ -1,4 +1,5 @@
 pub mod handlers;
+pub mod metadata_view;
 pub mod model;
 pub mod protocol;
 pub mod queries;

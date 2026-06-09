@@ -26,6 +26,9 @@
 	import Gauge from '@lucide/svelte/icons/gauge';
 	import LineChart from '@lucide/svelte/icons/line-chart';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
+	import Music from '@lucide/svelte/icons/music';
+	import Film from '@lucide/svelte/icons/film';
+	import DetailTable from './DetailTable.svelte';
 
 	let {
 		entry,
@@ -99,19 +102,6 @@
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(s));
 	}
 
-	// `format` is a string ("xml") OR a tagged object ({"unknown":"fasta"}).
-	function normalizeFormat(f: unknown): string | null {
-		if (!f) return null;
-		if (typeof f === 'string') return f;
-		if (typeof f === 'object') {
-			const o = f as Record<string, unknown>;
-			if ('unknown' in o) return String(o.unknown);
-			const k = Object.keys(o);
-			return k.length ? k[0].toLowerCase() : null;
-		}
-		return String(f);
-	}
-
 	// unix_mode (e.g. 33188) → symbolic perms ("rw-r--r--").
 	function symbolicMode(mode: number): string {
 		const p = mode & 0o777;
@@ -128,13 +118,24 @@
 		return m ? m[1].toLowerCase() : '';
 	}
 
-	// File-type icon: extension/format first (more specific), then category.
+	// File-type icon: format family (authoritative, from the probe) first, then
+	// an extension/format-name heuristic, then category.
 	function fileIcon(): typeof File {
+		switch (family) {
+			case 'image': return Image;
+			case 'audio': return Music;
+			case 'video': return Film;
+			case 'tabular':
+			case 'spreadsheet': return Table;
+			case 'archive': return Archive;
+			case 'config': return Settings2;
+			case 'scientific':
+			case 'mesh': return Box;
+		}
 		const ext = fileExt(entry.name);
-		const fmt = (normalizeFormat(fm.format) ?? '').toLowerCase();
-		const key = ext || fmt;
+		const key = ext || (formatLabel ?? '').toLowerCase();
 		if (['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp'].includes(key)) return Image;
-		if (['csv', 'tsv', 'parquet', 'arrow', 'xlsx'].includes(key) || fm.num_rows != null) return Table;
+		if (['csv', 'tsv', 'parquet', 'arrow', 'xlsx'].includes(key) || numRows != null) return Table;
 		if (['json', 'xml', 'yaml', 'yml', 'toml'].includes(key)) return Braces;
 		if (['fasta', 'fastq', 'fa', 'gb', 'genome', 'vcf'].includes(key)) return Dna;
 		if (['log'].includes(key)) return ScrollText;
@@ -143,16 +144,29 @@
 	}
 
 	// ── Derived data ────────────────────────────────────────────────────────────
-	const fm = $derived((entry.file_metadata ?? {}) as Record<string, any>);
+	// The normalized, UI-facing probe metadata (built server-side in
+	// catalogue/metadata_view.rs). `null` for rows whose `file_metadata` couldn't
+	// be parsed as fmeta::FileMetadata (empty / legacy / pre-probe) — the card
+	// then degrades to size + content hash.
+	const mv = $derived(entry.metadata_view ?? null);
 	const um = $derived((entry.user_metadata ?? {}) as Record<string, unknown>);
-	const formatLabel = $derived(normalizeFormat(fm.format));
-	const schema = $derived(fm.schema_fingerprint as { digest: string; version: number } | undefined);
-	const columns = $derived(fm.columns as { name: string; data_type: unknown }[] | undefined);
-	const details = $derived(fm.format_specific?.details as Record<string, unknown> | undefined);
-	const numRows = $derived(fm.num_rows as number | null | undefined);
-	const numCols = $derived(fm.num_columns as number | null | undefined);
-	const unixMode = $derived(fm.unix_mode as number | undefined);
-	const modifiedAt = $derived(fm.modified_at as string | undefined);
+	const formatLabel = $derived(mv?.format ?? null);
+	const family = $derived(mv?.family ?? null);
+	const schema = $derived(mv?.schema_fingerprint ?? null);
+	const columns = $derived(mv?.columns ?? []);
+	const details = $derived(mv?.details ?? null);
+	// Dims that duplicate a chip shown elsewhere (rows×cols, image width/height in
+	// details) add noise; surface only the interesting ones (z/y/x, lat/lon, …).
+	const REDUNDANT_DIMS = new Set(['rows', 'columns', 'width', 'height']);
+	const dims = $derived((mv?.dimensions ?? []).filter((d) => !REDUNDANT_DIMS.has(d.name)));
+	const attributes = $derived(mv?.attributes ?? []);
+	const preview = $derived(mv?.preview ?? null);
+	const dataQuality = $derived(mv?.data_quality ?? null);
+	const numRows = $derived(mv?.num_rows ?? null);
+	const numCols = $derived(mv?.num_columns ?? null);
+	const unixMode = $derived(mv?.unix_mode ?? null);
+	const modifiedAt = $derived(mv?.modified_at ?? null);
+	const pct = (n: number) => `${Math.round(n * 100)}%`;
 
 	const contentHash = $derived(entry.content_hash ?? null);
 	const shortHash = $derived(contentHash ? contentHash.slice(0, 10) : null);
@@ -179,7 +193,8 @@
 		copies.length > 0 ||
 		!!contentHash || !!entry.entry_id || !!executionId || !!entry.source_net ||
 		!!entry.signal_key || !!entry.process_step || !!schema ||
-		(columns?.length ?? 0) > 0 || !!details || numRows != null ||
+		columns.length > 0 || !!details || numRows != null || dims.length > 0 ||
+		attributes.length > 0 || !!preview || !!dataQuality || unixMode != null ||
 		!!entry.storage_path || Object.keys(um).length > 0
 	);
 	const canToggle = $derived(hasDetails && !!onToggle);
@@ -392,7 +407,7 @@
 			{/if}
 
 			<!-- Format & schema -->
-			{#if formatLabel || schema || details || numRows != null || (columns?.length ?? 0) > 0 || unixMode != null}
+			{#if formatLabel || schema || details || numRows != null || columns.length > 0 || dims.length > 0 || unixMode != null}
 				<section>
 					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Format &amp; schema</h4>
 					<div class="flex flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -402,11 +417,17 @@
 						{#if numRows != null}
 							<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs tabular-nums">{numRows.toLocaleString()} rows × {numCols ?? '?'} cols</span>
 						{/if}
+						{#each dims as d}
+							<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs">
+								<span class="text-muted-foreground">{d.name}:</span>
+								<span class="font-medium text-foreground tabular-nums">{d.size != null ? d.size.toLocaleString() : '∞'}</span>
+							</span>
+						{/each}
 						{#if details}
-							{#each Object.entries(details) as [k, v]}
+							{#each details.fields ?? [] as f}
 								<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs">
-									<span class="text-muted-foreground">{k.replace(/_/g, ' ')}:</span>
-									<span class="font-medium text-foreground">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+									<span class="text-muted-foreground">{f.label}:</span>
+									<span class="font-medium text-foreground">{f.value}{f.unit ? ` ${f.unit}` : ''}</span>
 								</span>
 							{/each}
 						{/if}
@@ -421,16 +442,71 @@
 							>schema {schema.digest}</button>
 						{/if}
 					</div>
-					{#if columns && columns.length > 0}
+
+					{#if columns.length > 0}
 						<div class="mt-2 flex flex-wrap gap-1">
 							{#each columns as col}
 								<span class="inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-xs">
 									<span class="font-medium text-foreground">{col.name}</span>
-									<span class="text-muted-foreground">{typeof col.data_type === 'string' ? col.data_type : JSON.stringify(col.data_type)}</span>
+									<span class="text-muted-foreground">{col.data_type}{col.nullable ? '?' : ''}</span>
+									{#each col.classifications ?? [] as tag}
+										<span class="rounded-sm bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400" title="{pct(tag.confidence)} confidence">{tag.category}</span>
+									{/each}
 								</span>
 							{/each}
 						</div>
 					{/if}
+
+					{#if details}
+						{#each details.tables ?? [] as t}
+							<DetailTable title={t.title} columns={t.columns} rows={t.rows} />
+						{/each}
+					{/if}
+				</section>
+			{/if}
+
+			<!-- Preview (first rows of tabular data) -->
+			{#if preview && preview.rows.length > 0}
+				<section>
+					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+						Preview
+						{#if preview.total_row_count != null}
+							<span class="ml-1 font-normal normal-case text-muted-foreground/70">of {preview.total_row_count.toLocaleString()} rows</span>
+						{/if}
+					</h4>
+					<DetailTable columns={preview.columns} rows={preview.rows} />
+				</section>
+			{/if}
+
+			<!-- Data quality -->
+			{#if dataQuality}
+				<section>
+					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Data quality</h4>
+					<div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs">
+						<span class="rounded border border-border bg-background px-1.5 py-0.5">
+							<span class="text-muted-foreground">completeness:</span>
+							<span class="font-medium text-foreground tabular-nums">{pct(dataQuality.completeness)}</span>
+						</span>
+					</div>
+					{#if (dataQuality.columns ?? []).length > 0}
+						<DetailTable
+							columns={['column', 'completeness', 'distinctness', 'score']}
+							rows={(dataQuality.columns ?? []).map((c) => [c.column_name, pct(c.completeness), pct(c.distinctness), pct(c.score)])}
+						/>
+					{/if}
+				</section>
+			{/if}
+
+			<!-- File attributes (author, conventions, …) -->
+			{#if attributes.length > 0}
+				<section>
+					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Attributes</h4>
+					<dl class="grid grid-cols-[10rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+						{#each attributes as a}
+							<dt class="truncate text-muted-foreground" title={a.key}>{a.key}</dt>
+							<dd class="min-w-0 truncate font-mono text-foreground" title={a.value}>{a.value}</dd>
+						{/each}
+					</dl>
 				</section>
 			{/if}
 
