@@ -1,0 +1,213 @@
+{
+  "nodes": [
+    {
+      "id": "cron",
+      "type": "trigger",
+      "position": { "x": -300, "y": 40 },
+      "data": {
+        "type": "trigger",
+        "label": "Every 15 min",
+        "description": "Cron trigger. Fires the workflow on a fixed schedule (default `0 */15 * * * *` — every 15 minutes, UTC). NOTE: the engine's cron parser expects a 6-field expression (leading seconds field), not the 5-field crontab form. The cron source exposes `fire_time` and `scheduled_time`; `payloadMapping` forwards `fire_time` onto the Start `fire_time` field so the alert email can report when the check ran.",
+        "source": {
+          "kind": "cron",
+          "schedule": "0 */15 * * * *",
+          "timezone": "UTC",
+          "jitterSecs": 0,
+          "catchup": "skip_missed"
+        },
+        "concurrency": "skip",
+        "payloadMapping": [
+          { "targetField": "fire_time", "expression": "fire_time" }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 44 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Loki Error Alert",
+        "initial": {
+          "id": "in",
+          "label": "Scheduled run",
+          "fields": [
+            {
+              "name": "fire_time",
+              "label": "Scheduled fire time",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "query_logs",
+      "type": "automated_step",
+      "slug": "query_logs",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Query Error Logs",
+        "description": "Loki `query_range` backend. Runs the LogQL query `{nomad_task=~\".+\"} |~ \"(?i)(error|fatal|panic|exception)\"` against the `aithericon_loki` resource over a 15m lookback window (`since: 15m`, end defaults to now), `limit: 40`, `direction: backward`. The matcher selects every Nomad task and the line filter keeps only error-level lines (case-insensitive). `limit` is kept small (40) on purpose: the full entry envelope (line + labels per match) is fed to the downstream Agent, and a few hundred entries overflow a typical 32K-token model context. The query is static (no `{{ }}` placeholders), so it passes through verbatim. Output is the fixed Loki envelope: `entries` (array of {ts, line, labels}), `entry_count`, `series`, `result_type`, `stats`.",
+        "executionSpec": {
+          "backendType": "loki",
+          "config": {
+            "resource_alias": "aithericon_loki",
+            "operation": "query_range",
+            "query": "{nomad_task=~\".+\"} |~ \"(?i)(error|fatal|panic|exception)\"",
+            "since": "15m",
+            "limit": 40,
+            "direction": "backward"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Logs",
+          "fields": [
+            { "name": "entries", "label": "Entries", "kind": "json" },
+            { "name": "entry_count", "label": "Entry count", "kind": "number" },
+            { "name": "series", "label": "Series", "kind": "json" },
+            { "name": "result_type", "label": "Result type", "kind": "text" },
+            { "name": "stats", "label": "Stats", "kind": "json" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 1,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "summarize",
+      "type": "agent",
+      "slug": "summarize",
+      "position": { "x": 610, "y": 0 },
+      "data": {
+        "type": "agent",
+        "label": "Summarize Errors",
+        "description": "Single-shot Agent (maxTurns 1, no tools — the degenerate LLM path). Reads the matched error log entries from the upstream Loki step (`{{ query_logs.entries }}` / `{{ query_logs.entry_count }}`, resolved via a synthesized read-arc) and writes a concise incident summary: how many lines matched, which tasks/services are affected, the most likely root cause, and a one-line recommended action. The summary is parked in the agent's `response` output for the SMTP step to template against. Bound to the in-cluster inference router via `provider: internal` + `resourceAlias: internal_pool_router` (the GDPR-safe internal binding — inference never escapes off-router; the compiler remaps it to the OpenAI-compatible wire shape). `model` is `qwen3.5:9b`, curated in `internal_pool_registry` and seeded loaded in `model_states`.",
+        "model": {
+          "provider": "internal",
+          "model": "qwen3.5:9b",
+          "resourceAlias": "internal_pool_router",
+          "temperature": 0
+        },
+        "systemPrompt": "You are an SRE on-call assistant. You receive raw error-level log lines pulled from a Grafana Loki instance and turn them into a short, scannable incident summary for an alert email. Be concise and factual — no preamble. Structure your reply as: (1) one headline sentence with the total count and the time window; (2) a short bulleted list grouping the errors by affected task/service with the dominant error pattern for each; (3) the single most likely root cause; (4) one recommended next action. If there are no entries, say clearly that no error-level logs were found in the window.",
+        "userPrompt": "Error-log scan for the Aithericon cluster (last 15 minutes, run at {{ start.fire_time }}).\n\nMatched lines: {{ query_logs.entry_count }}\n\nEntries (newest first):\n{{ query_logs.entries }}\n\nWrite the incident summary.",
+        "maxTurns": 1,
+        "retryPolicy": {
+          "maxRetries": 1,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "send_alert",
+      "type": "automated_step",
+      "slug": "send_alert",
+      "position": { "x": 920, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Send Alert Email",
+        "description": "SMTP backend with Tera templates. Subject + plain-text + HTML bodies are rendered against the upstream Loki count and the agent's summary (`{{ summarize.response }}`). The transport (host/port/auth/from) comes from the workspace resource `mail`, bound at launch time. Recipient is hard-coded to the on-call address; edit `to` or promote it to a Start field to change it. Dry-run is off.",
+        "executionSpec": {
+          "backendType": "smtp",
+          "config": {
+            "resource_alias": "mail",
+            "to": ["oncall@aithericon.local"],
+            "cc": [],
+            "bcc": [],
+            "subject": {
+              "label": "subject.tera",
+              "source": "[ALERT] {{ query_logs.entry_count }} error log line(s) in the Aithericon cluster"
+            },
+            "body_text": {
+              "label": "body.txt.tera",
+              "source": "Aithericon cluster error-log alert\n\nScan time: {{ start.fire_time }}\nWindow: last 15 minutes\nMatched lines: {{ query_logs.entry_count }}\n\n{{ summarize.response }}\n\n— Aithericon monitoring (Loki Error-Log Alert)\n"
+            },
+            "body_html": {
+              "label": "body.html.tera",
+              "source": "<!DOCTYPE html>\n<html><body>\n<h2>Aithericon cluster error-log alert</h2>\n<p><strong>Scan time:</strong> {{ start.fire_time }}<br>\n<strong>Window:</strong> last 15 minutes<br>\n<strong>Matched lines:</strong> {{ query_logs.entry_count }}</p>\n<hr>\n<pre style=\"white-space:pre-wrap;font-family:inherit\">{{ summarize.response }}</pre>\n<hr>\n<p style=\"color:#888\">— Aithericon monitoring (Loki Error-Log Alert)</p>\n</body></html>\n"
+            },
+            "attachments": [],
+            "dry_run": false,
+            "vars": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "outcome", "label": "Outcome", "kind": "json" },
+            { "name": "subject", "label": "Subject", "kind": "text" },
+            { "name": "body_text_preview", "label": "Body (text)", "kind": "textarea" },
+            { "name": "body_html_preview", "label": "Body (html)", "kind": "textarea" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 2,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1230, "y": 34 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "entry_count", "expression": "query_logs.entry_count" },
+          { "targetField": "outcome", "expression": "send_alert.outcome" },
+          { "targetField": "subject", "expression": "send_alert.subject" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_cron_start",
+      "source": "cron",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_start_query",
+      "source": "start",
+      "target": "query_logs",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_query_summarize",
+      "source": "query_logs",
+      "target": "summarize",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_summarize_send",
+      "source": "summarize",
+      "sourceHandle": "out",
+      "target": "send_alert",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_send_end",
+      "source": "send_alert",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}
