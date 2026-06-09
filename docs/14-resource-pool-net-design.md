@@ -16,6 +16,11 @@
 > (a shared-stack restart to load the M3 mekhan was deferred — see "Run the
 > showcase"). Prototype plan: `~/.claude/plans/please-plan-a-evaluatable-abstract-lampson.md`.
 
+> **Plane vocabulary (2026-06-09).** The pool net is the allocation plane's
+> rich-eligibility home ([35](35-allocation-and-traffic-planes.md) §1); the
+> claim contract's grant output is the dispatch address — the seam to the
+> traffic plane (35 §2).
+
 ## Thesis: resources are places, claims are tokens
 
 A pool of N units of some scarce infrastructure (GPUs, LLM inference slots, lab

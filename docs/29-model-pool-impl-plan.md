@@ -6,6 +6,12 @@ and the router data-plane spec [`11-inference-router.md`](./11-inference-router.
 Follows the repo's design+impl-plan pairing convention (cf. [`26`](./26-motion-planning.md)
 design + [`27`](./27-motion-planning-impl-plan.md) impl plan).
 
+> **Plane vocabulary (2026-06-09).** Per [35](35-allocation-and-traffic-planes.md):
+> the "exclusivity=consume → no admission net" reasoning in §0 reaches the right
+> conclusion (no net for inference) for a reason now stated differently —
+> inference is traffic-plane, and the engine only holds. The plan's contents are
+> unaffected.
+
 ## 0. How this relates to docs 28 / 11 / 21 / 23 / 24
 
 | Doc | Relationship |
@@ -13,7 +19,7 @@ design + [`27`](./27-motion-planning-impl-plan.md) impl plan).
 | **28** (design) | This plan is its executable form. doc 28 §12 lists phases P1–P5; this plan adds a **Router-MVP** phase (doc 11's data plane) that doc 28 P1 pairs with, and turns each design phase into new/edited files, migrations, DTOs, NATS subjects, tests, and live verification. |
 | **11** (router spec) | The Router-MVP phase here **is** doc 11 Phase 1 + parts of Phase 2, with the GDPR amendments applied (no auto external offload; residency hard-filter). doc 11 §5.7 metering, §5.5 cancel, §5.8 autoscale-signal are realized across Router-MVP + P5. |
 | **21** (lab-runner fleet) | Built substrate reused verbatim: runner enroll (`rt_`/`rnr_` tokens), scoped NATS JWT (`runner.{id}.>` SUB + `runner.{id}.presence` PUB), interface catalog (`POST /api/v1/runners/{id}/interfaces`), ClassAd `satisfies()`. P2 enrolls the model-server node on this plane; P3 generalizes its presence-pool net. |
-| **23 / 24** (unified capacity) | `CapacityAxes::backend()` / `axes_for_resource` is the single dispatch authority. LLM serving is `exclusivity=consume` → `CapacityBackend::Deferred` → **no admission net** — so the new `model_registry` / `model_policy` resource kinds are *plain typed config*, not capacity backends. The Control-Plane read surface (`GET /api/v1/capacities`) and resource CRUD are reused unchanged. |
+| **23 / 24** (unified capacity) | `CapacityAxes::backend()` / `axes_for_resource` is the single dispatch authority. LLM serving is `exclusivity=consume` → `CapacityBackend::Deferred` → **no admission net** — so the new `model_registry` / `model_policy` resource kinds are *plain typed config*, not capacity backends. The Control-Plane read surface (`GET /api/v1/capacities`) and resource CRUD are reused unchanged. *Vocabulary note: see the plane-vocabulary banner above — same conclusion, now derived from inference being traffic-plane ([35](35-allocation-and-traffic-planes.md)).* |
 
 The two load-bearing invariants threaded through every phase: **(1) inference
 never crosses the engine Petri net** (conventional OpenAI HTTP → router), and

@@ -15,6 +15,8 @@ org-scoped control plane: datacenters / job-templates / secrets), the resource
 model (`shared/resources`, docs implicit in `service/src/petri/resource_resolver.rs`),
 and the existing scheduler bridges in `engine/core-engine/crates/{nomad,slurm}`.
 
+**Plane vocabulary (2026-06-09).** Allocation-plane doc per [35](35-allocation-and-traffic-planes.md): the scheduler connection grants and holds allocations; jobs submitted onto a held allocation are traffic.
+
 ## Thesis
 
 A Slurm/Nomad **connection** is a resource. It has exactly the shape every

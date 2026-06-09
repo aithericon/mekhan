@@ -7,6 +7,8 @@
 > *offered* to eligible available members, a member *claims* it, does it, and
 > *completes* it — all engine-authoritative, with the inbox a pure projection.
 
+**Terminology (2026-06-09).** 'Offer discipline' here = Acceptance::consent in the consolidated model ([35](35-allocation-and-traffic-planes.md) §4). This build spec is unaffected: the §0 insight (the consumer scaffold is discipline-agnostic) is exactly 35's claim that acceptance is an allocation-plane property invisible to the traffic plane.
+
 This doc records the concrete decisions + topology. docs/33 holds the rationale;
 this is the implementation contract every builder follows.
 

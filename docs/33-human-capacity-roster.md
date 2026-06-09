@@ -12,6 +12,14 @@
 > matching code", and made a partitioned team-queue the primary path. All three
 > were overturned in design review (2026-06-07); §2 records what is actually true.
 
+> **Axis reframe (2026-06-09, [35](35-allocation-and-traffic-planes.md) §4).**
+> Dispatch::Offer (§3) is re-understood as Acceptance::consent: the dispatch
+> axis is deleted (pull/push derives from the backend) and the offer handshake
+> is the consent value of the new acceptance axis — bilateral eligibility,
+> resolving doc 23 §9.5. The net topology, the t_claim inversion (§4), and
+> everything downstream are unchanged; only the classification moves. Code
+> rename pending.
+
 ## 1. Thesis
 
 The consolidated capacity model is ready to absorb humans **without a new backend
@@ -36,6 +44,10 @@ the one new dispatch value:
 ```
 presence · offer · hold · presence_driven · predicate
 ```
+
+*Post-reframe ([35](35-allocation-and-traffic-planes.md) §4): `offer` here maps
+to `acceptance = consent`, and `hold` is implicit (the engine only does hold,
+35 §3) — the composition reads `presence · consent · presence_driven · predicate`.*
 
 Everything else — the matcher, the presence pool net, the presence controller,
 the claim/release handshake, the projection-backed inbox, the identity directory —
@@ -116,6 +128,9 @@ has **no capacity binding at all** — it is a bare `request → signal → fina
 
 `Dispatch` today is `Pull | Push` (`service/src/models/capacity.rs`). Add a third:
 
+*Reframed as `Acceptance::consent` by [35](35-allocation-and-traffic-planes.md) §4;
+shown below as designed/built, pre-rename.*
+
 ```rust
 pub enum Dispatch {
     Pull,   // capacity pulls off a broker queue (competing consumers, no matcher)
@@ -132,6 +147,10 @@ unit-initiated event**, not on every message. Match-once-then-bind is the answer
 the footgun, not the footgun.
 
 ### 3.1 Axis interactions
+
+*Post-reframe, these `validate()` rules mostly derive from the single
+`consent ⇒ presence ∧ predicate` invariant ([35](35-allocation-and-traffic-planes.md) §6);
+note 35 §4 also tightens away `offer × lease`.*
 
 - **`backend()`** is unchanged for `offer`: `presence · offer` still resolves to the
   `Presence` backend. What changes is that the **pool-net builder must read the
