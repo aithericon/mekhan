@@ -85,7 +85,7 @@
     {
       "id": "review",
       "type": "human_task",
-      "position": { "x": 290, "y": 10 },
+      "position": { "x": 290, "y": 14 },
       "data": {
         "type": "human_task",
         "label": "Review",

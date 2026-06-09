@@ -24,7 +24,7 @@
       "id": "emit",
       "type": "automated_step",
       "slug": "emit",
-      "position": { "x": 290, "y": 6 },
+      "position": { "x": 290, "y": 11 },
       "data": {
         "type": "automated_step",
         "label": "Write + log observation artifact",
@@ -53,7 +53,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 600, "y": 20 },
+      "position": { "x": 600, "y": 27 },
       "data": {
         "type": "end",
         "label": "Done",

@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 133 },
+      "position": { "x": 0, "y": 153 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -15,7 +15,7 @@
       "id": "add_obstacle",
       "type": "automated_step",
       "slug": "add_obstacle",
-      "position": { "x": 190, "y": 89 },
+      "position": { "x": 190, "y": 104 },
       "data": {
         "type": "automated_step",
         "label": "Add Collision Object (MoveIt scene)",
@@ -74,7 +74,7 @@
       "id": "plan_pose",
       "type": "automated_step",
       "slug": "plan_pose",
-      "position": { "x": 500, "y": 49 },
+      "position": { "x": 500, "y": 50 },
       "data": {
         "type": "automated_step",
         "label": "Plan to Pose (MoveIt, around obstacle)",
@@ -135,7 +135,7 @@
       "id": "gate",
       "type": "decision",
       "slug": "gate",
-      "position": { "x": 810, "y": 95 },
+      "position": { "x": 810, "y": 117 },
       "data": {
         "type": "decision",
         "label": "Plan acceptable?",
@@ -154,7 +154,7 @@
       "id": "execute",
       "type": "automated_step",
       "slug": "execute",
-      "position": { "x": 1120, "y": 172 },
+      "position": { "x": 1120, "y": 198 },
       "data": {
         "type": "automated_step",
         "label": "Execute Trajectory (Path B)",
@@ -198,7 +198,7 @@
       "id": "read_state",
       "type": "automated_step",
       "slug": "read_state",
-      "position": { "x": 1430, "y": 132 },
+      "position": { "x": 1430, "y": 144 },
       "data": {
         "type": "automated_step",
         "label": "Read Joint State",
@@ -241,7 +241,7 @@
       "id": "cleanup",
       "type": "automated_step",
       "slug": "cleanup",
-      "position": { "x": 1740, "y": 162 },
+      "position": { "x": 1740, "y": 185 },
       "data": {
         "type": "automated_step",
         "label": "Clear Planning Scene",
@@ -279,7 +279,7 @@
     {
       "id": "end-done",
       "type": "end",
-      "position": { "x": 2050, "y": 136 },
+      "position": { "x": 2050, "y": 147 },
       "data": {
         "type": "end",
         "label": "Done",

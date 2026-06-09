@@ -3,7 +3,7 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 0, "y": 544 },
+      "position": { "x": 0, "y": 639 },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -28,7 +28,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 250, "y": 524 },
+      "position": { "x": 250, "y": 612 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -57,7 +57,7 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": { "x": 540, "y": 500 },
+      "position": { "x": 540, "y": 582 },
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
@@ -107,7 +107,7 @@
     {
       "id": "classify",
       "type": "agent",
-      "position": { "x": 850, "y": 480 },
+      "position": { "x": 850, "y": 558 },
       "data": {
         "type": "agent",
         "label": "Classify (vision LLM)",
@@ -175,7 +175,7 @@
     {
       "id": "route-by-class",
       "type": "decision",
-      "position": { "x": 1180, "y": 484 },
+      "position": { "x": 1180, "y": 580 },
       "data": {
         "type": "decision",
         "label": "Route by class",
@@ -208,7 +208,7 @@
     {
       "id": "extract-bloodwork",
       "type": "agent",
-      "position": { "x": 1490, "y": 960 },
+      "position": { "x": 1490, "y": 1116 },
       "data": {
         "type": "agent",
         "label": "Extract — Bloodwork",
@@ -239,7 +239,7 @@
     {
       "id": "extract-prescription",
       "type": "agent",
-      "position": { "x": 1490, "y": 720 },
+      "position": { "x": 1490, "y": 837 },
       "data": {
         "type": "agent",
         "label": "Extract — Prescription",
@@ -270,7 +270,7 @@
     {
       "id": "extract-clinical-note",
       "type": "agent",
-      "position": { "x": 1490, "y": 480 },
+      "position": { "x": 1490, "y": 558 },
       "data": {
         "type": "agent",
         "label": "Extract — Clinical Note",
@@ -301,7 +301,7 @@
     {
       "id": "extract-form-fields",
       "type": "agent",
-      "position": { "x": 1490, "y": 240 },
+      "position": { "x": 1490, "y": 279 },
       "data": {
         "type": "agent",
         "label": "Extract — Form Fields",
@@ -364,7 +364,7 @@
       "id": "merge-extraction",
       "type": "join",
       "slug": "extraction",
-      "position": { "x": 1820, "y": 544 },
+      "position": { "x": 1820, "y": 639 },
       "data": {
         "type": "join",
         "label": "Merge branches",
@@ -387,7 +387,7 @@
     {
       "id": "persist",
       "type": "automated_step",
-      "position": { "x": 2060, "y": 490 },
+      "position": { "x": 2060, "y": 569 },
       "data": {
         "type": "automated_step",
         "label": "Persist",
@@ -439,7 +439,7 @@
     {
       "id": "verify",
       "type": "automated_step",
-      "position": { "x": 2370, "y": 490 },
+      "position": { "x": 2370, "y": 569 },
       "data": {
         "type": "automated_step",
         "label": "Verify citations",
@@ -491,7 +491,7 @@
     {
       "id": "gate",
       "type": "decision",
-      "position": { "x": 2680, "y": 526 },
+      "position": { "x": 2680, "y": 622 },
       "data": {
         "type": "decision",
         "label": "Needs review?",
@@ -509,7 +509,7 @@
     {
       "id": "review",
       "type": "human_task",
-      "position": { "x": 3000, "y": 620 },
+      "position": { "x": 3000, "y": 725 },
       "data": {
         "type": "human_task",
         "label": "Medical-assistant review",
@@ -521,7 +521,7 @@
     {
       "id": "end-reviewed",
       "type": "end",
-      "position": { "x": 3280, "y": 570 },
+      "position": { "x": 3280, "y": 657 },
       "data": {
         "type": "end",
         "label": "Reviewed",
@@ -552,7 +552,7 @@
     {
       "id": "end-clean",
       "type": "end",
-      "position": { "x": 2990, "y": 428 },
+      "position": { "x": 2990, "y": 500 },
       "data": {
         "type": "end",
         "label": "Auto-approved",

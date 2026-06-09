@@ -4,7 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": { "x": 0, "y": 262 },
+      "position": { "x": 0, "y": 539 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -18,7 +18,7 @@
       "slug": "cell",
       "position": { "x": 190, "y": 0 },
       "width": 2506,
-      "height": 560,
+      "height": 1122,
       "data": {
         "type": "lease_scope",
         "label": "xArm Cell Lease",
@@ -36,9 +36,9 @@
       "type": "map",
       "slug": "seed_inventory",
       "parentId": "lease",
-      "position": { "x": 636, "y": 202 },
+      "position": { "x": 636, "y": 475 },
       "width": 272,
-      "height": 172,
+      "height": 189,
       "data": {
         "type": "map",
         "label": "Seed Inventory into Scene",
@@ -115,7 +115,7 @@
       "type": "automated_step",
       "slug": "reset_scene",
       "parentId": "lease",
-      "position": { "x": 16, "y": 216 },
+      "position": { "x": 16, "y": 485 },
       "data": {
         "type": "automated_step",
         "label": "Reset Scene (clear move_group)",
@@ -150,7 +150,7 @@
       "type": "automated_step",
       "slug": "home_arm",
       "parentId": "lease",
-      "position": { "x": 326, "y": 226 },
+      "position": { "x": 326, "y": 499 },
       "data": {
         "type": "automated_step",
         "label": "Home Arm (reference config)",
@@ -190,7 +190,7 @@
       "type": "automated_step",
       "slug": "load_jobs",
       "parentId": "lease",
-      "position": { "x": 978, "y": 216 },
+      "position": { "x": 978, "y": 485 },
       "data": {
         "type": "automated_step",
         "label": "Load Jobs → array",
@@ -222,7 +222,7 @@
       "parentId": "lease",
       "position": { "x": 1288, "y": 32 },
       "width": 1202,
-      "height": 512,
+      "height": 1074,
       "data": {
         "type": "loop",
         "label": "Handle Jobs (sequential)",
@@ -237,7 +237,7 @@
       "type": "automated_step",
       "slug": "resolve_poses",
       "parentId": "handle_jobs",
-      "position": { "x": 16, "y": 142 },
+      "position": { "x": 16, "y": 461 },
       "data": {
         "type": "automated_step",
         "label": "Resolve Job Poses",
@@ -277,7 +277,7 @@
       "type": "decision",
       "slug": "op_gate",
       "parentId": "handle_jobs",
-      "position": { "x": 326, "y": 184 },
+      "position": { "x": 326, "y": 527 },
       "data": {
         "type": "decision",
         "label": "Dispatch on op",
@@ -302,7 +302,7 @@
       "type": "sub_workflow",
       "slug": "do_pick",
       "parentId": "handle_jobs",
-      "position": { "x": 636, "y": 352 },
+      "position": { "x": 636, "y": 776 },
       "data": {
         "type": "sub_workflow",
         "label": "Pick (37)",
@@ -329,7 +329,7 @@
       "type": "sub_workflow",
       "slug": "do_place",
       "parentId": "handle_jobs",
-      "position": { "x": 636, "y": 192 },
+      "position": { "x": 636, "y": 458 },
       "data": {
         "type": "sub_workflow",
         "label": "Place (38)",
@@ -386,7 +386,7 @@
       "type": "automated_step",
       "slug": "mark_done",
       "parentId": "handle_jobs",
-      "position": { "x": 946, "y": 192 },
+      "position": { "x": 946, "y": 529 },
       "data": {
         "type": "automated_step",
         "label": "Mark Job Done",
@@ -416,7 +416,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 2766, "y": 222 },
+      "position": { "x": 2766, "y": 494 },
       "data": {
         "type": "end",
         "label": "Done",

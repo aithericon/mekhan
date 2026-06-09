@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 10, "y": 108 },
+      "position": { "x": 10, "y": 138 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -46,7 +46,7 @@
     {
       "id": "lookup_order",
       "type": "sub_workflow",
-      "position": { "x": 0, "y": 240 },
+      "position": { "x": 0, "y": 282 },
       "data": {
         "type": "sub_workflow",
         "label": "lookup_order",
@@ -67,7 +67,7 @@
     {
       "id": "collect_feedback",
       "type": "sub_workflow",
-      "position": { "x": 0, "y": 420 },
+      "position": { "x": 0, "y": 546 },
       "data": {
         "type": "sub_workflow",
         "label": "collect_feedback",
@@ -87,7 +87,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 640, "y": 98 },
+      "position": { "x": 640, "y": 125 },
       "data": {
         "type": "end",
         "label": "Done",

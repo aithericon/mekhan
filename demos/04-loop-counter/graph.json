@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 68 },
+      "position": { "x": 0, "y": 73 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -20,7 +20,7 @@
       "type": "loop",
       "position": { "x": 190, "y": 0 },
       "width": 272,
-      "height": 172,
+      "height": 189,
       "data": {
         "type": "loop",
         "label": "Iterate",
@@ -62,7 +62,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 532, "y": 38 },
+      "position": { "x": 532, "y": 41 },
       "data": {
         "type": "end",
         "label": "Done",

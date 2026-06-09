@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 100 },
+      "position": { "x": 0, "y": 80 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -19,7 +19,7 @@
       "id": "move",
       "type": "automated_step",
       "slug": "move",
-      "position": { "x": 280, "y": 100 },
+      "position": { "x": 190, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Move (trajectory action + live twin stream)",
@@ -147,7 +147,7 @@
       "id": "twin_view",
       "type": "automated_step",
       "slug": "twin_view",
-      "position": { "x": 980, "y": 100 },
+      "position": { "x": 756, "y": 0 },
       "data": {
         "type": "automated_step",
         "label": "Twin view (drain joint stream)",
@@ -191,7 +191,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1340, "y": 100 },
+      "position": { "x": 1066, "y": 48 },
       "data": {
         "type": "end",
         "label": "Done",

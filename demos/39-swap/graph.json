@@ -27,7 +27,7 @@
     {
       "id": "pick_occupant",
       "type": "sub_workflow",
-      "position": { "x": 290, "y": 46 },
+      "position": { "x": 290, "y": 8 },
       "data": {
         "type": "sub_workflow",
         "label": "Pick Occupant (from port)",
@@ -52,7 +52,7 @@
     {
       "id": "place_occupant",
       "type": "sub_workflow",
-      "position": { "x": 600, "y": 56 },
+      "position": { "x": 600, "y": 8 },
       "data": {
         "type": "sub_workflow",
         "label": "Place Occupant (into temp slot)",
@@ -76,7 +76,7 @@
     {
       "id": "pick_new",
       "type": "sub_workflow",
-      "position": { "x": 910, "y": 46 },
+      "position": { "x": 910, "y": 8 },
       "data": {
         "type": "sub_workflow",
         "label": "Pick New (from rack)",
@@ -101,7 +101,7 @@
     {
       "id": "place_new",
       "type": "sub_workflow",
-      "position": { "x": 1220, "y": 56 },
+      "position": { "x": 1220, "y": 8 },
       "data": {
         "type": "sub_workflow",
         "label": "Place New (into port)",
@@ -125,7 +125,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1530, "y": 70 },
+      "position": { "x": 1530, "y": 95 },
       "data": {
         "type": "end",
         "label": "Swapped",

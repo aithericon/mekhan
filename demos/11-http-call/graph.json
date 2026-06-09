@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 104 },
+      "position": { "x": 0, "y": 130 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -19,7 +19,7 @@
       "id": "intake",
       "type": "human_task",
       "slug": "intake",
-      "position": { "x": 190, "y": 74 },
+      "position": { "x": 190, "y": 101 },
       "data": {
         "type": "human_task",
         "label": "Intake",
@@ -108,7 +108,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 770, "y": 64 },
+      "position": { "x": 770, "y": 84 },
       "data": {
         "type": "end",
         "label": "Done",

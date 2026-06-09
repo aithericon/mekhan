@@ -137,10 +137,36 @@
 	function isContainer(t: string | undefined): boolean {
 		return t === 'scope' || t === 'lease_scope' || t === 'loop' || t === 'timeout' || t === 'map';
 	}
-	function containerSort<T extends { type: string }>(a: T, b: T): number {
-		if (isContainer(a.type) && !isContainer(b.type)) return -1;
-		if (!isContainer(a.type) && isContainer(b.type)) return 1;
-		return 0;
+
+	/**
+	 * Order nodes so every parent precedes its descendants. xyflow derives a
+	 * child's absolute position by adding its parent's, which REQUIRES the parent
+	 * to come first in the nodes array — otherwise the child renders at its raw
+	 * parent-relative coordinates (the parent offset is silently dropped), which
+	 * looks like the child escaping its container.
+	 *
+	 * The stored graph order is arbitrary w.r.t. nesting — a nested container
+	 * (e.g. a loop INSIDE a lease scope) routinely appears before its parent. A
+	 * flat "containers first" partition does NOT fix this: it keeps two
+	 * sibling-ordered containers in their (wrong) input order, so the inner
+	 * container can still land ahead of its outer parent. Sorting by nesting
+	 * depth (ancestor count) is the robust fix — depth 0 (top level) first, then
+	 * each level — and a stable sort preserves sibling order within a level.
+	 */
+	function orderByNesting<T extends { id: string; parentId?: string | null }>(list: T[]): T[] {
+		const byId = new Map(list.map((n) => [n.id, n]));
+		const depthOf = (n: T): number => {
+			let d = 0;
+			let pid = n.parentId;
+			const seen = new Set<string>();
+			while (pid && byId.has(pid) && !seen.has(pid)) {
+				seen.add(pid);
+				d += 1;
+				pid = byId.get(pid)!.parentId;
+			}
+			return d;
+		};
+		return [...list].sort((a, b) => depthOf(a) - depthOf(b));
 	}
 
 	// World position of a node, walking up the parent chain. Used by drop
@@ -231,7 +257,7 @@
 	}
 
 	function toFlowNodes(g: WorkflowGraph): Node[] {
-		const sorted = [...g.nodes].sort(containerSort);
+		const sorted = orderByNesting(g.nodes);
 		return sorted.map((n) => ({
 			id: n.id,
 			type: n.type,
@@ -274,7 +300,7 @@
 		if (graph !== lastGraphRef) {
 			lastGraphRef = graph;
 			const currentNodes = new Map(nodes.map((n) => [n.id, n]));
-			const sorted = [...graph.nodes].sort(containerSort);
+			const sorted = orderByNesting(graph.nodes);
 			nodes = sorted.map((n) => {
 				const existing = currentNodes.get(n.id);
 				return {
@@ -504,7 +530,11 @@
 			data: n.data as WorkflowNodeData,
 			parentId: n.parentId,
 			width: n.width,
-			height: n.height
+			height: n.height,
+			// Real painted footprint (xyflow measures mounted nodes into `measured`)
+			// so the layout reserves exactly what's on screen — see workflow-layout.
+			measuredWidth: n.measured?.width,
+			measuredHeight: n.measured?.height
 		}));
 		const layoutEdges = edges.map((e) => ({
 			source: e.source,

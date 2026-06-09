@@ -3,7 +3,7 @@
     {
       "id": "trigger-bo-obs",
       "type": "trigger",
-      "position": { "x": 0, "y": 34 },
+      "position": { "x": 0, "y": 44 },
       "data": {
         "type": "trigger",
         "label": "New BO observation",
@@ -25,7 +25,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": { "x": 250, "y": 14 },
+      "position": { "x": 250, "y": 17 },
       "data": {
         "type": "start",
         "label": "Seed from catalogue entry",
@@ -74,7 +74,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 850, "y": 14 },
+      "position": { "x": 850, "y": 17 },
       "data": {
         "type": "end",
         "label": "Emit next candidate",

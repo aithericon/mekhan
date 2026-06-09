@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 34 },
+      "position": { "x": 0, "y": 41 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -63,7 +63,7 @@
     {
       "id": "verify",
       "type": "automated_step",
-      "position": { "x": 620, "y": 10 },
+      "position": { "x": 620, "y": 11 },
       "data": {
         "type": "automated_step",
         "label": "Verify flag provenance",
@@ -115,7 +115,7 @@
     {
       "id": "decide",
       "type": "automated_step",
-      "position": { "x": 930, "y": 10 },
+      "position": { "x": 930, "y": 11 },
       "data": {
         "type": "automated_step",
         "label": "Safety decision",
@@ -167,7 +167,7 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 1240, "y": 24 },
+      "position": { "x": 1240, "y": 27 },
       "data": {
         "type": "end",
         "label": "Done",

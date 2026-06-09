@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 54 },
+      "position": { "x": 0, "y": 62 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -15,7 +15,7 @@
       "id": "move",
       "type": "automated_step",
       "slug": "move",
-      "position": { "x": 190, "y": 7 },
+      "position": { "x": 190, "y": 12 },
       "data": {
         "type": "automated_step",
         "label": "Move (trajectory action, streaming feedback)",
@@ -94,7 +94,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 810, "y": 14 },
+      "position": { "x": 810, "y": 17 },
       "data": {
         "type": "end",
         "label": "Done",

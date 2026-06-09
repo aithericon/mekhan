@@ -74,22 +74,31 @@ export function isContainerKind(type: string | undefined): boolean {
 }
 
 // ── Height row metrics (must track WorkflowNodeCard + the node bodies) ───────
-// `px-3 py-2` header with a `size-6` (24px) icon → 24 + 2×8 = 40.
-const HEADER_H = 40;
+// Calibrated against measured rendered cards (see the demo-52 fleet graph: an
+// automated step with N output fields measures 81 + 33 + 27·N px, a field-less
+// pill measures 44). The estimate is tuned to land a hair OVER the real height —
+// a little extra air between rows is the safe direction; under-reserving packs a
+// neighbour onto a tall card. The live "Auto-arrange" prefers the real measured
+// DOM size (see `workflow-layout.ts`); these metrics are the fallback for the
+// headless demo-regen script and not-yet-rendered nodes.
+//
+// `px-3 py-2` header with a `size-6` (24px) icon → 24 + 2×8, plus the card
+// border / line-height slack the live render actually consumes.
+const HEADER_H = 44;
 // Body is `px-3 py-2` → 8 top + 8 bottom.
 const BODY_PAD = 16;
 // One `text-sm` line (label row, single-line body, section heading).
-const LINE = 20;
-// One declared field / mapping row (`space-y-0.5` list item).
-const FIELD_ROW = 20;
+const LINE = 21;
+// One declared field / mapping row (`space-y-0.5` list item with a badge).
+const FIELD_ROW = 27;
 // One streaming-channel row (a `py-0.5` badge inside `space-y-1`).
-const CHANNEL_ROW = 26;
+const CHANNEL_ROW = 30;
 // One decision branch row (`h-6` = 24 + `gap-1` = 4).
 const BRANCH_ROW = 28;
-// Gap before a `border-t pt-1.5` sub-section (border + padding).
-const SECTION_GAP = 8;
+// Gap before a `border-t pt-1.5` sub-section (border + padding + `space-y-1.5`).
+const SECTION_GAP = 12;
 // Field-less Start/End pill (single `rounded-full` line).
-const PILL_H = 36;
+const PILL_H = 44;
 
 /**
  * Predict a card's rendered height from its content. Generous by design — see

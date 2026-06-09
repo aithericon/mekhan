@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 56 },
+      "position": { "x": 0, "y": 59 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -36,7 +36,7 @@
     {
       "id": "risky_step",
       "type": "automated_step",
-      "position": { "x": 290, "y": 52 },
+      "position": { "x": 290, "y": 56 },
       "data": {
         "type": "automated_step",
         "label": "Risky Step",
@@ -67,7 +67,7 @@
     {
       "id": "handle_fail",
       "type": "failure",
-      "position": { "x": 615, "y": 10 },
+      "position": { "x": 615, "y": 14 },
       "data": {
         "type": "failure",
         "label": "Handle Failure",
@@ -82,7 +82,7 @@
     {
       "id": "end_ok",
       "type": "end",
-      "position": { "x": 600, "y": 122 },
+      "position": { "x": 600, "y": 131 },
       "data": {
         "type": "end",
         "label": "Done (Happy Path)",

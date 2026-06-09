@@ -39,6 +39,16 @@ export interface LayoutNode {
 	parentId?: string | null;
 	width?: number | null;
 	height?: number | null;
+	/**
+	 * Real rendered footprint, if the node is currently mounted (xyflow writes
+	 * `node.measured` after it measures the DOM). Preferred over the content
+	 * estimate for leaf nodes so the layout reserves exactly what's painted —
+	 * immune to estimate drift (CSS changes, live-fetched sub-workflow IO
+	 * contracts the stored `data` snapshot hasn't caught up to, …). Absent in the
+	 * headless demo-regen script, which falls back to the estimate.
+	 */
+	measuredWidth?: number | null;
+	measuredHeight?: number | null;
 }
 
 export interface LayoutEdge {
@@ -176,6 +186,9 @@ export function layoutWorkflowGraph(
 
 	const sizeOf = (n: LayoutNode): { width: number; height: number } => {
 		if (isContainerKind(n.type)) {
+			// A container's footprint is recomputed from its children (deepest-first
+			// into `containerSizes`); its own `measured` is the stale pre-layout box,
+			// so never trust it here.
 			return (
 				containerSizes.get(n.id) ?? {
 					width: n.width ?? containerMinOf(n.type).width,
@@ -183,7 +196,12 @@ export function layoutWorkflowGraph(
 				}
 			);
 		}
-		return getWorkflowNodeDimensions(n);
+		// Leaf nodes: prefer the real measured DOM box when mounted, else estimate.
+		const est = getWorkflowNodeDimensions(n);
+		return {
+			width: n.measuredWidth && n.measuredWidth > 0 ? n.measuredWidth : est.width,
+			height: n.measuredHeight && n.measuredHeight > 0 ? n.measuredHeight : est.height
+		};
 	};
 
 	// Nesting depth so containers resolve deepest-first (a container's fitted

@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 72 },
+      "position": { "x": 0, "y": 78 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -28,7 +28,7 @@
       "type": "lease_scope",
       "position": { "x": 290, "y": 0 },
       "width": 304,
-      "height": 240,
+      "height": 264,
       "data": {
         "type": "lease_scope",
         "label": "GPU Lease · Nomad",
@@ -44,7 +44,7 @@
       "parentId": "lease",
       "position": { "x": 16, "y": 32 },
       "width": 272,
-      "height": 192,
+      "height": 216,
       "data": {
         "type": "loop",
         "label": "Render shots",
@@ -91,7 +91,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 664, "y": 72 },
+      "position": { "x": 664, "y": 78 },
       "data": {
         "type": "end",
         "label": "Done",

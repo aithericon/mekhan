@@ -177,6 +177,72 @@ function lineDeletion(t: string, key: KeySpan): Edit {
 	return { start: lineStart, end: e, text: '' };
 }
 
+// ── Sub-workflow input-contract resolver ────────────────────────────────────
+// A `sub_workflow` node renders its child's INPUT contract (the child's Start
+// `initial` fields) on its face — that's what makes the card tall. But the demo
+// fixtures store `inputContract: null` (the editor only snapshots it at
+// publish / property-panel fetch, which the hand-authored fixtures skip), so a
+// blind layout under-reserves the card and the child overflows its container at
+// runtime. Reconstruct each child's contract from its own demo fixture
+// (`demo.json.templateId` → that demo's Start `initial`) and inject it into the
+// LAYOUT input only — the written bytes stay position/size-only, but the
+// reserved footprint now matches what actually paints. Same idea for `output`
+// when a fixture left it empty.
+interface IoContract { id?: string; label?: string; fields?: unknown[] }
+const childIo = new Map<string, { input?: IoContract; output?: IoContract }>();
+for (const name of readdirSync(DEMOS_DIR).sort()) {
+	const demoFile = join(DEMOS_DIR, name, 'demo.json');
+	const graphFile = join(DEMOS_DIR, name, 'graph.json');
+	if (!existsSync(demoFile) || !existsSync(graphFile)) continue;
+	try {
+		const templateId = (JSON.parse(readFileSync(demoFile, 'utf8')) as { templateId?: string }).templateId;
+		if (!templateId) continue;
+		const g = JSON.parse(readFileSync(graphFile, 'utf8')) as RawGraph;
+		const start = g.nodes.find((n) => n.type === 'start');
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const input = (start?.data as any)?.initial as IoContract | undefined;
+		// The child's output port = the union of its End nodes' result-mapping
+		// target fields (an End carries `resultMapping`, not an `output` object).
+		// Multiple branch Ends map the same fields — dedupe by target name.
+		const outNames = new Set<string>();
+		for (const n of g.nodes) {
+			if (n.type !== 'end') continue;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const mapping = (n.data as any)?.resultMapping as Array<{ targetField?: string }> | undefined;
+			for (const m of mapping ?? []) if (m.targetField) outNames.add(m.targetField);
+		}
+		const output: IoContract | undefined = outNames.size
+			? { fields: [...outNames].map((name) => ({ name })) }
+			: undefined;
+		childIo.set(templateId, { input, output });
+	} catch {
+		/* skip malformed demo */
+	}
+}
+
+const fieldCount = (c: IoContract | undefined | null): number => c?.fields?.length ?? 0;
+/** Whichever contract reserves more rows — the fixture snapshot or the child's
+ *  live contract. The card paints the live one, but either can be stale, so
+ *  take the taller of the two: over-reserving is the safe direction. */
+const richer = (a: IoContract | undefined | null, b: IoContract | undefined): IoContract | undefined =>
+	(fieldCount(b) > fieldCount(a) ? b : a) ?? undefined;
+
+/** Layout-only `data` for a node: reconcile a sub-workflow's IO contract with
+ *  its child's so the reserved height matches what actually renders (the
+ *  fixtures routinely store `inputContract: null` and a stale `output`). */
+function layoutDataFor(n: RawNode): unknown {
+	if (n.type !== 'sub_workflow') return n.data;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const data = n.data as any;
+	const io = data?.templateId ? childIo.get(data.templateId) : undefined;
+	if (!io) return n.data;
+	return {
+		...data,
+		inputContract: richer(data.inputContract, io.input),
+		output: richer(data.output, io.output)
+	};
+}
+
 let total = 0;
 let changed = 0;
 const flagged: string[] = [];
@@ -194,7 +260,7 @@ for (const name of readdirSync(DEMOS_DIR).sort()) {
 		id: n.id,
 		type: n.type,
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		data: n.data as any,
+		data: layoutDataFor(n) as any,
 		parentId: n.parentId,
 		width: n.width,
 		height: n.height
@@ -259,7 +325,7 @@ for (const name of readdirSync(DEMOS_DIR).sort()) {
 	const boxes = tops.map((n) => {
 		const size = containerSizes.get(n.id);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const dims = size ?? getWorkflowNodeDimensions({ type: n.type, data: n.data as any });
+		const dims = size ?? getWorkflowNodeDimensions({ type: n.type, data: layoutDataFor(n) as any });
 		const p = positions.get(n.id) ?? n.position ?? { x: 0, y: 0 };
 		return { id: n.id, x: p.x, y: p.y, w: dims.width, h: dims.height };
 	});

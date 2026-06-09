@@ -4,7 +4,7 @@
       "id": "start",
       "type": "start",
       "slug": "start",
-      "position": { "x": 0, "y": 48 },
+      "position": { "x": 0, "y": 54 },
       "data": {
         "type": "start",
         "label": "Seed BO Campaign",
@@ -41,7 +41,7 @@
       "slug": "bo",
       "position": { "x": 290, "y": 0 },
       "width": 924,
-      "height": 232,
+      "height": 270,
       "data": {
         "type": "loop",
         "label": "BO Iterations",
@@ -82,7 +82,7 @@
       "type": "automated_step",
       "slug": "propose",
       "parentId": "lp",
-      "position": { "x": 16, "y": 62 },
+      "position": { "x": 16, "y": 73 },
       "data": {
         "type": "automated_step",
         "label": "Fit GP + propose K candidates",
@@ -122,9 +122,9 @@
       "type": "map",
       "slug": "evals",
       "parentId": "lp",
-      "position": { "x": 326, "y": 38 },
+      "position": { "x": 326, "y": 49 },
       "width": 272,
-      "height": 172,
+      "height": 189,
       "data": {
         "type": "map",
         "label": "Evaluate K candidates",
@@ -251,7 +251,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1284, "y": 38 },
+      "position": { "x": 1284, "y": 41 },
       "data": {
         "type": "end",
         "label": "Report best",

@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 86 },
+      "position": { "x": 0, "y": 99 },
       "data": {
         "type": "start",
         "label": "Start",
@@ -26,9 +26,9 @@
     {
       "id": "sla",
       "type": "timeout",
-      "position": { "x": 290, "y": 62 },
+      "position": { "x": 290, "y": 78 },
       "width": 232,
-      "height": 144,
+      "height": 150,
       "data": {
         "type": "timeout",
         "label": "Review SLA",
@@ -77,7 +77,7 @@
     {
       "id": "end_done",
       "type": "end",
-      "position": { "x": 592, "y": 152 },
+      "position": { "x": 592, "y": 171 },
       "data": {
         "type": "end",
         "label": "Done (in SLA)",
