@@ -18,27 +18,54 @@
 <script lang="ts">
 	import { Canvas, T } from '@threlte/core';
 	import { OrbitControls } from '@threlte/extras';
+	import { NoToneMapping } from 'three';
+	import type { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 	import { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
-	import { FOV, buildRobot, frameRobot } from '$lib/channels/robotModel';
+	import { FOV, buildRobot } from '$lib/channels/robotModel';
+	import { initialCam, rememberCam } from '$lib/channels/twinCamera';
 	import { createJointInterpolator } from '$lib/channels/jointInterpolator';
 	import type { UrdfJointFrame } from '$lib/channels/urdfStreamPlayer';
 
 	let {
 		robotModel,
 		frame,
-		frozen = false
-	}: { robotModel: string | null; frame: UrdfJointFrame | null; frozen?: boolean } = $props();
+		frozen = false,
+		// Stable id for camera persistence across remounts (the edge id). Without it
+		// each rebuild re-frames the camera, snapping the user's orbit back.
+		viewKey,
+		// Render pixel ratio — driven by the host's graph zoom so the WebGL buffer
+		// tracks the on-screen (CSS-transform-scaled) size instead of staying frozen
+		// at mount resolution (which blurs when the graph is zoomed in).
+		dpr
+	}: {
+		robotModel: string | null;
+		frame: UrdfJointFrame | null;
+		frozen?: boolean;
+		viewKey?: string;
+		dpr?: number;
+	} = $props();
 
 	let robot = $state<URDFRobot | null>(null);
 	let error = $state<string | null>(null);
 
-	// Camera framing — derived from the loaded robot's bounding box (via the shared
-	// `frameRobot`) so the arm fills the stage at whatever size/aspect the edge
-	// widget gives us, instead of a fixed pose that leaves dead space when the
-	// container grows.
+	// Camera framing — the cached pose for this edge if we have one (preserves the
+	// user's orbit across remounts), else framed to the robot's AABB so the arm
+	// fills the stage at whatever size the edge widget gives us.
 	let camPos = $state<[number, number, number]>([0.9, 0.7, 0.9]);
 	let camTarget = $state<[number, number, number]>([0, 0.35, 0]);
+	let controls = $state<ThreeOrbitControls | undefined>();
+
+	// Snapshot the live camera pose so a later remount restores it (not the default).
+	function onControlsChange() {
+		const c = controls;
+		if (!c) return;
+		rememberCam(
+			viewKey,
+			c.object.position.toArray() as [number, number, number],
+			c.target.toArray() as [number, number, number]
+		);
+	}
 
 	// (Re)load the URDF whenever the robot model changes. Synchronous mesh parsing
 	// means once `loadRobotDescription` resolves, the robot is ready in one tick.
@@ -60,7 +87,7 @@
 					return;
 				}
 				const r = buildRobot(desc.urdfText, desc.meshes);
-				({ camPos, camTarget } = frameRobot(r));
+				({ pos: camPos, target: camTarget } = initialCam(viewKey, r));
 				robot = r;
 				error = null;
 			} catch (e) {
@@ -109,9 +136,15 @@
 	ondblclick={(e) => e.stopPropagation()}
 	oncontextmenu={(e) => e.stopPropagation()}
 >
-	<Canvas renderMode="always">
+	<Canvas renderMode="always" toneMapping={NoToneMapping} {dpr}>
 		<T.PerspectiveCamera makeDefault position={camPos} fov={FOV}>
-			<OrbitControls enableDamping enablePan={false} target={camTarget} />
+			<OrbitControls
+				bind:ref={controls}
+				onchange={onControlsChange}
+				enableDamping
+				enablePan={false}
+				target={camTarget}
+			/>
 		</T.PerspectiveCamera>
 		<T.AmbientLight intensity={0.75} />
 		<T.DirectionalLight position={[3, 5, 2]} intensity={1.5} />

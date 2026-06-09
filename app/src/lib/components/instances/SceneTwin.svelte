@@ -30,13 +30,16 @@
 		Group,
 		Mesh,
 		MeshStandardMaterial,
+		NoToneMapping,
 		Quaternion,
 		SphereGeometry,
 		type Object3D
 	} from 'three';
+	import type { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 	import { type URDFRobot } from 'urdf-loader';
 	import { loadRobotDescription } from '$lib/channels/robotDescription';
-	import { FOV, buildRobot, frameRobot } from '$lib/channels/robotModel';
+	import { FOV, buildRobot } from '$lib/channels/robotModel';
+	import { initialCam, rememberCam } from '$lib/channels/twinCamera';
 	import { createJointInterpolator } from '$lib/channels/jointInterpolator';
 	import type { ScenePrimitive, ScenePose, SceneFrame } from '$lib/channels/sceneStreamPlayer';
 
@@ -53,8 +56,18 @@
 	let {
 		robotModel,
 		frame,
-		frozen = false
-	}: { robotModel: string | null; frame: SceneFrame | null; frozen?: boolean } = $props();
+		frozen = false,
+		// Stable id for camera persistence across remounts (the edge id).
+		viewKey,
+		// Render pixel ratio — driven by the host's graph zoom (see RobotArmTwin).
+		dpr
+	}: {
+		robotModel: string | null;
+		frame: SceneFrame | null;
+		frozen?: boolean;
+		viewKey?: string;
+		dpr?: number;
+	} = $props();
 
 	let robot = $state<URDFRobot | null>(null);
 	let error = $state<string | null>(null);
@@ -80,9 +93,22 @@
 	const SPHERE = 2;
 	const CYLINDER = 3;
 
-	// Camera framing — shared `frameRobot` against the loaded robot's AABB.
+	// Camera framing — cached pose for this edge (preserves orbit across remounts),
+	// else framed to the robot's AABB.
 	let camPos = $state<[number, number, number]>([0.9, 0.7, 0.9]);
 	let camTarget = $state<[number, number, number]>([0, 0.35, 0]);
+	let controls = $state<ThreeOrbitControls | undefined>();
+
+	// Snapshot the live camera pose so a later remount restores it (not the default).
+	function onControlsChange() {
+		const c = controls;
+		if (!c) return;
+		rememberCam(
+			viewKey,
+			c.object.position.toArray() as [number, number, number],
+			c.target.toArray() as [number, number, number]
+		);
+	}
 
 	// World collision objects = warm amber, slightly translucent ("the work").
 	const WORLD_COLOR = 0xf59e0b;
@@ -168,8 +194,8 @@
 					return;
 				}
 				const r = buildRobot(desc.urdfText, desc.meshes);
-				// frameRobot expects the robot's own Z-up→Y-up rotation in place.
-				({ camPos, camTarget } = frameRobot(r));
+				// initialCam frames against the robot's own Z-up→Y-up rotation in place.
+				({ pos: camPos, target: camTarget } = initialCam(viewKey, r));
 				// The common parent now carries that rotation; clear the robot's own so
 				// the world objects (also under sceneRoot) share its exact frame.
 				r.rotation.set(0, 0, 0);
@@ -272,9 +298,15 @@
 	ondblclick={(e) => e.stopPropagation()}
 	oncontextmenu={(e) => e.stopPropagation()}
 >
-	<Canvas renderMode="always">
+	<Canvas renderMode="always" toneMapping={NoToneMapping} {dpr}>
 		<T.PerspectiveCamera makeDefault position={camPos} fov={FOV}>
-			<OrbitControls enableDamping enablePan={false} target={camTarget} />
+			<OrbitControls
+				bind:ref={controls}
+				onchange={onControlsChange}
+				enableDamping
+				enablePan={false}
+				target={camTarget}
+			/>
 		</T.PerspectiveCamera>
 		<T.AmbientLight intensity={0.75} />
 		<T.DirectionalLight position={[3, 5, 2]} intensity={1.5} />
