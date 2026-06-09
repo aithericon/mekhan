@@ -144,5 +144,11 @@ pub struct CatalogueRegisterCommand {
     /// Path on `file_server_id` where a by-reference artifact physically lives.
     #[serde(default)]
     pub reference_path: Option<String>,
+    /// Canonical (server-relative) root the `reference_path` is anchored to —
+    /// the `endpoint_root` a `crawl` recorded. Stamped into the inventory row's
+    /// `provenance` so an `adopt` can promote it onto the file-server endpoint's
+    /// `root`. Optional: absent for artifacts not sourced from a rooted crawl.
+    #[serde(default)]
+    pub endpoint_root: Option<String>,
     pub created_at: DateTime<Utc>,
 }

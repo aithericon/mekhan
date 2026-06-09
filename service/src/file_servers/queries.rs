@@ -226,6 +226,30 @@ pub async fn key_in_inventory(pool: &PgPool, key: &str) -> Result<bool, QueryErr
     Ok(row.0)
 }
 
+/// The canonical `endpoint_root` a `crawl` stamped onto this key's inventory
+/// rows, if any. Picked as the most-common non-empty `provenance->>endpoint_root`
+/// across all copies on the server — so `adopt` can promote it onto the created
+/// endpoint's `root`. Returns `None` when no copy recorded one (legacy / upload
+/// artifacts), in which case `adopt` falls back to an empty root.
+pub async fn inventory_endpoint_root(
+    pool: &PgPool,
+    key: &str,
+) -> Result<Option<String>, QueryError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT provenance->>'endpoint_root' AS root \
+         FROM file_inventory \
+         WHERE file_server_id = $1 \
+           AND NULLIF(TRIM(provenance->>'endpoint_root'), '') IS NOT NULL \
+         GROUP BY provenance->>'endpoint_root' \
+         ORDER BY COUNT(*) DESC, provenance->>'endpoint_root' \
+         LIMIT 1",
+    )
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0))
+}
+
 /// Insert a new identity-only file server, plus an optional inline first
 /// endpoint. A unique `(workspace_id, key)` violation surfaces as a DB error the
 /// handler maps to 409 (we pre-check existence in the handler for a clean message).

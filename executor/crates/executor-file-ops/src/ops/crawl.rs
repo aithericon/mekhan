@@ -58,10 +58,17 @@ const CRAWL_CHANNEL: &str = "crawl";
 /// - `last_path` — the user-facing path of the last file emitted (the resume
 ///   cursor for the next chunk), or `null` if nothing was crawled
 /// - `batches` — number of `item` batches emitted
+/// - `endpoint_root` — the canonical (server-relative) root the emitted `path`s
+///   are anchored to. Recorded so the registered `file_inventory.path` stays
+///   canonical and an `adopt` can stamp it onto the file-server endpoint root.
+///
+/// Each per-file batch item also carries `endpoint_root`, so the downstream
+/// fold/register can persist it into the inventory row's `provenance` JSONB.
 pub async fn execute(
     config: &CrawlConfig,
     operator: &Operator,
     prefix: &str,
+    endpoint_root: &str,
     event_stream: Option<Arc<dyn EventStream>>,
     cancel: &CancellationToken,
 ) -> FileOpsResult {
@@ -119,6 +126,7 @@ pub async fn execute(
             "path": user_path,
             "size": size,
             "mtime": mtime,
+            "endpoint_root": endpoint_root,
         }));
         total += 1;
         last_path = Some(user_path);
@@ -167,6 +175,7 @@ pub async fn execute(
         ("last_path".into(), serde_json::json!(last_path)),
         ("batches".into(), serde_json::json!(batch_idx)),
         ("cancelled".into(), serde_json::json!(cancelled)),
+        ("endpoint_root".into(), serde_json::json!(endpoint_root)),
     ]))
 }
 

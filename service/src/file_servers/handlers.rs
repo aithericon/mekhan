@@ -126,17 +126,33 @@ pub async fn adopt(
             req.key
         )));
     }
+    // Canonical root the crawl recorded onto this key's inventory rows
+    // (provenance.endpoint_root), if any — stamped onto the adopted endpoint so
+    // its `root` matches where the canonical (server-relative) paths are
+    // anchored. Falls back to '' when no copy recorded one.
+    let stamped_root = queries::inventory_endpoint_root(&state.db, &req.key)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
     // Adopting a crawled key: default its first access method to local_mount
-    // (the co-located-runner transport) unless the caller supplied one.
-    if req.endpoint.is_none() {
-        req.endpoint = Some(CreateEndpointRequest {
-            access_method: "local_mount".to_string(),
-            root: None,
-            resource_ref: None,
-            group_id: None,
-            priority: None,
-            config: None,
-        });
+    // (the co-located-runner transport) unless the caller supplied one. Either
+    // way, when the caller didn't pin a root explicitly, stamp the crawl-derived
+    // endpoint_root so adopt promotes the canonical anchor.
+    match req.endpoint.as_mut() {
+        None => {
+            req.endpoint = Some(CreateEndpointRequest {
+                access_method: "local_mount".to_string(),
+                root: stamped_root.clone(),
+                resource_ref: None,
+                group_id: None,
+                priority: None,
+                config: None,
+            });
+        }
+        Some(ep) if ep.root.is_none() => {
+            ep.root = stamped_root.clone();
+        }
+        Some(_) => {}
     }
     insert_server(&state, ws, &req).await
 }
