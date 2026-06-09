@@ -822,6 +822,12 @@ export interface paths {
          *       streams the file in-process (sftp has no presign).
          *
          *     Honours `Range: bytes=START-[END]` (single range) → 206 with the capped read.
+         *
+         *     Routing is cost-first + verification-gated (`serve::route_candidates`): the
+         *     candidates are tried in order and the FIRST one to start streaming wins; a
+         *     candidate that reports the file missing BEFORE the first byte is skipped
+         *     (fall-back-on-miss). `?endpoint=<uuid>` force-selects a single endpoint,
+         *     bypassing the routable filter.
          */
         get: operations["data_entry_content"];
         put?: never;
@@ -13239,7 +13245,10 @@ export interface operations {
     };
     data_entry_content: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Force a specific endpoint id (UUID), bypassing routing */
+                endpoint?: string;
+            };
             header?: never;
             path: {
                 /** @description Content hash (bare hex) of the logical entry to serve */
@@ -13274,8 +13283,17 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description No servable copy / endpoint for this hash */
+            /** @description No copy for this hash, or every endpoint missed */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No servable endpoint (all offline / mismatch / conflict) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

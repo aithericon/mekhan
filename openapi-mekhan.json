@@ -2296,7 +2296,7 @@
           "data"
         ],
         "summary": "GET /api/v1/data/entries/{content_hash}/content",
-        "description": "Serve the bytes of a logical entry, resolving it to a physical copy and a\nservable endpoint (docs/32 Phase 3b — multi-endpoint file-servers). The\nendpoint's `access_method` determines the transport:\n\n* `local_mount` → NATS relay through the co-located runner that owns the\n  mount (mekhan is cred-free; the runner path-jails + streams).\n* `object_store` / `s3` → presigned 302 (default) or proxied bytes\n  (`config.proxy_s3_reads`). External `s3` (`resource_ref`) resolves the\n  endpoint's resource creds via Vault, then presigns/proxies the same way.\n* `sftp` → resolves auth via Vault, builds the opendal sftp Operator, and\n  streams the file in-process (sftp has no presign).\n\nHonours `Range: bytes=START-[END]` (single range) → 206 with the capped read.",
+        "description": "Serve the bytes of a logical entry, resolving it to a physical copy and a\nservable endpoint (docs/32 Phase 3b — multi-endpoint file-servers). The\nendpoint's `access_method` determines the transport:\n\n* `local_mount` → NATS relay through the co-located runner that owns the\n  mount (mekhan is cred-free; the runner path-jails + streams).\n* `object_store` / `s3` → presigned 302 (default) or proxied bytes\n  (`config.proxy_s3_reads`). External `s3` (`resource_ref`) resolves the\n  endpoint's resource creds via Vault, then presigns/proxies the same way.\n* `sftp` → resolves auth via Vault, builds the opendal sftp Operator, and\n  streams the file in-process (sftp has no presign).\n\nHonours `Range: bytes=START-[END]` (single range) → 206 with the capped read.\n\nRouting is cost-first + verification-gated (`serve::route_candidates`): the\ncandidates are tried in order and the FIRST one to start streaming wins; a\ncandidate that reports the file missing BEFORE the first byte is skipped\n(fall-back-on-miss). `?endpoint=<uuid>` force-selects a single endpoint,\nbypassing the routable filter.",
         "operationId": "data_entry_content",
         "parameters": [
           {
@@ -2304,6 +2304,15 @@
             "in": "path",
             "description": "Content hash (bare hex) of the logical entry to serve",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endpoint",
+            "in": "query",
+            "description": "Force a specific endpoint id (UUID), bypassing routing",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2326,7 +2335,17 @@
             "description": "Redirect to a presigned object-store URL"
           },
           "404": {
-            "description": "No servable copy / endpoint for this hash",
+            "description": "No copy for this hash, or every endpoint missed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No servable endpoint (all offline / mismatch / conflict)",
             "content": {
               "application/json": {
                 "schema": {

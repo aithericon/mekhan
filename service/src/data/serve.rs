@@ -17,10 +17,12 @@
 //!   `config.proxy_s3_reads` is set. (opendal path — feature `migration-driver`.)
 //! * **`sftp`** — stream in-process through opendal. (feature `migration-driver`.)
 //!
-//! Endpoint SELECTION for this phase is a simple preference order
-//! (`local_mount` → `object_store` → `s3` → `sftp`), highest-priority endpoint
-//! within the chosen method. Full cost-first routing + verification gating is
-//! Phase 5 — see the TODO in [`pick_endpoint`].
+//! Endpoint SELECTION is cost-first, verification-gated, priority-aware routing
+//! ([`route_candidates`], Phase 5b): non-routable endpoints (offline / proven-bad
+//! `mismatch`/`conflict`) are dropped, the rest ordered by operator `priority`
+//! DESC, then effective transport cost ASC, then verified-before-unverified. The
+//! handler tries the ordered list, falling back to the next on a pre-byte miss
+//! ([`ServeMiss`]); the first that starts streaming wins.
 
 use std::time::Duration;
 
@@ -158,31 +160,102 @@ pub fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
 // Endpoint selection.
 // ---------------------------------------------------------------------------
 
-/// Preference order over `access_method` for this phase. Prefer the cheapest
-/// reachable transport: a co-located `local_mount` (no egress) first, then the
-/// built-in `object_store`, then external `s3`, then `sftp`.
-const METHOD_PREFERENCE: &[&str] = &["local_mount", "object_store", "s3", "sftp"];
+/// Whether a candidate endpoint is **routable** — eligible to serve at all
+/// (docs/32 §4 Phase 5b). A serve route is then an *ordered* list of routable
+/// candidates the handler tries until one starts streaming.
+///
+/// Gating rationale:
+/// * `status` must be `online` or `unknown` — a proven-`offline` endpoint can't
+///   serve. (`unknown` is the unprobed default; we don't brick serve on it.)
+/// * `verification_status` must NOT be `mismatch` or `conflict` — those are
+///   PROVEN-bad (the endpoint serves the wrong bytes / copies diverge). `verified`
+///   and `unverified` both pass: excluding `unverified` would brick the
+///   already-working `local_mount` serve before its first auto-probe lands;
+///   `verified` is merely *preferred* in the ordering below. A future strict-mode
+///   knob could additionally exclude `unverified`.
+fn is_routable(c: &ServeCandidate) -> bool {
+    let status_ok = matches!(c.endpoint.status.as_str(), "online" | "unknown");
+    let verification_ok = !matches!(
+        c.endpoint.verification_status.as_str(),
+        "mismatch" | "conflict"
+    );
+    status_ok && verification_ok
+}
 
-/// Pick the endpoint to serve from among a hash's resolved copies.
+/// Effective serve **cost** for an endpoint's `access_method` (lower is cheaper).
 ///
-/// Phase-3b policy: walk [`METHOD_PREFERENCE`]; for the first method any
-/// candidate offers, return the highest-priority candidate of that method.
-/// Candidates arrive already priority-ordered from `serve_candidates`, so the
-/// first match per method is the preferred one.
-///
-/// TODO(Phase 5): full cost-first routing (zone affinity, verification status
-/// gating, health) + tie-breaks. For now this is a deterministic static order.
-pub fn pick_endpoint(candidates: &[ServeCandidate]) -> Option<&ServeCandidate> {
-    for method in METHOD_PREFERENCE {
-        if let Some(c) = candidates
-            .iter()
-            .find(|c| c.endpoint.access_method == *method)
-        {
-            return Some(c);
-        }
+/// `proxy_s3_reads` flips s3-family endpoints from a zero-cost presigned 302
+/// (bytes never transit mekhan) to a proxied stream (bytes flow through mekhan),
+/// which is more expensive than a `local_mount` read, so it sorts *after* it.
+fn effective_cost(method: &str, proxy_s3_reads: bool) -> u32 {
+    match method {
+        // Presign-capable S3 family: a 302 is free (no egress through mekhan)…
+        "s3" | "object_store" if !proxy_s3_reads => 0,
+        // …but a proxied read transits mekhan → costlier than a local read.
+        "s3" | "object_store" => 3, // 1.5 scaled by 2 to stay integer; > local_mount(2).
+        "local_mount" => 2,
+        "sftp" => 4,
+        // Unknown transports sort last.
+        _ => u32::MAX,
     }
-    // Fall back to the single highest-priority candidate of any (unknown) method.
-    candidates.first()
+}
+
+/// Build the ordered list of routable serve candidates (docs/32 §4 Phase 5b),
+/// cost-first + verification-gated + priority-aware. The handler tries them in
+/// order, falling back to the next on a pre-byte miss.
+///
+/// Order keys, in precedence:
+/// 1. `priority` DESC — an operator override always wins.
+/// 2. effective cost ASC — cheapest transport first ([`effective_cost`]).
+/// 3. `verified`-before-`unverified` — prefer a proven-good endpoint on a tie.
+/// 4. stable (original priority-ordered input order) for full determinism.
+///
+/// Non-routable candidates (offline / mismatch / conflict) are dropped. An empty
+/// result means there is no servable endpoint at all (→ 409, not 404).
+pub fn route_candidates(
+    candidates: &[ServeCandidate],
+    proxy_s3_reads: bool,
+) -> Vec<&ServeCandidate> {
+    let mut routable: Vec<(usize, &ServeCandidate)> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| is_routable(c))
+        .collect();
+
+    routable.sort_by(|(ia, a), (ib, b)| {
+        // 1. priority DESC.
+        b.endpoint
+            .priority
+            .cmp(&a.endpoint.priority)
+            // 2. cost ASC.
+            .then_with(|| {
+                effective_cost(&a.endpoint.access_method, proxy_s3_reads).cmp(&effective_cost(
+                    &b.endpoint.access_method,
+                    proxy_s3_reads,
+                ))
+            })
+            // 3. verified before unverified.
+            .then_with(|| {
+                let rank = |s: &str| if s == "verified" { 0 } else { 1 };
+                rank(&a.endpoint.verification_status).cmp(&rank(&b.endpoint.verification_status))
+            })
+            // 4. stable: original (priority-ordered) input order.
+            .then_with(|| ia.cmp(ib))
+    });
+
+    routable.into_iter().map(|(_, c)| c).collect()
+}
+
+/// A pre-byte serve miss: the endpoint could not start a body, so the handler may
+/// fall back to the NEXT candidate. `NotFound` = the file isn't on this endpoint
+/// (try the next); `Fatal` carries a built [`Response`] to return immediately
+/// (a non-recoverable error — bad creds, transport down — where falling through
+/// would mask the real failure).
+pub enum ServeMiss {
+    /// The file is absent on this endpoint — fall through to the next candidate.
+    NotFound,
+    /// A non-recoverable failure; return this response immediately.
+    Fatal(Response),
 }
 
 // ---------------------------------------------------------------------------
@@ -573,9 +646,30 @@ fn map_opendal_err(e: opendal::Error) -> RemoteReadError {
     }
 }
 
+/// Map a [`RemoteReadError`] to a [`ServeMiss`]: `NotFound` → fall-through;
+/// everything else → a built `Fatal` response.
+fn remote_err_to_miss(e: RemoteReadError) -> ServeMiss {
+    match e {
+        RemoteReadError::NotFound(_)
+        | RemoteReadError::MissingResourceRef { .. }
+        | RemoteReadError::ResourceNotFound { .. } => {
+            // A missing object / unresolvable copy is a coverage gap for THIS
+            // endpoint — fall through to the next candidate.
+            ServeMiss::NotFound
+        }
+        other => ServeMiss::Fatal(other.into_response()),
+    }
+}
+
 /// Serve an external `s3` endpoint: presign + 302 by default, or proxy the bytes
 /// in-process when `proxy_s3_reads` is set. Mirrors the built-in object_store
 /// behaviour but against the endpoint's own resolved creds.
+///
+/// Returns `Err(ServeMiss::NotFound)` when the object isn't on this endpoint so
+/// the handler can fall through to the next candidate. NOTE: the default presign
+/// branch can't stat before redirecting, so a 302 to a missing key is "committed"
+/// (the client sees the store's 404) — only the proxy branch detects the miss
+/// pre-byte. A `Fatal` is returned for non-recoverable errors (bad creds, etc.).
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_s3_endpoint(
     db: &PgPool,
@@ -586,11 +680,10 @@ pub async fn serve_s3_endpoint(
     filename: &str,
     proxy: bool,
     range: Option<(u64, Option<u64>)>,
-) -> Response {
-    let target = match resolve_remote_target(db, secrets, workspace_id, endpoint).await {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
+) -> Result<Response, ServeMiss> {
+    let target = resolve_remote_target(db, secrets, workspace_id, endpoint)
+        .await
+        .map_err(remote_err_to_miss)?;
 
     if proxy {
         return stream_remote(&target, canonical_path, filename, range).await;
@@ -601,18 +694,21 @@ pub async fn serve_s3_endpoint(
     // Range against the store directly, so we still 302.)
     match presign_s3(&target, canonical_path, Duration::from_secs(300)).await {
         Ok(url) => match header::HeaderValue::from_str(&url) {
-            Ok(loc) => (StatusCode::FOUND, [(header::LOCATION, loc)]).into_response(),
-            Err(_) => {
-                crate::models::error::ApiError::internal("presigned URL was not a valid header value")
-                    .into_response()
-            }
+            Ok(loc) => Ok((StatusCode::FOUND, [(header::LOCATION, loc)]).into_response()),
+            Err(_) => Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::internal(
+                    "presigned URL was not a valid header value",
+                )
+                .into_response(),
+            )),
         },
-        Err(e) => e.into_response(),
+        Err(e) => Err(remote_err_to_miss(e)),
     }
 }
 
 /// Serve an `sftp` endpoint: always streamed in-process through opendal (sftp
 /// has no presign). Honours Range where opendal supports the ranged read.
+/// `Err(ServeMiss::NotFound)` → fall through to the next candidate.
 pub async fn serve_sftp_endpoint(
     db: &PgPool,
     secrets: &dyn SecretStore,
@@ -621,31 +717,30 @@ pub async fn serve_sftp_endpoint(
     canonical_path: &str,
     filename: &str,
     range: Option<(u64, Option<u64>)>,
-) -> Response {
-    let target = match resolve_remote_target(db, secrets, workspace_id, endpoint).await {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
+) -> Result<Response, ServeMiss> {
+    let target = resolve_remote_target(db, secrets, workspace_id, endpoint)
+        .await
+        .map_err(remote_err_to_miss)?;
     stream_remote(&target, canonical_path, filename, range).await
 }
 
 /// Shared in-process streamer for a resolved remote target (proxied s3 + sftp).
-/// Opens a (ranged) opendal byte stream and relays it into the HTTP body.
+/// Opens a (ranged) opendal byte stream and relays it into the HTTP body. A
+/// pre-byte not-found maps to `Err(ServeMiss::NotFound)` (fall through); other
+/// failures to `Err(ServeMiss::Fatal(_))`.
 async fn stream_remote(
     target: &RemoteTarget,
     canonical_path: &str,
     filename: &str,
     range: Option<(u64, Option<u64>)>,
-) -> Response {
-    let operator = match build_remote_operator(target) {
-        Ok(o) => o,
-        Err(e) => return e.into_response(),
-    };
+) -> Result<Response, ServeMiss> {
+    let operator =
+        build_remote_operator(target).map_err(|e| ServeMiss::Fatal(e.into_response()))?;
     let object_path = target.object_path(canonical_path);
 
     let meta = match operator.stat(&object_path).await {
         Ok(m) => m,
-        Err(e) => return map_opendal_err(e).into_response(),
+        Err(e) => return Err(remote_err_to_miss(map_opendal_err(e))),
     };
     let total = meta.content_length();
     let content_type = meta
@@ -655,7 +750,7 @@ async fn stream_remote(
 
     let reader = match operator.reader_with(&object_path).await {
         Ok(r) => r,
-        Err(e) => return map_opendal_err(e).into_response(),
+        Err(e) => return Err(remote_err_to_miss(map_opendal_err(e))),
     };
 
     // The number of bytes the body will carry (Content-Length).
@@ -670,7 +765,7 @@ async fn stream_remote(
 
     let stream = match reader.into_bytes_stream(byte_range).await {
         Ok(s) => s,
-        Err(e) => return map_opendal_err(e).into_response(),
+        Err(e) => return Err(ServeMiss::Fatal(map_opendal_err(e).into_response())),
     };
 
     let mut resp_headers = HeaderMap::new();
@@ -692,7 +787,7 @@ async fn stream_remote(
         StatusCode::OK
     };
 
-    (status, resp_headers, Body::from_stream(stream)).into_response()
+    Ok((status, resp_headers, Body::from_stream(stream)).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -712,12 +807,14 @@ const FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Resolves the endpoint's `group_id`, publishes a [`ServeRequest`] to
 /// `fileserve.<group>.read` with a fresh reply inbox, and:
 ///
-/// 1. Awaits the first frame. ERROR before any byte → 404 (not_found/path_jail)
-///    or 500 (io/read_error). OPEN → set Content-Type / Content-Length and begin
-///    streaming.
+/// 1. Awaits the first frame. ERROR before any byte → `Err(ServeMiss::NotFound)`
+///    (not_found/path_jail — fall through to the next candidate) or
+///    `Err(ServeMiss::Fatal)` (io/read_error). OPEN → set Content-Type /
+///    Content-Length and begin streaming.
 /// 2. Streams CHUNK bytes into [`Body::from_stream`], acking each consumed chunk
 ///    on `<reply>.ack` to keep the runner's in-flight window open. A mid-stream
-///    ERROR aborts the body (the bytes already sent can't be unsent).
+///    ERROR aborts the body (the bytes already sent can't be unsent) — once the
+///    first chunk is committed the result is always `Ok(_)`.
 ///
 /// `filename` is used only for the `Content-Disposition` header.
 pub async fn serve_local_mount(
@@ -727,12 +824,14 @@ pub async fn serve_local_mount(
     filename: &str,
     workspace_id: &str,
     range: Option<(u64, Option<u64>)>,
-) -> Response {
+) -> Result<Response, ServeMiss> {
     let Some(group) = endpoint.group_id.as_deref().filter(|g| !g.is_empty()) else {
-        return crate::models::error::ApiError::internal(
-            "local_mount endpoint has no group_id to dispatch to",
-        )
-        .into_response();
+        return Err(ServeMiss::Fatal(
+            crate::models::error::ApiError::internal(
+                "local_mount endpoint has no group_id to dispatch to",
+            )
+            .into_response(),
+        ));
     };
 
     let req_id = uuid::Uuid::new_v4().to_string();
@@ -746,10 +845,12 @@ pub async fn serve_local_mount(
     let mut frames = match client.subscribe(reply.clone()).await {
         Ok(s) => s,
         Err(e) => {
-            return crate::models::error::ApiError::internal(format!(
-                "failed to subscribe serve reply inbox: {e}"
-            ))
-            .into_response();
+            return Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::internal(format!(
+                    "failed to subscribe serve reply inbox: {e}"
+                ))
+                .into_response(),
+            ));
         }
     };
 
@@ -764,10 +865,12 @@ pub async fn serve_local_mount(
     let payload = match serde_json::to_vec(&request) {
         Ok(p) => p,
         Err(e) => {
-            return crate::models::error::ApiError::internal(format!(
-                "failed to serialize serve request: {e}"
-            ))
-            .into_response();
+            return Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::internal(format!(
+                    "failed to serialize serve request: {e}"
+                ))
+                .into_response(),
+            ));
         }
     };
 
@@ -776,27 +879,33 @@ pub async fn serve_local_mount(
         .publish_with_reply(subject.clone(), reply.clone(), payload.into())
         .await
     {
-        return crate::models::error::ApiError::internal(format!(
-            "failed to publish serve request: {e}"
-        ))
-        .into_response();
+        return Err(ServeMiss::Fatal(
+            crate::models::error::ApiError::internal(format!(
+                "failed to publish serve request: {e}"
+            ))
+            .into_response(),
+        ));
     }
 
     // (1) First frame: OPEN (begin streaming) or ERROR (terminal, no body yet).
     let first = match tokio::time::timeout(FIRST_FRAME_TIMEOUT, frames.next_frame()).await {
         Ok(Some(f)) => f,
         Ok(None) => {
-            return crate::models::error::ApiError::service_unavailable(
-                "serve reply stream closed before any frame",
-            )
-            .into_response();
+            return Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::service_unavailable(
+                    "serve reply stream closed before any frame",
+                )
+                .into_response(),
+            ));
         }
         Err(_) => {
-            return crate::models::error::ApiError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "timed out waiting for serving runner (group has no live worker?)",
-            )
-            .into_response();
+            return Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "timed out waiting for serving runner (group has no live worker?)",
+                )
+                .into_response(),
+            ));
         }
     };
 
@@ -807,14 +916,18 @@ pub async fn serve_local_mount(
             ..
         } => (content_type, total_size),
         ReplyFrame::Error { kind, message, .. } => {
-            return error_frame_to_response(kind, &message);
+            // not_found / path_jail → fall through to the next candidate;
+            // io / read_error → a real failure, return immediately.
+            return Err(error_frame_to_miss(kind, &message));
         }
         // CHUNK/CLOSE before OPEN is a protocol violation by the runner.
         other => {
-            return crate::models::error::ApiError::internal(format!(
-                "serve protocol error: expected OPEN, got {other:?}"
-            ))
-            .into_response();
+            return Err(ServeMiss::Fatal(
+                crate::models::error::ApiError::internal(format!(
+                    "serve protocol error: expected OPEN, got {other:?}"
+                ))
+                .into_response(),
+            ));
         }
     };
 
@@ -878,7 +991,19 @@ pub async fn serve_local_mount(
         StatusCode::OK
     };
 
-    (status, resp_headers, Body::from_stream(stream)).into_response()
+    Ok((status, resp_headers, Body::from_stream(stream)).into_response())
+}
+
+/// Map a pre-first-byte ERROR frame to a [`ServeMiss`]: `not_found`/`path_jail`
+/// → `NotFound` (the endpoint lacks the file — fall through to the next
+/// candidate); `io`/`read_error` → `Fatal` (a real failure, return immediately).
+fn error_frame_to_miss(kind: ServeErrorKind, message: &str) -> ServeMiss {
+    match kind {
+        ServeErrorKind::NotFound | ServeErrorKind::PathJail => ServeMiss::NotFound,
+        ServeErrorKind::ReadError | ServeErrorKind::Io => {
+            ServeMiss::Fatal(error_frame_to_response(kind, message))
+        }
+    }
 }
 
 /// Why a `local_mount` read (the NATS relay) couldn't be completed. Distinct
@@ -1095,6 +1220,24 @@ mod tests {
         }
     }
 
+    /// Candidate with explicit status + verification_status for routing tests.
+    fn cand_full(method: &str, priority: i32, status: &str, verification: &str) -> ServeCandidate {
+        let mut e = ep(method, priority);
+        e.status = status.to_string();
+        e.verification_status = verification.to_string();
+        ServeCandidate {
+            path: "a/b.txt".to_string(),
+            endpoint: e,
+        }
+    }
+
+    fn methods(ordered: &[&ServeCandidate]) -> Vec<String> {
+        ordered
+            .iter()
+            .map(|c| c.endpoint.access_method.clone())
+            .collect()
+    }
+
     #[test]
     fn subject_and_ack_match_runner_contract() {
         assert_eq!(fileserve_subject("grp-uuid"), "fileserve.grp-uuid.read");
@@ -1210,31 +1353,83 @@ mod tests {
         assert_eq!(parse_range(&h), None);
     }
 
+    // -----------------------------------------------------------------------
+    // Cost-first verification-gated routing (Phase 5b, route_candidates).
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn pick_prefers_local_mount_then_object_store() {
-        let cands = vec![cand("sftp", 100), cand("object_store", 5), cand("local_mount", 1)];
-        // local_mount wins despite lowest priority — it's the cheapest transport.
-        assert_eq!(pick_endpoint(&cands).unwrap().endpoint.access_method, "local_mount");
+    fn route_s3_presign_is_cheapest_by_default() {
+        // Equal priority → cost order: s3-presigned(0) < local_mount(1) < sftp.
+        let cands = vec![cand("sftp", 0), cand("local_mount", 0), cand("s3", 0)];
+        let ordered = route_candidates(&cands, false);
+        assert_eq!(methods(&ordered), vec!["s3", "local_mount", "sftp"]);
     }
 
     #[test]
-    fn pick_falls_through_method_order() {
-        let cands = vec![cand("sftp", 50), cand("s3", 10)];
-        // No local_mount/object_store → s3 beats sftp.
-        assert_eq!(pick_endpoint(&cands).unwrap().endpoint.access_method, "s3");
+    fn route_proxy_demotes_s3_below_local_mount() {
+        // proxy_s3_reads → s3 transits mekhan (cost 1.5) → after local_mount(1).
+        let cands = vec![cand("sftp", 0), cand("s3", 0), cand("local_mount", 0)];
+        let ordered = route_candidates(&cands, true);
+        assert_eq!(methods(&ordered), vec!["local_mount", "s3", "sftp"]);
     }
 
     #[test]
-    fn pick_highest_priority_within_method() {
-        // Two object_store endpoints; candidates arrive priority-ordered so the
-        // first match (priority 9) wins.
-        let cands = vec![cand("object_store", 9), cand("object_store", 1)];
-        assert_eq!(pick_endpoint(&cands).unwrap().endpoint.priority, 9);
+    fn route_priority_override_beats_cost() {
+        // A high-priority sftp wins over a cheaper-but-lower-priority s3.
+        let cands = vec![cand("s3", 0), cand("sftp", 100)];
+        let ordered = route_candidates(&cands, false);
+        assert_eq!(ordered[0].endpoint.access_method, "sftp");
     }
 
     #[test]
-    fn pick_empty_is_none() {
-        assert!(pick_endpoint(&[]).is_none());
+    fn route_excludes_mismatch_and_conflict() {
+        let cands = vec![
+            cand_full("local_mount", 0, "online", "mismatch"),
+            cand_full("s3", 0, "online", "conflict"),
+            cand_full("sftp", 0, "online", "verified"),
+        ];
+        let ordered = route_candidates(&cands, false);
+        // Only the verified sftp survives the verification gate.
+        assert_eq!(methods(&ordered), vec!["sftp"]);
+    }
+
+    #[test]
+    fn route_includes_unverified() {
+        // unverified must NOT be excluded (would brick first serve pre-probe).
+        let cands = vec![cand_full("local_mount", 0, "unknown", "unverified")];
+        let ordered = route_candidates(&cands, false);
+        assert_eq!(ordered.len(), 1);
+    }
+
+    #[test]
+    fn route_prefers_verified_over_unverified_on_tie() {
+        // Same method + priority + cost → verified sorts first.
+        let cands = vec![
+            cand_full("s3", 0, "online", "unverified"),
+            cand_full("s3", 0, "online", "verified"),
+        ];
+        let ordered = route_candidates(&cands, false);
+        assert_eq!(ordered[0].endpoint.verification_status, "verified");
+    }
+
+    #[test]
+    fn route_excludes_offline() {
+        let cands = vec![
+            cand_full("s3", 0, "offline", "verified"),
+            cand_full("local_mount", 0, "online", "verified"),
+        ];
+        let ordered = route_candidates(&cands, false);
+        assert_eq!(methods(&ordered), vec!["local_mount"]);
+    }
+
+    #[test]
+    fn route_empty_when_no_routable() {
+        // All non-routable → empty list → handler returns 409 (not 404).
+        let cands = vec![
+            cand_full("s3", 0, "offline", "verified"),
+            cand_full("local_mount", 0, "online", "mismatch"),
+        ];
+        assert!(route_candidates(&cands, false).is_empty());
     }
 
     #[test]
