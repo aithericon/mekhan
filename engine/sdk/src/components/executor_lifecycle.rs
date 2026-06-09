@@ -239,6 +239,12 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             .correlate("sig", "job", "execution_id")
             .auto_output("err", &failed)
             .logic(
+                // Carry `executor_namespace` (+ `feed_chunks`) through to the
+                // failure token so a downstream retry re-dispatches to the SAME
+                // worker-group namespace. Without this, the unified-dispatch
+                // model's grouped namespace is lost and the resubmit falls back
+                // to the bare `executor` namespace (no consumer) → orphaned
+                // retry → net hangs.
                 r#"#{
                     err: #{
                         job_id: job.job_id,
@@ -247,7 +253,9 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -270,7 +278,9 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -288,7 +298,9 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );
@@ -306,7 +318,9 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                         retries: job.retries,
                         max_retries: job.max_retries,
                         run: job.run,
-                        spec: job.spec
+                        spec: job.spec,
+                        executor_namespace: job.executor_namespace,
+                        feed_chunks: job.feed_chunks
                     }
                 }"#,
             );

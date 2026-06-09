@@ -667,6 +667,13 @@
                 "azblob"
               ],
               "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
+              ],
+              "type": "string"
             }
           ]
         },
@@ -1106,6 +1113,13 @@
               "description": "Azure Blob Storage.",
               "enum": [
                 "azblob"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
               ],
               "type": "string"
             }
@@ -3246,7 +3260,7 @@
         }
       ],
       "logic": {
-        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
         "type": "rhai"
       },
       "name": "On Failed",
@@ -3309,7 +3323,7 @@
         }
       ],
       "logic": {
-        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
         "type": "rhai"
       },
       "name": "On Timeout",
@@ -3429,7 +3443,7 @@
         }
       ],
       "logic": {
-        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec, executor_namespace: f.executor_namespace, feed_chunks: f.feed_chunks } }",
         "type": "rhai"
       },
       "name": "Retry",
@@ -3805,7 +3819,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Failed",
@@ -3875,7 +3889,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Failed (pre-Running)",
@@ -4085,7 +4099,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Timed Out",
@@ -4155,7 +4169,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Timed Out (pre-Running)",
@@ -4757,7 +4771,7 @@
         }
       ],
       "logic": {
-        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
         "type": "rhai"
       },
       "name": "On Failed",
@@ -4820,7 +4834,7 @@
         }
       ],
       "logic": {
-        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
         "type": "rhai"
       },
       "name": "On Timeout",
@@ -4940,7 +4954,7 @@
         }
       ],
       "logic": {
-        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec, executor_namespace: f.executor_namespace, feed_chunks: f.feed_chunks } }",
         "type": "rhai"
       },
       "name": "Retry",
@@ -5316,7 +5330,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Failed",
@@ -5386,7 +5400,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Failed (pre-Running)",
@@ -5596,7 +5610,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Timed Out",
@@ -5666,7 +5680,7 @@
         }
       ],
       "logic": {
-        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec\n                    }\n                }",
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
         "type": "rhai"
       },
       "name": "Execution Timed Out (pre-Running)",

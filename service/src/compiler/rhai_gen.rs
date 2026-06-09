@@ -394,7 +394,7 @@ pub(crate) fn build_retry_topology(
                 }
             }
             #{
-                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "failed" },
+                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: "failed" },
                 log: #{ level: "error", source: "executor", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }
             }"#,
         );
@@ -403,7 +403,7 @@ pub(crate) fn build_retry_topology(
         .auto_output("f", &failure)
         .auto_output("log", &failure_log)
         .logic(
-            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: "timed_out" }, log: #{ level: "error", source: "executor", message: "Automated step timed out", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }"#,
+            r#"#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: "timed_out" }, log: #{ level: "error", source: "executor", message: "Automated step timed out", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }"#,
         );
 
     // Project the failure entry through the process log effect handler. Its
@@ -415,7 +415,12 @@ pub(crate) fn build_retry_topology(
         .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
 
     // Rhai map for the re-dispatched submit token (bumps run + retries).
-    let resubmit = r#"#{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec }"#;
+    // CRITICAL: carry `executor_namespace` (+ `feed_chunks`) forward so the
+    // retry re-dispatches to the SAME worker-group namespace. Dropping it makes
+    // the engine's executor_submit handler fall back to the bare `executor`
+    // namespace, which has no consumer in the unified-dispatch model → the
+    // retried job orphans and the net hangs forever.
+    let resubmit = r#"#{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec, executor_namespace: f.executor_namespace, feed_chunks: f.feed_chunks }"#;
 
     match policy.backoff {
         BackoffKind::Immediate => {
