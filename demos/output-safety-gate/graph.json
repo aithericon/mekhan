@@ -43,9 +43,9 @@
         "label": "Safety critic (LLM)",
         "description": "Low-temperature critic. Reads the subject text + the evidence it was supposed to be grounded in, flags overconfident dosing, off-label use, unsupported diagnoses, and claims that don't appear in the evidence. Each flag must carry a verbatim `supporting_text` from the SUBJECT (what looked wrong) — the downstream verifier checks whether that text actually appears in the EVIDENCE.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 2048
         },

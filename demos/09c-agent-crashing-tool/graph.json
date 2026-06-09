@@ -26,9 +26,9 @@
         "label": "Worker Agent",
         "description": "Calls the do_work tool; the tool always crashes. With onToolError=feedback the failure comes back as a tool error the agent must read and report — it must NOT crash the agent.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0
         },
         "systemPrompt": "You are a worker. You MUST call the `do_work` tool exactly once, passing the user's request as `payload`. The tool may fail. If the tool returns an error, do NOT call it again — reply in one sentence stating that the tool failed and quote the failure reason. Otherwise reply with the tool's summary.",

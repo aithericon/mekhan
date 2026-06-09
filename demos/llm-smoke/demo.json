@@ -2,5 +2,5 @@
   "templateId": "00000000-0000-0000-0000-000000000020",
   "folder": "agents-llm",
   "name": "LLM Smoke Test",
-  "description": "Sends a fixed text prompt to the local Ollama daemon (http://localhost:11434, provider=\"ollama\") and surfaces the response. Verifies the executor's LLM backend → Ollama native /api/chat integration end-to-end. Requires `just dev ollama-up` (see just/dev.just::up-ollama for install + model defaults; the recipe idempotently pulls the default model on first run)."
+  "description": "Sends a fixed text prompt through the internal LLM pool (provider=\"internal\", bound to the in-cluster inference router via `internal_pool_router`) and surfaces the response. Verifies the executor's LLM backend → router → Ollama integration end-to-end. Uses `llama3.2:1b`, the small/fast model pulled by default `just dev` and seeded `loaded` in the pool, so the smoke test runs out of the box without a heavy 9B download. Requires `just dev` (managed Ollama + model runner + inference router)."
 }

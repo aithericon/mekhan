@@ -63,9 +63,9 @@
         "label": "Extract (vision-only, single call)",
         "description": "Classification + extraction in ONE vision call. No OCR layer, no per-field citations, no bbox grounding. Mirrors the clinic's `t_extract` transition (Vision, qwen3.6:35b-a3b). Locally we use llama3.2-vision:11b as the vision substitute — swap to the heavier MoE for parity benchmarks.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "llama3.2-vision:11b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 4096
         },

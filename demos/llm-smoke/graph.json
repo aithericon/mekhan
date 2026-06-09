@@ -22,11 +22,11 @@
       "data": {
         "type": "agent",
         "label": "Ask LLM",
-        "description": "Send a fixed prompt to the local Ollama daemon and capture its response. Model must match the one Ollama has pulled (recipe default qwen3.5:9b — override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 generates `<think>...</think>` blocks before the answer by default; expect them in the response field.",
+        "description": "Send a fixed prompt through the internal LLM pool (the in-cluster inference router bound via `internal_pool_router`) and capture the response. Uses `llama3.2:1b` — the small/fast model pulled by default `just dev` (DEMO36_MODEL) and seeded `loaded` in the pool — so the smoke test runs out of the box without a heavy 9B download. The model must be loaded resident on a runner for the pool's live-runner gate to report it available.",
         "model": {
-          "provider": "ollama",
-          "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "provider": "internal",
+          "model": "llama3.2:1b",
+          "resourceAlias": "internal_pool_router",
           "maxTokens": 256,
           "temperature": 0
         },

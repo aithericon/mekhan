@@ -113,9 +113,9 @@
         "label": "Classify (vision LLM)",
         "description": "Vision MoE: looks at the document image and the OCR text together, returns one of the canonical document classes plus a confidence.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "llama3.2-vision:11b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 512
         },
@@ -214,9 +214,9 @@
         "label": "Extract — Bloodwork",
         "description": "Lab-result extractor. Each row of the result table becomes one field with citations.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 4096
         },
@@ -245,9 +245,9 @@
         "label": "Extract — Prescription",
         "description": "Prescription extractor. One field per medication.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 2048
         },
@@ -276,9 +276,9 @@
         "label": "Extract — Clinical Note",
         "description": "Narrative clinical doc extractor (referral / imaging / discharge / consultation).",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 4096
         },
@@ -307,9 +307,9 @@
         "label": "Extract — Form Fields",
         "description": "Administrative form extractor (insurance / invoice / consent).",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 2048
         },
@@ -338,9 +338,9 @@
         "label": "Extract — Generic",
         "description": "Best-effort extractor for documents that did not match any specialist branch.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 2048
         },
