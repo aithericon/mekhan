@@ -5,13 +5,16 @@ trigger**, the **Loki/LogQL backend**, an **Agent**, and the **SMTP backend**
 into one end-to-end monitoring workflow.
 
 ```
-Cron(*/15m) → Start{fire_time} → Loki query_range → Agent(summarize) → SMTP send → End
+Cron(12h) → Start{fire_time} → Loki query_range → Agent(summarize) → Decision(errors?)
+                                                                        ├─ yes → SMTP send → End
+                                                                        └─ no  → End (no email)
 ```
 
-1. **cron** — a `cron` Trigger fires every 15 minutes (`0 */15 * * * *`, UTC).
-   The cron source exposes `fire_time` / `scheduled_time`; `payloadMapping`
-   forwards `fire_time` onto the Start so the email can report when the check
-   ran. `concurrency: skip` means a still-running scan is never double-fired.
+1. **cron** — a `cron` Trigger fires every 12 hours (`0 0 */12 * * *`, at
+   00:00 and 12:00 UTC). The cron source exposes `fire_time` / `scheduled_time`;
+   `payloadMapping` forwards `fire_time` onto the Start so the email can report
+   when the check ran. `concurrency: skip` means a still-running scan is never
+   double-fired.
 2. **query_logs** — Loki `query_range` against the `aithericon_loki` resource.
    Runs `{nomad_task=~".+"} |~ "(?i)(error|fatal|panic|exception)"` over a
    `15m` lookback window, `limit: 40`, newest-first. Returns the fixed Loki
@@ -25,14 +28,22 @@ Cron(*/15m) → Start{fire_time} → Loki query_range → Agent(summarize) → S
    internal_pool_router`, model `qwen3.5:9b`) — the GDPR-safe internal-LLM
    pattern from demo 37; inference never leaves the router and the compiler
    emits the OpenAI-compatible wire shape.
-4. **send_alert** — SMTP backend. Subject + text + HTML are Tera-rendered
+4. **has_errors** — a Decision node that gates the email on whether the Loki
+   query actually returned error lines. The query already filters for
+   error/fatal/panic/exception, so the guard `query_logs.entry_count > 0` means
+   real errors were found: `> 0` routes to **send_alert**; otherwise it routes
+   to a separate **end_noalert** (no email). `query_logs.entry_count` is read
+   via a synthesized read-arc even though the Decision sits after the Agent.
+5. **send_alert** — SMTP backend. Subject + text + HTML are Tera-rendered
    against `{{ query_logs.entry_count }}`, `{{ start.fire_time }}`, and the
    agent's `{{ summarize.response }}`, then sent through the `mail` resource.
-5. **end** — maps `entry_count`, the send `outcome`, and the `subject`.
+6. **end** — maps `entry_count`, the send `outcome`, and the `subject`.
+   **end_noalert** (the no-errors path) maps just `entry_count` — `send_alert`
+   never runs there, so its outputs aren't available to map.
 
 > **Cron format**: the engine's cron parser wants a **6-field** expression
-> (leading seconds field), e.g. `0 */15 * * * *` — *not* the 5-field crontab
-> form `*/15 * * * *` (which fails compile with `TriggerCronInvalid`).
+> (leading seconds field), e.g. `0 0 */12 * * *` — *not* the 5-field crontab
+> form `0 */12 * * *` (which fails compile with `TriggerCronInvalid`).
 
 ## Connections
 

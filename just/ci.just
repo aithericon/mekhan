@@ -244,6 +244,8 @@ test-e2e:
 build-backend-service:
     #!/usr/bin/env bash
     cd ..
+
+    source just/scripts/ci-cargo-env.sh
     echo "▶ Cross-compiling mekhan-service for {{target_triple}}"
     SQLX_OFFLINE=true cargo build --release \
       --target {{target_triple}} \
