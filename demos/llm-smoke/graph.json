@@ -24,9 +24,9 @@
         "label": "Ask LLM",
         "description": "Send a fixed prompt to the local Ollama daemon and capture its response. Model must match the one Ollama has pulled (recipe default qwen3.5:9b — override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 generates `<think>...</think>` blocks before the answer by default; expect them in the response field.",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "qwen3.5:9b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "maxTokens": 256,
           "temperature": 0
         },

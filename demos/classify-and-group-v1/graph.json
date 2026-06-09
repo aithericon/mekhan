@@ -113,9 +113,9 @@
         "label": "Group & classify (vision LLM)",
         "description": "Vision MoE looks at the document image and the OCR text together. Groups pages into logical documents and assigns each group one of the canonical document classes. Single LLM call — the model owns both the grouping decision and the per-group classification (mirrors online-clinic's `assemble_and_classify`).",
         "model": {
-          "provider": "ollama",
+          "provider": "internal",
           "model": "llama3.2-vision:11b",
-          "baseUrl": "http://localhost:11434",
+          "resourceAlias": "internal_pool_router",
           "temperature": 0,
           "maxTokens": 1024
         },
