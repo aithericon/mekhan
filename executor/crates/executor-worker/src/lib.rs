@@ -5,6 +5,7 @@ pub mod completion;
 pub mod config;
 pub mod drain;
 pub mod event_emitter;
+pub mod fileserve;
 pub mod executor;
 pub mod handler;
 pub mod host_probe;
@@ -31,6 +32,10 @@ pub use config::{
 };
 pub use drain::{drain_signal, DrainConfig};
 pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};
+pub use fileserve::{
+    ack_subject, fileserve_subject, serve_file, spawn_fileserve_handler, FrameSink, ReplyFrame,
+    ServeAck, ServeErrorKind, ServeRequest,
+};
 pub use executor::JobExecutor;
 pub use handler::handle_execution;
 pub use host_probe::{probe_host, HostInfo};

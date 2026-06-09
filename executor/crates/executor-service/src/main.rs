@@ -45,10 +45,11 @@ use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 #[cfg(feature = "surya")]
 use aithericon_executor_surya::SuryaBackend;
 use aithericon_executor_worker::{
-    drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
-    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker, DrainConfig,
-    ExecutorConfig, JobExecutor, JobSource, Lifetime, LiveModelState, NatsCancelListener,
-    NixEnvironmentHook, SidecarLogConfig, StatusReporter, TransportRegistry,
+    drain_signal, handle_execution, spawn_fileserve_handler, spawn_presence_task,
+    spawn_worker_presence_task, BackendRegistry, BatchRunner, CancellationRegistry,
+    CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
+    LiveModelState, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    TransportRegistry,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -418,6 +419,40 @@ async fn run_nats_daemon(
             interval_secs = config.presence_interval_secs,
             "runner presence heartbeat started"
         );
+    }
+
+    // Phase 3a (multi-endpoint file-servers): a co-located runner serves bytes
+    // from an endpoint's LOCAL mount root on demand. mekhan publishes serve
+    // requests to `fileserve.<group>.read` where <group> is the capacity-group
+    // UUID the file-server endpoint binds to — the SAME partition this daemon
+    // consumes jobs on. We queue-subscribe (queue group = <group>) so exactly
+    // one co-grouped worker handles each request; the serve handler is cred-free
+    // (mekhan sends the authoritative `root` per request) and path-jails every
+    // read. It reuses the daemon's NATS client + shared shutdown token and runs
+    // alongside the job consumers without interfering with job consumption.
+    //
+    // Serve groups = the partition(s) this daemon binds dispatch consumers on:
+    // a runner serves its `runner_id`; an enrolled worker-pool daemon serves its
+    // `worker_routing_partition` (the group's capacity-resource UUID). A daemon
+    // with neither (drain/PerJob) serves no endpoint, so the handler is skipped.
+    {
+        let mut serve_groups: Vec<String> = Vec::new();
+        if let Some(rid) = config.runner_id.clone() {
+            serve_groups.push(rid);
+        }
+        if let Some(part) = config.worker_routing_partition.clone() {
+            if !serve_groups.contains(&part) {
+                serve_groups.push(part);
+            }
+        }
+        if !serve_groups.is_empty() {
+            info!(?serve_groups, "fileserve handler binding");
+            spawn_fileserve_handler(
+                nats_client_for_cancel.clone(),
+                serve_groups,
+                cancel_shutdown.clone(),
+            );
+        }
     }
 
     // Phase 3 (runner-side ROS catalog publish): when this daemon is a runner
