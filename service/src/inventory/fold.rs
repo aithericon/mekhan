@@ -99,6 +99,9 @@ async fn process_batch(
                     size: i.size as i64,
                     mtime: parse_mtime(i.mtime.as_deref()),
                     hash: i.hash.clone(),
+                    uid: i.uid.map(|v| v as i32),
+                    gid: i.gid.map(|v| v as i32),
+                    mode: i.mode,
                 })
                 .collect();
             let counts = reconcile::reconcile_batch(db, &batch.file_server_id, &items, &ctx).await?;
@@ -126,6 +129,10 @@ async fn process_batch(
                 if let Some(group) = ctx.serve_group.as_deref() {
                     provenance["serve_group"] = serde_json::json!(group);
                 }
+                // st_mode is provenance-only (no promoted column for it).
+                if let Some(mode) = item.mode {
+                    provenance["mode"] = serde_json::json!(mode);
+                }
 
                 // A hash-carrying item couples the catalogue half in the same
                 // tx; hashless items are plain observations (inventory only).
@@ -142,6 +149,12 @@ async fn process_batch(
                     )
                     .await?;
                 }
+                let facts = super::model::ObservedFacts {
+                    size_bytes: Some(item.size as i64),
+                    mtime: parse_mtime(item.mtime.as_deref()),
+                    uid: item.uid.map(|v| v as i32),
+                    gid: item.gid.map(|v| v as i32),
+                };
                 super::queries::upsert_inventory_copy(
                     &mut tx,
                     hash,
@@ -150,6 +163,7 @@ async fn process_batch(
                     "indexed",
                     false,
                     &provenance,
+                    &facts,
                 )
                 .await?;
             }

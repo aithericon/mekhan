@@ -65,6 +65,15 @@ pub struct FoldItem {
     /// Content hash (`sha256:…`), when known. Triggers catalogue coupling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    /// Owning user id (`st_uid`), when the crawler could lstat locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    /// Owning group id (`st_gid`), when the crawler could lstat locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+    /// File mode bits (`st_mode`), when the crawler could lstat locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
 }
 
 /// One crawl batch on its way to the inventory fold consumer.
@@ -120,6 +129,9 @@ mod tests {
                 size: 42,
                 mtime: Some("2026-06-10T00:00:00Z".into()),
                 hash: None,
+                uid: Some(501),
+                gid: Some(20),
+                mode: Some(0o100644),
             }],
         };
         assert_eq!(batch.msg_id(), "exec-1-ep-1-3");
@@ -137,9 +149,28 @@ mod tests {
             size: 0,
             mtime: None,
             hash: None,
+            uid: None,
+            gid: None,
+            mode: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(!json.contains("mtime"));
         assert!(!json.contains("hash"));
+        assert!(!json.contains("uid"));
+        assert!(!json.contains("gid"));
+        assert!(!json.contains("mode"));
+    }
+
+    /// Wire backward compat: a pre-ownership publisher's item JSON (no
+    /// uid/gid/mode keys) must still deserialize, defaulting to `None`.
+    #[test]
+    fn fold_item_pre_ownership_json_deserializes() {
+        let json = r#"{"path":"datasets/a.csv","size":42,"mtime":"2026-06-10T00:00:00Z"}"#;
+        let item: FoldItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.path, "datasets/a.csv");
+        assert_eq!(item.size, 42);
+        assert_eq!(item.uid, None);
+        assert_eq!(item.gid, None);
+        assert_eq!(item.mode, None);
     }
 }

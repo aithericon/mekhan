@@ -233,7 +233,8 @@ impl StagingHook for InjectEnvironmentHook {
         // The SDK's `_load_manifest()` reads AITHERICON_CHANNELS to validate
         // local `emit()`/`scatter()` calls against the compiler-declared channel
         // set. Serialize the job's manifest as the JSON array of
-        // `{name, plane, contract, element_kind}` entries the SDK expects.
+        // `{name, plane, element_kind, transport}` entries the SDK expects
+        // (it reads fields via `.get()`, so extra fields are harmless).
         ctx.env.insert(
             "AITHERICON_CHANNELS".into(),
             serde_json::to_string(&job.channels).map_err(|e| {
@@ -968,8 +969,8 @@ mod tests {
         assert_eq!(
             parsed,
             json!([
-                {"name": "progress", "plane": "control", "contract": "signal", "element_kind": "json"},
-                {"name": "frames", "plane": "data", "element_kind": "binary"},
+                {"name": "progress", "plane": "control", "element_kind": "json", "transport": "jetstream"},
+                {"name": "frames", "plane": "data", "element_kind": "binary", "transport": "nats-latest"},
             ])
         );
     }

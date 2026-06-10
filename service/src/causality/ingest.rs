@@ -2319,6 +2319,12 @@ async fn register_catalogue_entry(
         "registered",
         true,
         &provenance,
+        // The executor reports the artifact's byte size; ownership/mtime are
+        // not part of the register command (the bytes were just produced).
+        &crate::inventory::model::ObservedFacts {
+            size_bytes,
+            ..Default::default()
+        },
     )
     .await?;
 

@@ -23,6 +23,31 @@ pub struct InventoryEntry {
     pub last_seen: Option<DateTime<Utc>>,
     pub last_verified: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    // Promoted analytics columns (migration 20240166) — observed facts that
+    // used to live only in `provenance` JSONB. Nullable: pre-promotion rows
+    // and non-stat-capable observers leave them NULL.
+    pub size_bytes: Option<i64>,
+    pub mtime: Option<DateTime<Utc>>,
+    pub uid: Option<i32>,
+    pub gid: Option<i32>,
+    /// GENERATED ALWAYS from `path` (lowercased suffix) — never written by any
+    /// inventory writer.
+    pub extension: Option<String>,
+}
+
+/// Promoted analytics facts observed about one physical copy.
+///
+/// The single carrier every inventory writer threads to
+/// [`super::queries::upsert_inventory_copy`] — the compile-breaking parameter
+/// forces each caller to decide explicitly what it observed, so the promoted
+/// columns (migration 20240166) can never silently drift across the writers.
+/// `extension` is NOT here: it is a GENERATED column derived from `path`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ObservedFacts {
+    pub size_bytes: Option<i64>,
+    pub mtime: Option<DateTime<Utc>>,
+    pub uid: Option<i32>,
+    pub gid: Option<i32>,
 }
 
 /// One item in a batched by-reference **register** request.
@@ -53,6 +78,25 @@ pub struct InventoryRegisterItem {
     pub size_bytes: Option<i64>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    // Optional observed facts → promoted inventory columns (analytics).
+    #[serde(default)]
+    pub mtime: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub uid: Option<i32>,
+    #[serde(default)]
+    pub gid: Option<i32>,
+}
+
+impl InventoryRegisterItem {
+    /// The promoted-column facts this register item observed.
+    pub fn facts(&self) -> ObservedFacts {
+        ObservedFacts {
+            size_bytes: self.size_bytes,
+            mtime: self.mtime,
+            uid: self.uid,
+            gid: self.gid,
+        }
+    }
 }
 
 fn default_provenance() -> serde_json::Value {
@@ -95,6 +139,27 @@ pub struct InventoryIndexItem {
     pub status: String,
     #[serde(default = "default_provenance")]
     pub provenance: serde_json::Value,
+    // Optional observed facts → promoted inventory columns (analytics).
+    #[serde(default)]
+    pub size_bytes: Option<i64>,
+    #[serde(default)]
+    pub mtime: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub uid: Option<i32>,
+    #[serde(default)]
+    pub gid: Option<i32>,
+}
+
+impl InventoryIndexItem {
+    /// The promoted-column facts this index item observed.
+    pub fn facts(&self) -> ObservedFacts {
+        ObservedFacts {
+            size_bytes: self.size_bytes,
+            mtime: self.mtime,
+            uid: self.uid,
+            gid: self.gid,
+        }
+    }
 }
 
 /// Batched index request body — all items share one `file_server_id`.

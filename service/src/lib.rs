@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod analytics;
 pub mod auth;
 pub mod autoscaler;
 pub mod backends;
@@ -431,6 +432,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Serve bridge — stream an entry's bytes by resolving it to a physical
         // copy + endpoint (local_mount NATS relay / s3 presign-or-proxy / sftp).
         .routes(routes!(data::handlers::entry_content))
+        // File analytics (docs/32 Cuts 1+2) — group-by breakdowns over the
+        // promoted file_inventory columns (the `directory` dimension doubles
+        // as the capacity-treemap level loader) + growth timeseries over
+        // `inventory_snapshots` + the manual snapshot trigger.
+        .routes(routes!(analytics::handlers::breakdown))
+        .routes(routes!(analytics::handlers::timeseries))
+        .routes(routes!(analytics::handlers::snapshot))
         // Provenance
         .routes(routes!(causality::routes::token_provenance))
         .routes(routes!(causality::routes::cross_link))

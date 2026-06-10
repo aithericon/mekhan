@@ -8,6 +8,7 @@
 		type CatalogueStats
 	} from '$lib/api/client';
 	import { ArtifactCard } from '$lib/components/catalogue';
+	import { formatBytes } from './format';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -71,14 +72,6 @@
 	};
 	const statusColor = (s: string) =>
 		statusColors[s] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
-
-	function formatBytes(bytes: number | null): string {
-		if (bytes === null || bytes === undefined) return '—';
-		if (bytes === 0) return '0 B';
-		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(1024));
-		return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-	}
 
 	// `entry.id` is the catalogue row id (job-net artifacts); content-addressed /
 	// by-reference rows carry only entry_id/content_hash, so prefer those.

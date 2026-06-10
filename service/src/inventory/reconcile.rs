@@ -38,6 +38,15 @@ pub struct ObservedItem {
     /// the inherited legacy hash and triggers catalogue coupling.
     #[serde(default)]
     pub hash: Option<String>,
+    /// Owning user id (`st_uid`), when the crawler could lstat locally.
+    #[serde(default)]
+    pub uid: Option<i32>,
+    /// Owning group id (`st_gid`), when the crawler could lstat locally.
+    #[serde(default)]
+    pub gid: Option<i32>,
+    /// File mode bits (`st_mode`) — provenance-only, never a column.
+    #[serde(default)]
+    pub mode: Option<u32>,
 }
 
 /// Where a batch of observations came from — persisted into every upserted
@@ -120,15 +129,19 @@ pub async fn reconcile_batch(
     let mut tx = pool.begin().await?;
 
     for item in items {
-        // Inherit the legacy hash + size by (file_server_id, path).
-        let legacy: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
-            "SELECT hash, size FROM legacy_file_index \
+        // Inherit the legacy hash + size by (file_server_id, path); owner_id
+        // rides along so a catalogue coupling can stamp the legacy owner.
+        let legacy: Option<(Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
+            "SELECT hash, size, owner_id FROM legacy_file_index \
              WHERE file_server_id = $1 AND path = $2",
         )
         .bind(file_server_id)
         .bind(&item.path)
         .fetch_optional(&mut *tx)
         .await?;
+
+        let legacy_owner_id = legacy.as_ref().and_then(|(_, _, o)| o.clone());
+        let legacy = legacy.map(|(hash, size, _)| (hash, size));
 
         let (status, content_hash, mut provenance) = match legacy {
             Some((hash, legacy_size)) => {
@@ -175,26 +188,53 @@ pub async fn reconcile_batch(
                 None,
             )
             .await?;
+            // Legacy owner → user_metadata stamp on the coupled catalogue row
+            // (the decided posture: NO native owner backfill from legacy data;
+            // legacy `owner_id` is preserved as JSONB context only).
+            if let Some(owner) = legacy_owner_id.as_deref().filter(|o| !o.trim().is_empty()) {
+                sqlx::query(
+                    "UPDATE catalogue_entries SET user_metadata = \
+                        jsonb_set(user_metadata, '{legacy_owner_id}', to_jsonb($1::text), true) \
+                     WHERE content_hash = $2",
+                )
+                .bind(owner)
+                .bind(hash)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
 
         // Where the observation came from (adopt autostamp chain).
         ctx.stamp(&mut provenance);
+        // st_mode is provenance-only (no promoted column for it).
+        if let (Some(mode), Some(obj)) = (item.mode, provenance.as_object_mut()) {
+            obj.insert("mode".into(), serde_json::json!(mode));
+        }
 
         // `verified`/`mismatch` set last_verified (we just compared against the
         // baseline); `orphan_disk` leaves it NULL (nothing was verified).
         let verified_now = status != "orphan_disk";
 
+        // Promoted analytics columns: a reconcile observation is FRESH state,
+        // so observed size/mtime OVERWRITE on conflict; uid/gid COALESCE (a
+        // non-stat-capable re-crawl never NULLs known ownership). The
+        // provenance keys above stay for compat. `extension` is GENERATED.
         sqlx::query(
             r#"
             INSERT INTO file_inventory
                 (content_hash, file_server_id, path, status, provenance,
+                 size_bytes, mtime, uid, gid,
                  last_seen, last_verified, updated_at)
-            VALUES ($1, $2, $3, $4, $5, NOW(),
+            VALUES ($1, $2, $3, $4, $5, $7, $8, $9, $10, NOW(),
                     CASE WHEN $6 THEN NOW() ELSE NULL END, NOW())
             ON CONFLICT (file_server_id, path) DO UPDATE SET
                 status        = EXCLUDED.status,
                 content_hash  = EXCLUDED.content_hash,
                 provenance    = EXCLUDED.provenance,
+                size_bytes    = EXCLUDED.size_bytes,
+                mtime         = EXCLUDED.mtime,
+                uid           = COALESCE(EXCLUDED.uid, file_inventory.uid),
+                gid           = COALESCE(EXCLUDED.gid, file_inventory.gid),
                 last_seen     = NOW(),
                 last_verified = CASE WHEN $6 THEN NOW()
                                      ELSE file_inventory.last_verified END,
@@ -207,6 +247,10 @@ pub async fn reconcile_batch(
         .bind(status)
         .bind(&provenance)
         .bind(verified_now)
+        .bind(item.size)
+        .bind(item.mtime)
+        .bind(item.uid)
+        .bind(item.gid)
         .execute(&mut *tx)
         .await?;
 

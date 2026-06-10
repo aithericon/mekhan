@@ -1131,6 +1131,14 @@ mod tests {
     #[test]
     fn normalize_namespace_unchanged_without_runner_identity() {
         let mut config = test_config();
+        // Isolate from the developer machine: the default base_dir is
+        // $HOME/.aithericon/executor, where a real `register` enrollment may
+        // have left a runner/identity.json that normalize() would discover.
+        let tmp = std::env::temp_dir().join(format!(
+            "exec-worker-no-identity-test-{}",
+            std::process::id()
+        ));
+        config.base_dir = tmp.to_string_lossy().into_owned();
         config.normalize();
         assert_eq!(config.namespace, default_namespace());
     }

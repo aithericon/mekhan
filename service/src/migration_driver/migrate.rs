@@ -71,6 +71,8 @@ struct SourceRow {
     id: uuid::Uuid,
     content_hash: Option<String>,
     path: String,
+    /// Carried onto the copied row — identical bytes, identical size.
+    size_bytes: Option<i64>,
 }
 
 /// Copy the selected source rows' bytes to `target_server`, verify each by
@@ -162,7 +164,15 @@ pub async fn migrate(
         }
 
         // 3. Verified copy — record the copied inventory row on the target.
-        insert_copied_row(pool, &content_hash, target_server, &row.path, row.id).await?;
+        insert_copied_row(
+            pool,
+            &content_hash,
+            target_server,
+            &row.path,
+            row.id,
+            row.size_bytes,
+        )
+        .await?;
         counts.verified += 1;
         counts.copied += 1;
     }
@@ -185,7 +195,7 @@ async fn select_source_rows(
 ) -> Result<Vec<SourceRow>, DriverError> {
     let rows = match selector {
         MigrateSelector::Hash(hash) => sqlx::query_as::<_, SourceRow>(
-            "SELECT id, content_hash, path FROM file_inventory \
+            "SELECT id, content_hash, path, size_bytes FROM file_inventory \
              WHERE file_server_id = $1 AND content_hash = $2 \
              ORDER BY path",
         )
@@ -196,7 +206,7 @@ async fn select_source_rows(
         MigrateSelector::AllCanonical { respect_target } => {
             if *respect_target {
                 sqlx::query_as::<_, SourceRow>(
-                    "SELECT id, content_hash, path FROM file_inventory \
+                    "SELECT id, content_hash, path, size_bytes FROM file_inventory \
                      WHERE file_server_id = $1 AND is_canonical = true \
                        AND migration_target = $2 \
                      ORDER BY path",
@@ -207,7 +217,7 @@ async fn select_source_rows(
                 .await?
             } else {
                 sqlx::query_as::<_, SourceRow>(
-                    "SELECT id, content_hash, path FROM file_inventory \
+                    "SELECT id, content_hash, path, size_bytes FROM file_inventory \
                      WHERE file_server_id = $1 AND is_canonical = true \
                      ORDER BY path",
                 )
@@ -273,29 +283,34 @@ async fn probe_dest(
         .ok_or_else(|| DriverError::Probe("probe returned no checksum_digest".into()))
 }
 
-/// UPSERT the copied inventory row on the target server.
+/// UPSERT the copied inventory row on the target server. The copy is
+/// byte-identical to the verified source, so the source's `size_bytes` carries
+/// over (`extension` is GENERATED from `path` — never named here).
 async fn insert_copied_row(
     pool: &PgPool,
     content_hash: &str,
     target_server: &str,
     path: &str,
     copy_of: uuid::Uuid,
+    size_bytes: Option<i64>,
 ) -> Result<(), DriverError> {
     sqlx::query(
         "INSERT INTO file_inventory \
             (content_hash, file_server_id, path, status, is_canonical, copy_of, \
-             last_seen, updated_at) \
-         VALUES ($1, $2, $3, 'copied', false, $4, NOW(), NOW()) \
+             size_bytes, last_seen, updated_at) \
+         VALUES ($1, $2, $3, 'copied', false, $4, $5, NOW(), NOW()) \
          ON CONFLICT (file_server_id, path) DO UPDATE SET \
             content_hash = EXCLUDED.content_hash, \
             status       = 'copied', \
             copy_of      = EXCLUDED.copy_of, \
+            size_bytes   = COALESCE(EXCLUDED.size_bytes, file_inventory.size_bytes), \
             updated_at   = NOW()",
     )
     .bind(content_hash)
     .bind(target_server)
     .bind(path)
     .bind(copy_of)
+    .bind(size_bytes)
     .execute(pool)
     .await?;
     Ok(())

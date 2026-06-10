@@ -52,6 +52,10 @@ pub struct StagedEvent {
 }
 
 /// Typed detail for status updates and execution events.
+// `ArtifactLogged` dwarfs the other variants, but these events are built
+// once and serialized — never stored in bulk — so boxing its dozen fields
+// (and rippling through every constructor/matcher) buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "event_type", rename_all = "snake_case")]

@@ -55,6 +55,9 @@ async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size
             name: Some("obs".to_string()),
             size_bytes: Some(size),
             mime_type: None,
+            mtime: None,
+            uid: None,
+            gid: None,
         }],
     };
     inv::register(pool, &req).await.expect("register copy");

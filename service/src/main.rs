@@ -96,6 +96,17 @@ async fn main() -> anyhow::Result<()> {
         artifact_store.clone(),
     ));
 
+    // File-analytics growth snapshots (docs/32 Cut 2): periodic aggregate
+    // captures of file_inventory into the inventory_snapshots hypertable.
+    // The manual POST /api/v1/data/analytics/snapshot trigger shares the
+    // same writer regardless of this switch.
+    if config.analytics.snapshot_enabled {
+        tokio::spawn(mekhan_service::analytics::snapshot::start_snapshot_job(
+            config.analytics.clone(),
+            db.clone(),
+        ));
+    }
+
     let yjs_persistence = YjsPersistence::new(db.clone());
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     tracing::info!("Yjs collaboration manager initialized");

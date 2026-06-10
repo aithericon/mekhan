@@ -9,6 +9,9 @@
 //! - `stat()`s each FILE entry for `{size, mtime}` (the `fs` lister returns
 //!   entries WITHOUT `content_length`/`last_modified`, so this is mandatory to
 //!   capture size+mtime — mirrors [`list`](super::list) when `include_stat`);
+//!   on a LOCAL backend the stat is a direct `lstat` of
+//!   `<endpoint>/<storage path>`, additionally capturing `{uid, gid, mode}`
+//!   (ownership facts an opendal `Metadata` cannot carry);
 //! - emits fixed-size batches — either over the job's
 //!   [`EventStream`](aithericon_executor_backend::traits::EventStream)
 //!   `item()`/`close()` channel mechanism (docs/25 consumer-join), or, in
@@ -36,7 +39,7 @@ use aithericon_executor_domain::{FoldBatch, FoldItem, FoldMode};
 
 use crate::config::CrawlConfig;
 
-use super::{resolve_path, FileOpsError, FileOpsResult};
+use super::{local_stat, local_stat_root, resolve_path, FileOpsError, FileOpsResult};
 
 /// Channel name the crawl batches are emitted on (events mode).
 const CRAWL_CHANNEL: &str = "crawl";
@@ -46,6 +49,11 @@ struct Observed {
     path: String,
     size: u64,
     mtime: Option<String>,
+    /// `st_uid`/`st_gid`/`st_mode` — only populated when the storage backend
+    /// is local (a direct lstat); opendal metadata cannot carry ownership.
+    uid: Option<u32>,
+    gid: Option<u32>,
+    mode: Option<u32>,
 }
 
 /// Where filled batches go — resolved once from config + injected sink.
@@ -84,6 +92,9 @@ impl Emitter {
                                 "path": o.path,
                                 "size": o.size,
                                 "mtime": o.mtime,
+                                "uid": o.uid,
+                                "gid": o.gid,
+                                "mode": o.mode,
                                 "endpoint_root": endpoint_root,
                             })
                         })
@@ -121,6 +132,9 @@ impl Emitter {
                             size: o.size,
                             mtime: o.mtime,
                             hash: None,
+                            uid: o.uid,
+                            gid: o.gid,
+                            mode: o.mode,
                         })
                         .collect(),
                 };
@@ -236,6 +250,12 @@ pub async fn execute(
     // One episode for the whole walk: items + close share this uid.
     let episode_uid = Uuid::new_v4().to_string();
 
+    // Local backend → lstat directly at `<endpoint>/<storage path>` (the Fs
+    // operator's root IS the endpoint): size + mtime + uid/gid/mode in ONE
+    // syscall, where the opendal stat would cost the same syscall yet drop
+    // ownership. Non-local (or any lstat error) falls back to opendal below.
+    let lstat_root = local_stat_root(&config.storage);
+
     let batch_cap = config.batch_size.max(1);
     let mut batch: Vec<Observed> = Vec::with_capacity(batch_cap);
     let mut total: u64 = 0;
@@ -272,20 +292,31 @@ pub async fn execute(
 
         // The `fs` lister returns entries without size/mtime, so stat each file
         // when requested (the default). `path` here is the full storage path.
-        let (size, mtime) = if config.stat {
-            let meta = operator.stat(&path).await?;
-            // `last_modified()` is an opendal `Timestamp` (RFC 3339 via Display),
-            // mirroring `list`'s `include_stat` rendering.
-            let mtime = meta.last_modified().map(|t| t.to_string());
-            (meta.content_length(), mtime)
+        let (size, mtime, uid, gid, mode) = if config.stat {
+            match lstat_root
+                .as_deref()
+                .and_then(|root| local_stat(root, &path))
+            {
+                Some(s) => (s.size, s.mtime, s.uid, s.gid, s.mode),
+                None => {
+                    let meta = operator.stat(&path).await?;
+                    // `last_modified()` is an opendal `Timestamp` (RFC 3339 via
+                    // Display), mirroring `list`'s `include_stat` rendering.
+                    let mtime = meta.last_modified().map(|t| t.to_string());
+                    (meta.content_length(), mtime, None, None, None)
+                }
+            }
         } else {
-            (entry.metadata().content_length(), None)
+            (entry.metadata().content_length(), None, None, None, None)
         };
 
         batch.push(Observed {
             path: user_path.clone(),
             size,
             mtime,
+            uid,
+            gid,
+            mode,
         });
         total += 1;
         last_path = Some(user_path);
@@ -375,4 +406,105 @@ pub async fn execute(
         ("exhausted".into(), serde_json::json!(exhausted)),
         ("endpoint_root".into(), serde_json::json!(endpoint_root)),
     ]))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    use aithericon_executor_backend::traits::EventStream;
+    use aithericon_executor_domain::LogLevel;
+    use aithericon_executor_storage::{StorageBackend, StorageConfig};
+
+    use crate::config::CrawlConfig;
+
+    #[derive(Default)]
+    struct CapturingStream {
+        items: Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl EventStream for CapturingStream {
+        async fn log(&self, _level: LogLevel, _message: String, _fields: HashMap<String, String>) {}
+
+        async fn item(&self, _channel: String, _episode_uid: String, _idx: u64, payload: Value) {
+            self.items.lock().unwrap().push(payload);
+        }
+    }
+
+    /// Local-backend crawl captures ownership: every emitted item carries the
+    /// current process's uid/gid, a mode, and an RFC 3339 mtime — proving the
+    /// single-lstat path ran instead of the (ownership-blind) opendal stat.
+    #[tokio::test]
+    async fn crawl_local_backend_captures_ownership() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas/sub")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), "aaaa").unwrap();
+        std::fs::write(dir.path().join("nas/sub/b.txt"), "bb").unwrap();
+
+        let storage = StorageConfig {
+            backend: StorageBackend::Local,
+            endpoint: dir.path().to_str().unwrap().to_string(),
+            bucket: String::new(),
+            region: None,
+            prefix: String::new(),
+            credentials: Default::default(),
+            retry: Default::default(),
+            resource_alias: None,
+        };
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = CrawlConfig {
+            prefix: "nas/".into(),
+            storage,
+            batch_size: 10,
+            resume_from: None,
+            stat: true,
+            max_batches: None,
+            sink: None,
+        };
+
+        let stream = Arc::new(CapturingStream::default());
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["count"], serde_json::json!(2));
+
+        let root_meta = std::fs::metadata(dir.path()).unwrap();
+        let (my_uid, my_gid) = (root_meta.uid(), root_meta.gid());
+
+        let items = stream.items.lock().unwrap();
+        let entries: Vec<&Value> = items
+            .iter()
+            .flat_map(|p| p["items"].as_array().expect("items array"))
+            .collect();
+        assert_eq!(entries.len(), 2);
+        for e in &entries {
+            assert!(e["size"].as_u64().unwrap() > 0, "stat size: {e}");
+            assert_eq!(e["uid"].as_u64().unwrap() as u32, my_uid, "uid: {e}");
+            assert_eq!(e["gid"].as_u64().unwrap() as u32, my_gid, "gid: {e}");
+            assert!(e["mode"].as_u64().is_some(), "mode present: {e}");
+            let mtime = e["mtime"].as_str().expect("mtime string");
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(mtime).is_ok(),
+                "mtime must parse as RFC 3339: {mtime}"
+            );
+        }
+    }
 }

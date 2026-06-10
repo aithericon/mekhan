@@ -5,8 +5,9 @@
 	import EntriesTab from '$lib/components/data/EntriesTab.svelte';
 	import CopiesTab from '$lib/components/data/CopiesTab.svelte';
 	import ServersTab from '$lib/components/data/ServersTab.svelte';
+	import AnalyticsTab from '$lib/components/data/AnalyticsTab.svelte';
 
-	const TABS = ['entries', 'copies', 'servers'];
+	const TABS = ['entries', 'copies', 'servers', 'analytics'];
 
 	// Deep-link the active tab via ?tab= so a server link can jump straight to
 	// the Servers view (and bookmarks survive). /catalogue + /inventory redirect
@@ -59,6 +60,9 @@
 				<Tabs.Trigger variant="underline" value="servers" data-testid="data-tab-servers">
 					Servers
 				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="analytics" data-testid="data-tab-analytics">
+					Analytics
+				</Tabs.Trigger>
 			</Tabs.List>
 		{/snippet}
 
@@ -70,6 +74,9 @@
 		</Tabs.Content>
 		<Tabs.Content value="servers">
 			<ServersTab focusKey={focusServer} />
+		</Tabs.Content>
+		<Tabs.Content value="analytics">
+			<AnalyticsTab />
 		</Tabs.Content>
 	</PageShell>
 </Tabs.Root>

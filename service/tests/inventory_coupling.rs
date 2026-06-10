@@ -87,6 +87,9 @@ fn reg_item(server: &str, path: &str, hash: Option<&str>) -> InventoryRegisterIt
         name: Some("obs".to_string()),
         size_bytes: Some(0),
         mime_type: None,
+        mtime: None,
+        uid: None,
+        gid: None,
     }
 }
 
@@ -206,6 +209,10 @@ async fn index_writes_inventory_only() {
             path: path.to_string(),
             status: "indexed".to_string(),
             provenance: serde_json::json!({"source": "test-index"}),
+            size_bytes: None,
+            mtime: None,
+            uid: None,
+            gid: None,
         }],
     };
     let resp = queries::index(&pool, &req).await.expect("index");
