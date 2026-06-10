@@ -45,6 +45,7 @@
 	--node-timeout: oklch(0.64 0.14 215);
 	--node-sub-workflow: oklch(0.70 0.13 185);
 	--node-agent: oklch(0.66 0.15 50);
+	--node-stream: oklch(0.64 0.15 265);
 	--border: oklch(0.80 0.005 270);
 	--input: oklch(0.972 0.003 270);
 	--ring: oklch(0.50 0.075 264);
@@ -136,6 +137,7 @@
 	--color-node-timeout: var(--node-timeout);
 	--color-node-sub-workflow: var(--node-sub-workflow);
 	--color-node-agent: var(--node-agent);
+	--color-node-stream: var(--node-stream);
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);

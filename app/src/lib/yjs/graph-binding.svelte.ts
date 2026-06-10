@@ -11,7 +11,9 @@ import type {
 	AutomatedStepNodeData,
 	EndNodeData,
 	FailureNodeData,
-	AgentNodeData
+	AgentNodeData,
+	StreamSourceNodeData,
+	StreamSinkNodeData
 } from '$lib/types/editor';
 
 /**
@@ -456,6 +458,26 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
+			case 'stream_source': {
+				// `channels` (docs/25) is the node's ONLY config — the whole array
+				// round-trips as one value, mirroring automated_step. It MUST be
+				// read back here or the editor reconstruction drops the channels
+				// and the node loses its (only) handles.
+				const channels = config?.channels as StreamSourceNodeData['channels'] | undefined;
+				return {
+					...base,
+					type: 'stream_source',
+					...(channels && channels.length > 0 ? { channels } : {})
+				};
+			}
+			case 'stream_sink': {
+				const channels = config?.channels as StreamSinkNodeData['channels'] | undefined;
+				return {
+					...base,
+					type: 'stream_sink',
+					...(channels && channels.length > 0 ? { channels } : {})
+				};
+			}
 		}
 	}
 
@@ -1036,6 +1058,16 @@ export class YjsGraphBinding {
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
 				break;
+			case 'stream_source':
+			case 'stream_sink': {
+				// `channels` round-trips whole, conditionally — delete when empty so
+				// clearing the last channel removes the stale Yjs key (mirrors the
+				// automated_step channels clear path).
+				const chans = (data as StreamSourceNodeData | StreamSinkNodeData).channels;
+				if (chans && chans.length > 0) config.set('channels', chans);
+				else config.delete('channels');
+				break;
+			}
 		}
 	}
 

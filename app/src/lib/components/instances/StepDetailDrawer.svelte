@@ -18,6 +18,7 @@
 	import ArtifactMediaPreview from '$lib/components/catalogue/ArtifactMediaPreview.svelte';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import ChannelsPanel from './ChannelsPanel.svelte';
+	import StreamSinkPanel from './StreamSinkPanel.svelte';
 	import StepLogs from './StepLogs.svelte';
 	import Server from '@lucide/svelte/icons/server';
 	import Cpu from '@lucide/svelte/icons/cpu';
@@ -81,13 +82,24 @@
 		onSelectIteration
 	}: Props = $props();
 
-	// Statically-declared channels on this node (docs/25). Only the
-	// `automated_step` arm of `WorkflowNodeData` carries `channels`; narrow on
-	// the arm before reading. Surfaced in the Channels section; lifecycle (if
+	// Statically-declared channels on this node (docs/25). They live on the
+	// channel-carrying arms of `WorkflowNodeData` — `automated_step` plus the
+	// streaming endpoint nodes (`stream_source`/`stream_sink`); narrow on the
+	// arm before reading. Surfaced in the Channels section; lifecycle (if
 	// available) comes from `channelRuntime`.
 	const channels = $derived<Channel[]>(
-		node?.data?.type === 'automated_step' ? (node.data.channels ?? []) : []
+		node?.data?.type === 'automated_step' ||
+			node?.data?.type === 'stream_source' ||
+			node?.data?.type === 'stream_sink'
+			? (node.data.channels ?? [])
+			: []
 	);
+
+	// A StreamSink node re-exposes its consumed stream at a stable per-instance
+	// egress URL — the drawer surfaces it (plus a live preview when renderable).
+	// A sink runs no executor job, so it usually has NO step row: the dedicated
+	// sheet branch below keeps the drawer non-empty for it (mirroring LeaseScope).
+	const isStreamSink = $derived(node?.data?.type === 'stream_sink');
 
 	// Cluster-lease lifecycle palette + copy.
 	const leaseTone: Record<string, { bg: string; text: string; label: string }> = {
@@ -669,6 +681,13 @@
 					</section>
 				{/if}
 
+				{#if isStreamSink && node && instanceId}
+					<!-- Stable egress URL + live preview for the sink's stream. Rendered
+					     here too in case a sink ever carries a step row; the dedicated
+					     no-step branch below is the usual path. -->
+					<StreamSinkPanel {instanceId} nodeId={node.id} {channels} runtime={channelRuntime} />
+				{/if}
+
 				{#if channels.length > 0}
 					<!-- Declared streaming channels (docs/25). Static list of
 					     name/direction/plane/element; best-effort live "opened · N
@@ -726,6 +745,48 @@
 				{@render leasePanel(leaseRuntime)}
 				{#if showAllocationPanel}
 					{@render allocationPanel(allocationRows)}
+				{/if}
+			</div>
+		{:else if isStreamSink && node && instanceId}
+			<!-- StreamSink endpoint: no step-execution row of its own (it runs no
+			     executor job). The drawer is the egress view — the stable URL
+			     external consumers tap, plus a live preview when renderable. -->
+			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
+			<SheetDescription>Stream egress endpoint for this node.</SheetDescription>
+
+			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
+				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
+					<Icon class="size-5 {meta.iconClass}" />
+				</div>
+				<div class="min-w-0 flex-1">
+					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
+					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
+					</div>
+					<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
+						id: {node.id}
+					</div>
+					{#if nodeDescription}
+						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
+					{/if}
+				</div>
+				<div class="flex shrink-0 items-center gap-1">
+					<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
+						<Settings2 class="size-4" />
+						<span class="ml-1.5 hidden sm:inline">Config</span>
+					</Button>
+					<SheetClose>
+						<Button variant="ghost" size="icon" aria-label="Close">
+							<X class="size-4" />
+						</Button>
+					</SheetClose>
+				</div>
+			</header>
+
+			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+				<StreamSinkPanel {instanceId} nodeId={node.id} {channels} runtime={channelRuntime} />
+				{#if channels.length > 0}
+					<ChannelsPanel {channels} runtime={channelRuntime} executionId={null} />
 				{/if}
 			</div>
 		{:else if showAllocationPanel}

@@ -45,7 +45,9 @@ export const NODE_WIDTH: Record<NodeKind, number> = {
 	delay: 190,
 	trigger: 180,
 	sub_workflow: 240,
-	agent: 260
+	agent: 260,
+	stream_source: 220,
+	stream_sink: 220
 };
 
 // Start / End collapse to a compact pill when they declare no fields — keep
@@ -164,6 +166,16 @@ export function getWorkflowNodeHeight(node: {
 			if (inputs > 0) h += SECTION_GAP + LINE + inputs * FIELD_ROW;
 			const outputs = data.output?.fields?.length ?? 0;
 			if (outputs > 0) h += SECTION_GAP + LINE + outputs * FIELD_ROW;
+			return h;
+		}
+		case 'stream_source':
+		case 'stream_sink': {
+			// "Ingress/Egress endpoint" caption line + one channel row per
+			// declared channel (the rows mirror automated_step's channel list).
+			let h = HEADER_H + BODY_PAD + LINE;
+			const channels = data.channels?.length ?? 0;
+			if (channels > 0) h += SECTION_GAP + channels * CHANNEL_ROW;
+			else h += LINE; // "No channels declared" hint line
 			return h;
 		}
 		case 'agent': {

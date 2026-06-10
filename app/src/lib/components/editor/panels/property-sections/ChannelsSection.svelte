@@ -13,14 +13,35 @@
 	// into a per-name edge handle.
 
 	type Channel = components['schemas']['Channel'];
+	type ChannelDirection = components['schemas']['ChannelDirection'];
+	type ChannelTransport = components['schemas']['ChannelTransport'];
 
 	type Props = {
 		channels: Channel[];
 		readonly?: boolean;
 		onchange: (channels: Channel[]) => void;
+		/** Force every channel's direction (StreamSource ⇒ 'out', StreamSink ⇒
+		 *  'in'). The editor hides the direction picker and new channels are
+		 *  seeded with this direction. Absent ⇒ free authoring (AutomatedStep). */
+		lockDirection?: ChannelDirection;
+		/** Cap on declared channels (StreamSink v1 ⇒ exactly one IN channel).
+		 *  The "Add channel" affordance disables once reached. */
+		maxChannels?: number;
+		/** Restrict the transport picker to this subset (StreamSource ⇒
+		 *  jetstream | nats-latest). Absent ⇒ all transports. */
+		allowedTransports?: ChannelTransport[];
 	};
 
-	let { channels, readonly = false, onchange }: Props = $props();
+	let {
+		channels,
+		readonly = false,
+		onchange,
+		lockDirection,
+		maxChannels,
+		allowedTransports
+	}: Props = $props();
+
+	const atCap = $derived(maxChannels != null && channels.length >= maxChannels);
 
 	function updateChannel(index: number, channel: Channel) {
 		const next = [...channels];
@@ -35,7 +56,9 @@
 	}
 
 	function addChannel() {
-		onchange([...channels, newChannel()]);
+		if (atCap) return;
+		const seed = newChannel();
+		onchange([...channels, lockDirection ? { ...seed, direction: lockDirection } : seed]);
 	}
 </script>
 
@@ -46,7 +69,16 @@
 			Streaming channels
 		</span>
 		{#if !readonly}
-			<Button variant="ghost" size="sm" onclick={addChannel} class="h-7 gap-1 px-2 text-sm">
+			<Button
+				variant="ghost"
+				size="sm"
+				onclick={addChannel}
+				disabled={atCap}
+				title={atCap
+					? `This node supports at most ${maxChannels} channel${maxChannels === 1 ? '' : 's'}`
+					: undefined}
+				class="h-7 gap-1 px-2 text-sm"
+			>
 				<Plus class="size-3.5" />
 				Add channel
 			</Button>
@@ -64,6 +96,8 @@
 				<ChannelEditor
 					{channel}
 					{readonly}
+					{lockDirection}
+					{allowedTransports}
 					onchange={(c) => updateChannel(i, c)}
 					onremove={() => removeChannel(i)}
 				/>

@@ -138,6 +138,21 @@ export interface ExecutionLike {
 }
 
 /**
+ * The deterministic execution id a `stream_source` node's channel bytes are
+ * addressed by. A StreamSource is an INGRESS endpoint — no executor job runs
+ * for it, so there is no step-execution row to read an `execution_id` off.
+ * Instead the backend keys its datastream under a synthetic, deterministic id
+ * derived from (instance, node), and the tap endpoint
+ * (`/api/v1/executions/{id}/channels/{name}/data`) resolves it like any other
+ * execution id — so EdgeMediaWidget renders the live feed unchanged.
+ *
+ * MUST stay in lockstep with the service-side convention (WI-3/WI-4).
+ */
+export function streamSourceExecutionId(instanceId: string, nodeId: string): string {
+	return `st-${instanceId}-${nodeId}`;
+}
+
+/**
  * Resolve a source node's declared channels. `channels` lives only on the
  * `automated_step` arm of the node-data union — mirror the same defensive
  * `data.channels` access shape `edge-lane.ts` uses (structural, not coupled to
@@ -230,6 +245,13 @@ function modelFromContentType(contentType: string | null): string | null {
  * `executionsByNode` maps `node_id → ExecutionLike[]` ordered so `.at(-1)` is
  * the latest; we take the latest with a non-null `execution_id`.
  *
+ * EXCEPTION — `stream_source` producers: an ingress endpoint runs no executor
+ * job, so it never gets a step-execution row. When `instanceId` is supplied,
+ * its feed's `executionId` is derived deterministically via
+ * {@link streamSourceExecutionId} (`st-<instanceId>-<nodeId>`) and its
+ * `producerStatus` is synthesized as `running` while the instance is live
+ * (the endpoint accepts bytes for the whole run) / `completed` once terminal.
+ *
  * `terminal` (the owning instance's terminal status) is stamped onto every feed
  * so the widget can freeze its end-state even if it never observed a `close`
  * token — see {@link edgeFeedLifecycle}.
@@ -240,6 +262,10 @@ export function deriveEdgeFeeds(
 	executionsByNode: Map<string, ExecutionLike[]>,
 	marking: MarkingStoreLike,
 	terminal: boolean = false,
+	/** Owning instance id — required only for `stream_source` feeds (their
+	 *  execution id is derived from it). Absent ⇒ stream_source edges yield
+	 *  no feed (everything else is unaffected). */
+	instanceId: string | null = null,
 	// Injected for testability (jsdom has no `MediaSource`), exactly like
 	// `planLiveRender`'s own probe. Production uses the real capability check.
 	mseSupported: (mime: string) => boolean = defaultMseSupported
@@ -265,9 +291,19 @@ export function deriveEdgeFeeds(
 		const plan = planLiveRender(contentType, mseSupported);
 
 		// Latest execution carrying a tappable execution_id; skip if none yet.
+		// EXCEPT for stream_source producers: an ingress endpoint runs no
+		// executor job (no step-execution row, ever), so its execution id is
+		// derived deterministically from (instance, node) and its liveness is
+		// "running while the instance runs".
 		const rows = executionsByNode.get(edge.source);
 		const latest = rows?.at(-1);
-		const executionId = latest?.execution_id;
+		let executionId = latest?.execution_id ?? null;
+		let producerStatus = latest?.status ?? null;
+		if (source?.type === 'stream_source') {
+			if (!instanceId) continue;
+			executionId = streamSourceExecutionId(instanceId, edge.source);
+			producerStatus = terminal ? 'completed' : 'running';
+		}
 		if (!executionId) continue;
 
 		const runtime = channelRuntimeFor(marking, edge.source, ch.name);
@@ -281,7 +317,7 @@ export function deriveEdgeFeeds(
 			contentType,
 			plan,
 			runtime,
-			producerStatus: latest?.status ?? null,
+			producerStatus,
 			terminal
 		});
 	}
