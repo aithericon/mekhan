@@ -1,13 +1,11 @@
 <script lang="ts">
-	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import Tag from '@lucide/svelte/icons/tag';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import { Button } from '$lib/components/ui/button';
 	import { listFolders, listWorkspaceTags, type Folder } from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
-	import FolderTree from '$lib/components/FolderTree.svelte';
+	import FolderTreeRailSection from '$lib/components/folders/FolderTreeRailSection.svelte';
 	import { SideRail } from '$lib/components/shell';
-	import ManageFoldersDialog from '$lib/components/templates/ManageFoldersDialog.svelte';
 
 	interface Props {
 		folderId: string | null;
@@ -21,12 +19,6 @@
 	let folders = $state<Folder[]>([]);
 	let tags = $state<string[]>([]);
 	let loading = $state(false);
-	let manageOpen = $state(false);
-
-	function refreshFilters() {
-		const ws = workspaces.active?.id;
-		if (ws) loadFilters(ws);
-	}
 
 	async function loadFilters(workspaceId: string) {
 		loading = true;
@@ -63,26 +55,22 @@
 
 <SideRail testid="templates-filters-sidebar">
 	<div class="space-y-6 p-4">
-		<section>
-			<div class="mb-2 flex items-center justify-between gap-2">
-				<div class="flex items-center gap-2 text-sm font-medium text-foreground">
-					<FolderTreeIcon class="size-4 text-muted-foreground" />
-					Folders
-				</div>
+		<FolderTreeRailSection {folders} selectedId={folderId} onSelect={selectFolder}>
+			{#snippet headerAction()}
+				<!-- Folder management lives on /folders (the browser); deep-link
+				     the current filter selection into it. -->
 				<Button
 					variant="ghost"
 					size="sm"
 					class="size-7 p-0 text-muted-foreground"
 					title="Manage folders"
 					aria-label="Manage folders"
-					onclick={() => (manageOpen = true)}
+					href={folderId ? `/folders?folder=${folderId}` : '/folders'}
 					data-testid="btn-manage-folders"
 				>
 					<Settings2 class="size-4" />
 				</Button>
-			</div>
-
-			<FolderTree {folders} selectedId={folderId} onSelect={selectFolder} />
+			{/snippet}
 
 			<label
 				class="mt-2 flex items-center gap-1.5 px-2 text-sm text-muted-foreground"
@@ -98,7 +86,7 @@
 				/>
 				Include subfolders
 			</label>
-		</section>
+		</FolderTreeRailSection>
 
 		{#if tags.length > 0}
 			<section>
@@ -126,5 +114,3 @@
 		{/if}
 	</div>
 </SideRail>
-
-<ManageFoldersDialog bind:open={manageOpen} onChanged={refreshFilters} />

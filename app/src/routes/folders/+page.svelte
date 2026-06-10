@@ -21,7 +21,7 @@
 		deleteFolder,
 		type Folder
 	} from '$lib/api/client';
-	import FolderTree from '$lib/components/FolderTree.svelte';
+	import FolderTreeRailSection from '$lib/components/folders/FolderTreeRailSection.svelte';
 	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
 	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
 	import FolderSettingsPanel from '$lib/components/folders/FolderSettingsPanel.svelte';
@@ -269,9 +269,27 @@
 
 	{#snippet sidebar()}
 		<SideRail testid="folders-tree-panel">
-			<div class="border-b border-border/60 p-2">
+			<div class="space-y-6 p-4">
+				<FolderTreeRailSection {folders} {selectedId} onSelect={selectFolder} {actions}>
+					{#snippet headerAction()}
+						<Button
+							variant="ghost"
+							size="sm"
+							class="size-7 p-0 text-muted-foreground"
+							title="New folder"
+							aria-label="New folder"
+							onclick={() => (createOpen = !createOpen)}
+							data-testid="btn-new-folder"
+						>
+							<Plus class="size-4" />
+						</Button>
+					{/snippet}
+					{#snippet extra()}
 						{#if createOpen}
-							<form onsubmit={handleCreate} class="space-y-2 p-1">
+							<form
+								onsubmit={handleCreate}
+								class="mb-3 space-y-2 rounded-md border border-border/60 p-2"
+							>
 								<Input
 									placeholder="slug"
 									bind:value={newSlug}
@@ -318,20 +336,9 @@
 									</Button>
 								</div>
 							</form>
-						{:else}
-							<Button
-								variant="ghost"
-								size="sm"
-								class="w-full justify-start"
-								onclick={() => (createOpen = true)}
-								data-testid="btn-new-folder"
-							>
-								<Plus class="size-4" /> New folder
-							</Button>
 						{/if}
-			</div>
-			<div class="p-3">
-				<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
+					{/snippet}
+				</FolderTreeRailSection>
 			</div>
 		</SideRail>
 	{/snippet}
