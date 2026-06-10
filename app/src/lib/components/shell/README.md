@@ -52,7 +52,10 @@ migration — **new pages use the band**.
    `PageShell width` caps the BODY only: `default`/`wide` (max-w-6xl, the
    standard) · `narrow` (max-w-2xl) form bodies · `full` (no cap)
    full-width detail bodies · `bleed` canvas opt-out. Hand-rolled bands on
-   bleed pages must wrap their content in `mx-auto w-full max-w-6xl` too.
+   bleed pages must wrap their content in `mx-auto w-full max-w-6xl` too —
+   UNLESS the body below is itself full-width (`sidebar` rail pages, bleed
+   run dashboards like `instances/[id]`): then the band anchors flush left
+   so header and body share the same left edge.
 2. **One h1 scale** (`PageHeader variant`): `page` = text-2xl for top-level
    pages, `detail` = text-lg for back-linked detail pages. Never a raw `<h1>`.
 3. **Tabs — pick by what changes:**

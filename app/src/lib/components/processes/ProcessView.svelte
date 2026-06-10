@@ -218,6 +218,18 @@
 		progress ? Math.round(Math.min(1, Math.max(0, progress.fraction)) * 100) : 0
 	);
 
+	// Per-tab counts rendered as chips on the tab pills themselves (no
+	// separate stats card) — tabs without a cheap count get no chip.
+	const tabCounts = $derived<Partial<Record<Tab, number>>>(
+		detail
+			? {
+					artifacts: detail.artifact_count,
+					tasks: detail.tasks.length,
+					metrics: detail.recent_metrics.length
+				}
+			: {}
+	);
+
 	// ── Data loading ───────────────────────────────────────────────────────────
 	async function loadDetail() {
 		loading = true;
@@ -435,223 +447,241 @@
 			>
 				<tab.icon class="size-3.5" />
 				{tab.label}
+				{#if tabCounts[tab.key] !== undefined}
+					<!-- opacity-based so the chip reads on both the active
+					     (primary) and ghost pill backgrounds -->
+					<span class="tabular-nums opacity-60">{tabCounts[tab.key]}</span>
+				{/if}
 			</Button>
 		{/each}
 	</div>
 
 	<!-- ── Overview Tab ───────────────────────────────────────── -->
 	{#if activeTab === 'overview'}
-		<div class="space-y-4">
-			{#if showInputs}
-				<!-- The workflow's Start envelope(s) — what was fed into this run.
-				     One section per Start block; SmartValue picks ProcessTokenEnvelope
-				     (matches on `_instance_id`) so business fields surface above the
-				     `_*` metadata disclosure. -->
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-						<LogIn class="size-4 text-muted-foreground" />
-						Inputs
-						{#if startSteps.length > 1}
-							<Badge variant="secondary">{startSteps.length}</Badge>
-						{/if}
-					</h3>
-					<div class="space-y-4">
-						{#each startSteps as step (step.node_id + '-' + step.iteration_index)}
-							{#if startSteps.length > 1}
-								<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
-									<span class="font-mono text-muted-foreground">from</span>
-									<span class="font-mono text-foreground">{step.node_id}</span>
-								</div>
-							{/if}
-							<SmartValue
-								value={step.outputs}
-								ctx={{
-									position: 'output',
-									nodeKind: step.node_kind,
-									instanceId: instance?.id,
-									stepStartedAt: step.started_at ?? undefined,
-									stepCompletedAt: step.completed_at ?? undefined
-								}}
-							/>
-						{/each}
-					</div>
-				</div>
-			{/if}
-
-			{#if showResults}
-				<!-- Workflow terminal(s). Prefer rendering each End-node step's
-				     output envelope directly — `EndTerminalEnvelope` matches the
-				     `{exit_code, name, status, process_id, task_id}` shape and
-				     leads with the declared result. Fall back to `instance.result`
-				     when the step projection hasn't caught up yet but the instance
-				     row already carries the structured result envelope. -->
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-						<Flag class="size-4 text-muted-foreground" />
-						Results
-						{#if endSteps.length > 1}
-							<Badge variant="secondary">{endSteps.length}</Badge>
-						{/if}
-					</h3>
-					<div class="space-y-4">
-						{#if endSteps.length > 0}
-							{#each endSteps as step (step.node_id + '-' + step.iteration_index)}
-								{#if endSteps.length > 1}
-									<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
-										<span class="font-mono text-muted-foreground">from</span>
-										<span class="font-mono text-foreground">{step.node_id}</span>
-									</div>
-								{/if}
-								<SmartValue
-									value={step.outputs}
-									ctx={{
-										position: 'output',
-										nodeKind: step.node_kind,
-										instanceId: instance?.id,
-										stepStartedAt: step.started_at ?? undefined,
-										stepCompletedAt: step.completed_at ?? undefined
-									}}
-								/>
-							{/each}
-						{:else}
-							<SmartValue
-								value={instance?.result}
-								ctx={{
-									position: 'output',
-									instanceId: instance?.id
-								}}
-							/>
-						{/if}
-					</div>
-				</div>
-			{/if}
-
-			{#if progress}
-				<div class="rounded-lg border border-border bg-card p-4">
-					<div class="mb-2 flex items-baseline justify-between gap-3">
-						<h3 class="text-sm font-semibold text-foreground">Progress</h3>
-						<span class="text-sm tabular-nums text-muted-foreground">
-							{progressPct}%{#if (progress.total_steps ?? 0) > 0}
-								· step {progress.current_step ?? 0}/{progress.total_steps}{/if}
-						</span>
-					</div>
-					<div class="h-2 w-full overflow-hidden rounded-full bg-muted/50">
-						<div
-							class="h-full rounded-full bg-cyan-500 transition-all duration-300"
-							style="width: {progressPct}%"
-						></div>
-					</div>
-					{#if progress.message}
-						<p class="mt-1.5 text-sm text-muted-foreground">{progress.message}</p>
-					{/if}
-				</div>
-			{/if}
-
-			{#if timelineEntries.length > 0}
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 text-sm font-semibold text-foreground">Timeline</h3>
-					<ProcessTimeline entries={timelineEntries} />
-				</div>
-			{/if}
-
-			{#if openTasks.length > 0}
-				<div class="max-w-3xl rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-						<ListChecks class="size-4 text-muted-foreground" />
-						Open tasks
-						<Badge variant="secondary">{openTasks.length}</Badge>
-					</h3>
-					<div class="space-y-2">
-						{#each openTasks as task (task.id)}
-							{@const anyTask = task as unknown as {
-								task_id?: string;
-								id: string;
-								steps?: unknown[];
-							}}
-							{@const taskId = anyTask.task_id ?? anyTask.id}
-							<div class="group/task relative">
-								<a
-									href={taskHref(taskId)}
-									class="block rounded-lg border border-border/60 bg-background px-3 py-2 pr-12 transition hover:border-primary/40 hover:shadow-sm"
-								>
-									<div class="flex items-center gap-2">
-										<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
-										<Badge
-											variant="outline"
-											class="shrink-0 rounded-full border-amber-200 bg-amber-50 text-amber-700"
-										>
-											Pending
-										</Badge>
-									</div>
-									<div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm text-muted-foreground">
-										<span>Received {relativeTime(task.created_at)}</span>
-										{#if task.assignee}
-											<span class="text-muted-foreground/60">·</span>
-											<span>{task.assignee}</span>
+		<!-- Two-column tiling: a 2/3 reading column (results → inputs → live
+		     activity, answer-first) beside a 1/3 status rail (needs-attention
+		     tasks → progress → timeline → tab counts). On narrow viewports
+		     the rail stacks FIRST — attention items lead. -->
+		<div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+			<div class="order-2 min-w-0 space-y-4 lg:order-1 lg:col-span-2">
+				{#if showInputs || showResults}
+					<!-- The run's I/O pair: inputs left, results right — reads
+					     in → out. A lone card spans the full column; the pair
+					     splits side-by-side only at xl, where each half is still
+					     wide enough for SmartValue's field tables. -->
+					<div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+						{#if showInputs}
+							<!-- The workflow's Start envelope(s) — what was fed into this run.
+							     One section per Start block; SmartValue picks ProcessTokenEnvelope
+							     (matches on `_instance_id`) so business fields surface above the
+							     `_*` metadata disclosure. -->
+							<div
+								class={[
+									'min-w-0 rounded-lg border border-border bg-card p-4',
+									!showResults && 'xl:col-span-2'
+								]}
+							>
+								<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+									<LogIn class="size-4 text-muted-foreground" />
+									Inputs
+									{#if startSteps.length > 1}
+										<Badge variant="secondary">{startSteps.length}</Badge>
+									{/if}
+								</h3>
+								<div class="space-y-4">
+									{#each startSteps as step (step.node_id + '-' + step.iteration_index)}
+										{#if startSteps.length > 1}
+											<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+												<span class="font-mono text-muted-foreground">from</span>
+												<span class="font-mono text-foreground">{step.node_id}</span>
+											</div>
 										{/if}
-									</div>
-								</a>
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									title="Cancel task"
-									aria-label="Cancel task"
-									class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900 dark:hover:text-red-400"
-									onclick={async (e) => {
-										e.preventDefault();
-										e.stopPropagation();
-										await handleCancelTask(taskId);
-										dropOpenTask(taskId, 'cancelled');
-									}}
-								>
-									<X class="size-4" />
-								</Button>
+										<SmartValue
+											value={step.outputs}
+											ctx={{
+												position: 'output',
+												nodeKind: step.node_kind,
+												instanceId: instance?.id,
+												stepStartedAt: step.started_at ?? undefined,
+												stepCompletedAt: step.completed_at ?? undefined,
+												hideProcessMetadata: true
+											}}
+										/>
+									{/each}
+								</div>
 							</div>
-						{/each}
-					</div>
-				</div>
-			{/if}
+						{/if}
 
-			<div class="grid grid-cols-3 gap-3">
-				<div class="rounded-lg border border-border bg-card px-4 py-3">
-					<div class="flex items-center gap-2 text-muted-foreground">
-						<FileBox class="size-4" />
-						<span class="text-sm font-medium uppercase tracking-wide">Artifacts</span>
+						{#if showResults}
+							<!-- Workflow terminal(s). Prefer rendering each End-node step's
+							     output envelope directly — `EndTerminalEnvelope` matches the
+							     `{exit_code, name, status, process_id, task_id}` shape and
+							     leads with the declared result. Fall back to `instance.result`
+							     when the step projection hasn't caught up yet but the instance
+							     row already carries the structured result envelope. -->
+							<div
+								class={[
+									'min-w-0 rounded-lg border border-border bg-card p-4',
+									!showInputs && 'xl:col-span-2'
+								]}
+							>
+								<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+									<Flag class="size-4 text-muted-foreground" />
+									Results
+									{#if endSteps.length > 1}
+										<Badge variant="secondary">{endSteps.length}</Badge>
+									{/if}
+								</h3>
+								<div class="space-y-4">
+									{#if endSteps.length > 0}
+										{#each endSteps as step (step.node_id + '-' + step.iteration_index)}
+											{#if endSteps.length > 1}
+												<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+													<span class="font-mono text-muted-foreground">from</span>
+													<span class="font-mono text-foreground">{step.node_id}</span>
+												</div>
+											{/if}
+											<SmartValue
+												value={step.outputs}
+												ctx={{
+													position: 'output',
+													nodeKind: step.node_kind,
+													instanceId: instance?.id,
+													stepStartedAt: step.started_at ?? undefined,
+													stepCompletedAt: step.completed_at ?? undefined,
+													hideProcessMetadata: true
+												}}
+											/>
+										{/each}
+									{:else}
+										<SmartValue
+											value={instance?.result}
+											ctx={{
+												position: 'output',
+												instanceId: instance?.id,
+												hideProcessMetadata: true
+											}}
+										/>
+									{/if}
+								</div>
+							</div>
+						{/if}
 					</div>
-					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
-						{detail.artifact_count}
-					</p>
-				</div>
-				<div class="rounded-lg border border-border bg-card px-4 py-3">
-					<div class="flex items-center gap-2 text-muted-foreground">
-						<ListChecks class="size-4" />
-						<span class="text-sm font-medium uppercase tracking-wide">Tasks</span>
+				{/if}
+
+				<!-- Recent activity uses the exact same LogsPanel as the Logs tab so
+				     row shape, level badges, expand toggles, and follow-tail behave
+				     identically — otherwise the two surfaces look like different
+				     systems for the same data. -->
+				{#if liveStore}
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-3 text-sm font-semibold text-foreground">Recent activity</h3>
+						<LogsPanel store={liveStore} />
 					</div>
-					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
-						{detail.tasks.length}
-					</p>
-				</div>
-				<div class="rounded-lg border border-border bg-card px-4 py-3">
-					<div class="flex items-center gap-2 text-muted-foreground">
-						<BarChart3 class="size-4" />
-						<span class="text-sm font-medium uppercase tracking-wide">Metrics</span>
-					</div>
-					<p class="mt-1 text-xl font-semibold tabular-nums text-foreground">
-						{detail.recent_metrics.length}
-					</p>
-				</div>
+				{/if}
 			</div>
 
-			<!-- Recent activity uses the exact same LogsPanel as the Logs tab so
-			     row shape, level badges, expand toggles, and follow-tail behave
-			     identically — otherwise the two surfaces look like different
-			     systems for the same data. -->
-			{#if liveStore}
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h3 class="mb-3 text-sm font-semibold text-foreground">Recent activity</h3>
-					<LogsPanel store={liveStore} />
-				</div>
-			{/if}
+			<div class="order-1 min-w-0 space-y-4 lg:order-2">
+				{#if openTasks.length > 0}
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<ListChecks class="size-4 text-muted-foreground" />
+							Open tasks
+							<Badge variant="warm">{openTasks.length}</Badge>
+						</h3>
+						<div class="space-y-2">
+							{#each openTasks as task (task.id)}
+								{@const anyTask = task as unknown as {
+									task_id?: string;
+									id: string;
+									steps?: unknown[];
+								}}
+								{@const taskId = anyTask.task_id ?? anyTask.id}
+								<div class="group/task relative">
+									<a
+										href={taskHref(taskId)}
+										class="block rounded-lg border border-border/60 bg-background px-3 py-2 pr-12 transition hover:border-primary/40 hover:shadow-sm"
+									>
+										<div class="flex items-center gap-2">
+											<span class="truncate text-sm font-medium text-foreground">{task.title}</span>
+											<Badge
+												variant="outline"
+												class="shrink-0 rounded-full border-amber-200 bg-amber-50 text-amber-700"
+											>
+												Pending
+											</Badge>
+										</div>
+										<div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm text-muted-foreground">
+											<span>Received {relativeTime(task.created_at)}</span>
+											{#if task.assignee}
+												<span class="text-muted-foreground/60">·</span>
+												<span>{task.assignee}</span>
+											{/if}
+										</div>
+									</a>
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										title="Cancel task"
+										aria-label="Cancel task"
+										class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900 dark:hover:text-red-400"
+										onclick={async (e) => {
+											e.preventDefault();
+											e.stopPropagation();
+											await handleCancelTask(taskId);
+											dropOpenTask(taskId, 'cancelled');
+										}}
+									>
+										<X class="size-4" />
+									</Button>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				{#if liveStore && detail.recent_metrics.length > 0}
+					<!-- Compact live metrics — same store and renderer as the
+					     Metrics tab (full controls live there). Only shown once
+					     the process has actually emitted metrics. -->
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<BarChart3 class="size-4 text-muted-foreground" />
+							Metrics
+						</h3>
+						<MetricsPanel {processId} store={liveStore} compact />
+					</div>
+				{/if}
+
+				{#if progress}
+					<div class="rounded-lg border border-border bg-card p-4">
+						<div class="mb-2 flex items-baseline justify-between gap-3">
+							<h3 class="text-sm font-semibold text-foreground">Progress</h3>
+							<span class="text-sm tabular-nums text-muted-foreground">
+								{progressPct}%{#if (progress.total_steps ?? 0) > 0}
+									· step {progress.current_step ?? 0}/{progress.total_steps}{/if}
+							</span>
+						</div>
+						<div class="h-2 w-full overflow-hidden rounded-full bg-muted/50">
+							<div
+								class="h-full rounded-full bg-cyan-500 transition-all duration-300"
+								style="width: {progressPct}%"
+							></div>
+						</div>
+						{#if progress.message}
+							<p class="mt-1.5 text-sm text-muted-foreground">{progress.message}</p>
+						{/if}
+					</div>
+				{/if}
+
+				{#if timelineEntries.length > 0}
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-3 text-sm font-semibold text-foreground">Timeline</h3>
+						<ProcessTimeline entries={timelineEntries} />
+					</div>
+				{/if}
+
+			</div>
 		</div>
 
 		<!-- ── Artifacts Tab ──────────────────────────────────────── -->

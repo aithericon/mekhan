@@ -192,7 +192,7 @@
 		</div>
 	{/if}
 
-	{#if hasProcessMeta}
+	{#if hasProcessMeta && !ctx.hideProcessMetadata}
 		<div>
 			<button
 				type="button"

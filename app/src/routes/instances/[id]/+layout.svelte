@@ -311,10 +311,11 @@
 			{@const instance = ctx.instance}
 			<!-- Hand-rolled band (bleed shell): same tokens/anatomy as PageShell's
 			     band variant — header row + flush tab row over one border-b, the
-			     tab underline overlapping it via -mb-px, inner content on the
-			     shared max-w-6xl band grid. -->
+			     tab underline overlapping it via -mb-px. The body below is
+			     full-width, so the band content anchors flush LEFT (not the
+			     centered 6xl grid) — header and body share the same left edge. -->
 			<div class="shrink-0 border-b border-border bg-card px-6 pt-4">
-				<div class="mx-auto w-full max-w-6xl">
+				<div class="w-full">
 					{#if instance.parent_instance_id}
 						<!-- This run was spawned by a SubWorkflow node in a parent run.
 						     A plain <a> is correct: navigating to the parent is a fresh

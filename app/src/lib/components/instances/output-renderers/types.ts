@@ -42,6 +42,13 @@ export type RenderContext = {
 	 *  showing the same lines twice. Defaults to false (envelopes shown in
 	 *  process views / inputs keep their inline logs). */
 	suppressLogs?: boolean;
+	/** Hide the collapsed "Process metadata" (`_*` keys) disclosure. Set by
+	 *  views that already display the run's identity around the envelope (the
+	 *  instance overview's Inputs/Results cards sit under a header carrying
+	 *  instance id / template / timestamps), where the plumbing keys are pure
+	 *  noise. Defaults to false — standalone surfaces (task pages, step
+	 *  drawers) keep the disclosure. */
+	hideProcessMetadata?: boolean;
 };
 
 export type RendererProps = {
