@@ -36,6 +36,7 @@
 	import { subscribe as subscribeLiveTap } from '$lib/channels/liveTapRegistry';
 	import { playMseStream, type LiveMediaHandle, type LiveMediaStatus } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
+	import { playTextStream, tailCap } from '$lib/channels/textStreamPlayer';
 	import {
 		playUrdfStream,
 		type UrdfJointFrame,
@@ -98,12 +99,17 @@
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let urdfEl = $state<HTMLDivElement | null>(null);
 	let sceneEl = $state<HTMLDivElement | null>(null);
+	let preEl = $state<HTMLPreElement | null>(null);
 	let rootEl = $state<HTMLDivElement | null>(null);
 
 	// Latest joint-state frame from the URDF stream; fed into the 3D twin.
 	let urdfFrame = $state<UrdfJointFrame | null>(null);
 	// Latest planning-scene snapshot from the scene stream; fed into the 3D twin.
 	let sceneFrame = $state<SceneFrame | null>(null);
+	// Accumulated tail of a live text feed (capped so a long feed can't grow
+	// this widget's state without bound; the cap comfortably fills the frame).
+	const EDGE_TEXT_CAP = 4000;
+	let edgeText = $state('');
 
 	let muted = $state(true);
 
@@ -142,8 +148,10 @@
 	const isUrdf = $derived(feed.plan?.kind === 'urdf');
 	// A planning-scene stream → a live 3D twin of the arm + collision objects.
 	const isScene = $derived(feed.plan?.kind === 'scene');
-	// Anything with a live render path renders here now (video, mjpeg, audio, urdf, scene).
-	const renderable = $derived(isVideo || isMjpeg || isAudio || isUrdf || isScene);
+	// A text/* stream → a live appending console tail.
+	const isText = $derived(feed.plan?.kind === 'text');
+	// Anything with a live render path renders here now (video, mjpeg, audio, urdf, scene, text).
+	const renderable = $derived(isVideo || isMjpeg || isAudio || isUrdf || isScene || isText);
 	// A data-plane binary channel with NO live renderer → show a minimal liveness
 	// dot only (no decode, no media element, no cap slot). Distinct from the
 	// media widget and from a non-feed edge (which renders nothing at all).
@@ -256,6 +264,7 @@
 		if (isAudio && !canvasEl) return;
 		if (isUrdf && !urdfEl) return;
 		if (isScene && !sceneEl) return;
+		if (isText && !preEl) return;
 		try {
 			if (isAudio && canvasEl) {
 				// Audio plans render a PASSIVE waveform; the tap subscription is owned
@@ -300,6 +309,14 @@
 					stream: sub.stream,
 					onFrame: (f) => (sceneFrame = f),
 					onStatus: (s) => (status = (s.startsWith('error') ? 'error' : s) as typeof status)
+				});
+			} else if (isText) {
+				// text/* → decode UTF-8 and append into the console tail (capped).
+				edgeText = '';
+				player = playTextStream({
+					stream: sub.stream,
+					onText: (t) => (edgeText = tailCap(edgeText + t, EDGE_TEXT_CAP)),
+					onStatus: (s) => (status = s)
 				});
 			}
 			status = 'streaming';
@@ -387,11 +404,20 @@
 						? urdfEl
 						: isScene
 							? sceneEl
-							: null;
+							: isText
+								? preEl
+								: null;
 		if (holdsSlot && renderable && el && !streamStarted) {
 			streamStarted = true;
 			startStream();
 		}
+	});
+
+	// Pin the text console to its tail as new text lands — the natural reading
+	// position for a live feed (runs after the DOM reflects the new text).
+	$effect(() => {
+		void edgeText;
+		if (preEl) preEl.scrollTop = preEl.scrollHeight;
 	});
 
 	onDestroy(() => teardownStream());
@@ -450,7 +476,13 @@
 
 <div bind:this={rootEl} class="edge-media" data-testid="edge-media-widget">
 	{#if showWidget}
-		<div class="frame" class:audio={isAudio} class:active={owningAudio} class:ended={frozen}>
+		<div
+			class="frame"
+			class:audio={isAudio}
+			class:text={isText}
+			class:active={owningAudio}
+			class:ended={frozen}
+		>
 			{#if isVideo}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video bind:this={videoEl} {muted} playsinline autoplay class="media"></video>
@@ -486,6 +518,11 @@
 							dpr={twinDpr}
 						/>
 				</div>
+			{:else if isText}
+				<pre
+					bind:this={preEl}
+					class="console"
+					aria-label={`Live ${feed.channelName} text feed`}>{edgeText}</pre>
 			{:else if isAudio}
 				<canvas
 					bind:this={canvasEl}
@@ -566,6 +603,26 @@
 	.frame.audio {
 		height: 120px;
 		background: #0b0f0a;
+	}
+	/* Text console frame: same short form factor, terminal-dark. */
+	.frame.text {
+		height: 120px;
+		background: #0a0e14;
+	}
+	.console {
+		width: 100%;
+		height: 100%;
+		margin: 0;
+		padding: 6px 8px;
+		overflow-y: auto;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 10px;
+		line-height: 1.45;
+		color: #d1e7dd;
+		white-space: pre-wrap;
+		word-break: break-word;
+		/* The edge-label container centers content; a console reads left-aligned. */
+		text-align: left;
 	}
 	/* The edge that currently OWNS audio gets a glowing ring. */
 	.frame.active {

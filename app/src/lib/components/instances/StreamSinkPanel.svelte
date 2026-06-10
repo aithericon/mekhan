@@ -21,6 +21,7 @@
 	import { playLivePcm, parseSampleRate } from '$lib/audio/livePcmPlayer';
 	import { playMseStream } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
+	import { playTextStream, tailCap } from '$lib/channels/textStreamPlayer';
 	import type { Channel } from '$lib/api/client';
 	import type { ChannelRuntime } from '$lib/stores/instance-marking.svelte';
 
@@ -75,6 +76,11 @@
 	} | null>(null);
 	let mediaEl = $state<HTMLMediaElement | null>(null);
 	let imgEl = $state<HTMLImageElement | null>(null);
+	let textPreEl = $state<HTMLPreElement | null>(null);
+	// Accumulated tail of a live text preview (capped — a long-running feed
+	// must not grow panel state without bound).
+	const TEXT_TAIL_CAP = 20_000;
+	let liveText = $state('');
 
 	const isLiveActive = $derived(!!live && (live.status === 'streaming' || live.status === 'ended'));
 
@@ -117,6 +123,14 @@
 					onStatus,
 					onProgress
 				});
+			} else if (plan.kind === 'text') {
+				liveText = '';
+				handle = playTextStream({
+					stream: r.body,
+					onText: (t) => (liveText = tailCap(liveText + t, TEXT_TAIL_CAP)),
+					onStatus,
+					onProgress
+				});
 			} else {
 				// urdf / scene twins are graph-edge renderers; no in-drawer preview.
 				throw new Error(`no in-panel preview for '${plan.kind}'`);
@@ -145,6 +159,12 @@
 			live?.handle?.stop();
 			live?.abort?.abort();
 		};
+	});
+
+	// Pin the text preview to its tail as new text lands.
+	$effect(() => {
+		void liveText;
+		if (textPreEl) textPreEl.scrollTop = textPreEl.scrollHeight;
 	});
 </script>
 
@@ -175,7 +195,7 @@
 			<div class="mt-1.5 font-mono text-sm text-muted-foreground">{contentType}</div>
 		{/if}
 
-		{#if plan && (plan.kind === 'pcm' || plan.kind === 'mse' || plan.kind === 'mjpeg')}
+		{#if plan && (plan.kind === 'pcm' || plan.kind === 'mse' || plan.kind === 'mjpeg' || plan.kind === 'text')}
 			<div class="mt-2 flex flex-wrap items-center gap-2">
 				{#if !isLiveActive}
 					<Button
@@ -183,7 +203,13 @@
 						size="sm"
 						onclick={playLive}
 						title={`Stream and play the sink's bytes live (${
-							plan.kind === 'pcm' ? 'Web Audio' : plan.kind === 'mjpeg' ? 'MJPEG' : 'Media Source'
+							plan.kind === 'pcm'
+								? 'Web Audio'
+								: plan.kind === 'mjpeg'
+									? 'MJPEG'
+									: plan.kind === 'text'
+										? 'text console'
+										: 'Media Source'
 						})`}
 					>
 						<AudioLines class="size-4" />
@@ -203,7 +229,9 @@
 						{#if live.status === 'streaming'}<span class="text-red-500">●</span> live{:else}ended{/if}
 						· {plan.kind === 'mjpeg'
 							? `${live.seconds} frame${live.seconds === 1 ? '' : 's'}`
-							: `${live.seconds.toFixed(1)}s`} · {(live.bytes / 1024).toFixed(0)} KB
+							: plan.kind === 'text'
+								? `${live.seconds} char${live.seconds === 1 ? '' : 's'}`
+								: `${live.seconds.toFixed(1)}s`} · {(live.bytes / 1024).toFixed(0)} KB
 					</span>
 				{:else if live && live.status === 'error'}
 					<span class="text-sm text-red-500">{live.error}</span>
@@ -229,6 +257,14 @@
 						alt="live frame"
 						class="max-h-64 w-full rounded-md bg-black object-contain"
 					/>
+				</div>
+			{:else if plan.kind === 'text'}
+				<!-- Live text console: decoded UTF-8 appends here, pinned to the tail. -->
+				<div class="mt-2" class:hidden={!isLiveActive}>
+					<pre
+						bind:this={textPreEl}
+						data-testid="sink-text-preview"
+						class="max-h-64 w-full overflow-y-auto rounded-md bg-black/90 px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-emerald-100">{liveText}</pre>
 				</div>
 			{/if}
 		{/if}

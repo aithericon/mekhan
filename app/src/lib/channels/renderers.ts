@@ -30,13 +30,16 @@ export type LiveRenderKind =
 	/** A robot joint-angle (joint-state) stream → drive a 3D URDF twin. */
 	| 'urdf'
 	/** A planning-scene stream → drive a 3D twin of the arm + collision objects. */
-	| 'scene';
+	| 'scene'
+	/** A `text/*` byte stream → decode UTF-8 and append into a live console tail. */
+	| 'text';
 
 export interface LiveRenderPlan {
 	kind: LiveRenderKind;
 	/** Which media element the bytes drive (MSE needs one; PCM uses AudioContext;
-	 *  MJPEG swaps frames into an `<img>`; URDF drives a `'3d'` scene). */
-	mediaKind: 'audio' | 'video' | 'image' | '3d';
+	 *  MJPEG swaps frames into an `<img>`; URDF drives a `'3d'` scene; text
+	 *  appends into a scrolling `<pre>`). */
+	mediaKind: 'audio' | 'video' | 'image' | '3d' | 'text';
 	/** The content_type to hand the renderer (the full MIME incl. any `codecs=`
 	 *  param — MSE's `addSourceBuffer`/`isTypeSupported` require codecs). */
 	mime: string;
@@ -117,6 +120,14 @@ export function planLiveRender(
 	// the player feeds each snapshot into a 3D twin of the arm AND its scene.
 	if (base === 'application/vnd.aithericon.planning-scene+x-ndjson') {
 		return { kind: 'scene', mediaKind: '3d', mime: contentType };
+	}
+	// Live text tail: any `text/*` data channel (text/plain echo feeds, CSV/log
+	// streams, LLM token streams) decodes as UTF-8 and appends into a scrolling
+	// console. No probe needed — every UA can render text. The whole `text/`
+	// family takes this arm; structured `application/*` types (json, ndjson)
+	// deliberately do NOT — they carry framing a raw tail would mangle.
+	if (base.startsWith('text/')) {
+		return { kind: 'text', mediaKind: 'text', mime: contentType };
 	}
 	return null;
 }

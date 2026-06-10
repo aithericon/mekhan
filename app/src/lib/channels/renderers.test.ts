@@ -95,6 +95,25 @@ describe('planLiveRender — presentation-side content_type dispatch', () => {
 		).toBe('scene');
 	});
 
+	it('routes a text/plain data channel to the text renderer (no probe needed)', () => {
+		// A text stream renders as a live appending console tail.
+		expect(planLiveRender('text/plain', supportsNone)).toEqual<LiveRenderPlan>({
+			kind: 'text',
+			mediaKind: 'text',
+			mime: 'text/plain'
+		});
+	});
+
+	it('routes the whole text/* family to the text renderer, ignoring params/casing', () => {
+		expect(planLiveRender('TEXT/PLAIN; charset=utf-8', supportsAll)?.kind).toBe('text');
+		expect(planLiveRender('text/csv', supportsNone)?.kind).toBe('text');
+		expect(planLiveRender('text/markdown', supportsNone)?.kind).toBe('text');
+	});
+
+	it('does NOT treat structured application/* types as text (json/ndjson carry framing)', () => {
+		expect(planLiveRender('application/x-ndjson', supportsAll)).toBeNull();
+	});
+
 	it('does NOT treat other image/* as mjpeg (the EOI split is JPEG-specific)', () => {
 		// image/png has different framing; no live image-sequence path for it.
 		expect(planLiveRender('image/png', supportsAll)).toBeNull();

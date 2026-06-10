@@ -25,11 +25,12 @@
  * The source loop therefore NEVER awaits a sink. It reads a chunk and hands it
  * to each sink synchronously; each sink applies its OWN per-render-kind drop
  * policy and the source moves straight to the next `read()`:
- *  - 'mse'  — order-sensitive: a missing fragment corrupts the stream forever, a
- *             gap can't be silently tolerated. So each MSE sink gets a bounded
- *             FIFO queue (~MSE_QUEUE_LIMIT chunks). If a consumer falls that far
- *             behind, we ERROR that one sink's stream (surfacing the gap to its
- *             renderer) rather than stall the source or feed it a corrupt stream.
+ *  - 'mse' | 'text' — order-sensitive: a missing MSE fragment corrupts the
+ *             stream forever; a missing text chunk is silently lost characters.
+ *             So each such sink gets a bounded FIFO queue (~MSE_QUEUE_LIMIT
+ *             chunks). If a consumer falls that far behind, we ERROR that one
+ *             sink's stream (surfacing the gap to its renderer) rather than
+ *             stall the source or feed it a corrupt stream.
  *  - 'mjpeg' | 'pcm' — loss-tolerant: a dropped JPEG frame is a skipped image, a
  *             dropped PCM run is a tiny audio glitch. So each such sink keeps only
  *             the LATEST pending chunk (drop-to-latest); a slow renderer simply
@@ -77,7 +78,7 @@ export interface LiveTapSubscription {
 interface Sink {
 	readonly kind: LiveRenderKind;
 	controller: ReadableStreamDefaultController<Uint8Array>;
-	/** Bounded FIFO for 'mse'; for 'mjpeg'/'pcm' holds at most the latest chunk. */
+	/** Bounded FIFO for 'mse'/'text'; for 'mjpeg'/'pcm' holds at most the latest chunk. */
 	queue: Uint8Array[];
 	/** Set once the sink errored (mse overflow) or was released — stop feeding it. */
 	dead: boolean;
@@ -127,14 +128,14 @@ function feedSink(sink: Sink, chunk: Uint8Array): void {
 		return;
 	}
 
-	if (sink.kind === 'mse') {
+	if (sink.kind === 'mse' || sink.kind === 'text') {
 		// Order-sensitive: bounded FIFO. Overflow => unrecoverable gap => error
 		// this sink (and only this sink) so its renderer surfaces the break.
 		if (sink.queue.length >= MSE_QUEUE_LIMIT) {
 			sink.dead = true;
 			try {
 				sink.controller.error(
-					new Error('live tap: MSE consumer fell behind (buffer overflow) — stream gap')
+					new Error('live tap: consumer fell behind (buffer overflow) — stream gap')
 				);
 			} catch {
 				/* already closed/errored */

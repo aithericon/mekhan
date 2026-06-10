@@ -11,6 +11,7 @@
 	import { planLiveRender, planFileRender, type LiveRenderPlan } from '$lib/channels/renderers';
 	import { playMseStream } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
+	import { playTextStream, tailCap } from '$lib/channels/textStreamPlayer';
 	import { playLiveKitStream } from '$lib/channels/livekitStreamPlayer';
 	import { subscribe as subscribeLiveTap } from '$lib/channels/liveTapRegistry';
 	import MediaPlayer from './output-renderers/MediaPlayer.svelte';
@@ -158,6 +159,11 @@
 	let mediaEls = $state<Record<string, HTMLMediaElement | null>>({});
 	// MJPEG swaps each decoded frame into an <img>; bound per channel below.
 	let imgEls = $state<Record<string, HTMLImageElement | null>>({});
+	// Text appends into a scrolling <pre>; bound + accumulated per channel below.
+	// Tails are capped so a long-running feed can't grow panel state unboundedly.
+	const TEXT_TAIL_CAP = 20_000;
+	let textPreEls = $state<Record<string, HTMLPreElement | null>>({});
+	let liveTexts = $state<Record<string, string>>({});
 	// LiveKit attaches a subscribed WebRTC video track into a <video>; bound below.
 	let livekitVideoEls = $state<Record<string, HTMLVideoElement | null>>({});
 
@@ -279,6 +285,34 @@
 		}
 	}
 
+	// text/* → decode UTF-8 and append into the bound <pre> console tail.
+	function playLiveText(ch: Channel) {
+		if (!executionId) return;
+		stopLive(ch);
+		startLive(ch);
+		liveTexts[ch.name] = '';
+		try {
+			const sub = openLiveTap(ch, 'text');
+			const handle = playTextStream({
+				stream: sub.stream,
+				onText: (t) => (liveTexts[ch.name] = tailCap((liveTexts[ch.name] ?? '') + t, TEXT_TAIL_CAP)),
+				onStatus: onLiveStatus(ch),
+				onProgress: onLiveProgress(ch)
+			});
+			const cur = lives[ch.name];
+			if (cur) lives[ch.name] = { ...cur, handle, release: sub.release };
+		} catch (e) {
+			lives[ch.name] = {
+				status: 'error',
+				seconds: 0,
+				bytes: 0,
+				error: e instanceof Error ? e.message : String(e),
+				handle: null,
+				release: null
+			};
+		}
+	}
+
 	// LiveKit → mint a subscribe-only token via mekhan, then join the room and
 	// attach the published video track into the bound <video> element. The media
 	// never transits mekhan; mekhan only hands back the server URL, JWT, and room.
@@ -336,6 +370,14 @@
 				l.release?.();
 			}
 		};
+	});
+
+	// Pin each text console to its tail as new text lands.
+	$effect(() => {
+		for (const [name, el] of Object.entries(textPreEls)) {
+			void liveTexts[name];
+			if (el) el.scrollTop = el.scrollHeight;
+		}
 	});
 
 	function statusLabel(rt: ChannelRuntime | undefined): string | null {
@@ -470,14 +512,18 @@
 										? playLivePcmChannel(ch)
 										: lplan.kind === 'mjpeg'
 											? playLiveMjpeg(ch, lplan)
-											: playLiveMse(ch, lplan)}
+											: lplan.kind === 'text'
+												? playLiveText(ch)
+												: playLiveMse(ch, lplan)}
 								title={executionId
 									? `Stream and play this channel live (${
 											lplan.kind === 'pcm'
 												? 'Web Audio'
 												: lplan.kind === 'mjpeg'
 													? 'MJPEG'
-													: 'Media Source'
+													: lplan.kind === 'text'
+														? 'text console'
+														: 'Media Source'
 										}) while the step produces`
 									: 'Execution id unavailable — cannot tap this channel'}
 							>
@@ -498,7 +544,9 @@
 								{#if live.status === 'streaming'}<span class="text-red-500">●</span> live{:else}ended{/if}
 								· {lplan.kind === 'mjpeg'
 									? `${live.seconds} frame${live.seconds === 1 ? '' : 's'}`
-									: `${live.seconds.toFixed(1)}s`} · {(live.bytes / 1024).toFixed(0)} KB
+									: lplan.kind === 'text'
+										? `${live.seconds} char${live.seconds === 1 ? '' : 's'}`
+										: `${live.seconds.toFixed(1)}s`} · {(live.bytes / 1024).toFixed(0)} KB
 							</span>
 						{:else if live && live.status === 'error'}
 							<span class="text-sm text-red-500">{live.error}</span>
@@ -530,6 +578,15 @@
 								alt="live frame"
 								class="max-h-64 w-full rounded-md bg-black object-contain"
 							/>
+						</div>
+					{:else if lplan.kind === 'text'}
+						<!-- Live text console: decoded UTF-8 appends here, pinned to the tail. -->
+						<div class="mt-2" class:hidden={!isLiveActive(live)}>
+							<pre
+								bind:this={textPreEls[ch.name]}
+								class="max-h-64 w-full overflow-y-auto rounded-md bg-black/90 px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-emerald-100">{liveTexts[
+									ch.name
+								] ?? ''}</pre>
 						</div>
 					{/if}
 				{/if}
