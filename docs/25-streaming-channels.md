@@ -1,6 +1,7 @@
 # 25 · Streaming Channels — one emission primitive, control/data split, pluggable transport
 
-Status: **design** (agreed forks, not yet implemented). Captures the 2026-06-04
+Status: **implemented with gaps** (Phase 1 + Phase 2 transports + §11 built; see
+the implementation-status note in §9 for what remains open). Captures the 2026-06-04
 design dialogue that reworks streaming to be load-bearing for real-world
 workflows (video, audio, large data). Supersedes the streaming model of
 [`18-streaming-redesign.md`](18-streaming-redesign.md) — the `StreamFold` /
@@ -341,27 +342,55 @@ with open_output("thumbnails") as data:
 
 ## 9. Phasing
 
-**Phase 1 — AutomatedStep (Python) only.**
-- `Channel` model (declaration + typing + `Any`).
+> ### Implementation status (2026-06-10, verified by code audit)
+>
+> **Phase 1 is fully built** in its **revised** form (see the revision note at
+> the top: uniform producer + consumer-side `join`, no producer contract).
+> **Phase 2's transports are built** — all three adapters live in
+> `executor-worker/src/chunks.rs` behind the `StreamTransport` port — and the
+> **§11 presentation layer is fully built**. Still open:
+> - **Edge `join` picker UI + resolver/variable-picker integration per §7**
+>   (in progress on this branch).
+> - **Descriptor single-use credential (§6)** — designed, not wired.
+> - **Phase 3** — Agent / SubWorkflow channels; workflow-as-streaming-endpoint
+>   is being built on this branch as dedicated **StreamSource / StreamSink
+>   NODES** rather than a Start/End extension (Start is a launch-time seed,
+>   End is terminal — neither can carry a live channel).
+> - **Replay / range read API** over durable transports.
+> - `feed_chunks` vestigial field cleanup (deferred — ~690 snapshot churn);
+>   gather consumer key hardcoded as `"output"` (rename = recorded non-goal).
+> - Async SDK / `select()` not built (sync-over-async core is ready, §8).
+
+**Phase 1 — AutomatedStep (Python) only.** ✅ **Built** (revised form).
+- `Channel` model (declaration + typing + `Any`). ✅ (channel manifest baked
+  into job specs.)
 - Uniform bracketed emission (`open` / `item` / `close`) + consumer-side `join`
-  disciplines (`each` | `gather`) + `max_fanout` safety cap.
+  disciplines (`each` | `gather`, default `each`). ✅ — `max_fanout` was
+  **removed entirely** rather than shipped (commit `f7c7d825`).
 - `control_emit` engine path (new event → declared place); `kind: open | item |
-  close`.
+  close`. ✅ (metadata-routed `ExternalSignal`.)
 - SDK verbs (`stream` / `out` / `open_output`, plus `out(...).send` sugar), sync
-  over async core.
-- JetStream data adapter + binary envelope + descriptor/credential.
-- **Retire** Fold / Map per-chunk synthesis; **migrate** demos 14/15/17/18.
+  over async core. ✅
+- JetStream data adapter + binary envelope. ✅ Descriptor **credential** not
+  wired (see status note).
+- **Retire** Fold / Map per-chunk synthesis; **migrate** demos 14/15/17/18. ✅
+  (old model deleted.)
 
 **Phase 2 — make it actually load-bearing for AV.**
-- S3 / object-store adapter (real large-blob / video).
+- S3 / object-store adapter (real large-blob / video). ✅ (opendal; durable +
+  replayable.)
 - Async SDK + multi-input `select` (mux audio + video, fan-in N sensors).
-- Lossy-latest live transport.
+  ⏳ NOT built.
+- Lossy-latest live transport. ✅ (`nats-latest`; plus a feature-gated
+  **LiveKit** egress-only presentation transport beyond the original plan.)
 
-**Phase 3 — node-type reach.**
+**Phase 3 — node-type reach.** ⏳ Open / in progress.
 - Agent channels (LLM token streaming out; "agent decided X" control emits).
 - SubWorkflow channels (expose a child's channels on the parent face).
 - **Start / End streaming** — a workflow *as* a streaming endpoint (live feed in
   at Start, stream out at End). Highest-value P3 item for real-world use.
+  *Being built as dedicated StreamSource / StreamSink nodes instead of
+  extending Start/End (see status note).*
 
 ## 10. Open sub-branches (deferred detail, not blockers)
 

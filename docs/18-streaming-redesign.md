@@ -1,6 +1,8 @@
 # 18 · Streaming support redesign — dissolve the StreamConsumer container
 
-Status: **design** (agreed forks, not yet implemented)
+Status: **SUPERSEDED** by [`25-streaming-channels.md`](25-streaming-channels.md).
+This design was built (StreamReduce / streaming-Map / `streamInput`) and then
+retired by the channels model — kept as the rationale record for that arc.
 Supersedes the `StreamConsumer` + `dispatch` model from the streaming-output work
 (docs reference: [`10-control-data-token-model.md`](10-control-data-token-model.md),
 post-mortem [`refactor/2026-05-31-live-reduce-post-mortem.md`](refactor/2026-05-31-live-reduce-post-mortem.md)).
