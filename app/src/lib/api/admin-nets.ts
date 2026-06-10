@@ -32,6 +32,8 @@ client.use(sessionExpiryMiddleware);
 
 export type AdminNetRow = components['schemas']['AdminNetRow'];
 export type PurgeEventsResponse = components['schemas']['PurgeEventsResponse'];
+export type BulkKillResponse = components['schemas']['BulkKillResponse'];
+export type PurgeTerminalResponse = components['schemas']['PurgeTerminalResponse'];
 
 /** 403 from the admin list — the caller is not a workspace admin. */
 export class AdminNetsForbidden extends Error {
@@ -88,5 +90,29 @@ export async function purgeNetEvents(netId: string): Promise<PurgeEventsResponse
 	const result = await client.POST('/api/v1/admin/nets/{net_id}/purge-events', {
 		params: { path: { net_id: netId } }
 	});
+	return unwrap(result);
+}
+
+/**
+ * POST /api/v1/admin/nets/bulk-kill — terminate many nets at once. Infra
+ * (non-`mekhan-`) nets in `netIds` are skipped server-side unless
+ * `includeInfrastructure` is set. Per-net failures are reported, not fatal.
+ */
+export async function bulkKillNets(
+	netIds: string[],
+	includeInfrastructure = false
+): Promise<BulkKillResponse> {
+	const result = await client.POST('/api/v1/admin/nets/bulk-kill', {
+		body: { net_ids: netIds, include_infrastructure: includeInfrastructure }
+	});
+	return unwrap(result);
+}
+
+/**
+ * POST /api/v1/admin/nets/purge-terminal — sweep every terminal net's events
+ * out of PETRI_GLOBAL in one shot. Active nets are never touched.
+ */
+export async function purgeTerminalNets(): Promise<PurgeTerminalResponse> {
+	const result = await client.POST('/api/v1/admin/nets/purge-terminal', {});
 	return unwrap(result);
 }

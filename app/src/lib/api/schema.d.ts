@@ -64,6 +64,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/nets/bulk-kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/admin/nets/bulk-kill` — kill many nets at once (admin).
+         * @description Terminates each net in `net_ids` via the engine's terminate-with-cleanup,
+         *     EXCEPT infrastructure (`non-mekhan-`) nets unless `include_infrastructure`
+         *     is set — those are reported under `skipped_infrastructure`. Per-net failures
+         *     are collected, not fatal, so one unreachable net doesn't abort the batch.
+         */
+        post: operations["bulk_kill_nets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/nets/purge-terminal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/admin/nets/purge-terminal` — sweep every terminal net's
+         *     events from PETRI_GLOBAL (admin).
+         * @description Server-driven: snapshots the engine metadata, purges the event+signal
+         *     subjects of every net whose status is NOT active (running/created), and
+         *     reports the totals. Active nets are never touched — their log is
+         *     authoritative state. The single-net `purge-events` endpoint remains for
+         *     orphan event-streams whose net metadata is already gone (not enumerated
+         *     here, since they have no metadata row).
+         */
+        post: operations["purge_terminal_nets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/nets/{net_id}": {
         parameters: {
             query?: never;
@@ -4883,6 +4932,36 @@ export interface components {
             target_net: string;
             target_place: string;
         };
+        /** @description One net that a bulk op could not act on, with the reason. */
+        BulkFailure: {
+            error: string;
+            net_id: string;
+        };
+        /** @description Request body for `POST /api/v1/admin/nets/bulk-kill`. */
+        BulkKillRequest: {
+            /**
+             * @description Opt-in to also kill INFRASTRUCTURE nets (`pool-*`, `staging-*`, …). When
+             *     false (default), any non-`mekhan-` id in `net_ids` is SKIPPED, not
+             *     killed — the safe default that stops a "kill all" from cancelling the
+             *     pool/staging/materialize nets that keep the platform running.
+             */
+            include_infrastructure?: boolean;
+            /**
+             * @description Explicit net ids to terminate. The client computes the set (typically
+             *     every active net in the current view) so the operation is auditable and
+             *     the server never guesses intent.
+             */
+            net_ids: string[];
+        };
+        /** @description Result of a bulk kill. */
+        BulkKillResponse: {
+            /** @description Nets the engine failed to terminate (per-net errors don't abort the run). */
+            failed: components["schemas"]["BulkFailure"][];
+            /** @description Nets successfully terminated (engine accepted the delete). */
+            killed: string[];
+            /** @description Infrastructure nets skipped because `include_infrastructure` was false. */
+            skipped_infrastructure: string[];
+        };
         /**
          * @description Severity for callout blocks. Snake-case on the wire (`"info"`,
          *     `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
@@ -9209,6 +9288,21 @@ export interface components {
              */
             purged_messages: number;
         };
+        /** @description Result of a terminal-net purge sweep. */
+        PurgeTerminalResponse: {
+            /** @description Nets the sweep failed to purge (per-net errors don't abort the run). */
+            failed: components["schemas"]["BulkFailure"][];
+            /**
+             * Format: int64
+             * @description How many terminal nets had their subjects purged.
+             */
+            nets_purged: number;
+            /**
+             * Format: int64
+             * @description Total messages removed from PETRI_GLOBAL across all purged nets.
+             */
+            total_messages: number;
+        };
         /**
          * @description Configuration for the Python execution backend.
          *
@@ -11999,6 +12093,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminNetRow"][];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Engine unreachable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    bulk_kill_nets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkKillRequest"];
+            };
+        };
+        responses: {
+            /** @description Per-net kill outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkKillResponse"];
+                };
+            };
+            /** @description Invalid net id in the batch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    purge_terminal_nets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Terminal nets swept */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeTerminalResponse"];
                 };
             };
             /** @description Admin role required */
