@@ -51,6 +51,14 @@ pub struct JobExecutor {
     /// descriptor and relays its envelopes back. `None` when NATS is not wired
     /// (some test harnesses), in which case both validate + no-op.
     pub transports: Option<TransportRegistry>,
+    /// The fileserve dispatch group this daemon answers reads on
+    /// (`fileserve.<group>.read`): its `runner_id`, else its worker pool's
+    /// routing partition — the same precedence `serve_groups` uses in
+    /// executor-service. Stamped onto by-reference `ArtifactLogged` events so
+    /// adopting the file server yields an endpoint whose `group_id` already
+    /// dispatches to the runner that can actually read the bytes. `None` for
+    /// drain/manifest daemons with no serve identity.
+    pub serve_group: Option<String>,
 }
 
 impl JobExecutor {
@@ -625,6 +633,12 @@ impl JobExecutor {
                                 by_reference: artifact.by_reference,
                                 file_server_id: artifact.file_server_id.clone(),
                                 reference_path: artifact.reference_path.clone(),
+                                endpoint_root: artifact.endpoint_root.clone(),
+                                serve_group: if artifact.by_reference {
+                                    self.serve_group.clone()
+                                } else {
+                                    None
+                                },
                             },
                             metadata: job.metadata.clone(),
                             source: self.reporter.source().to_string(),

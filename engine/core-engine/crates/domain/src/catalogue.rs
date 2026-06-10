@@ -73,6 +73,15 @@ pub struct CatalogueRegisterCommand {
     /// Path on the file server where the by-reference artifact lives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_path: Option<String>,
+    /// Mount root under which `reference_path` resolved on the registering
+    /// executor. Stamped into inventory provenance by the backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_root: Option<String>,
+    /// Fileserve dispatch group of the registering executor
+    /// (`fileserve.<group>.read`), so adopting the server can stamp a
+    /// working endpoint `group_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve_group: Option<String>,
 
     /// When the artifact was originally created.
     pub created_at: DateTime<Utc>,

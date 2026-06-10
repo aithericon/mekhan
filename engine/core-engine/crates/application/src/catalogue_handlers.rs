@@ -242,6 +242,14 @@ fn build_command_from_event(
             .get("reference_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        endpoint_root: detail
+            .get("endpoint_root")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        serve_group: detail
+            .get("serve_group")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         created_at: Utc::now(),
     })
 }

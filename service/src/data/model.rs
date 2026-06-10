@@ -16,6 +16,12 @@ pub struct DataCopy {
     pub server_display_name: Option<String>,
     /// Transport kind of the backing server (`object_store`/`s3`/`sftp`/…).
     pub server_kind: Option<String>,
+    /// Whether the backing server currently has at least one endpoint that can
+    /// actually deliver bytes (`endpoint_servable`: healthy, not
+    /// mismatch/conflict, transport-dispatchable). Drives the Data browser's
+    /// Download affordance — false renders a disabled hint instead of a dead
+    /// click.
+    pub servable: bool,
 }
 
 /// A unified Data-browser row: the full catalogue entry (so the browser can

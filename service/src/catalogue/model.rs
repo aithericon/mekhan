@@ -150,5 +150,12 @@ pub struct CatalogueRegisterCommand {
     /// `root`. Optional: absent for artifacts not sourced from a rooted crawl.
     #[serde(default)]
     pub endpoint_root: Option<String>,
+    /// Fileserve dispatch group of the executor that registered the artifact
+    /// (`fileserve.<group>.read`: its runner id or pool routing partition).
+    /// Stamped into inventory `provenance` so an `adopt` can promote it onto
+    /// the endpoint's `group_id` — making the adopted endpoint dispatchable
+    /// (and auto-verifiable) without manual configuration.
+    #[serde(default)]
+    pub serve_group: Option<String>,
     pub created_at: DateTime<Utc>,
 }

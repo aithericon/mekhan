@@ -174,12 +174,34 @@ pub fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
 ///   `verified` is merely *preferred* in the ordering below. A future strict-mode
 ///   knob could additionally exclude `unverified`.
 fn is_routable(c: &ServeCandidate) -> bool {
-    let status_ok = matches!(c.endpoint.status.as_str(), "online" | "unknown");
+    endpoint_servable(&c.endpoint)
+}
+
+/// Whether an endpoint can actually deliver bytes: routable health/verification
+/// AND transport-dispatchable. A `local_mount` endpoint with no `group_id` (the
+/// pre-configuration adopt default) or an external s3/sftp endpoint with no
+/// `resource_ref` can never start a read — excluding them here keeps routing
+/// from burning a candidate slot on a guaranteed failure, and lets the Data
+/// browser grey out Download instead of offering a dead click. Single source
+/// of truth for both (`route_candidates` + the `/data/entries` `servable`
+/// flag) so the UI can never disagree with what routing would do.
+pub fn endpoint_servable(endpoint: &FileServerEndpoint) -> bool {
+    let status_ok = matches!(endpoint.status.as_str(), "online" | "unknown");
     let verification_ok = !matches!(
-        c.endpoint.verification_status.as_str(),
+        endpoint.verification_status.as_str(),
         "mismatch" | "conflict"
     );
-    status_ok && verification_ok
+    let dispatchable = match endpoint.access_method.as_str() {
+        "local_mount" => endpoint.group_id.as_deref().is_some_and(|g| !g.is_empty()),
+        // External s3/sftp need a resource to resolve creds from; a bare
+        // `object_store` endpoint is the built-in platform bucket (servable).
+        "s3" | "sftp" => endpoint
+            .resource_ref
+            .as_deref()
+            .is_some_and(|r| !r.is_empty()),
+        _ => true,
+    };
+    status_ok && verification_ok && dispatchable
 }
 
 /// Effective serve **cost** for an endpoint's `access_method` (lower is cheaper).
@@ -1238,7 +1260,9 @@ mod tests {
             file_server_id: uuid::Uuid::new_v4(),
             access_method: method.to_string(),
             root: "/mnt/data".to_string(),
-            resource_ref: None,
+            // Dispatchable per `endpoint_servable`: external transports carry a
+            // resource_ref, local_mount a group — mirrors a configured endpoint.
+            resource_ref: matches!(method, "s3" | "sftp").then(|| "res-1".to_string()),
             group_id: Some("grp-1".to_string()),
             status: "online".to_string(),
             verification_status: "verified".to_string(),
@@ -1249,6 +1273,38 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn endpoint_servable_requires_dispatchability() {
+        // The adopt-default before auto-stamping: local_mount with no group —
+        // healthy + verified but UNDISPATCHABLE → not servable (this is the
+        // "dead Download click" case the flag exists for).
+        let mut e = ep("local_mount", 0);
+        e.group_id = None;
+        assert!(!endpoint_servable(&e));
+        e.group_id = Some(String::new());
+        assert!(!endpoint_servable(&e));
+        e.group_id = Some("grp-1".into());
+        assert!(endpoint_servable(&e));
+
+        // External s3 without a resource_ref can't resolve creds → not servable.
+        let mut s3 = ep("s3", 0);
+        s3.resource_ref = None;
+        assert!(!endpoint_servable(&s3));
+        s3.resource_ref = Some("res-1".into());
+        assert!(endpoint_servable(&s3));
+
+        // Bare object_store is the built-in platform bucket → servable.
+        let mut os = ep("object_store", 0);
+        os.resource_ref = None;
+        assert!(endpoint_servable(&os));
+        // Health/verification gates still apply on top.
+        os.status = "offline".into();
+        assert!(!endpoint_servable(&os));
+        os.status = "online".into();
+        os.verification_status = "mismatch".into();
+        assert!(!endpoint_servable(&os));
     }
 
     fn cand(method: &str, priority: i32) -> ServeCandidate {

@@ -1095,6 +1095,26 @@ pub async fn start_ipc_sidecar(
     Ok(handle)
 }
 
+/// Derive the mount root a by-reference artifact was read under: the local
+/// absolute `path` the SDK hashed, minus the canonical `reference_path`
+/// suffix. `None` when the two don't lexically align (caller passed a
+/// reference_path that isn't a suffix of the local path) — better no stamp
+/// than a wrong one, since reconcile would flag a bad root as `mismatch`
+/// only after an adopt.
+fn derive_endpoint_root(local_path: &str, reference_path: &str) -> Option<String> {
+    let rel = reference_path.trim_start_matches('/');
+    if rel.is_empty() {
+        return None;
+    }
+    let stripped = local_path.strip_suffix(rel)?;
+    let root = stripped.trim_end_matches('/');
+    Some(if root.is_empty() {
+        "/".to_string()
+    } else {
+        root.to_string()
+    })
+}
+
 async fn handle_log_artifact(
     req: &proto::LogArtifactRequest,
     state: &Arc<Mutex<SidecarState>>,
@@ -1178,6 +1198,14 @@ async fn handle_log_artifact(
             },
             reference_path: if req.no_upload && !req.reference_path.is_empty() {
                 Some(req.reference_path.clone())
+            } else {
+                None
+            },
+            // The mount root this executor reads the file under: the local
+            // absolute path minus the canonical reference_path suffix. Lets
+            // the control plane stamp a serve-ready endpoint root at adopt.
+            endpoint_root: if req.no_upload && !req.reference_path.is_empty() {
+                derive_endpoint_root(&req.path, &req.reference_path)
             } else {
                 None
             },
@@ -2040,6 +2068,29 @@ mod tests {
             .expect("sidecar task");
 
         result.outputs
+    }
+
+    #[test]
+    fn derive_endpoint_root_strips_reference_suffix() {
+        // The demo-50 shape: abs local path = root + '/' + canonical path.
+        assert_eq!(
+            derive_endpoint_root(
+                "/tmp/mekhan-crawl-demo/datasets/genome_a.fasta",
+                "mekhan-crawl-demo/datasets/genome_a.fasta"
+            ),
+            Some("/tmp".to_string())
+        );
+        // Leading slash on the reference is tolerated (root-relative).
+        assert_eq!(
+            derive_endpoint_root("/mnt/nas/proj/a.h5", "/proj/a.h5"),
+            Some("/mnt/nas".to_string())
+        );
+        // File at the filesystem root → root is "/".
+        assert_eq!(derive_endpoint_root("/a.h5", "a.h5"), Some("/".to_string()));
+        // Misaligned paths → no stamp (better none than a wrong root).
+        assert_eq!(derive_endpoint_root("/tmp/other/a.h5", "proj/a.h5"), None);
+        // Empty reference → no stamp.
+        assert_eq!(derive_endpoint_root("/tmp/a.h5", ""), None);
     }
 
     #[test]

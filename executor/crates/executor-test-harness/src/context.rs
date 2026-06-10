@@ -267,6 +267,7 @@ impl ExecutorTestContext {
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
             transports: self.transports.clone(),
+            serve_group: None,
         });
         let storage = self.storage.clone();
 
@@ -303,6 +304,7 @@ impl ExecutorTestContext {
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
             transports: self.transports.clone(),
+            serve_group: None,
         });
         let storage = self.storage.clone();
 
@@ -339,6 +341,7 @@ impl ExecutorTestContext {
             log_config,
             completion_tracker: None,
             transports: self.transports.clone(),
+            serve_group: None,
         });
         let storage = self.storage.clone();
 
@@ -377,6 +380,7 @@ impl ExecutorTestContext {
             log_config: SidecarLogConfig::default(),
             completion_tracker: Some(tracker.clone()),
             transports: self.transports.clone(),
+            serve_group: None,
         });
         let storage = self.storage.clone();
 
@@ -408,6 +412,7 @@ impl ExecutorTestContext {
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
             transports: self.transports.clone(),
+            serve_group: None,
         })
     }
 

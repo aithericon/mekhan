@@ -67,6 +67,14 @@ pub struct Artifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_path: Option<String>,
 
+    /// Mount root under which `reference_path` resolves on THIS executor —
+    /// derived at registration time as the local absolute path minus the
+    /// `reference_path` suffix. The control plane stamps it into inventory
+    /// provenance so adopting the file server yields a serve-ready endpoint
+    /// root without manual configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_root: Option<String>,
+
     /// Extracted file metadata as JSON (avoids hard dependency on file-metadata crate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_metadata: Option<serde_json::Value>,
@@ -111,6 +119,7 @@ mod tests {
             by_reference: false,
             file_server_id: None,
             reference_path: None,
+            endpoint_root: None,
             file_metadata: None,
             metadata: HashMap::from([("epoch".into(), "10".into())]),
             created_at: Utc::now(),

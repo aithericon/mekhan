@@ -343,9 +343,9 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>Download</Tooltip.Content>
 				</Tooltip.Root>
-			{:else if entry.content_hash && copies.length > 0}
-				<!-- By-reference entry: no platform-store copy, but physical copies are
-				     servable through the routed endpoint data plane. -->
+			{:else if entry.content_hash && copies.some((c) => c.servable)}
+				<!-- By-reference entry: no platform-store copy, but at least one
+				     physical copy sits behind a servable endpoint — route it. -->
 				<Tooltip.Root>
 					<Tooltip.Trigger>
 						<a
@@ -357,6 +357,24 @@
 						</a>
 					</Tooltip.Trigger>
 					<Tooltip.Content>Download from file server</Tooltip.Content>
+				</Tooltip.Root>
+			{:else if entry.content_hash && copies.length > 0}
+				<!-- Copies exist but no endpoint can deliver them: explain instead of
+				     offering a dead click that would 409. -->
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<span
+							class="inline-flex size-8 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/40"
+							aria-disabled="true"
+							data-testid="download-unservable"
+						>
+							<Download class="size-4" />
+						</span>
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						No servable endpoint for this file's server yet — adopt the server under Data → Servers
+						(root + serve group are stamped automatically for crawled files), then Verify.
+					</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}
 

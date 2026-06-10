@@ -91,6 +91,17 @@ pub enum StatusDetail {
         /// Physical path of a by-reference artifact on its file server.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reference_path: Option<String>,
+        /// Mount root under which `reference_path` resolves on the executor
+        /// that registered it (local absolute path minus the reference_path
+        /// suffix). Stamped into inventory provenance so adopt yields a
+        /// serve-ready endpoint root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint_root: Option<String>,
+        /// The fileserve dispatch group this executor answers reads on
+        /// (`fileserve.<group>.read`): its runner id, or its worker pool's
+        /// routing partition. Lets adopt stamp a working `group_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        serve_group: Option<String>,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         metadata: HashMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

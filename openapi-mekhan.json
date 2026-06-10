@@ -15430,7 +15430,8 @@
           "file_server_id",
           "path",
           "status",
-          "is_canonical"
+          "is_canonical",
+          "servable"
         ],
         "properties": {
           "file_server_id": {
@@ -15441,6 +15442,10 @@
           },
           "path": {
             "type": "string"
+          },
+          "servable": {
+            "type": "boolean",
+            "description": "Whether the backing server currently has at least one endpoint that can\nactually deliver bytes (`endpoint_servable`: healthy, not\nmismatch/conflict, transport-dispatchable). Drives the Data browser's\nDownload affordance — false renders a disabled hint instead of a dead\nclick."
           },
           "server_display_name": {
             "type": [

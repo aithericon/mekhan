@@ -250,6 +250,30 @@ pub async fn inventory_endpoint_root(
     Ok(row.map(|r| r.0))
 }
 
+/// The fileserve dispatch group the registering executor stamped onto this
+/// key's inventory rows (`provenance->>'serve_group'`), if any — the exact
+/// sibling of [`inventory_endpoint_root`] for the endpoint's `group_id`.
+/// Most-common-wins for the same reason: a server's copies are registered by
+/// the co-located runner, so the modal group is the one that can read them.
+pub async fn inventory_serve_group(
+    pool: &PgPool,
+    key: &str,
+) -> Result<Option<String>, QueryError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT provenance->>'serve_group' AS grp \
+         FROM file_inventory \
+         WHERE file_server_id = $1 \
+           AND NULLIF(TRIM(provenance->>'serve_group'), '') IS NOT NULL \
+         GROUP BY provenance->>'serve_group' \
+         ORDER BY COUNT(*) DESC, provenance->>'serve_group' \
+         LIMIT 1",
+    )
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0))
+}
+
 /// Insert a new identity-only file server, plus an optional inline first
 /// endpoint. A unique `(workspace_id, key)` violation surfaces as a DB error the
 /// handler maps to 409 (we pre-check existence in the handler for a clean message).

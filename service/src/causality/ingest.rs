@@ -2305,6 +2305,12 @@ async fn register_catalogue_entry(
     if let Some(root) = &endpoint_root {
         provenance["endpoint_root"] = serde_json::json!(root);
     }
+    // The registering executor's fileserve dispatch group — `adopt` promotes
+    // it onto the endpoint's `group_id` so the adopted endpoint can serve
+    // (and auto-verify) immediately. Same fail-soft contract as the root.
+    if let Some(group) = cmd.serve_group.as_deref().filter(|g| !g.trim().is_empty()) {
+        provenance["serve_group"] = serde_json::json!(group);
+    }
     crate::inventory::queries::upsert_inventory_copy(
         &mut tx,
         Some(&content_hash),

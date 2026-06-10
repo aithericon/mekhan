@@ -1127,6 +1127,13 @@ fn build_executor(
             log_config,
             completion_tracker: None,
             transports,
+            // Same precedence as the fileserve `serve_groups` binding below:
+            // a runner serves its runner_id, an enrolled pool daemon its
+            // routing partition.
+            serve_group: config
+                .runner_id
+                .clone()
+                .or_else(|| config.worker_routing_partition.clone()),
         },
         registered_wires,
     ))

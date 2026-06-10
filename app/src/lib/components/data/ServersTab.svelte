@@ -8,6 +8,7 @@
 		createEndpoint,
 		updateEndpoint,
 		deleteEndpoint,
+		verifyEndpoint,
 		type FileServerView,
 		type FileServerEndpoint,
 		type UnregisteredServer,
@@ -28,6 +29,9 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Link2Off from '@lucide/svelte/icons/link-2-off';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import { toast } from 'svelte-sonner';
 
 	// When set (a server link was clicked in Entries/Copies), highlight that row.
 	let { focusKey }: { focusKey?: string | null } = $props();
@@ -304,6 +308,34 @@
 		}
 	}
 
+	// Endpoint ids with an in-flight hash-probe (verify is sampled reads through
+	// the live transport — runner/s3/sftp — so it can take a few seconds).
+	let verifying = $state<Set<string>>(new Set());
+
+	async function runVerify(s: FileServerView, ep: FileServerEndpoint) {
+		verifying = new Set([...verifying, ep.id]);
+		try {
+			const r = await verifyEndpoint(s.key, ep.id);
+			const counts = `${r.passed}/${r.sampled} passed${r.missing ? `, ${r.missing} missing` : ''}`;
+			if (r.verification_status === 'verified') {
+				toast.success(`Endpoint verified — ${counts}`);
+			} else {
+				const example = r.examples?.[0];
+				toast.error(
+					`Endpoint ${r.verification_status} — ${r.mismatched} mismatched of ${r.sampled}` +
+						(example ? ` (e.g. ${example.path})` : '')
+				);
+			}
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'verification failed');
+		} finally {
+			const next = new Set(verifying);
+			next.delete(ep.id);
+			verifying = next;
+		}
+	}
+
 	async function removeEndpoint(s: FileServerView, ep: FileServerEndpoint) {
 		if (!confirm(`Remove the ${ep.access_method} endpoint from "${s.display_name}"?`)) return;
 		try {
@@ -420,6 +452,20 @@
 									<Badge variant="outline" class="px-1.5 py-0 text-[10px] {ver.class}"
 										>{ver.label}</Badge
 									>
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										disabled={verifying.has(ep.id)}
+										onclick={() => runVerify(s, ep)}
+										title="Verify endpoint (hash-probe a sample of this server's files through it)"
+										data-testid="endpoint-verify"
+									>
+										{#if verifying.has(ep.id)}
+											<LoaderCircle class="size-3.5 animate-spin" />
+										{:else}
+											<ShieldCheck class="size-3.5" />
+										{/if}
+									</Button>
 									<Button
 										variant="ghost"
 										size="icon-sm"

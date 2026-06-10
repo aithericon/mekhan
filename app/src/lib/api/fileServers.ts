@@ -22,6 +22,7 @@ export type CreateFileServerRequest = components['schemas']['CreateFileServerReq
 export type UpdateFileServerRequest = components['schemas']['UpdateFileServerRequest'];
 export type CreateEndpointRequest = components['schemas']['CreateEndpointRequest'];
 export type UpdateEndpointRequest = components['schemas']['UpdateEndpointRequest'];
+export type VerifyResult = components['schemas']['VerifyResult'];
 
 const BASE = '/api/v1/file-servers';
 
@@ -105,5 +106,18 @@ export async function deleteEndpoint(key: string, endpointId: string): Promise<v
 	return send<void>(
 		'DELETE',
 		`/${encodeURIComponent(key)}/endpoints/${encodeURIComponent(endpointId)}`
+	);
+}
+
+/**
+ * On-demand hash-probe of one endpoint: re-reads a stratified sample of this
+ * server's inventory through the endpoint and compares against the recorded
+ * content hashes. Returns the persisted verdict (verified/mismatch/conflict)
+ * plus sampled/passed/missing counts and mismatch examples.
+ */
+export async function verifyEndpoint(key: string, endpointId: string): Promise<VerifyResult> {
+	return send<VerifyResult>(
+		'POST',
+		`/${encodeURIComponent(key)}/endpoints/${encodeURIComponent(endpointId)}/verify`
 	);
 }

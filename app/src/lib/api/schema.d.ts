@@ -5835,6 +5835,14 @@ export interface components {
             file_server_id: string;
             is_canonical: boolean;
             path: string;
+            /**
+             * @description Whether the backing server currently has at least one endpoint that can
+             *     actually deliver bytes (`endpoint_servable`: healthy, not
+             *     mismatch/conflict, transport-dispatchable). Drives the Data browser's
+             *     Download affordance — false renders a disabled hint instead of a dead
+             *     click.
+             */
+            servable: boolean;
             /** @description Display name of the backing `file_servers` row, if the key is registered. */
             server_display_name?: string | null;
             /** @description Transport kind of the backing server (`object_store`/`s3`/`sftp`/…). */

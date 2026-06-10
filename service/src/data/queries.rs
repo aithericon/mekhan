@@ -24,7 +24,7 @@ const UNCATALOGUED_PEEK: i64 = 50;
 async fn server_lookup(
     pool: &PgPool,
     workspace_id: Uuid,
-) -> Result<HashMap<String, (String, Option<String>)>, sqlx::Error> {
+) -> Result<HashMap<String, (String, Option<String>, bool)>, sqlx::Error> {
     let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT fs.key, fs.display_name, \
                 (SELECT e.access_method FROM file_server_endpoints e \
@@ -35,17 +35,53 @@ async fn server_lookup(
     .bind(workspace_id)
     .fetch_all(pool)
     .await?;
+
+    // Per-server "can any endpoint actually deliver bytes" — evaluated in Rust
+    // with the SAME predicate routing uses (`endpoint_servable`), so the
+    // browser's Download affordance can never disagree with the serve route.
+    let endpoints: Vec<(String, crate::file_servers::model::FileServerEndpoint)> = sqlx::query_as(
+        "SELECT fs.key, e.* FROM file_server_endpoints e \
+         JOIN file_servers fs ON fs.id = e.file_server_id \
+         WHERE fs.workspace_id = $1",
+    )
+    .bind(workspace_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row: ServerEndpointRow| (row.key, row.endpoint))
+    .collect();
+    let mut servable_by_key: HashMap<String, bool> = HashMap::new();
+    for (key, ep) in endpoints {
+        let entry = servable_by_key.entry(key).or_insert(false);
+        *entry = *entry || crate::data::serve::endpoint_servable(&ep);
+    }
+
     Ok(rows
         .into_iter()
-        .map(|(k, d, kind)| (k, (d, kind)))
+        .map(|(k, d, kind)| {
+            let servable = servable_by_key.get(&k).copied().unwrap_or(false);
+            (k, (d, kind, servable))
+        })
         .collect())
 }
 
-fn to_copy(inv: InventoryEntry, servers: &HashMap<String, (String, Option<String>)>) -> DataCopy {
-    let (display, kind) = servers
+/// Row shape for the endpoint-servability join: the server key + the full
+/// endpoint record (flattened — `e.*` columns follow `fs.key`).
+#[derive(sqlx::FromRow)]
+struct ServerEndpointRow {
+    key: String,
+    #[sqlx(flatten)]
+    endpoint: crate::file_servers::model::FileServerEndpoint,
+}
+
+fn to_copy(
+    inv: InventoryEntry,
+    servers: &HashMap<String, (String, Option<String>, bool)>,
+) -> DataCopy {
+    let (display, kind, servable) = servers
         .get(&inv.file_server_id)
-        .map(|(d, k)| (Some(d.clone()), k.clone()))
-        .unwrap_or((None, None));
+        .map(|(d, k, s)| (Some(d.clone()), k.clone(), *s))
+        .unwrap_or((None, None, false));
     DataCopy {
         file_server_id: inv.file_server_id,
         path: inv.path,
@@ -53,6 +89,7 @@ fn to_copy(inv: InventoryEntry, servers: &HashMap<String, (String, Option<String
         is_canonical: inv.is_canonical,
         server_display_name: display,
         server_kind: kind,
+        servable,
     }
 }
 

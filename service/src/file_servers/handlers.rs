@@ -163,26 +163,37 @@ pub async fn adopt(
     let stamped_root = queries::inventory_endpoint_root(&state.db, &req.key)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    // The registering executor's fileserve group, recorded the same way —
+    // promoting it onto `group_id` makes the adopted endpoint dispatchable
+    // (and lets the auto-probe verify it) with zero manual configuration.
+    let stamped_group = queries::inventory_serve_group(&state.db, &req.key)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     // Adopting a crawled key: default its first access method to local_mount
     // (the co-located-runner transport) unless the caller supplied one. Either
-    // way, when the caller didn't pin a root explicitly, stamp the crawl-derived
-    // endpoint_root so adopt promotes the canonical anchor.
+    // way, when the caller didn't pin a root/group explicitly, stamp the
+    // registration-derived endpoint_root + serve_group so adopt promotes a
+    // serve-ready endpoint.
     match req.endpoint.as_mut() {
         None => {
             req.endpoint = Some(CreateEndpointRequest {
                 access_method: "local_mount".to_string(),
                 root: stamped_root.clone(),
                 resource_ref: None,
-                group_id: None,
+                group_id: stamped_group.clone(),
                 priority: None,
                 config: None,
             });
         }
-        Some(ep) if ep.root.is_none() => {
-            ep.root = stamped_root.clone();
+        Some(ep) => {
+            if ep.root.is_none() {
+                ep.root = stamped_root.clone();
+            }
+            if ep.group_id.is_none() && ep.access_method == "local_mount" {
+                ep.group_id = stamped_group.clone();
+            }
         }
-        Some(_) => {}
     }
     insert_server(&state, ws, &req).await
 }
