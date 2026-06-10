@@ -4,6 +4,7 @@
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -89,7 +90,7 @@
 
 </script>
 
-<div class="mx-auto max-w-4xl px-6 py-8" data-testid="workspace-detail">
+<PageShell testid="workspace-detail">
 	{#if loading}
 		<div class="text-sm text-muted-foreground">Loading workspace…</div>
 	{:else if error}
@@ -97,18 +98,16 @@
 			{error}
 		</div>
 	{:else if workspace}
-		<header class="mb-8 flex items-baseline justify-between">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight">{workspace.display_name}</h1>
-				<p class="text-sm text-muted-foreground">
-					{workspace.slug} · {members.length}
-					{members.length === 1 ? 'member' : 'members'}
-				</p>
-			</div>
-			{#if workspace.is_system}
-				<Badge variant="secondary">system</Badge>
-			{/if}
-		</header>
+		<PageHeader
+			title={workspace.display_name}
+			subtitle="{workspace.slug} · {members.length} {members.length === 1 ? 'member' : 'members'}"
+		>
+			{#snippet actions()}
+				{#if workspace?.is_system}
+					<Badge variant="secondary">system</Badge>
+				{/if}
+			{/snippet}
+		</PageHeader>
 
 		<div class="grid gap-6 md:grid-cols-2">
 			<!-- Members -->
@@ -203,5 +202,5 @@
 			</Card>
 		</div>
 	{/if}
-</div>
+</PageShell>
 

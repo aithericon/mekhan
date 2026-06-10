@@ -33,6 +33,14 @@ export default defineConfig({
 			'$app/navigation': new URL(
 				'./src/lib/testing/app-navigation-stub.ts',
 				import.meta.url
+			).pathname,
+			// `$app/state` is virtual too; shell components reachable from route
+			// pages under test (e.g. tasks inbox → shell/PageTabs) read
+			// `page.url.pathname` for active-tab highlighting. Tests may still
+			// vi.mock it to pin a specific URL.
+			'$app/state': new URL(
+				'./src/lib/testing/app-state-stub.ts',
+				import.meta.url
 			).pathname
 		}
 	}

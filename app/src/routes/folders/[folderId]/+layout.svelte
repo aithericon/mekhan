@@ -5,7 +5,7 @@
 	import Settings from '@lucide/svelte/icons/settings';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import * as Tabs from '$lib/components/ui/tabs';
+	import { PageShell, PageHeader, PageTabs } from '$lib/components/shell';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 	import { listFolders } from '$lib/api/client';
 	import {
@@ -63,45 +63,50 @@
 		if (folderId) reload();
 	});
 
-	// Tab nav drives the subroutes. Settings lives behind the gear, so the
-	// active tab is empty there (no trigger highlighted).
-	const activeTab = $derived(pathname.endsWith('/api') ? 'api' : pathname.endsWith('/settings') ? '' : 'templates');
+	// Tab nav drives the subroutes (PageTabs link-tabs). Settings lives behind
+	// the gear — neither tab's href prefix matches /settings, so no tab is
+	// highlighted there (the gear button shows the active state instead).
 	const onSettings = $derived(pathname.endsWith('/settings'));
-
-	function selectTab(v: string | undefined) {
-		if (v && v !== activeTab) goto(`/folders/${ctx.folderId}/${v}`);
-	}
 </script>
 
 <svelte:head><title>{ctx.folder?.display_name ?? 'Folder'} | Mekhan</title></svelte:head>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-4xl px-6 py-8">
+<PageShell>
+	{#if ctx.loading && !ctx.folder}
 		<a
 			href="/folders"
 			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 		>
 			<ChevronLeft class="size-4" /> Folders
 		</a>
-
-		{#if ctx.loading && !ctx.folder}
-			<p class="text-sm text-muted-foreground">Loading…</p>
-		{:else if ctx.error && !ctx.folder}
-			<div class="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-				{ctx.error}
+		<p class="text-sm text-muted-foreground">Loading…</p>
+	{:else if ctx.error && !ctx.folder}
+		<a
+			href="/folders"
+			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+		>
+			<ChevronLeft class="size-4" /> Folders
+		</a>
+		<div class="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+			{ctx.error}
+		</div>
+	{:else if ctx.folder}
+		{@const folder = ctx.folder}
+		<!-- Static folder header — shared across every tab subroute. -->
+		<PageHeader
+			title={folder.display_name}
+			variant="detail"
+			back={{ href: '/folders', label: 'Folders' }}
+			headTitle={false}
+			class="mb-5"
+		>
+			<div class="mt-1 flex items-center gap-2">
+				<Badge variant="secondary" class="font-mono text-sm">{folder.path}</Badge>
+				{#if folder.description}
+					<span class="truncate text-sm text-muted-foreground">{folder.description}</span>
+				{/if}
 			</div>
-		{:else if ctx.folder}
-			<!-- Static folder header — shared across every tab subroute. -->
-			<div class="mb-5 flex items-start justify-between gap-3">
-				<div class="min-w-0">
-					<h1 class="text-lg font-semibold tracking-tight">{ctx.folder.display_name}</h1>
-					<div class="mt-1 flex items-center gap-2">
-						<Badge variant="secondary" class="font-mono text-sm">{ctx.folder.path}</Badge>
-						{#if ctx.folder.description}
-							<span class="truncate text-sm text-muted-foreground">{ctx.folder.description}</span>
-						{/if}
-					</div>
-				</div>
+			{#snippet actions()}
 				<Button
 					variant={onSettings ? 'secondary' : 'ghost'}
 					size="sm"
@@ -111,16 +116,17 @@
 				>
 					<Settings class="size-4" /> Settings
 				</Button>
-			</div>
+			{/snippet}
+		</PageHeader>
 
-			<Tabs.Root value={activeTab} onValueChange={selectTab} class="mb-5">
-				<Tabs.List>
-					<Tabs.Trigger value="templates" data-testid="tab-templates">Templates</Tabs.Trigger>
-					<Tabs.Trigger value="api" data-testid="tab-api">API</Tabs.Trigger>
-				</Tabs.List>
-			</Tabs.Root>
+		<PageTabs
+			class="mb-5"
+			tabs={[
+				{ href: `/folders/${ctx.folderId}/templates`, label: 'Templates', testid: 'tab-templates' },
+				{ href: `/folders/${ctx.folderId}/api`, label: 'API', testid: 'tab-api' }
+			]}
+		/>
 
-			{@render children()}
-		{/if}
-	</div>
-</div>
+		{@render children()}
+	{/if}
+</PageShell>

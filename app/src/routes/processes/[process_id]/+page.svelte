@@ -6,12 +6,13 @@
 		type WorkflowInstance,
 		type ProcessDetail
 	} from '$lib/api/client';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { ProcessView } from '$lib/components/processes';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Separator } from '$lib/components/ui/separator';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Check from '@lucide/svelte/icons/check';
 	import X from '@lucide/svelte/icons/x';
@@ -102,100 +103,124 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto w-full px-6 py-8 animate-rise">
-		<!-- Back link -->
-		<a
-			href="/processes"
-			class="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-		>
-			<ArrowLeft class="size-4" />
-			Back to processes
-		</a>
-
-		{#if detail}
-			<!-- Header -->
-			<div class="mb-6">
-				<div class="flex items-center gap-2 mb-2">
-					{#if editingName}
-						<Input
-							type="text"
-							class="h-8 w-64 text-sm"
-							bind:value={editNameValue}
-							onkeydown={(e: KeyboardEvent) => {
-								if (e.key === 'Enter') saveName();
-								if (e.key === 'Escape') editingName = false;
-							}}
-						/>
-						<Button variant="ghost" size="icon-sm" onclick={saveName}>
-							<Check class="size-4" />
-						</Button>
-						<Button variant="ghost" size="icon-sm" onclick={() => (editingName = false)}>
-							<X class="size-4" />
-						</Button>
-					{:else}
-						<h1 class="text-2xl font-semibold tracking-tight text-foreground">
-							{detail.name ?? 'Unnamed Process'}
-						</h1>
-						<button
-							class="text-muted-foreground hover:text-foreground transition-colors"
-							onclick={() => {
-								editNameValue = detail?.name ?? '';
-								editingName = true;
-							}}
-						>
-							<Pencil class="size-4" />
-						</button>
-					{/if}
-				</div>
-
-				<div class="flex flex-wrap items-center gap-2 mb-2">
-					<Badge class={statusColor(detail.status)} variant="secondary">
-						{detail.status}
+<PageShell width="full">
+	{#if detail}
+		{@const d = detail}
+		<!-- Meta rows shared between display + rename header states -->
+		{#snippet metaRows()}
+			<div class="mt-2 mb-2 flex flex-wrap items-center gap-2">
+				<Badge class={statusColor(d.status)} variant="secondary">
+					{d.status}
+				</Badge>
+				{#if d.kind}
+					<Badge class={kindColor(d.kind)} variant="secondary">
+						{d.kind}
 					</Badge>
-					{#if detail.kind}
-						<Badge class={kindColor(detail.kind)} variant="secondary">
-							{detail.kind}
-						</Badge>
-					{/if}
-					{#if detail.owner}
-						<span class="text-sm text-muted-foreground">Owner: {detail.owner}</span>
-					{/if}
-				</div>
-
-				<p class="font-mono text-sm text-muted-foreground mb-1">{detail.process_id}</p>
-				{#if detail.instance_id}
-					<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
-						<span class="text-muted-foreground">Origin:</span>
-						<a
-							href="/instances/{detail.instance_id}"
-							class="inline-flex items-center gap-1 text-primary hover:underline"
-							data-testid="process-instance-link"
-						>
-							Instance
-							<ChevronRight class="size-3" />
-						</a>
-						{#if linkedInstance}
-							<a
-								href="/templates/{linkedInstance.template_id}"
-								class="inline-flex items-center gap-1 text-primary hover:underline"
-								data-testid="process-template-link"
-							>
-								Template v{linkedInstance.template_version}
-								<ChevronRight class="size-3" />
-							</a>
-						{/if}
-					</div>
 				{/if}
-				<div class="flex items-center gap-4 text-sm text-muted-foreground">
-					<span>Created {formatDate(detail.created_at)}</span>
-					<span>Updated {relativeTime(detail.updated_at)}</span>
-				</div>
+				{#if d.owner}
+					<span class="text-sm text-muted-foreground">Owner: {d.owner}</span>
+				{/if}
 			</div>
 
-			<Separator class="mb-4" />
+			<p class="font-mono text-sm text-muted-foreground mb-1">{d.process_id}</p>
+			{#if d.instance_id}
+				<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+					<span class="text-muted-foreground">Origin:</span>
+					<a
+						href="/instances/{d.instance_id}"
+						class="inline-flex items-center gap-1 text-primary hover:underline"
+						data-testid="process-instance-link"
+					>
+						Instance
+						<ChevronRight class="size-3" />
+					</a>
+					{#if linkedInstance}
+						<a
+							href="/templates/{linkedInstance.template_id}"
+							class="inline-flex items-center gap-1 text-primary hover:underline"
+							data-testid="process-template-link"
+						>
+							Template v{linkedInstance.template_version}
+							<ChevronRight class="size-3" />
+						</a>
+					{/if}
+				</div>
+			{/if}
+			<div class="flex items-center gap-4 text-sm text-muted-foreground">
+				<span>Created {formatDate(d.created_at)}</span>
+				<span>Updated {relativeTime(d.updated_at)}</span>
+			</div>
+		{/snippet}
+
+		{#if editingName}
+			<!-- Inline-rename state: the title is an input, so PageHeader (string
+			     title) steps aside for this transient editing header. -->
+			<header class="mb-6">
+				<div class="mb-3">
+					<a
+						href="/processes"
+						class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<ChevronLeft class="size-4" />
+						Back to processes
+					</a>
+				</div>
+				<div class="flex items-center gap-2">
+					<Input
+						type="text"
+						class="h-8 w-64 text-sm"
+						bind:value={editNameValue}
+						onkeydown={(e: KeyboardEvent) => {
+							if (e.key === 'Enter') saveName();
+							if (e.key === 'Escape') editingName = false;
+						}}
+					/>
+					<Button variant="ghost" size="icon-sm" onclick={saveName}>
+						<Check class="size-4" />
+					</Button>
+					<Button variant="ghost" size="icon-sm" onclick={() => (editingName = false)}>
+						<X class="size-4" />
+					</Button>
+				</div>
+				{@render metaRows()}
+			</header>
+		{:else}
+			<PageHeader
+				title={d.name ?? 'Unnamed Process'}
+				variant="detail"
+				back={{ href: '/processes', label: 'Back to processes' }}
+			>
+				{#snippet actions()}
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onclick={() => {
+							editNameValue = d.name ?? '';
+							editingName = true;
+						}}
+					>
+						<Pencil class="size-4" />
+					</Button>
+				{/snippet}
+				{#snippet children()}
+					{@render metaRows()}
+				{/snippet}
+			</PageHeader>
 		{/if}
 
-		<ProcessView {processId} bind:detail />
-	</div>
-</div>
+		<Separator class="mb-4" />
+	{:else}
+		<!-- Back link while the process is still loading -->
+		<div class="mb-6">
+			<a
+				href="/processes"
+				class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ChevronLeft class="size-4" />
+				Back to processes
+			</a>
+		</div>
+	{/if}
+
+	<ProcessView {processId} bind:detail />
+</PageShell>

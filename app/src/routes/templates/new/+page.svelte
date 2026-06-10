@@ -6,6 +6,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 
 	let name = $state('');
 	let description = $state('');
@@ -51,54 +52,49 @@
 	}
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="new-template-page">
-	<div class="mx-auto max-w-lg px-6 py-8 animate-rise">
-		<h1 class="text-2xl font-semibold tracking-tight text-foreground">New Template</h1>
-		<p class="mt-1 text-sm text-muted-foreground">
-			Create a new workflow template
-		</p>
+<PageShell width="narrow" testid="new-template-page">
+	<PageHeader title="New Template" subtitle="Create a new workflow template" />
 
-		{#if error}
-			<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-				{error}
-			</div>
-		{/if}
+	{#if error}
+		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{error}
+		</div>
+	{/if}
 
-		<form class="mt-6 space-y-4" data-testid="new-template-form" onsubmit={handleSubmit}>
-			<div class="space-y-1.5">
-				<Label for="name">Name</Label>
-				<Input
-					id="name"
-					bind:value={name}
-					required
-					placeholder="My Workflow"
-					data-testid="input-template-name"
-				/>
-			</div>
+	<form class="space-y-4" data-testid="new-template-form" onsubmit={handleSubmit}>
+		<div class="space-y-1.5">
+			<Label for="name">Name</Label>
+			<Input
+				id="name"
+				bind:value={name}
+				required
+				placeholder="My Workflow"
+				data-testid="input-template-name"
+			/>
+		</div>
 
-			<div class="space-y-1.5">
-				<Label for="description">Description</Label>
-				<Textarea
-					id="description"
-					bind:value={description}
-					rows={3}
-					placeholder="Optional description"
-					data-testid="input-template-description"
-				/>
-			</div>
+		<div class="space-y-1.5">
+			<Label for="description">Description</Label>
+			<Textarea
+				id="description"
+				bind:value={description}
+				rows={3}
+				placeholder="Optional description"
+				data-testid="input-template-description"
+			/>
+		</div>
 
-			<div class="flex items-center gap-3 pt-2">
-				<Button
-					type="submit"
-					disabled={submitting || !name.trim()}
-					data-testid="btn-submit-template"
-				>
-					{submitting ? 'Creating...' : 'Create Template'}
-				</Button>
-				<Button variant="outline" href="/templates">
-					Cancel
-				</Button>
-			</div>
-		</form>
-	</div>
-</div>
+		<div class="flex items-center gap-3 pt-2">
+			<Button
+				type="submit"
+				disabled={submitting || !name.trim()}
+				data-testid="btn-submit-template"
+			>
+				{submitting ? 'Creating...' : 'Create Template'}
+			</Button>
+			<Button variant="outline" href="/templates">
+				Cancel
+			</Button>
+		</div>
+	</form>
+</PageShell>

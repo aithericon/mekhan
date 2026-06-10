@@ -14,9 +14,9 @@
 	//              somehow lands here, we just link out.
 	import { page } from '$app/state';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -85,42 +85,39 @@
 	});
 </script>
 
-<svelte:head><title>{name} | Control Plane | Mekhan</title></svelte:head>
-
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
-		<a
-			href="/fleet"
-			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-		>
-			<ChevronLeft class="size-4" /> Control Plane
-		</a>
-
-		<div class="mb-4 flex items-start justify-between gap-3">
-			<div>
-				<h1 class="text-lg font-semibold tracking-tight" data-testid="group-detail-title">{name}</h1>
-				<div class="mt-1 flex items-center gap-2 text-sm">
-					<Badge variant="secondary">{backend ?? 'capacity'}</Badge>
-					{#if capacity}
-						<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
-						{#if capacity.live.kind === 'presence'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.online}/{capacity.live.total} online
-							</span>
-						{:else if capacity.live.kind === 'queue'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.online}/{capacity.live.enrolled} online
-							</span>
-						{:else if capacity.live.kind === 'tokens'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.in_use}/{capacity.live.seeded} in use
-							</span>
-						{/if}
-					{:else}
-						<span class="font-mono text-xs text-muted-foreground">{resourceId}</span>
+<PageShell width="wide">
+	<PageHeader
+		title={name}
+		variant="detail"
+		back={{ href: '/fleet', label: 'Control Plane' }}
+		headTitle={`${name} | Control Plane | Mekhan`}
+		titleTestid="group-detail-title"
+		class="mb-4"
+	>
+		{#snippet children()}
+			<div class="mt-1 flex items-center gap-2 text-sm">
+				<Badge variant="secondary">{backend ?? 'capacity'}</Badge>
+				{#if capacity}
+					<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
+					{#if capacity.live.kind === 'presence'}
+						<span class="text-xs text-muted-foreground tabular-nums">
+							{capacity.live.online}/{capacity.live.total} online
+						</span>
+					{:else if capacity.live.kind === 'queue'}
+						<span class="text-xs text-muted-foreground tabular-nums">
+							{capacity.live.online}/{capacity.live.enrolled} online
+						</span>
+					{:else if capacity.live.kind === 'tokens'}
+						<span class="text-xs text-muted-foreground tabular-nums">
+							{capacity.live.in_use}/{capacity.live.seeded} in use
+						</span>
 					{/if}
-				</div>
+				{:else}
+					<span class="font-mono text-xs text-muted-foreground">{resourceId}</span>
+				{/if}
 			</div>
+		{/snippet}
+		{#snippet actions()}
 			{#if groupAlias && backend === 'queue'}
 				<!-- Presence enroll lives in the runner-cards header row (RunnerList);
 					 the worker roster has no such row, so it keeps the header action. -->
@@ -135,131 +132,131 @@
 					Enroll worker here
 				</Button>
 			{/if}
+		{/snippet}
+	</PageHeader>
+
+	{#if error}
+		<div
+			class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+		>
+			{error}
 		</div>
+	{/if}
 
-		{#if error}
-			<div
-				class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-			>
-				{error}
-			</div>
+	{#if backend === 'presence' && groupAlias}
+		<!-- PRESENCE — one consolidated Runners roster + Interfaces, scoped to the
+			 runner group. -->
+		<Tabs.Root
+			value={activeTab}
+			onValueChange={(v) => (activeTab = v as typeof activeTab)}
+			class="mb-5"
+		>
+			<Tabs.List>
+				<Tabs.Trigger value="runners" data-testid="group-tab-runners">Runners</Tabs.Trigger>
+				<Tabs.Trigger value="interfaces" data-testid="group-tab-interfaces">Interfaces</Tabs.Trigger>
+			</Tabs.List>
+		</Tabs.Root>
+
+		{#if activeTab === 'runners'}
+			<RunnerList group={groupAlias} roster onenroll={() => (enrollOpen = true)} />
+		{:else}
+			<InterfacesCatalog group={groupAlias} />
 		{/if}
-
-		{#if backend === 'presence' && groupAlias}
-			<!-- PRESENCE — one consolidated Runners roster + Interfaces, scoped to the
-				 runner group. -->
-			<Tabs.Root
-				value={activeTab}
-				onValueChange={(v) => (activeTab = v as typeof activeTab)}
-				class="mb-5"
-			>
-				<Tabs.List>
-					<Tabs.Trigger value="runners" data-testid="group-tab-runners">Runners</Tabs.Trigger>
-					<Tabs.Trigger value="interfaces" data-testid="group-tab-interfaces">Interfaces</Tabs.Trigger>
-				</Tabs.List>
-			</Tabs.Root>
-
-			{#if activeTab === 'runners'}
-				<RunnerList group={groupAlias} roster onenroll={() => (enrollOpen = true)} />
+	{:else if backend === 'queue'}
+		<!-- QUEUE — the workers enrolled into this group. -->
+		<div class="space-y-2" data-testid="group-workers">
+			<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+				Workers
+			</h4>
+			{#if groupWorkers.length === 0}
+				<FleetEmpty
+					message="No workers in this group."
+					hint="Enroll a worker — it competes for this group's queued jobs."
+				>
+					{#snippet icon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
+				</FleetEmpty>
 			{:else}
-				<InterfacesCatalog group={groupAlias} />
-			{/if}
-		{:else if backend === 'queue'}
-			<!-- QUEUE — the workers enrolled into this group. -->
-			<div class="space-y-2" data-testid="group-workers">
-				<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-					Workers
-				</h4>
-				{#if groupWorkers.length === 0}
-					<FleetEmpty
-						message="No workers in this group."
-						hint="Enroll a worker — it competes for this group's queued jobs."
-					>
-						{#snippet icon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
-					</FleetEmpty>
-				{:else}
-					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-						{#each groupWorkers as w (w.id)}
-							<FleetCard
-								title={w.name}
-								tone={w.status === 'online' ? 'live' : 'idle'}
-								meta={workerMeta(w)}
-								backends={workerBackends(w)}
-								testid="group-worker-{w.id}"
-							>
-								{#snippet tooltip()}
-									<p class="font-mono text-sm">{w.name}</p>
-									<p class="text-sm">Status: {w.status}</p>
-									{#if workerBackends(w).length > 0}
-										<p class="text-sm">Serves: {workerBackends(w).join(', ')}</p>
-									{/if}
-								{/snippet}
-							</FleetCard>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{:else if backend === 'tokens'}
-			<!-- TOKENS — the seeded/in-use gauge + the live grant holders. -->
-			{#if capacity && capacity.live.kind === 'tokens'}
-				{@const live = capacity.live}
-				<div class="space-y-4" data-testid="group-holders">
-					<div class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-						<KeyRound class="size-5 text-muted-foreground" />
-						<div>
-							<p class="text-sm font-medium text-foreground tabular-nums">
-								{live.in_use}/{live.seeded} in use
-							</p>
-							<p class="text-xs text-muted-foreground">
-								{live.seeded - live.in_use} token{live.seeded - live.in_use === 1 ? '' : 's'} free
-							</p>
-						</div>
-					</div>
-
-					<div class="space-y-2">
-						<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-							Holders
-						</h4>
-						{#if live.holders.length === 0}
-							<FleetEmpty message="No tokens held.">
-								{#snippet icon()}<KeyRound class="size-10 text-muted-foreground/40" />{/snippet}
-							</FleetEmpty>
-						{:else}
-							<div class="overflow-hidden rounded-lg border border-border">
-								<table class="w-full text-sm">
-									<thead class="bg-muted/50 text-muted-foreground">
-										<tr>
-											<th class="px-3 py-2 text-left font-medium">Instance</th>
-											<th class="px-3 py-2 text-left font-medium">Since</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each live.holders as h, i (h.instance_id ?? i)}
-											<tr class="border-t border-border">
-												<td class="px-3 py-2 font-mono text-xs text-foreground">
-													{h.instance_id ?? '—'}
-												</td>
-												<td class="px-3 py-2 text-muted-foreground">{fmtDate(h.since)}</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-						{/if}
-					</div>
+				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					{#each groupWorkers as w (w.id)}
+						<FleetCard
+							title={w.name}
+							tone={w.status === 'online' ? 'live' : 'idle'}
+							meta={workerMeta(w)}
+							backends={workerBackends(w)}
+							testid="group-worker-{w.id}"
+						>
+							{#snippet tooltip()}
+								<p class="font-mono text-sm">{w.name}</p>
+								<p class="text-sm">Status: {w.status}</p>
+								{#if workerBackends(w).length > 0}
+									<p class="text-sm">Serves: {workerBackends(w).join(', ')}</p>
+								{/if}
+							{/snippet}
+						</FleetCard>
+					{/each}
 				</div>
 			{/if}
-		{:else if backend === 'scheduler'}
-			<!-- SCHEDULER — detailed on the cluster page, not here. -->
-			<div class="rounded-lg border border-border bg-card px-4 py-3 text-sm">
-				Scheduler capacities are managed on the cluster page.
-				<a class="font-medium text-foreground underline" href="/clusters/{resourceId}">
-					Open cluster →
-				</a>
+		</div>
+	{:else if backend === 'tokens'}
+		<!-- TOKENS — the seeded/in-use gauge + the live grant holders. -->
+		{#if capacity && capacity.live.kind === 'tokens'}
+			{@const live = capacity.live}
+			<div class="space-y-4" data-testid="group-holders">
+				<div class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+					<KeyRound class="size-5 text-muted-foreground" />
+					<div>
+						<p class="text-sm font-medium text-foreground tabular-nums">
+							{live.in_use}/{live.seeded} in use
+						</p>
+						<p class="text-xs text-muted-foreground">
+							{live.seeded - live.in_use} token{live.seeded - live.in_use === 1 ? '' : 's'} free
+						</p>
+					</div>
+				</div>
+
+				<div class="space-y-2">
+					<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+						Holders
+					</h4>
+					{#if live.holders.length === 0}
+						<FleetEmpty message="No tokens held.">
+							{#snippet icon()}<KeyRound class="size-10 text-muted-foreground/40" />{/snippet}
+						</FleetEmpty>
+					{:else}
+						<div class="overflow-hidden rounded-lg border border-border">
+							<table class="w-full text-sm">
+								<thead class="bg-muted/50 text-muted-foreground">
+									<tr>
+										<th class="px-3 py-2 text-left font-medium">Instance</th>
+										<th class="px-3 py-2 text-left font-medium">Since</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each live.holders as h, i (h.instance_id ?? i)}
+										<tr class="border-t border-border">
+											<td class="px-3 py-2 font-mono text-xs text-foreground">
+												{h.instance_id ?? '—'}
+											</td>
+											<td class="px-3 py-2 text-muted-foreground">{fmtDate(h.since)}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+				</div>
 			</div>
 		{/if}
-	</div>
-</div>
+	{:else if backend === 'scheduler'}
+		<!-- SCHEDULER — detailed on the cluster page, not here. -->
+		<div class="rounded-lg border border-border bg-card px-4 py-3 text-sm">
+			Scheduler capacities are managed on the cluster page.
+			<a class="font-medium text-foreground underline" href="/clusters/{resourceId}">
+				Open cluster →
+			</a>
+		</div>
+	{/if}
+</PageShell>
 
 <EnrollSheet
 	bind:open={enrollOpen}

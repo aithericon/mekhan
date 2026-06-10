@@ -3,6 +3,7 @@
 	import { replaceState, goto } from '$app/navigation';
 	import { resolveRoute } from '$app/paths';
 	import { onDestroy } from 'svelte';
+	import { PageShell } from '$lib/components/shell';
 	import IdeToolbar from '$lib/components/ide/IdeToolbar.svelte';
 	import FileTree from '$lib/components/ide/FileTree.svelte';
 	import EditorTabs from '$lib/components/ide/EditorTabs.svelte';
@@ -324,131 +325,137 @@
 	});
 </script>
 
-<div class="flex h-full flex-col">
-	<IdeToolbar
-		templateName={template?.name ?? 'Loading...'}
-		{templateId}
-		published={template?.published ?? false}
-		version={template?.version}
-		awareness={session.awareness}
-		provider={session.provider}
-		onPublish={handlePublish}
-		onNewVersion={handleNewVersion}
-		onRun={handleRun}
-		onRename={handleRename}
-	/>
+<svelte:head>
+	<title>{template?.name ?? 'Template'} | IDE | Mekhan</title>
+</svelte:head>
 
-	{#if error}
-		<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-			<span class="flex-1">{error}</span>
-			<CopyButton text={error} title="Copy error" class="text-amber-700 hover:text-amber-900" />
-			<button type="button" class="underline" onclick={() => (error = null)}>dismiss</button>
-		</div>
-	{/if}
+<PageShell width="bleed">
+	<div class="flex h-full flex-col">
+		<IdeToolbar
+			templateName={template?.name ?? 'Loading...'}
+			{templateId}
+			published={template?.published ?? false}
+			version={template?.version}
+			awareness={session.awareness}
+			provider={session.provider}
+			onPublish={handlePublish}
+			onNewVersion={handleNewVersion}
+			onRun={handleRun}
+			onRename={handleRename}
+		/>
 
-	<!-- Analyzer status: surfaced so an empty reference panel is explained.
-	     `graphOk: false` is a compiler verdict (dangling edge, missing End,
-	     cycle, …); `scopeRequestFailed` is a transport-level fault. -->
-	{#if !scopeBusy && (!graphOk || scopeRequestFailed)}
-		<div
-			class="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-sm text-amber-900"
-			data-testid="ide-analyzer-banner"
-		>
-			<span>
-				{#if scopeRequestFailed}
-					<strong>Variable references unavailable</strong> — the analyzer didn't
-					respond. Click Refresh in the Reference panel to retry.
-				{:else}
-					<strong>Variable references unavailable</strong> — the graph isn't a
-					complete flow yet
-					{#if scopeDiagnostics.length > 0}
-						({scopeDiagnostics.length} diagnostic{scopeDiagnostics.length === 1 ? '' : 's'})
-					{/if}.
-					Wire every node to a Start/End, resolve dangling edges, then it
-					recomputes automatically.
+		{#if error}
+			<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+				<span class="flex-1">{error}</span>
+				<CopyButton text={error} title="Copy error" class="text-amber-700 hover:text-amber-900" />
+				<button type="button" class="underline" onclick={() => (error = null)}>dismiss</button>
+			</div>
+		{/if}
+
+		<!-- Analyzer status: surfaced so an empty reference panel is explained.
+		     `graphOk: false` is a compiler verdict (dangling edge, missing End,
+		     cycle, …); `scopeRequestFailed` is a transport-level fault. -->
+		{#if !scopeBusy && (!graphOk || scopeRequestFailed)}
+			<div
+				class="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-sm text-amber-900"
+				data-testid="ide-analyzer-banner"
+			>
+				<span>
+					{#if scopeRequestFailed}
+						<strong>Variable references unavailable</strong> — the analyzer didn't
+						respond. Click Refresh in the Reference panel to retry.
+					{:else}
+						<strong>Variable references unavailable</strong> — the graph isn't a
+						complete flow yet
+						{#if scopeDiagnostics.length > 0}
+							({scopeDiagnostics.length} diagnostic{scopeDiagnostics.length === 1 ? '' : 's'})
+						{/if}.
+						Wire every node to a Start/End, resolve dangling edges, then it
+						recomputes automatically.
+					{/if}
+				</span>
+				{#if scopeDiagnostics.length > 0}
+					<details class="text-sm">
+						<summary class="cursor-pointer underline">Show diagnostics</summary>
+						<ul class="mt-1 space-y-0.5">
+							{#each scopeDiagnostics as d, i (`${d.node_id}:${i}`)}
+								<li>
+									<code class="font-mono">{d.kind}</code> · {d.message}
+									{#if d.node_id}
+										<span class="text-muted-foreground">({d.node_id})</span>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					</details>
 				{/if}
-			</span>
-			{#if scopeDiagnostics.length > 0}
-				<details class="text-sm">
-					<summary class="cursor-pointer underline">Show diagnostics</summary>
-					<ul class="mt-1 space-y-0.5">
-						{#each scopeDiagnostics as d, i (`${d.node_id}:${i}`)}
-							<li>
-								<code class="font-mono">{d.kind}</code> · {d.message}
-								{#if d.node_id}
-									<span class="text-muted-foreground">({d.node_id})</span>
-								{/if}
-							</li>
-						{/each}
-					</ul>
-				</details>
-			{/if}
-		</div>
-	{/if}
+			</div>
+		{/if}
 
-	<div class="flex flex-1 overflow-hidden">
-		<div class="w-[200px] shrink-0">
-			<FileTree
-				{binding}
-				{selectedFile}
-				{selectedNodeId}
-				onSelectFile={handleSelectFile}
-				onSelectNode={handleSelectNode}
-				onCreateFile={handleCreateFile}
-				onUploadFile={handleUploadFile}
-				onDeleteFile={handleDeleteFile}
-				onRenameFile={handleRenameFile}
-			/>
-		</div>
+		<div class="flex flex-1 overflow-hidden">
+			<div class="w-[200px] shrink-0">
+				<FileTree
+					{binding}
+					{selectedFile}
+					{selectedNodeId}
+					onSelectFile={handleSelectFile}
+					onSelectNode={handleSelectNode}
+					onCreateFile={handleCreateFile}
+					onUploadFile={handleUploadFile}
+					onDeleteFile={handleDeleteFile}
+					onRenameFile={handleRenameFile}
+				/>
+			</div>
 
-		<div class="flex-1 overflow-hidden">
-			{#if showHumanTaskEditor && selectedNodeId}
-				<HumanTaskFormEditor
-					{binding}
-					nodeId={selectedNodeId}
-					readonly={template?.published ?? false}
-				/>
-			{:else if showLlmStepEditor && selectedNodeId}
-				<LlmStepIdeEditor
-					{binding}
-					nodeId={selectedNodeId}
-					readonly={template?.published ?? false}
-					scope={nodeScopes.get(selectedNodeId) ?? []}
-				/>
-			{:else}
-				<EditorTabs
-					tabs={openTabs}
-					activeTab={activeTabKey}
-					{binding}
-					awareness={session.awareness}
-					provider={session.provider}
-					onCloseTab={handleCloseTab}
-					onSelectTab={handleSelectTab}
-					onEditorReady={(api) => (editorApi = api)}
-				/>
-			{/if}
-		</div>
+			<div class="flex-1 overflow-hidden">
+				{#if showHumanTaskEditor && selectedNodeId}
+					<HumanTaskFormEditor
+						{binding}
+						nodeId={selectedNodeId}
+						readonly={template?.published ?? false}
+					/>
+				{:else if showLlmStepEditor && selectedNodeId}
+					<LlmStepIdeEditor
+						{binding}
+						nodeId={selectedNodeId}
+						readonly={template?.published ?? false}
+						scope={nodeScopes.get(selectedNodeId) ?? []}
+					/>
+				{:else}
+					<EditorTabs
+						tabs={openTabs}
+						activeTab={activeTabKey}
+						{binding}
+						awareness={session.awareness}
+						provider={session.provider}
+						onCloseTab={handleCloseTab}
+						onSelectTab={handleSelectTab}
+						onEditorReady={(api) => (editorApi = api)}
+					/>
+				{/if}
+			</div>
 
-		<div class="w-[320px] shrink-0">
-			{#if selectedNodeId}
-				<NodeConfigPanel
-					{binding}
-					nodeId={selectedNodeId}
-					readonly={template?.published ?? false}
-					scope={nodeScopes.get(selectedNodeId) ?? []}
-					{templateId}
-					scopeBusy={scopeBusy}
-					onRefreshScope={refreshScopes}
-					oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}
-				/>
-			{:else}
-				<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">
-					Select a node to configure
-				</div>
-			{/if}
+			<div class="w-[320px] shrink-0">
+				{#if selectedNodeId}
+					<NodeConfigPanel
+						{binding}
+						nodeId={selectedNodeId}
+						readonly={template?.published ?? false}
+						scope={nodeScopes.get(selectedNodeId) ?? []}
+						{templateId}
+						scopeBusy={scopeBusy}
+						onRefreshScope={refreshScopes}
+						oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}
+					/>
+				{:else}
+					<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">
+						Select a node to configure
+					</div>
+				{/if}
+			</div>
 		</div>
 	</div>
-</div>
+</PageShell>
 
 <CreateInstanceDialog
 	bind:open={runDialogOpen}

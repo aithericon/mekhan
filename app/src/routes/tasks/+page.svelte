@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createTaskStore } from '$lib/stores/tasks.svelte';
+	import { PageShell, PageHeader, FilterPills } from '$lib/components/shell';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
 	import ClipboardList from '@lucide/svelte/icons/clipboard-list';
 
 	const store = createTaskStore();
@@ -24,11 +24,11 @@
 	type StatusFilter = 'all' | 'pending' | 'completed' | 'failed';
 	let activeFilter: StatusFilter = $state('all');
 
-	const filters: { key: StatusFilter; label: string }[] = [
-		{ key: 'all', label: 'All' },
-		{ key: 'pending', label: 'Pending' },
-		{ key: 'completed', label: 'Completed' },
-		{ key: 'failed', label: 'Failed' }
+	const filters: { value: StatusFilter; label: string }[] = [
+		{ value: 'all', label: 'All' },
+		{ value: 'pending', label: 'Pending' },
+		{ value: 'completed', label: 'Completed' },
+		{ value: 'failed', label: 'Failed' }
 	];
 
 	function setFilter(f: StatusFilter) {
@@ -75,88 +75,77 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
-		<div class="mb-6">
-			<h1 class="text-2xl font-semibold tracking-tight text-foreground">Tasks</h1>
-			<p class="mt-1 text-sm text-muted-foreground">
-				Human tasks from running workflows
+<PageShell testid="tasks-page">
+	<PageHeader title="Tasks" subtitle="Human tasks from running workflows" />
+
+	<!-- Status filter -->
+	<FilterPills
+		class="mb-4"
+		testid="tasks-status-filter"
+		active={activeFilter}
+		onSelect={(v) => setFilter(v as StatusFilter)}
+		options={filters}
+	/>
+
+	{#if store.error}
+		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{store.error}
+		</div>
+	{/if}
+
+	{#if store.loading}
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+			Loading...
+		</div>
+	{:else if store.tasks.length === 0}
+		<div
+			class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16"
+		>
+			<ClipboardList class="size-10 text-muted-foreground/40" />
+			<p class="mt-3 text-sm text-muted-foreground">No tasks</p>
+			<p class="text-sm text-muted-foreground">
+				Tasks appear when workflows reach human task steps
 			</p>
 		</div>
-
-		<!-- Status filter tabs -->
-		<div class="mb-4 flex gap-1">
-			{#each filters as f (f.key)}
-				<Button
-					variant={activeFilter === f.key ? 'default' : 'ghost'}
-					size="sm"
-					onclick={() => setFilter(f.key)}
+	{:else}
+		<div class="space-y-2">
+			{#each store.tasks as task (task.task_id)}
+				{@const cfg = statusConfig[task.status] ?? statusConfig.pending}
+				{@const hover = hoverByStatus[task.status] ?? hoverByStatus.pending}
+				{@const duration = formatDuration(task.duration_ms)}
+				<a
+					href="/tasks/{task.task_id}"
+					class="group block rounded-xl border border-border bg-card p-4 transition {hover}"
 				>
-					{f.label}
-				</Button>
+					<div class="flex items-start justify-between gap-3">
+						<div class="min-w-0 flex-1">
+							<div class="truncate text-sm font-semibold leading-snug text-foreground">
+								{task.title}
+							</div>
+							<div class="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+								<span>{dateText(task)}</span>
+								{#if duration}
+									<span class="text-muted-foreground/60">·</span>
+									<span>{duration}</span>
+								{/if}
+								{#if task.process_id}
+									<span class="text-muted-foreground/60">·</span>
+									<span class="font-mono text-sm">{task.process_id}</span>
+								{/if}
+							</div>
+						</div>
+						<Badge variant="outline" class="shrink-0 rounded-full {cfg.class}">
+							{cfg.label}
+						</Badge>
+					</div>
+				</a>
 			{/each}
 		</div>
 
-		{#if store.error}
-			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-				{store.error}
-			</div>
+		{#if store.total > store.tasks.length}
+			<p class="mt-4 text-center text-sm text-muted-foreground">
+				Showing {store.tasks.length} of {store.total} tasks
+			</p>
 		{/if}
-
-		{#if store.loading}
-			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-				Loading...
-			</div>
-		{:else if store.tasks.length === 0}
-			<div
-				class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16"
-			>
-				<ClipboardList class="size-10 text-muted-foreground/40" />
-				<p class="mt-3 text-sm text-muted-foreground">No tasks</p>
-				<p class="text-sm text-muted-foreground">
-					Tasks appear when workflows reach human task steps
-				</p>
-			</div>
-		{:else}
-			<div class="space-y-2">
-				{#each store.tasks as task (task.task_id)}
-					{@const cfg = statusConfig[task.status] ?? statusConfig.pending}
-					{@const hover = hoverByStatus[task.status] ?? hoverByStatus.pending}
-					{@const duration = formatDuration(task.duration_ms)}
-					<a
-						href="/tasks/{task.task_id}"
-						class="group block rounded-xl border border-border bg-card p-4 transition {hover}"
-					>
-						<div class="flex items-start justify-between gap-3">
-							<div class="min-w-0 flex-1">
-								<div class="truncate text-sm font-semibold leading-snug text-foreground">
-									{task.title}
-								</div>
-								<div class="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-									<span>{dateText(task)}</span>
-									{#if duration}
-										<span class="text-muted-foreground/60">·</span>
-										<span>{duration}</span>
-									{/if}
-									{#if task.process_id}
-										<span class="text-muted-foreground/60">·</span>
-										<span class="font-mono text-sm">{task.process_id}</span>
-									{/if}
-								</div>
-							</div>
-							<Badge variant="outline" class="shrink-0 rounded-full {cfg.class}">
-								{cfg.label}
-							</Badge>
-						</div>
-					</a>
-				{/each}
-			</div>
-
-			{#if store.total > store.tasks.length}
-				<p class="mt-4 text-center text-sm text-muted-foreground">
-					Showing {store.tasks.length} of {store.total} tasks
-				</p>
-			{/if}
-		{/if}
-	</div>
-</div>
+	{/if}
+</PageShell>

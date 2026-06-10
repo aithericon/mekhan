@@ -16,6 +16,7 @@
 	//   card "Enroll here" → EnrollSheet, fixed to that group's path.
 	import { page } from '$app/state';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Server from '@lucide/svelte/icons/server';
@@ -176,24 +177,17 @@
 	}
 </script>
 
-<svelte:head><title>Control Plane | Mekhan</title></svelte:head>
-
-<div class="h-full overflow-y-auto" data-testid="control-plane-page">
-	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
-		<div class="mb-6 flex items-start justify-between gap-4">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Control Plane</h1>
-				<p class="mt-1 text-sm text-muted-foreground">
-					The runners (the actual nodes) that pick up work, and the dispatch capacities that back
-					them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and
-					scheduler clusters.
-				</p>
-			</div>
+<PageShell width="wide" testid="control-plane-page">
+	<PageHeader
+		title="Control Plane"
+		subtitle="The runners (the actual nodes) that pick up work, and the dispatch capacities that back them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and scheduler clusters."
+	>
+		{#snippet actions()}
 			{#if activeTab === 'capacities'}
 				<Button
 					variant="default"
 					size="sm"
-					class="shrink-0 gap-1.5"
+					class="gap-1.5"
 					onclick={openCreate}
 					data-testid="new-capacity-button"
 				>
@@ -201,38 +195,39 @@
 					New capacity
 				</Button>
 			{/if}
+		{/snippet}
+	</PageHeader>
+
+	<Tabs.Root
+		value={activeTab}
+		onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
+		class="mb-6"
+	>
+		<Tabs.List>
+			<Tabs.Trigger value="runners" data-testid="cp-tab-runners">Runners</Tabs.Trigger>
+			<Tabs.Trigger value="capacities" data-testid="cp-tab-capacities">Capacities</Tabs.Trigger>
+		</Tabs.List>
+	</Tabs.Root>
+
+	{#if activeTab === 'runners'}
+		<!-- The runner roster IS the unified machine view; Engines is this list
+			 filtered to model servers (role=engines). RunnerList owns its own
+			 enroll + token management. -->
+		<RunnerList role={roleParam} />
+	{:else}
+		<div class="mb-6">
+			<BoardHeader title="Capacities" {summary} updated={lastUpdated} />
 		</div>
 
-		<Tabs.Root
-			value={activeTab}
-			onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
-			class="mb-6"
-		>
-			<Tabs.List>
-				<Tabs.Trigger value="runners" data-testid="cp-tab-runners">Runners</Tabs.Trigger>
-				<Tabs.Trigger value="capacities" data-testid="cp-tab-capacities">Capacities</Tabs.Trigger>
-			</Tabs.List>
-		</Tabs.Root>
-
-		{#if activeTab === 'runners'}
-			<!-- The runner roster IS the unified machine view; Engines is this list
-				 filtered to model servers (role=engines). RunnerList owns its own
-				 enroll + token management. -->
-			<RunnerList role={roleParam} />
-		{:else}
-			<div class="mb-6">
-				<BoardHeader title="Capacities" {summary} updated={lastUpdated} />
+		{#if error}
+			<div
+				class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
+			>
+				{error}
 			</div>
+		{/if}
 
-			{#if error}
-				<div
-					class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
-				>
-					{error}
-				</div>
-			{/if}
-
-			<div class="space-y-10">
+		<div class="space-y-10">
 			<!-- PRESENCE — runner groups -->
 			<CapacitySection
 				title="Presence"
@@ -318,10 +313,9 @@
 			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
 				 placement, router/inference-audit) now lives on its own page at
 				 /models — see the "Models" top-nav entry. -->
-			</div>
-		{/if}
-	</div>
-</div>
+		</div>
+	{/if}
+</PageShell>
 
 <!-- Capacity create/edit flow: the dedicated kind-switcher modal. `editing`
 	 null ⇒ create; a summary ⇒ edit (kind + name locked, fields prefilled). -->

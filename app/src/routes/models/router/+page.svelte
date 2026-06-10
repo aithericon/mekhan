@@ -16,7 +16,7 @@
 	import InferenceAuditTable from '$lib/components/fleet/InferenceAuditTable.svelte';
 	import RouterLiveGauges from '$lib/components/fleet/RouterLiveGauges.svelte';
 	import InferenceTimeseriesChart from '$lib/components/fleet/InferenceTimeseriesChart.svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { FilterPills } from '$lib/components/shell';
 	import {
 		getRouterLive,
 		listInferenceTimeseries,
@@ -104,34 +104,26 @@
 					>per-model throughput, latency &amp; error rate — from the metering ledger</span
 				>
 			</div>
-			<div class="flex items-center gap-1 rounded-lg border border-border bg-card p-0.5">
-				{#each WINDOW_CHOICES as w (w.label)}
-					<Button
-						variant={win.label === w.label ? 'default' : 'ghost'}
-						size="sm"
-						class="h-7 px-2.5 text-xs"
-						onclick={() => (win = w)}
-					>
-						{w.label}
-					</Button>
-				{/each}
-			</div>
+			<!-- Window scope — same chart, different time filter ⇒ FilterPills. -->
+			<FilterPills
+				active={win.label}
+				onSelect={(v) => (win = WINDOW_CHOICES.find((w) => w.label === v) ?? WINDOW_CHOICES[1])}
+				options={WINDOW_CHOICES.map((w) => ({ value: w.label, label: w.label }))}
+			/>
 		</div>
 
 		<div class="rounded-xl border border-border bg-card p-4">
-			<div class="mb-3 flex flex-wrap gap-1.5">
-				{#each TIMESERIES_METRICS as m (m.key)}
-					<Button
-						variant={metric.key === m.key ? 'secondary' : 'ghost'}
-						size="sm"
-						class="h-7 px-2.5 text-xs"
-						onclick={() => (metricKey = m.key)}
-						data-testid="ts-metric-{m.key}"
-					>
-						{m.label}
-					</Button>
-				{/each}
-			</div>
+			<!-- Metric scope — same chart, switching the plotted series ⇒ FilterPills. -->
+			<FilterPills
+				class="mb-3 flex-wrap"
+				active={metric.key}
+				onSelect={(v) => (metricKey = v)}
+				options={TIMESERIES_METRICS.map((m) => ({
+					value: m.key,
+					label: m.label,
+					testid: `ts-metric-${m.key}`
+				}))}
+			/>
 
 			{#if tsError}
 				<div

@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 	import {
 		listFolders,
@@ -211,8 +212,6 @@
 	);
 </script>
 
-<svelte:head><title>Folders | Mekhan</title></svelte:head>
-
 {#snippet actions(f: Folder)}
 	<button
 		type="button"
@@ -229,18 +228,15 @@
 	</button>
 {/snippet}
 
-<div class="mx-auto max-w-5xl px-6 py-8" data-testid="folders-index">
-	<header class="mb-6 flex items-baseline justify-between">
-		<div>
-			<h1 class="text-2xl font-semibold tracking-tight">Folders</h1>
-			<p class="mt-1 text-sm text-muted-foreground">
-				Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
-				with a runnable contract for every published template in its subtree, plus a
-				dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
-					Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
-			</p>
-		</div>
-	</header>
+<PageShell testid="folders-index">
+	<PageHeader title="Folders">
+		<p class="mt-1 text-sm text-muted-foreground">
+			Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
+			with a runnable contract for every published template in its subtree, plus a
+			dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
+				Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
+		</p>
+	</PageHeader>
 
 	{#if !workspaceId}
 		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
@@ -418,4 +414,4 @@
 			</div>
 		{/if}
 	{/if}
-</div>
+</PageShell>

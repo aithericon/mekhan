@@ -35,6 +35,7 @@
 	import Settings from '@lucide/svelte/icons/settings';
 	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import MoveToFolderDialog from '$lib/components/templates/MoveToFolderDialog.svelte';
@@ -319,27 +320,23 @@
 	onMount(loadFirst);
 </script>
 
-<div class="flex h-full" data-testid="templates-page">
+<div class="flex h-full">
 	<TemplatesFiltersSidebar
 		folderId={folderFilter}
 		recursive={recursiveFilter}
 		tag={tagFilter}
 		onChange={applyFilters}
 	/>
-	<div class="flex-1 overflow-y-auto">
-	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
-		<div class="mb-6 flex items-center justify-between">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Templates</h1>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Create and manage workflow templates
-				</p>
-			</div>
-			<Button data-testid="btn-create-template" onclick={handleCreate}>
-				<Plus class="size-4" />
-				New Template
-			</Button>
-		</div>
+	<div class="min-w-0 flex-1 overflow-hidden">
+	<PageShell testid="templates-page">
+		<PageHeader title="Templates" subtitle="Create and manage workflow templates">
+			{#snippet actions()}
+				<Button data-testid="btn-create-template" onclick={handleCreate}>
+					<Plus class="size-4" />
+					New Template
+				</Button>
+			{/snippet}
+		</PageHeader>
 
 		{#if error}
 			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -590,7 +587,7 @@
 				<p class="mt-4 text-center text-sm text-muted-foreground">Showing all {total}</p>
 			{/if}
 		{/if}
-		</div>
+	</PageShell>
 	</div>
 </div>
 

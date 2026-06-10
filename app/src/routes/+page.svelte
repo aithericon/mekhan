@@ -181,6 +181,10 @@
 	);
 </script>
 
+<svelte:head>
+	<title>Mekhan</title>
+</svelte:head>
+
 <div class="relative h-full overflow-x-hidden overflow-y-auto" data-testid="home-page">
 	<!-- Abstract brand motif, faint in the top-right corner. -->
 	<BrandSpiral
