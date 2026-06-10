@@ -89,7 +89,11 @@ check-rust:
 # so the bins compile without a live DB.
 test-unit-rust:
     #!/usr/bin/env bash
+    set -euo pipefail
     cd ..
+    # debuginfo=0 + jobs cap + sccache — same budget as the integration/e2e
+    # lanes, so linking on the capped ARM node doesn't OOM-kill `ld`.
+    source just/scripts/ci-cargo-env.sh
     SQLX_OFFLINE=true cargo test --workspace --lib --bins --no-fail-fast
 
 # Whole-workspace cargo test (unit + integration targets). Requires a live
@@ -240,6 +244,8 @@ test-e2e:
 build-backend-service:
     #!/usr/bin/env bash
     cd ..
+
+    source just/scripts/ci-cargo-env.sh
     echo "▶ Cross-compiling mekhan-service for {{target_triple}}"
     SQLX_OFFLINE=true cargo build --release \
       --target {{target_triple}} \
@@ -264,6 +270,11 @@ build-frontend:
     # on macOS. With CI=true pnpm silently purges + reinstalls cleanly.
     export CI=true
     pnpm install --frozen-lockfile
+    # Raise Node's old-space heap: `vite build` transforms 6400+ modules and
+    # OOMs against Node's ~2 GiB default ("Ineffective mark-compacts near heap
+    # limit"). 4 GiB fits inside the CI node's 6 GiB cap with room for the
+    # parallel Rust build. Overridable via the step env.
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=4096"
     pnpm run build
     if [ ! -f build/index.html ]; then
       echo "✗ Frontend build failed — app/build/index.html not produced" >&2

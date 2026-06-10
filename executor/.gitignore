@@ -1,5 +1,7 @@
 /target
-Cargo.lock
+# Cargo.lock is committed (application workspace) → reproducible builds and the
+# Docker image build can use `--locked`, so it stops re-resolving deps every
+# build and the target cache mount stays valid → fast incremental image builds.
 .agent_status/
 .claude/
 .pytest_cache/

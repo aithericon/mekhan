@@ -1,0 +1,8 @@
+{
+  "path": "aithericon_loki",
+  "resource_type": "loki",
+  "display_name": "Aithericon Cluster Loki",
+  "config": {
+    "base_url": "${AITHERICON_LOKI_URL:-http://loki.service.consul:3100}"
+  }
+}

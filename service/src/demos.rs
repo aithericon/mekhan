@@ -2510,6 +2510,85 @@ mod tests {
         );
     }
 
+    /// `loki-error-alert` is the scheduled-alert composition: a Cron trigger
+    /// fires `Start{fire_time}` → a Loki `query_range` AutomatedStep →
+    /// a single-shot Agent that summarizes the matched entries →
+    /// an SMTP AutomatedStep that emails the summary. This pins that the
+    /// full chain compiles and that the SMTP step carries the agent-output
+    /// borrow (`{{ summarize.response }}`) into its parked config.
+    #[test]
+    fn loki_error_alert_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/loki-error-alert"))
+            .expect("loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Loki Error-Log Alert");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000a1"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("loki-error-alert must compile");
+
+        // The Loki step binds the cluster resource.
+        let loki_cfg = node_configs
+            .get("query_logs")
+            .expect("query_logs config must be parked")
+            .to_string();
+        assert!(
+            loki_cfg.contains("aithericon_loki"),
+            "loki step must bind the aithericon_loki resource: {loki_cfg}"
+        );
+
+        // The SMTP step keeps the literal Tera placeholders in its parked
+        // config (resolved at render time from the staged producer envelopes
+        // via synthesized read-arcs) — so the email body must still reference
+        // both the agent summary and the upstream entry count.
+        let smtp_cfg = node_configs
+            .get("send_alert")
+            .expect("send_alert config must be parked")
+            .to_string();
+        assert!(
+            smtp_cfg.contains("{{ summarize.response }}"),
+            "smtp step must template against the agent summary: {smtp_cfg}"
+        );
+        assert!(
+            smtp_cfg.contains("{{ query_logs.entry_count }}"),
+            "smtp step must template against the upstream entry count: {smtp_cfg}"
+        );
+
+        // The agent binds the in-cluster inference router: `provider: internal`
+        // must remap to the `openai` wire shape while keeping the
+        // `internal_pool_router` resource_alias that overlays the router
+        // endpoint at fire time (same contract as demo 37).
+        let agent_cfg = node_configs
+            .get("summarize")
+            .expect("summarize config must be parked");
+        assert_eq!(
+            agent_cfg.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "internal provider must compile to the openai wire shape: {agent_cfg}"
+        );
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("internal_pool_router"),
+            "the router-binding alias must survive the remap: {agent_cfg}"
+        );
+    }
+
     /// `output-safety-gate` is a SubWorkflow-shaped composable critic:
     /// a low-temperature LLM critic step (with a strict `CriticFlags` `$ref`
     /// response_format) followed by two Python steps (`verify`, `decide`)
