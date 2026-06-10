@@ -359,7 +359,12 @@ async fn read_remote_outcome(
             }
             Ok(ReadOutcome::Present(buf))
         }
-        Err(RemoteReadError::NotFound(_)) => Ok(ReadOutcome::Missing),
+        // PathJail mirrors the runner's `path_jail` ERROR frame: an inventory
+        // path that escapes the root is a coverage gap on this endpoint, not a
+        // probe-aborting transport error.
+        Err(RemoteReadError::NotFound(_) | RemoteReadError::PathJail(_)) => {
+            Ok(ReadOutcome::Missing)
+        }
         Err(e) => Err(e.to_string()),
     }
 }

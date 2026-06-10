@@ -292,6 +292,12 @@ pub enum RemoteReadError {
     /// The object/file was not found on the backend.
     #[error("object not found at {0:?}")]
     NotFound(String),
+    /// The canonical path lexically escapes the endpoint root (`..` past the
+    /// top). Inventory paths are untrusted data; an escaping path is treated as
+    /// a miss/coverage-gap — the exact semantics of the runner's `path_jail`
+    /// ERROR frame on the `local_mount` transport.
+    #[error("canonical path escapes the endpoint root: {0:?}")]
+    PathJail(String),
     /// Any other backend I/O failure.
     #[error("remote read failed: {0}")]
     Io(String),
@@ -307,7 +313,8 @@ impl RemoteReadError {
         match self {
             RemoteReadError::MissingResourceRef { .. }
             | RemoteReadError::ResourceNotFound { .. }
-            | RemoteReadError::NotFound(_) => StatusCode::NOT_FOUND,
+            | RemoteReadError::NotFound(_)
+            | RemoteReadError::PathJail(_) => StatusCode::NOT_FOUND,
             RemoteReadError::MissingField { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             RemoteReadError::Secret { .. }
             | RemoteReadError::Operator(_)
@@ -569,6 +576,31 @@ pub fn build_remote_operator(target: &RemoteTarget) -> Result<Operator, RemoteRe
     build_operator(&target.storage).map_err(|e| RemoteReadError::Operator(e.to_string()))
 }
 
+/// Lexically jail an inventory canonical path before any remote access — the
+/// mekhan-side mirror of the runner's `resolve_jailed`. Inventory paths are
+/// untrusted data; without this an escaping path (`../…`) is forwarded verbatim
+/// to the backend (and the presign branch would mint a signed URL for a key
+/// outside the endpoint root).
+///
+/// Same rules as the runner: leading `/` is root-relative (stripped, never
+/// absolute), `.` drops, `..` pops one segment and is rejected if it would
+/// climb above the root. Returns the normalized relative path.
+pub fn jail_canonical(canonical_path: &str) -> Result<String, RemoteReadError> {
+    let mut segments: Vec<&str> = Vec::new();
+    for seg in canonical_path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if segments.pop().is_none() {
+                    return Err(RemoteReadError::PathJail(canonical_path.to_string()));
+                }
+            }
+            s => segments.push(s),
+        }
+    }
+    Ok(segments.join("/"))
+}
+
 /// **Reusable remote read** (docs/32 Phase 4 entry point).
 ///
 /// Resolve an endpoint's creds, build the operator, and open a (optionally
@@ -586,9 +618,10 @@ pub async fn read_remote(
     canonical_path: &str,
     range: Option<(u64, Option<u64>)>,
 ) -> Result<RemoteRead, RemoteReadError> {
+    let canonical_path = jail_canonical(canonical_path)?;
     let target = resolve_remote_target(db, secrets, workspace_id, endpoint).await?;
     let operator = build_remote_operator(&target)?;
-    let object_path = target.object_path(canonical_path);
+    let object_path = target.object_path(&canonical_path);
 
     // stat() up front for content-type + total size, and to surface a clean
     // NotFound before we start a body.
@@ -651,6 +684,7 @@ fn map_opendal_err(e: opendal::Error) -> RemoteReadError {
 fn remote_err_to_miss(e: RemoteReadError) -> ServeMiss {
     match e {
         RemoteReadError::NotFound(_)
+        | RemoteReadError::PathJail(_)
         | RemoteReadError::MissingResourceRef { .. }
         | RemoteReadError::ResourceNotFound { .. } => {
             // A missing object / unresolvable copy is a coverage gap for THIS
@@ -681,6 +715,9 @@ pub async fn serve_s3_endpoint(
     proxy: bool,
     range: Option<(u64, Option<u64>)>,
 ) -> Result<Response, ServeMiss> {
+    // Jail BEFORE presigning — the redirect branch never stats the object, so
+    // an unjailed escaping path would be signed and committed to the client.
+    let canonical_path = &jail_canonical(canonical_path).map_err(remote_err_to_miss)?;
     let target = resolve_remote_target(db, secrets, workspace_id, endpoint)
         .await
         .map_err(remote_err_to_miss)?;
@@ -734,9 +771,10 @@ async fn stream_remote(
     filename: &str,
     range: Option<(u64, Option<u64>)>,
 ) -> Result<Response, ServeMiss> {
+    let canonical_path = jail_canonical(canonical_path).map_err(remote_err_to_miss)?;
     let operator =
         build_remote_operator(target).map_err(|e| ServeMiss::Fatal(e.into_response()))?;
-    let object_path = target.object_path(canonical_path);
+    let object_path = target.object_path(&canonical_path);
 
     let meta = match operator.stat(&object_path).await {
         Ok(m) => m,
@@ -1489,6 +1527,43 @@ mod tests {
         let t = s3_target("");
         assert_eq!(t.object_path("runs/a.h5"), "runs/a.h5");
         assert_eq!(t.object_path("/runs/a.h5"), "runs/a.h5");
+    }
+
+    #[test]
+    fn jail_canonical_rejects_escapes_and_normalizes() {
+        // `..` past the top → PathJail, mirroring the runner's resolve_jailed.
+        assert!(matches!(
+            jail_canonical("../etc/passwd"),
+            Err(RemoteReadError::PathJail(_))
+        ));
+        // Sneaky nested escape.
+        assert!(matches!(
+            jail_canonical("sub/../../etc/passwd"),
+            Err(RemoteReadError::PathJail(_))
+        ));
+        // Absolute path is root-relative, never escaping.
+        assert_eq!(jail_canonical("/etc/passwd").unwrap(), "etc/passwd");
+        // `.` and interior `..` that stay inside normalize away.
+        assert_eq!(jail_canonical("a/./b/../c.txt").unwrap(), "a/c.txt");
+        // A legitimate nested path is untouched.
+        assert_eq!(
+            jail_canonical("mekhan-crawl-demo/datasets/genome_a.fasta").unwrap(),
+            "mekhan-crawl-demo/datasets/genome_a.fasta"
+        );
+    }
+
+    #[test]
+    fn path_jail_maps_to_miss_not_fatal() {
+        // Serve: an escaping path falls through to the next candidate…
+        assert!(matches!(
+            remote_err_to_miss(RemoteReadError::PathJail("../x".into())),
+            ServeMiss::NotFound
+        ));
+        // …and pre-byte it reports 404, never 500.
+        assert_eq!(
+            RemoteReadError::PathJail("../x".into()).status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[test]
