@@ -1,269 +1,477 @@
 <script lang="ts">
-	// Per-capacity detail. Resolves the `capacity` by its id (the CapacityCard
-	// "Detail" / "Enroll here" deep-link `/fleet/{id}`), then DISPATCHES on its
-	// dispatch backend — mirroring the Control Plane's backend sections:
+	// Uniform pool detail — ONE shell for every pool kind. The capacity is
+	// resolved by id (the /fleet Pools-row deep-link `/fleet/{id}`), classified
+	// into its operator-facing kind via the shared taxonomy in `pool-kinds.ts`,
+	// and rendered as band (identity + kind chip + live line + per-kind enroll
+	// action) over [Members | Interfaces (machine only) | Settings] tabs:
 	//
-	//   presence → [Runners | Interfaces] sub-tabs SCOPED to that runner group. The
-	//              Runners tab is the consolidated roster (RunnerList) — the old
-	//              Board/Roster split was two views of the same data; the coverage
-	//              strip + pool-net link + live backends are folded into the roster.
-	//   queue    → a Workers view: the enrolled workers whose `group` is this
-	//              capacity's path, each a FleetCard (shared with WorkerPoolBoard).
-	//   tokens   → a Holders view: the seeded/in-use gauge + the live grant holders.
-	//   scheduler → NOT detailed here (those cards link to /clusters/{id}); if one
-	//              somehow lands here, we just link out.
+	//   machine → MachinesTable scoped to this group (runners) + Interfaces.
+	//   worker  → MachinesTable scoped to this group (pull workers).
+	//   human   → PoolMembersHumans (roster + live presence + admin enroll).
+	//   limit   → the seeded/in-use gauge + the live grant holders.
+	//   cluster → managed on /clusters/{id}; this page just links out.
+	//
+	// Settings (all kinds): pool-net link (where a backing net exists), edit via
+	// NewCapacityModal, delete, and — machine pools — the pool-scoped
+	// registration tokens.
+	import { tick } from 'svelte';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+	import { toast } from 'svelte-sonner';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
-	import Cpu from '@lucide/svelte/icons/cpu';
 	import KeyRound from '@lucide/svelte/icons/key-round';
-	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+	import Pencil from '@lucide/svelte/icons/pencil';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import MachinesTable from '$lib/components/fleet/MachinesTable.svelte';
+	import PoolMembersHumans from '$lib/components/fleet/PoolMembersHumans.svelte';
 	import InterfacesCatalog from '$lib/components/fleet/InterfacesCatalog.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
-	import FleetCard from '$lib/components/fleet/FleetCard.svelte';
-	import FleetEmpty from '$lib/components/fleet/FleetEmpty.svelte';
-	import { fmtMsAgo, fmtDate } from '$lib/components/fleet/format';
+	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
+	import { poolKindOf, poolLiveLine, type PoolKind } from '$lib/components/fleet/pool-kinds';
+	import { fmtDate } from '$lib/components/fleet/format';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
-	import { listWorkers, type WorkerSummary } from '$lib/api/workers';
+	import { deleteResource } from '$lib/api/resources';
+	import {
+		listRegistrationTokens,
+		revokeRegistrationToken,
+		type RegistrationTokenSummary
+	} from '$lib/api/runners';
+	import { auth } from '$lib/auth/store.svelte';
 
 	const resourceId = $derived(page.params.id ?? '');
 
 	let capacity = $state<CapacitySummary | null>(null);
 	let error = $state<string | null>(null);
-	let activeTab = $state<'runners' | 'interfaces'>('runners');
+	let activeTab = $state<'members' | 'interfaces' | 'settings'>('members');
+
+	// Machine-pool registration tokens (Settings tab), scoped to this group.
+	let tokens = $state<RegistrationTokenSummary[]>([]);
+	let revokingToken = $state<string | null>(null);
+
+	// Enroll sheet (runner / worker token mint, fixed to this pool's path).
 	let enrollOpen = $state(false);
+	// Edit via the same kind-switcher modal the list page uses (edit mode).
+	let editOpen = $state(false);
+	let deleting = $state(false);
 
-	// Workers in this queue group (loaded only for queue-backed capacities).
-	let workers = $state<WorkerSummary[]>([]);
+	// Human pools: the band's "Enroll member" forwards into the roster
+	// component's exported openEnroll() (it owns the HumanEnrollSheet).
+	let humansRef = $state<{ openEnroll: () => void } | undefined>();
 
-	/** The capacity alias (`path`) every scoped child view binds to. */
-	const groupAlias = $derived(capacity?.path ?? null);
+	const kind = $derived<PoolKind | null>(capacity ? poolKindOf(capacity) : null);
+	const path = $derived(capacity?.path ?? null);
 	const name = $derived(capacity?.display_name || capacity?.path || resourceId);
-	const backend = $derived(capacity?.backend ?? null);
+	const liveLine = $derived(capacity ? poolLiveLine(capacity) : null);
+	const isAdmin = $derived(auth.isWorkspaceAdmin);
 
-	/** Workers enrolled into THIS queue group (by alias). */
-	const groupWorkers = $derived(
-		groupAlias ? workers.filter((w) => w.group === groupAlias) : []
+	/** Members-tab label per kind: Members / Workers / Holders. */
+	const membersLabel = $derived(
+		kind?.id === 'worker' ? 'Workers' : kind?.id === 'limit' ? 'Holders' : 'Members'
 	);
-
-	/** A worker's advertised backends — `WorkerSummary.backends` is wire `unknown`. */
-	function workerBackends(w: WorkerSummary): string[] {
-		return Array.isArray(w.backends) ? (w.backends as string[]) : [];
-	}
-
-	/** Freshness line off `last_seen_at` (ISO) — "live · 3s ago" / "never seen". */
-	function workerMeta(w: WorkerSummary): string {
-		const bs = workerBackends(w);
-		const head = `${bs.length} backend${bs.length === 1 ? '' : 's'}`;
-		if (!w.last_seen_at) return `${head} · never seen`;
-		const ms = Date.now() - new Date(w.last_seen_at).getTime();
-		return Number.isNaN(ms) ? `${head} · ${w.status}` : `${head} · ${fmtMsAgo(ms)}`;
-	}
+	/** Kinds whose capacity is backed by a deployed pool net (deep-linkable). */
+	const hasPoolNet = $derived(
+		kind?.id === 'machine' || kind?.id === 'human' || kind?.id === 'limit'
+	);
 
 	async function load() {
 		try {
 			const all = await listCapacities();
-			capacity = all.find((c) => c.id === resourceId) ?? null;
-			error = capacity ? null : 'Capacity not found.';
-			if (capacity?.backend === 'queue') {
-				const paged = await listWorkers();
-				workers = paged.items;
+			const cap = all.find((c) => c.id === resourceId) ?? null;
+			capacity = cap;
+			error = cap ? null : 'Pool not found.';
+			if (cap && poolKindOf(cap).id === 'machine') {
+				// Pool-scoped runner registration tokens; fail-soft — the token list
+				// is Settings-tab garnish, never let it wipe the page.
+				try {
+					const tPage = await listRegistrationTokens({ perPage: 200 });
+					tokens = tPage.items.filter((t) => t.group === cap.path);
+				} catch {
+					tokens = [];
+				}
 			} else {
-				workers = [];
+				tokens = [];
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load capacity';
+			error = e instanceof Error ? e.message : 'Failed to load pool';
 		}
 	}
 
 	$effect(() => {
 		void resourceId;
+		activeTab = 'members';
 		void load();
+		const t = setInterval(() => void load(), 5000);
+		return () => clearInterval(t);
 	});
+
+	// ── Band actions ────────────────────────────────────────────────────────────
+
+	/** Machine / worker pools: open the token-mint sheet fixed to this pool. */
+	function openEnroll() {
+		enrollOpen = true;
+	}
+
+	/** Human pools: jump to the roster (it owns the enroll sheet) and open it. */
+	async function openEnrollMember() {
+		activeTab = 'members';
+		await tick();
+		humansRef?.openEnroll();
+	}
+
+	async function handleDelete() {
+		if (deleting) return;
+		if (!confirm(`Delete pool “${name}”? Its backing net (if any) is retired.`)) return;
+		deleting = true;
+		try {
+			await deleteResource(resourceId);
+			toast.success('Pool deleted.');
+			await goto('/fleet');
+		} catch (e) {
+			toast.error(`Delete failed: ${e instanceof Error ? e.message : e}`);
+		} finally {
+			deleting = false;
+		}
+	}
+
+	async function handleRevokeToken(token: RegistrationTokenSummary) {
+		if (revokingToken) return;
+		if (
+			!confirm(
+				"Revoke this registration token? Runners that haven't enrolled yet won't be able to use it."
+			)
+		)
+			return;
+		revokingToken = token.id;
+		try {
+			await revokeRegistrationToken(token.id);
+			toast.success('Token revoked.');
+			await load();
+		} catch (e) {
+			toast.error(`Revoke failed: ${e instanceof Error ? e.message : e}`);
+		} finally {
+			revokingToken = null;
+		}
+	}
 </script>
 
-<svelte:head><title>{name} | Control Plane | Mekhan</title></svelte:head>
-
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
-		<a
-			href="/fleet"
-			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+<PageShell width="wide" testid="pool-detail-page">
+	{#snippet band()}
+		<PageHeader
+			title={name}
+			variant="detail"
+			back={{ href: '/fleet', label: 'Fleet' }}
+			headTitle={`${name} | Fleet | Mekhan`}
+			titleTestid="pool-detail-title"
 		>
-			<ChevronLeft class="size-4" /> Control Plane
-		</a>
-
-		<div class="mb-4 flex items-start justify-between gap-3">
-			<div>
-				<h1 class="text-lg font-semibold tracking-tight" data-testid="group-detail-title">{name}</h1>
-				<div class="mt-1 flex items-center gap-2 text-sm">
-					<Badge variant="secondary">{backend ?? 'capacity'}</Badge>
+			{#snippet children()}
+				<div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+					{#if kind}
+						<Badge variant="secondary">{kind.chip}</Badge>
+						<span class="text-xs text-muted-foreground">{kind.plainAxes}</span>
+					{/if}
 					{#if capacity}
 						<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
-						{#if capacity.live.kind === 'presence'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.online}/{capacity.live.total} online
-							</span>
-						{:else if capacity.live.kind === 'queue'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.online}/{capacity.live.enrolled} online
-							</span>
-						{:else if capacity.live.kind === 'tokens'}
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{capacity.live.in_use}/{capacity.live.seeded} in use
-							</span>
-						{/if}
 					{:else}
 						<span class="font-mono text-xs text-muted-foreground">{resourceId}</span>
 					{/if}
+					{#if liveLine}
+						<span class="text-xs text-muted-foreground tabular-nums">{liveLine}</span>
+					{/if}
 				</div>
-			</div>
-			{#if groupAlias && backend === 'queue'}
-				<!-- Presence enroll lives in the runner-cards header row (RunnerList);
-					 the worker roster has no such row, so it keeps the header action. -->
-				<Button
-					variant="outline"
-					size="sm"
-					class="gap-1.5"
-					onclick={() => (enrollOpen = true)}
-					data-testid="group-enroll-here"
-				>
-					<UserPlus class="size-4" />
-					Enroll worker here
-				</Button>
-			{/if}
-		</div>
-
-		{#if error}
-			<div
-				class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-			>
-				{error}
-			</div>
-		{/if}
-
-		{#if backend === 'presence' && groupAlias}
-			<!-- PRESENCE — one consolidated Runners roster + Interfaces, scoped to the
-				 runner group. -->
-			<Tabs.Root
-				value={activeTab}
-				onValueChange={(v) => (activeTab = v as typeof activeTab)}
-				class="mb-5"
-			>
-				<Tabs.List>
-					<Tabs.Trigger value="runners" data-testid="group-tab-runners">Runners</Tabs.Trigger>
-					<Tabs.Trigger value="interfaces" data-testid="group-tab-interfaces">Interfaces</Tabs.Trigger>
-				</Tabs.List>
-			</Tabs.Root>
-
-			{#if activeTab === 'runners'}
-				<RunnerList group={groupAlias} roster onenroll={() => (enrollOpen = true)} />
-			{:else}
-				<InterfacesCatalog group={groupAlias} />
-			{/if}
-		{:else if backend === 'queue'}
-			<!-- QUEUE — the workers enrolled into this group. -->
-			<div class="space-y-2" data-testid="group-workers">
-				<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-					Workers
-				</h4>
-				{#if groupWorkers.length === 0}
-					<FleetEmpty
-						message="No workers in this group."
-						hint="Enroll a worker — it competes for this group's queued jobs."
+			{/snippet}
+			{#snippet actions()}
+				{#if kind?.id === 'machine'}
+					<Button
+						variant="default"
+						size="sm"
+						class="gap-1.5"
+						onclick={openEnroll}
+						data-testid="pool-detail-enroll"
 					>
-						{#snippet icon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
-					</FleetEmpty>
-				{:else}
-					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-						{#each groupWorkers as w (w.id)}
-							<FleetCard
-								title={w.name}
-								tone={w.status === 'online' ? 'live' : 'idle'}
-								meta={workerMeta(w)}
-								backends={workerBackends(w)}
-								testid="group-worker-{w.id}"
-							>
-								{#snippet tooltip()}
-									<p class="font-mono text-sm">{w.name}</p>
-									<p class="text-sm">Status: {w.status}</p>
-									{#if workerBackends(w).length > 0}
-										<p class="text-sm">Serves: {workerBackends(w).join(', ')}</p>
-									{/if}
-								{/snippet}
-							</FleetCard>
-						{/each}
-					</div>
+						<UserPlus class="size-4" />
+						Enroll runner
+					</Button>
+				{:else if kind?.id === 'worker'}
+					<Button
+						variant="default"
+						size="sm"
+						class="gap-1.5"
+						onclick={openEnroll}
+						data-testid="pool-detail-enroll"
+					>
+						<UserPlus class="size-4" />
+						Enroll worker
+					</Button>
+				{:else if kind?.id === 'human' && isAdmin}
+					<Button
+						variant="default"
+						size="sm"
+						class="gap-1.5"
+						onclick={() => void openEnrollMember()}
+						data-testid="pool-detail-enroll"
+					>
+						<UserPlus class="size-4" />
+						Enroll member
+					</Button>
 				{/if}
-			</div>
-		{:else if backend === 'tokens'}
-			<!-- TOKENS — the seeded/in-use gauge + the live grant holders. -->
-			{#if capacity && capacity.live.kind === 'tokens'}
-				{@const live = capacity.live}
-				<div class="space-y-4" data-testid="group-holders">
-					<div class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-						<KeyRound class="size-5 text-muted-foreground" />
-						<div>
-							<p class="text-sm font-medium text-foreground tabular-nums">
-								{live.in_use}/{live.seeded} in use
-							</p>
-							<p class="text-xs text-muted-foreground">
-								{live.seeded - live.in_use} token{live.seeded - live.in_use === 1 ? '' : 's'} free
-							</p>
+			{/snippet}
+		</PageHeader>
+	{/snippet}
+	{#snippet tabs()}
+		<Tabs.Root
+			value={activeTab}
+			onValueChange={(v) => (activeTab = (v as typeof activeTab) ?? 'members')}
+		>
+			<Tabs.List variant="underline">
+				<Tabs.Trigger
+					variant="underline"
+					value="members"
+					data-testid={kind?.id === 'machine' ? 'group-tab-runners' : 'pool-tab-members'}
+				>
+					{membersLabel}
+				</Tabs.Trigger>
+				{#if kind?.id === 'machine'}
+					<Tabs.Trigger variant="underline" value="interfaces" data-testid="group-tab-interfaces">
+						Interfaces
+					</Tabs.Trigger>
+				{/if}
+				<Tabs.Trigger variant="underline" value="settings" data-testid="pool-tab-settings">
+					Settings
+				</Tabs.Trigger>
+			</Tabs.List>
+		</Tabs.Root>
+	{/snippet}
+
+	{#if error}
+		<div
+			class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+		>
+			{error}
+		</div>
+	{/if}
+
+	{#if capacity && kind}
+		{#if activeTab === 'members'}
+			{#if kind.id === 'machine' || kind.id === 'worker'}
+				<!-- MACHINE / WORKER — the flat machines inventory scoped to this pool
+					 (runners.group / workers.group === path). The band owns the enroll
+					 action; onenroll forwards "Enroll here" back to it. -->
+				<MachinesTable group={path} onenroll={openEnroll} />
+			{:else if kind.id === 'human'}
+				<!-- HUMAN — roster members + live presence; owns its enroll sheet. -->
+				<PoolMembersHumans
+					bind:this={humansRef}
+					capacityId={resourceId}
+					capacityName={capacity.display_name}
+				/>
+			{:else if kind.id === 'limit'}
+				<!-- LIMIT — the seeded/in-use gauge + the live grant holders. -->
+				{#if capacity.live.kind === 'tokens'}
+					{@const live = capacity.live}
+					<div class="space-y-4" data-testid="group-holders">
+						<div class="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
+							<KeyRound class="size-5 text-muted-foreground" />
+							<div>
+								<p class="text-sm font-medium text-foreground tabular-nums">
+									{live.in_use}/{live.seeded} in use
+								</p>
+								<p class="text-xs text-muted-foreground">
+									{live.seeded - live.in_use} token{live.seeded - live.in_use === 1 ? '' : 's'} free
+								</p>
+							</div>
+						</div>
+
+						<div class="space-y-2">
+							<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+								Holders
+							</h4>
+							{#if live.holders.length === 0}
+								<div
+									class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-10"
+								>
+									<KeyRound class="size-10 text-muted-foreground/40" />
+									<p class="mt-2 text-sm text-muted-foreground">No tokens held.</p>
+								</div>
+							{:else}
+								<div class="overflow-hidden rounded-lg border border-border">
+									<table class="w-full text-sm">
+										<thead class="bg-muted/50 text-muted-foreground">
+											<tr>
+												<th class="px-3 py-2 text-left font-medium">Instance</th>
+												<th class="px-3 py-2 text-left font-medium">Since</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#each live.holders as h, i (h.instance_id ?? i)}
+												<tr class="border-t border-border">
+													<td class="px-3 py-2 font-mono text-xs text-foreground">
+														{h.instance_id ?? '—'}
+													</td>
+													<td class="px-3 py-2 text-muted-foreground">{fmtDate(h.since)}</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{/if}
 						</div>
 					</div>
-
-					<div class="space-y-2">
-						<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-							Holders
-						</h4>
-						{#if live.holders.length === 0}
-							<FleetEmpty message="No tokens held.">
-								{#snippet icon()}<KeyRound class="size-10 text-muted-foreground/40" />{/snippet}
-							</FleetEmpty>
-						{:else}
-							<div class="overflow-hidden rounded-lg border border-border">
-								<table class="w-full text-sm">
-									<thead class="bg-muted/50 text-muted-foreground">
-										<tr>
-											<th class="px-3 py-2 text-left font-medium">Instance</th>
-											<th class="px-3 py-2 text-left font-medium">Since</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each live.holders as h, i (h.instance_id ?? i)}
-											<tr class="border-t border-border">
-												<td class="px-3 py-2 font-mono text-xs text-foreground">
-													{h.instance_id ?? '—'}
-												</td>
-												<td class="px-3 py-2 text-muted-foreground">{fmtDate(h.since)}</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-						{/if}
-					</div>
+				{/if}
+			{:else if kind.id === 'cluster'}
+				<!-- CLUSTER — detailed on the cluster page, not here. -->
+				<div class="rounded-lg border border-border bg-card px-4 py-3 text-sm">
+					This pool is an external scheduler cluster — it is managed on the cluster page.
+					<a class="font-medium text-foreground underline" href="/clusters/{resourceId}">
+						Open cluster →
+					</a>
+				</div>
+			{:else}
+				<!-- BROKEN — axes failed to parse (fail-closed); fix it in Settings. -->
+				<div class="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+					{kind.plainAxes}.
 				</div>
 			{/if}
-		{:else if backend === 'scheduler'}
-			<!-- SCHEDULER — detailed on the cluster page, not here. -->
-			<div class="rounded-lg border border-border bg-card px-4 py-3 text-sm">
-				Scheduler capacities are managed on the cluster page.
-				<a class="font-medium text-foreground underline" href="/clusters/{resourceId}">
-					Open cluster →
-				</a>
+		{:else if activeTab === 'interfaces' && kind.id === 'machine' && path}
+			<InterfacesCatalog group={path} />
+		{:else if activeTab === 'settings'}
+			<div class="space-y-6" data-testid="pool-settings">
+				<!-- Pool record: edit via the kind-switcher modal + the backing-net link. -->
+				<section class="space-y-2">
+					<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">Pool</h4>
+					<div
+						class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3"
+					>
+						<div class="min-w-0">
+							<p class="text-sm font-medium text-foreground">{name}</p>
+							<p class="truncate font-mono text-xs text-muted-foreground">{capacity.path}</p>
+						</div>
+						<div class="flex shrink-0 items-center gap-2">
+							{#if hasPoolNet}
+								<Button
+									href="/nets/pool-{resourceId}"
+									variant="outline"
+									size="sm"
+									class="gap-1.5"
+									data-testid="view-pool-net"
+								>
+									<ArrowUpRight class="size-4" />
+									View pool net
+								</Button>
+							{/if}
+							<Button
+								variant="outline"
+								size="sm"
+								class="gap-1.5"
+								onclick={() => (editOpen = true)}
+								data-testid="pool-edit-button"
+							>
+								<Pencil class="size-3.5" />
+								Edit
+							</Button>
+						</div>
+					</div>
+				</section>
+
+				{#if kind.id === 'machine'}
+					<!-- Pool-scoped registration tokens (runner enrollment). -->
+					<section class="space-y-2">
+						<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+							Registration tokens
+						</h4>
+						{#if tokens.length === 0}
+							<p class="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+								No registration tokens for this pool. “Enroll runner” mints one.
+							</p>
+						{:else}
+							<div class="space-y-2">
+								{#each tokens as token (token.id)}
+									<div
+										class="group flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:bg-accent/40"
+									>
+										<div class="min-w-0 space-y-0.5">
+											<div class="flex flex-wrap items-center gap-2">
+												{#if token.group}
+													<Badge variant="secondary" class="text-sm">{token.group}</Badge>
+												{/if}
+												<Badge variant="outline" class="text-sm">
+													{token.reusable ? 'reusable' : `1-shot · ${token.uses} used`}
+												</Badge>
+												{#if token.max_uses}
+													<span class="text-sm text-muted-foreground">max {token.max_uses}</span>
+												{/if}
+											</div>
+											<p class="text-sm text-muted-foreground">
+												Created {fmtDate(token.created_at)}
+												{#if token.expires_at}· Expires {fmtDate(token.expires_at)}{/if}
+											</p>
+										</div>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="opacity-0 transition-opacity group-hover:opacity-100 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+											onclick={() => handleRevokeToken(token)}
+											disabled={revokingToken === token.id}
+										>
+											<Trash2 class="size-3.5" />
+											{revokingToken === token.id ? 'Revoking…' : 'Revoke'}
+										</Button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</section>
+				{/if}
+
+				<!-- Danger zone -->
+				<section class="space-y-2">
+					<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+						Danger zone
+					</h4>
+					<div
+						class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3"
+					>
+						<p class="text-sm text-muted-foreground">
+							Delete this pool. Its backing net (if any) is retired.
+						</p>
+						<Button
+							variant="outline"
+							size="sm"
+							class="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+							onclick={handleDelete}
+							disabled={deleting}
+							data-testid="pool-delete-button"
+						>
+							<Trash2 class="size-3.5" />
+							{deleting ? 'Deleting…' : 'Delete pool'}
+						</Button>
+					</div>
+				</section>
 			</div>
 		{/if}
-	</div>
-</div>
+	{/if}
+</PageShell>
 
+<!-- Enroll flow (machine / worker pools): mint + reveal-once, fixed to this
+	 pool's path. Human pools enroll via PoolMembersHumans' own sheet. -->
 <EnrollSheet
 	bind:open={enrollOpen}
-	mode={backend === 'queue' ? 'worker' : 'runner'}
-	group={groupAlias}
+	mode={kind?.id === 'worker' ? 'worker' : 'runner'}
+	group={path}
 	onenrolled={() => void load()}
+/>
+
+<!-- Edit: the same kind-switcher modal as the list page, in edit mode
+	 (kind + name locked, fields prefilled from the summary). -->
+<NewCapacityModal
+	bind:open={editOpen}
+	editing={capacity}
+	onsaved={() => {
+		editOpen = false;
+		void load();
+	}}
 />

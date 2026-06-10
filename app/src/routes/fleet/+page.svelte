@@ -1,37 +1,53 @@
 <script lang="ts">
-	// The unified Control Plane — RUNNER-FIRST. The default lens is the Runners
-	// roster (the actual enrolled machines, identity-rich: name · host · role ·
-	// resident model engines), because that's what an operator means by "what do I
-	// have." The four dispatch BACKENDS — PRESENCE (runner groups), QUEUE (worker
-	// pools), TOKENS (concurrency limits), SCHEDULER (clusters) — are the *backing*
-	// for that capacity and live one tab over under "Capacities" (mirroring
-	// `CapacityAxes::backend()` 1:1, read off `GET /api/v1/capacities`, polled ~5s).
+	// The Fleet page — two lenses over the same hardware/people:
+	//   "Pools"    (default) — the logical dispatch units. One row per capacity,
+	//                grouped by operator-vocabulary kind (pool-kinds.ts): machine /
+	//                worker / human pools, limits, clusters, not-dispatchable.
+	//   "Machines" — the flat physical inventory of every enrolled daemon (runners
+	//                AND workers), identity-first; pools appear only as linked
+	//                chips per row (MachinesTable owns its own fetching + toolbar).
 	//
-	// `?tab=capacities` / `?role=engines` deep-link in — the Engines lens
-	// (/models/engines) links here as the roster filtered to model servers.
-	//
-	// Page-level capacity actions (Capacities tab only):
-	//   "New capacity"  → NewCapacityModal (kind switcher: runner group / limit /
-	//                      worker / cluster).
-	//   card "Enroll here" → EnrollSheet, fixed to that group's path.
+	// Deep-link compat: the old Control-Plane params still land correctly —
+	// `?tab=capacities` → Pools, `?tab=runners` → Machines, and `?role=engines`
+	// (the Engines lens from /models) forces the Machines tab filtered to model
+	// servers. Tab switches reflect into the URL via history.replaceState.
 	import { page } from '$app/state';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Server from '@lucide/svelte/icons/server';
-	import Cpu from '@lucide/svelte/icons/cpu';
-	import KeyRound from '@lucide/svelte/icons/key-round';
-	import Boxes from '@lucide/svelte/icons/boxes';
-	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
 	import { deleteResource } from '$lib/api/resources';
 	import { reconnectCluster, drainCluster } from '$lib/api/clusters';
-	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
-	import CapacitySection from '$lib/components/fleet/CapacitySection.svelte';
-	import HumanCapacitySection from '$lib/components/fleet/HumanCapacitySection.svelte';
-	import BoardHeader from '$lib/components/fleet/BoardHeader.svelte';
+	import PoolsList from '$lib/components/fleet/PoolsList.svelte';
+	import MachinesTable from '$lib/components/fleet/MachinesTable.svelte';
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
+
+	// ── Tabs + deep-link compat ─────────────────────────────────────────────────
+
+	type Tab = 'pools' | 'machines';
+
+	function initialTab(): Tab {
+		const sp = page.url.searchParams;
+		if (sp.get('role') === 'engines') return 'machines';
+		const t = sp.get('tab');
+		if (t === 'machines' || t === 'runners') return 'machines';
+		return 'pools'; // 'pools', legacy 'capacities', absent, or unknown
+	}
+
+	let activeTab = $state<Tab>(initialTab());
+	const roleParam: 'all' | 'engines' =
+		page.url.searchParams.get('role') === 'engines' ? 'engines' : 'all';
+
+	function onTab(v: string) {
+		activeTab = v === 'machines' ? 'machines' : 'pools';
+		if (typeof window !== 'undefined') {
+			const url = new URL(window.location.href);
+			url.searchParams.set('tab', activeTab);
+			history.replaceState(null, '', url);
+		}
+	}
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -39,47 +55,16 @@
 	let error = $state<string | null>(null);
 	let lastUpdated = $state<Date | null>(null);
 
-	// Runner-first: the roster is the default lens; the capacity board is one tab
-	// over. Deep-linked via `?tab=` / `?role=` (the Engines lens lands here).
-	let activeTab = $state<'runners' | 'capacities'>(
-		page.url.searchParams.get('tab') === 'capacities' ? 'capacities' : 'runners'
-	);
-	const roleParam: 'all' | 'engines' =
-		page.url.searchParams.get('role') === 'engines' ? 'engines' : 'all';
-
-	// "New capacity" → the dedicated kind-switcher modal. `editing` non-null ⇒ the
-	// same modal in edit mode (kind + name locked, fields prefilled).
+	// "New pool" → the kind-switcher modal. `editing` non-null ⇒ the same modal
+	// in edit mode (kind + name locked, fields prefilled).
 	let createOpen = $state(false);
 	let editing = $state<CapacitySummary | null>(null);
-	// "Enroll runner" → EnrollSheet. `enrollGroup` null ⇒ global (picker); a path
-	// ⇒ scoped to that presence group (per-card "Enroll here").
+	// A machine-pool row's "Enroll" → EnrollSheet scoped to that pool's path.
 	let enrollOpen = $state(false);
 	let enrollGroup = $state<string | null>(null);
-	// "Enroll worker" → EnrollSheet in worker mode. `enrollWorkerGroup` null ⇒
-	// global (picker over `workers` capacities); a path ⇒ scoped to that queue
-	// group (per-card "Enroll here").
+	// A worker-pool row's "Enroll" → EnrollSheet in worker mode, scoped likewise.
 	let enrollWorkerOpen = $state(false);
 	let enrollWorkerGroup = $state<string | null>(null);
-
-	// ── Derived: partition by backend ───────────────────────────────────────────
-
-	// Human capacities are ALSO presence-backed — the `offer` dispatch axis is what
-	// distinguishes a self-claiming human pool from a runner group. Split them so
-	// the Presence section stays runner-only and humans get their own roster view.
-	const humans = $derived(
-		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch === 'offer')
-	);
-	const presence = $derived(
-		capacities.filter((c) => c.backend === 'presence' && c.axes?.dispatch !== 'offer')
-	);
-	const queue = $derived(capacities.filter((c) => c.backend === 'queue'));
-	// `deferred` shares the Tokens lane (the consume-quota path is a Tokens flavour).
-	const tokens = $derived(
-		capacities.filter((c) => c.backend === 'tokens' || c.backend === 'deferred')
-	);
-	const scheduler = $derived(capacities.filter((c) => c.backend === 'scheduler'));
-
-	const summary = $derived(`${capacities.length} capacities across 4 backends`);
 
 	// ── Polling ────────────────────────────────────────────────────────────────
 
@@ -89,7 +74,7 @@
 			lastUpdated = new Date();
 			error = null;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to fetch capacities';
+			error = e instanceof Error ? e.message : 'Failed to fetch pools';
 		}
 	}
 
@@ -101,62 +86,56 @@
 		return () => clearInterval(t);
 	});
 
+	const updatedLabel = $derived(
+		lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+	);
+
+	// ── Pool actions ───────────────────────────────────────────────────────────
+
 	function openCreate() {
 		editing = null;
 		createOpen = true;
 	}
 
-	function onCreated() {
+	function onSaved() {
 		createOpen = false;
 		editing = null;
 		void poll();
 	}
 
-	/** Open the global enroll flow (no fixed group — the sheet shows a picker). */
-	function openEnroll() {
-		enrollGroup = null;
-		enrollOpen = true;
-	}
-
-	/** A presence card's "Enroll here" — scope the sheet to that group's path. */
-	function onEnrollCapacity(path: string) {
+	/** A machine-pool row's "Enroll" — scope the runner sheet to that pool's path. */
+	function onEnrollMachine(path: string) {
 		enrollGroup = path;
 		enrollOpen = true;
 	}
 
-	/** Open the global worker-enroll flow (no fixed group — the sheet shows a picker). */
-	function openEnrollWorker() {
-		enrollWorkerGroup = null;
-		enrollWorkerOpen = true;
-	}
-
-	/** A queue card's "Enroll here" — scope the worker sheet to that group's path. */
-	function onEnrollWorkerCapacity(path: string) {
+	/** A worker-pool row's "Enroll" — scope the worker sheet to that pool's path. */
+	function onEnrollWorker(path: string) {
 		enrollWorkerGroup = path;
 		enrollWorkerOpen = true;
 	}
 
 	// Edit opens the same modal in edit mode, prefilled from the summary the page
 	// already holds (kind + name locked; count / cluster fields editable).
-	function onEditCapacity(id: string) {
+	function onEditPool(id: string) {
 		editing = capacities.find((c) => c.id === id) ?? null;
 		createOpen = true;
 	}
 
-	async function onDeleteCapacity(id: string) {
+	async function onDeletePool(id: string) {
 		const cap = capacities.find((c) => c.id === id);
-		const label = cap ? cap.display_name || cap.path : 'this capacity';
-		if (!confirm(`Delete capacity “${label}”? Its backing net (if any) is retired.`)) return;
+		const label = cap ? cap.display_name || cap.path : 'this pool';
+		if (!confirm(`Delete pool “${label}”? Its backing net (if any) is retired.`)) return;
 		try {
 			await deleteResource(id);
 			await poll();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to delete capacity';
+			error = e instanceof Error ? e.message : 'Failed to delete pool';
 		}
 	}
 
-	/** Scheduler card → force the cluster session to reconnect. */
-	async function onReconnectCapacity(id: string) {
+	/** Cluster row → force the cluster session to reconnect. */
+	async function onReconnect(id: string) {
 		try {
 			await reconnectCluster(id);
 			await poll();
@@ -165,8 +144,8 @@
 		}
 	}
 
-	/** Scheduler card → drain: refuse new leases while held ones finish. */
-	async function onDrainCapacity(id: string) {
+	/** Cluster row → drain: refuse new leases while held ones finish. */
+	async function onDrain(id: string) {
 		try {
 			await drainCluster(id);
 			await poll();
@@ -176,161 +155,79 @@
 	}
 </script>
 
-<svelte:head><title>Control Plane | Mekhan</title></svelte:head>
-
-<div class="h-full overflow-y-auto" data-testid="control-plane-page">
-	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
-		<div class="mb-6 flex items-start justify-between gap-4">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Control Plane</h1>
-				<p class="mt-1 text-sm text-muted-foreground">
-					The runners (the actual nodes) that pick up work, and the dispatch capacities that back
-					them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and
-					scheduler clusters.
-				</p>
-			</div>
-			{#if activeTab === 'capacities'}
-				<Button
-					variant="default"
-					size="sm"
-					class="shrink-0 gap-1.5"
-					onclick={openCreate}
-					data-testid="new-capacity-button"
-				>
-					<Plus class="size-4" />
-					New capacity
-				</Button>
-			{/if}
-		</div>
-
-		<Tabs.Root
-			value={activeTab}
-			onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
-			class="mb-6"
+<PageShell width="wide" testid="fleet-page">
+	{#snippet band()}
+		<PageHeader
+			title="Fleet"
+			subtitle="Pools of machines, workers and people that pick up work — and the limits and clusters that bound it."
 		>
-			<Tabs.List>
-				<Tabs.Trigger value="runners" data-testid="cp-tab-runners">Runners</Tabs.Trigger>
-				<Tabs.Trigger value="capacities" data-testid="cp-tab-capacities">Capacities</Tabs.Trigger>
+			{#snippet actions()}
+				{#if activeTab === 'pools'}
+					<Button
+						variant="default"
+						size="sm"
+						class="gap-1.5"
+						onclick={openCreate}
+						data-testid="new-pool-button"
+					>
+						<Plus class="size-4" />
+						New pool
+					</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
+	{#snippet tabs()}
+		<Tabs.Root value={activeTab} onValueChange={onTab}>
+			<Tabs.List variant="underline">
+				<Tabs.Trigger variant="underline" value="pools" data-testid="fleet-tab-pools">
+					Pools
+				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="machines" data-testid="fleet-tab-machines">
+					Machines
+				</Tabs.Trigger>
 			</Tabs.List>
 		</Tabs.Root>
+	{/snippet}
 
-		{#if activeTab === 'runners'}
-			<!-- The runner roster IS the unified machine view; Engines is this list
-				 filtered to model servers (role=engines). RunnerList owns its own
-				 enroll + token management. -->
-			<RunnerList role={roleParam} />
-		{:else}
-			<div class="mb-6">
-				<BoardHeader title="Capacities" {summary} updated={lastUpdated} />
-			</div>
-
-			{#if error}
-				<div
-					class="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
-				>
-					{error}
-				</div>
-			{/if}
-
-			<div class="space-y-10">
-			<!-- PRESENCE — runner groups -->
-			<CapacitySection
-				title="Presence"
-				backend="presence"
-				capacities={presence}
-				emptyMessage="No runner groups. Create a runner group, then enroll a runner into it."
-				onedit={onEditCapacity}
-				ondelete={onDeleteCapacity}
-				onenroll={onEnrollCapacity}
+	{#if activeTab === 'pools'}
+		{#if error}
+			<div
+				class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
 			>
-				{#snippet emptyIcon()}<Server class="size-10 text-muted-foreground/40" />{/snippet}
-				{#snippet action()}
-					<Button
-						variant="outline"
-						size="sm"
-						class="gap-1.5"
-						onclick={openEnroll}
-						data-testid="enroll-runner-button"
-					>
-						<UserPlus class="size-4" />
-						Enroll runner
-					</Button>
-				{/snippet}
-			</CapacitySection>
-
-			<!-- QUEUE — worker groups. Backend coverage is a PER-GROUP attribute
-				 (each card shows its group's served backends), so there is no
-				 fleet-wide coverage blob here. -->
-			<CapacitySection
-				title="Queue"
-				backend="queue"
-				capacities={queue}
-				emptyMessage="No worker groups."
-				onedit={onEditCapacity}
-				ondelete={onDeleteCapacity}
-				onenroll={onEnrollWorkerCapacity}
-			>
-				{#snippet emptyIcon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
-				{#snippet action()}
-					<Button
-						variant="outline"
-						size="sm"
-						class="gap-1.5"
-						onclick={openEnrollWorker}
-						data-testid="enroll-worker-button"
-					>
-						<UserPlus class="size-4" />
-						Enroll worker
-					</Button>
-				{/snippet}
-			</CapacitySection>
-
-			<!-- TOKENS — concurrency limits -->
-			<CapacitySection
-				title="Tokens"
-				backend="tokens"
-				capacities={tokens}
-				emptyMessage="No concurrency limits."
-				onedit={onEditCapacity}
-				ondelete={onDeleteCapacity}
-			>
-				{#snippet emptyIcon()}<KeyRound class="size-10 text-muted-foreground/40" />{/snippet}
-			</CapacitySection>
-
-			<!-- SCHEDULER — clusters / datacenters -->
-			<CapacitySection
-				title="Scheduler"
-				backend="scheduler"
-				capacities={scheduler}
-				emptyMessage="No scheduler clusters."
-				onedit={onEditCapacity}
-				ondelete={onDeleteCapacity}
-				onreconnect={onReconnectCapacity}
-				ondrain={onDrainCapacity}
-			>
-				{#snippet emptyIcon()}<Boxes class="size-10 text-muted-foreground/40" />{/snippet}
-			</CapacitySection>
-
-			<!-- HUMANS — offer-dispatch presence pools (docs/33). Roster members +
-				 their live presence; the human counterpart to the runner cards. -->
-			<HumanCapacitySection capacities={humans} />
-
-			<!-- The self-hosted LLM model pool (engines, catalog, curated set,
-				 placement, router/inference-audit) now lives on its own page at
-				 /models — see the "Models" top-nav entry. -->
+				{error}
 			</div>
 		{/if}
-	</div>
-</div>
 
-<!-- Capacity create/edit flow: the dedicated kind-switcher modal. `editing`
-	 null ⇒ create; a summary ⇒ edit (kind + name locked, fields prefilled). -->
-<NewCapacityModal bind:open={createOpen} {editing} onsaved={onCreated} />
+		{#if updatedLabel}
+			<p class="mb-4 text-xs text-muted-foreground">Updated {updatedLabel}</p>
+		{/if}
 
-<!-- Enroll flow: global (group picker) or scoped to a presence group's path. -->
+		<PoolsList
+			{capacities}
+			onenroll={onEnrollMachine}
+			onenrollworker={onEnrollWorker}
+			onedit={onEditPool}
+			ondelete={onDeletePool}
+			onreconnect={onReconnect}
+			ondrain={onDrain}
+		/>
+	{:else}
+		<!-- The flat physical inventory: every enrolled daemon, runners AND
+			 workers. MachinesTable owns its own polling + toolbar (filters,
+			 enroll/tokens) when unscoped. -->
+		<MachinesTable role={roleParam} />
+	{/if}
+</PageShell>
+
+<!-- Pool create/edit flow: the dedicated kind-switcher modal. `editing` null ⇒
+	 create; a summary ⇒ edit (kind + name locked, fields prefilled). -->
+<NewCapacityModal bind:open={createOpen} {editing} onsaved={onSaved} />
+
+<!-- Machine-pool enroll flow, scoped to the row's pool path. -->
 <EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void poll()} />
 
-<!-- Worker enroll flow: global (workers-group picker) or scoped to a queue group's path. -->
+<!-- Worker-pool enroll flow, scoped to the row's pool path. -->
 <EnrollSheet
 	bind:open={enrollWorkerOpen}
 	mode="worker"

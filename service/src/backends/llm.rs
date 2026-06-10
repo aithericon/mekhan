@@ -536,9 +536,9 @@ mod tests {
 
     #[test]
     fn derive_json_schema_mode() {
-        // Note: the workspace's serde_json carries the `preserve_order`
-        // feature (enabled transitively via the lockfile), so `Map`
-        // iteration follows insertion order. Schema-property ports come
+        // Note: schema property iteration order follows `serde_json::Map`'s
+        // ordering. This workspace builds with `serde_json/preserve_order`
+        // (enabled transitively by `zarrs`), so schema-property ports come
         // out in declaration order (`summary`, `score`, `ok`), then the
         // metadata tail in fixed order.
         let cfg = json!({
@@ -691,8 +691,7 @@ mod tests {
             "base_url": "https://evil.example.com/v1",
             "api_key": "sk-leak",
         });
-        let (wire, _inputs) =
-            validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
+        let (wire, _inputs) = validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
         assert_eq!(
             wire.get("provider").and_then(|v| v.as_str()),
             Some("openai"),

@@ -4,6 +4,13 @@ Status: **design spec — not yet implemented.** Companion to
 [`11-inference-router.md`](./11-inference-router.md). Records the design
 conversation of 2026-06-04.
 
+> **Plane vocabulary (2026-06-09, [35](35-allocation-and-traffic-planes.md)).**
+> This doc's serving-data-plane / pool-control-plane split is the model-pool
+> instance of 35's traffic/allocation planes: serving = traffic, control =
+> allocation. "Serve model X on runner Y" is a hold; inference requests are
+> traffic to the held capacity. The §1 boundary decision (inference does NOT
+> flow through the engine net) is the founding observation 35 generalises.
+
 doc 11 specs the **data plane** (the router: OpenAI-compatible surface, routing,
 admission, cancellation, metering, autoscale-signal emission). This doc specs the
 **control plane** it deferred — the part doc 11 hand-waved to an abstract
@@ -23,6 +30,10 @@ hosts them, and how capacity is accounted.**
 | **Job / authoring** | The `Llm`/`Agent` node, prompt assembly, typed ports, the workflow that *calls* a model. | [12](./12-agent-node-design.md), `backends/llm.rs` (built) |
 | **Serving data plane** | Every inference request crossing job→model: HTTP routing, admission, cancellation, metering, audit. | [11](./11-inference-router.md) |
 | **Pool control plane** | The *set* of loaded models, worker lifecycle, capacity accounting, placement, autoscaling. | **this doc** |
+
+*In [35](35-allocation-and-traffic-planes.md)'s vocabulary: job/authoring,
+serving data plane, and pool control plane map to authoring, the traffic plane,
+and the allocation plane respectively.*
 
 The load-bearing boundary, settled in this conversation: **inference does NOT
 flow through the engine Petri net.** A step makes a conventional OpenAI HTTP call

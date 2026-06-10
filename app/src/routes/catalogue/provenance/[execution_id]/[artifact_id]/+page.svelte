@@ -62,7 +62,7 @@
 </script>
 
 <svelte:head>
-	<title>{artifact?.name ?? 'Provenance'} - Mekhan</title>
+	<title>{artifact?.name ?? 'Provenance'} | Mekhan</title>
 </svelte:head>
 
 <div class="flex h-screen flex-col">

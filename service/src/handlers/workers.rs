@@ -167,7 +167,7 @@ fn is_safe_group(group: &str) -> bool {
 ///
 /// A worker's `group` is only meaningful if it is BACKED by a `capacity` resource
 /// sitting at the worker point in the trait-space: `competing_consumer` liveness +
-/// `pull` dispatch (the `worker` preset — see `models/capacity.rs::presets`). That
+/// `auto` acceptance (the `worker` preset — see `models/capacity.rs::presets`). That
 /// is the named partition coordinate the group routes onto; without it, an
 /// enrolled worker would carry a group token that addresses no declared pool — a
 /// silent dangling reference. We forbid minting a registration token for an
@@ -179,7 +179,7 @@ fn is_safe_group(group: &str) -> bool {
 /// presence/lease (instrument/HPC) capacity is the PUSH path and is NOT a valid
 /// worker group. The axes live in the latest version's `public_config`, so this
 /// joins `resources` → `resource_versions` at `latest_version` and matches the two
-/// worker-defining axis strings (`liveness` / `dispatch`).
+/// worker-defining axis strings (`liveness` / `acceptance`).
 async fn worker_group_exists(
     db: &sqlx::PgPool,
     workspace_id: Uuid,
@@ -192,7 +192,7 @@ async fn worker_group_exists(
          WHERE r.workspace_id = $1 AND r.path = $2 \
            AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
            AND rv.public_config ->> 'liveness' = 'competing_consumer' \
-           AND rv.public_config ->> 'dispatch' = 'pull'",
+           AND rv.public_config ->> 'acceptance' = 'auto'",
     )
     .bind(workspace_id)
     .bind(alias)
@@ -688,7 +688,7 @@ pub async fn create_worker_registration_token(
             ));
         }
         // A group is only meaningful when BACKED by a `capacity` resource at the
-        // worker point in the trait-space (`competing_consumer` + `pull` — the
+        // worker point in the trait-space (`competing_consumer` + `auto` — the
         // `worker` preset). Reject minting a token for an unbacked group so we
         // never enroll a worker whose group addresses no declared pool (the
         // silent dangling reference). The operator creates the group (a

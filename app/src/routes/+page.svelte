@@ -181,6 +181,10 @@
 	);
 </script>
 
+<svelte:head>
+	<title>Mekhan</title>
+</svelte:head>
+
 <div class="relative h-full overflow-x-hidden overflow-y-auto" data-testid="home-page">
 	<!-- Abstract brand motif, faint in the top-right corner. -->
 	<BrandSpiral
@@ -308,7 +312,7 @@
 			</a>
 		</div>
 
-		<!-- My inbox preview: tasks to claim + my open work (offer dispatch).
+		<!-- My inbox preview: tasks to claim + my open work (consent acceptance).
 		     Only shown when there's something relevant, so it stays out of the
 		     way for users with no human-task assignments. -->
 		{#if hasInboxPreview}

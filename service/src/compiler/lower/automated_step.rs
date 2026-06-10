@@ -645,7 +645,7 @@ pub(super) enum DeploymentRole {
 /// - alias not in `known_resources` → `WorkspaceResourceUnknown` (normally
 ///   caught earlier at publish by `discover_known_resources`).
 /// - alias resolves to a backend the role does not accept (incl. `Queue` /
-///   `Deferred` / a non-pool resource) → a role-specific CompileError
+///   a non-pool resource) → a role-specific CompileError
 ///   (`ResourcePoolNotAPool` for the Executor.capacity entry,
 ///   `SchedulerNotADatacenter` for the Scheduled entry) steering the author to
 ///   the right deployment model.
@@ -705,20 +705,17 @@ pub(super) fn resolve_binding(
         crate::models::capacity::axes_for_resource(&kind, &public_map).map(|axes| axes.backend());
 
     // Map the resolved CapacityBackend to a net-backed PoolBackend the role
-    // accepts. Queue / Deferred / None have no admission net, so they are a
+    // accepts. Queue / None have no admission net, so they are a
     // "not a pool" error for either role. The role then narrows further:
     // ExecutorCapacity rejects Scheduler; SchedulerLease accepts ONLY Scheduler.
     let backend: PoolBackend = match capacity_backend {
         Some(crate::models::capacity::CapacityBackend::Tokens) => PoolBackend::Tokens,
         Some(crate::models::capacity::CapacityBackend::Presence) => PoolBackend::Presence,
         Some(crate::models::capacity::CapacityBackend::Scheduler) => PoolBackend::Scheduler,
-        // A worker queue / deferred-quota / non-pool resource has no admission
-        // net for either role.
+        // A worker queue / non-pool resource (incl. a capacity whose axes are
+        // unparseable — not dispatchable) has no admission net for either role.
         Some(crate::models::capacity::CapacityBackend::Queue) => {
             return Err(wrong_backend("queue"))
-        }
-        Some(crate::models::capacity::CapacityBackend::Deferred) => {
-            return Err(wrong_backend("deferred"))
         }
         None => return Err(wrong_backend("non-pool")),
     };

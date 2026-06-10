@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { PoolContentionView } from '$lib/components/petri';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import ClusterMetricsPanel from '$lib/components/clusters/ClusterMetricsPanel.svelte';
 	import ClusterLeasesTable from '$lib/components/clusters/ClusterLeasesTable.svelte';
@@ -103,20 +103,15 @@
 	);
 </script>
 
-<svelte:head><title>{name} | Clusters | Mekhan</title></svelte:head>
-
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
-		<a
-			href="/fleet"
-			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+<PageShell width="wide">
+	{#snippet band()}
+		<PageHeader
+			title={name}
+			variant="detail"
+			back={{ href: '/fleet', label: 'Fleet' }}
+			headTitle={`${name} | Clusters | Mekhan`}
 		>
-			<ChevronLeft class="size-4" /> Control Plane
-		</a>
-
-		<div class="mb-4 flex items-start justify-between gap-3">
-			<div>
-				<h1 class="text-lg font-semibold tracking-tight">{name}</h1>
+			{#snippet children()}
 				<div class="mt-1 flex items-center gap-2 text-sm">
 					{#if cluster}
 						<Badge variant="secondary">{cluster.flavor}</Badge>
@@ -126,54 +121,56 @@
 						<span class="font-mono text-xs text-muted-foreground">{poolNetId}</span>
 					{/if}
 				</div>
-			</div>
-			{#if cluster && cluster.resource_id !== '_env'}
-				<div class="flex items-center gap-1.5">
-					<Button variant="outline" size="sm" disabled={busy} onclick={() => act(reconnectCluster)}>
-						<RotateCcw class="mr-1.5 size-4" /> Reconnect
-					</Button>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={busy || cluster.draining}
-						onclick={() => act(drainCluster)}
-					>
-						Drain
-					</Button>
-				</div>
-			{/if}
+			{/snippet}
+			{#snippet actions()}
+				{#if cluster && cluster.resource_id !== '_env'}
+					<div class="flex items-center gap-1.5">
+						<Button variant="outline" size="sm" disabled={busy} onclick={() => act(reconnectCluster)}>
+							<RotateCcw class="mr-1.5 size-4" /> Reconnect
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={busy || cluster.draining}
+							onclick={() => act(drainCluster)}
+						>
+							Drain
+						</Button>
+					</div>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
+
+	{#if error}
+		<div class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+			{error}
 		</div>
+	{/if}
 
-		{#if error}
-			<div class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-				{error}
-			</div>
-		{/if}
+	{#key poolNetId}
+		<PoolContentionView netId={poolNetId} />
+	{/key}
 
-		{#key poolNetId}
-			<PoolContentionView netId={poolNetId} />
-		{/key}
+	{#if !isEnvCluster}
+		<div class="mt-8 space-y-8">
+			<ClusterMetricsPanel {metrics} loading={metricsLoading} />
 
-		{#if !isEnvCluster}
-			<div class="mt-8 space-y-8">
-				<ClusterMetricsPanel {metrics} loading={metricsLoading} />
+			<ClusterLeasesTable
+				leases={leases.filter((l) => l.status === 'held' || l.status === 'pending')}
+				loading={leasesLoading}
+				variant="active"
+			/>
 
-				<ClusterLeasesTable
-					leases={leases.filter((l) => l.status === 'held' || l.status === 'pending')}
-					loading={leasesLoading}
-					variant="active"
+			<ClusterLeasesTable {leases} loading={leasesLoading} variant="recent" />
+
+			<!-- Templates section: job templates whose flavor matches this cluster -->
+			<div class="border-t border-border/40 pt-8">
+				<ClusterTemplatesTable
+					flavor={cluster?.flavor ?? null}
+					clusterId={resourceId}
 				/>
-
-				<ClusterLeasesTable {leases} loading={leasesLoading} variant="recent" />
-
-				<!-- Templates section: job templates whose flavor matches this cluster -->
-				<div class="border-t border-border/40 pt-8">
-					<ClusterTemplatesTable
-						flavor={cluster?.flavor ?? null}
-						clusterId={resourceId}
-					/>
-				</div>
 			</div>
-		{/if}
-	</div>
-</div>
+		</div>
+	{/if}
+</PageShell>

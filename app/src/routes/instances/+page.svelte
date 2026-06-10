@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { listInstances, cancelInstance, type InstanceListItem } from '$lib/api/client';
+	import { PageShell, PageHeader, FilterPills, type FilterPill } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Activity from '@lucide/svelte/icons/activity';
@@ -24,13 +25,25 @@
 		test_run: 'bg-purple-100 text-purple-800'
 	};
 
-	const liveActive = $derived(modeFilter === undefined || modeFilter === 'live');
-	const draftActive = $derived(modeFilter === 'draft');
-	const testActive = $derived(modeFilter === 'test_run');
-	const anyActive = $derived(modeFilter === 'any' || modeFilter === 'all');
 	const baseQuery = $derived(
 		templateFilter ? `template_id=${encodeURIComponent(templateFilter)}&` : ''
 	);
+
+	// Mode filter pills. Default view hides drafts and test runs; `any`
+	// shows everything so the user can scope into them.
+	const activeMode = $derived(
+		modeFilter === undefined || modeFilter === 'live'
+			? 'live'
+			: modeFilter === 'all'
+				? 'any'
+				: modeFilter
+	);
+	const modeOptions = $derived<FilterPill[]>([
+		{ value: 'live', label: 'Live', href: `/instances?${baseQuery}` },
+		{ value: 'draft', label: 'Drafts', href: `/instances?${baseQuery}mode=draft` },
+		{ value: 'test_run', label: 'Test runs', href: `/instances?${baseQuery}mode=test_run` },
+		{ value: 'any', label: 'All', href: `/instances?${baseQuery}mode=any` }
+	]);
 
 	const statusColors: Record<string, string> = {
 		created: 'bg-gray-100 text-gray-700',
@@ -79,148 +92,104 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="instances-page">
-	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
-		<div class="mb-6 flex items-end justify-between gap-4">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Instances</h1>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Running and completed workflow instances
-				</p>
-			</div>
-			<!-- Mode filter pills. Default view hides drafts and test runs; `any`
-			     shows everything so the user can scope into them. -->
-			<nav
-				class="flex items-center gap-1 rounded-md border border-border bg-card p-0.5 text-xs"
-				data-testid="mode-filter"
+<PageShell testid="instances-page">
+	{#snippet band()}
+		<PageHeader title="Instances" subtitle="Running and completed workflow instances" />
+	{/snippet}
+
+	<FilterPills class="mb-4" testid="mode-filter" active={activeMode} options={modeOptions} />
+
+	{#if templateFilter}
+		<div
+			class="mb-4 flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2 text-sm"
+		>
+			<span class="text-muted-foreground">Runs of</span>
+			<span class="font-medium text-foreground">{filteredTemplateName}</span>
+			{#if statusFilter}
+				<Badge variant="secondary">{statusFilter}</Badge>
+			{/if}
+			<a
+				href="/instances"
+				class="ml-auto inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 			>
-				<a
-					href="/instances?{baseQuery}"
-					class="rounded px-2 py-1 {liveActive
-						? 'bg-primary text-primary-foreground'
-						: 'text-muted-foreground hover:bg-accent'}"
-				>
-					Live
-				</a>
-				<a
-					href="/instances?{baseQuery}mode=draft"
-					class="rounded px-2 py-1 {draftActive
-						? 'bg-primary text-primary-foreground'
-						: 'text-muted-foreground hover:bg-accent'}"
-				>
-					Drafts
-				</a>
-				<a
-					href="/instances?{baseQuery}mode=test_run"
-					class="rounded px-2 py-1 {testActive
-						? 'bg-primary text-primary-foreground'
-						: 'text-muted-foreground hover:bg-accent'}"
-				>
-					Test runs
-				</a>
-				<a
-					href="/instances?{baseQuery}mode=any"
-					class="rounded px-2 py-1 {anyActive
-						? 'bg-primary text-primary-foreground'
-						: 'text-muted-foreground hover:bg-accent'}"
-				>
-					All
-				</a>
-			</nav>
+				<X class="size-3" /> Clear
+			</a>
 		</div>
+	{/if}
 
-		{#if templateFilter}
-			<div
-				class="mb-4 flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2 text-sm"
-			>
-				<span class="text-muted-foreground">Runs of</span>
-				<span class="font-medium text-foreground">{filteredTemplateName}</span>
-				{#if statusFilter}
-					<Badge variant="secondary">{statusFilter}</Badge>
-				{/if}
+	{#if error}
+		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{error}
+		</div>
+	{/if}
+
+	{#if loading}
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+			Loading...
+		</div>
+	{:else if instances.length === 0}
+		<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
+			<Activity class="size-10 text-muted-foreground/40" />
+			<p class="mt-3 text-sm text-muted-foreground">No instances yet</p>
+			<p class="text-sm text-muted-foreground">
+				Publish a template and run it to create instances
+			</p>
+		</div>
+	{:else}
+		<div class="space-y-2">
+			{#each instances as instance (instance.id)}
 				<a
-					href="/instances"
-					class="ml-auto inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					href="/instances/{instance.id}"
+					class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+					data-testid="instance-item-{instance.id}"
 				>
-					<X class="size-3" /> Clear
-				</a>
-			</div>
-		{/if}
-
-		{#if error}
-			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-				{error}
-			</div>
-		{/if}
-
-		{#if loading}
-			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-				Loading...
-			</div>
-		{:else if instances.length === 0}
-			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
-				<Activity class="size-10 text-muted-foreground/40" />
-				<p class="mt-3 text-sm text-muted-foreground">No instances yet</p>
-				<p class="text-sm text-muted-foreground">
-					Publish a template and run it to create instances
-				</p>
-			</div>
-		{:else}
-			<div class="space-y-2">
-				{#each instances as instance (instance.id)}
-					<a
-						href="/instances/{instance.id}"
-						class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
-						data-testid="instance-item-{instance.id}"
-					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="text-sm font-medium text-foreground">
-									{instance.template_name ?? instance.net_id}
-								</span>
-								<Badge variant="secondary">
-									v{instance.template_version}
+					<div class="min-w-0">
+						<div class="flex items-center gap-2">
+							<span class="text-sm font-medium text-foreground">
+								{instance.template_name ?? instance.net_id}
+							</span>
+							<Badge variant="secondary">
+								v{instance.template_version}
+							</Badge>
+							<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
+								{instance.status}
+							</Badge>
+							{#if instance.mode && instance.mode !== 'live'}
+								<Badge
+									class={modeBadgeClass[instance.mode] ?? ''}
+									variant="secondary"
+								>
+									{instance.mode === 'test_run' ? 'test run' : instance.mode}
 								</Badge>
-								<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
-									{instance.status}
-								</Badge>
-								{#if instance.mode && instance.mode !== 'live'}
-									<Badge
-										class={modeBadgeClass[instance.mode] ?? ''}
-										variant="secondary"
-									>
-										{instance.mode === 'test_run' ? 'test run' : instance.mode}
-									</Badge>
-								{/if}
-							</div>
-							{#if instance.current_step}
-								<p class="mt-1 text-sm text-muted-foreground">
-									Current: {instance.current_step}
-								</p>
 							{/if}
-							<p class="mt-1 text-sm text-muted-foreground">
-								<span class="font-mono">{instance.net_id}</span>
-								<span class="mx-1">&middot;</span>
-								{formatDate(instance.created_at)}
-							</p>
 						</div>
-						{#if instance.status === 'running' || instance.status === 'created'}
-							<Button
-								variant="ghost"
-								size="sm"
-								class="text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-								onclick={(e: MouseEvent) => {
-									e.preventDefault();
-									e.stopPropagation();
-									handleCancel(instance.id);
-								}}
-							>
-								Cancel
-							</Button>
+						{#if instance.current_step}
+							<p class="mt-1 text-sm text-muted-foreground">
+								Current: {instance.current_step}
+							</p>
 						{/if}
-					</a>
-				{/each}
-			</div>
-		{/if}
-	</div>
-</div>
+						<p class="mt-1 text-sm text-muted-foreground">
+							<span class="font-mono">{instance.net_id}</span>
+							<span class="mx-1">&middot;</span>
+							{formatDate(instance.created_at)}
+						</p>
+					</div>
+					{#if instance.status === 'running' || instance.status === 'created'}
+						<Button
+							variant="ghost"
+							size="sm"
+							class="text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+							onclick={(e: MouseEvent) => {
+								e.preventDefault();
+								e.stopPropagation();
+								handleCancel(instance.id);
+							}}
+						>
+							Cancel
+						</Button>
+					{/if}
+				</a>
+			{/each}
+		</div>
+	{/if}
+</PageShell>

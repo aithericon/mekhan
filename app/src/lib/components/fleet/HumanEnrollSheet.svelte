@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Enroll / edit a HUMAN into an `offer`-dispatch capacity (docs/33 P4). The
+	// Enroll / edit a HUMAN into a consent-acceptance capacity (docs/33 P4). The
 	// human counterpart to EnrollSheet — but humans don't mint a registration
 	// token: an admin enrolls an EXISTING `workspace_member` directly onto the
 	// roster (`POST /api/v1/roster`), so the picker is over the workspace's

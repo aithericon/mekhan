@@ -200,7 +200,7 @@ export class YjsGraphBinding {
 					// producer that emits the form blocks at runtime. Undefined ⇒ static
 					// `steps` authoring. (Not yet in the generated schema → cast.)
 					stepsRef: config?.stepsRef as string | undefined,
-					// Capacity binding (docs/33): the offer-dispatch pool this task is
+					// Capacity binding (docs/33): the consent-acceptance pool this task is
 					// offered to + its placement Requirements. Round-trips whole +
 					// conditionally so a collaborative edit doesn't drop the offer
 					// binding (mirrors `automated_step`'s deploymentModel/requirements).

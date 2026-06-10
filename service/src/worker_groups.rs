@@ -11,7 +11,7 @@
 //!
 //! For that to work, every workspace must own a `capacity` resource at path
 //! [`DEFAULT_WORKER_GROUP_PATH`] sitting at the WORKER point in the trait-space
-//! (the `worker` preset: `competing_consumer` liveness + `pull` dispatch). This
+//! (the `worker` preset: `competing_consumer` liveness + `auto` acceptance). This
 //! module is the single idempotent seeder + the alias→UUID resolver both the
 //! compiler and the enroll handler use to turn the human group alias (or the
 //! implicit "default") into the routing-partition UUID.
@@ -34,7 +34,7 @@ const WORKER_GROUP_SEEDER_AUTHOR_ID: Uuid = uuid::uuid!("00000000-0000-0000-0000
 /// Resolve a worker-group ALIAS (workspace-scoped resource `path`) to its
 /// capacity-resource UUID — the routing partition token. Matches the same
 /// worker axes the enroll gate (`worker_group_exists`) checks: a live
-/// `capacity` resource with `competing_consumer` liveness + `pull` dispatch.
+/// `capacity` resource with `competing_consumer` liveness + `auto` acceptance.
 ///
 /// Returns `Ok(None)` when no such backed group exists (the caller decides
 /// whether that is a hard error). DB read only.
@@ -50,7 +50,7 @@ pub async fn resolve_worker_group_uuid(
          WHERE r.workspace_id = $1 AND r.path = $2 \
            AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
            AND rv.public_config ->> 'liveness' = 'competing_consumer' \
-           AND rv.public_config ->> 'dispatch' = 'pull'",
+           AND rv.public_config ->> 'acceptance' = 'auto'",
     )
     .bind(workspace_id)
     .bind(alias)
@@ -90,7 +90,7 @@ pub async fn ensure_default_worker_group(
         path: DEFAULT_WORKER_GROUP_PATH.to_string(),
         resource_type: "capacity".to_string(),
         display_name: Some("Default workers".to_string()),
-        // The `worker` preset locks the competing_consumer/pull axes; the
+        // The `worker` preset locks the competing_consumer/auto axes; the
         // create path expands it into the typed axis strings before persisting.
         config: serde_json::json!({ "preset": "worker" }),
         workspace_id: Some(workspace_id),

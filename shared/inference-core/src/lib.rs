@@ -14,6 +14,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// The shared `satisfies(requirements, caps)` eligibility matcher — the one
+/// Rust transcription of the engine's authoritative Rhai matcher.
+pub mod capability;
+
 /// The metering record / GDPR processing-record shape (doc 11 §5.7, doc 29 §7'
 /// P5 `inference_request_log`).
 ///

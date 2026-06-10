@@ -83,7 +83,7 @@ describe('YjsGraphBinding', () => {
 	});
 
 	it('human_task capacity binding + requirements survive the updateNodeData round-trip', () => {
-		// docs/33: a HumanTask bound to an offer-dispatch `capacity` must round-trip
+		// docs/33: a HumanTask bound to a consent-acceptance `capacity` must round-trip
 		// through Yjs, and clearing it (selecting "Anyone") must strip both keys so
 		// no stale binding reappears on reload. Regression for the dropped-binding
 		// bug (the human_task case used to map only taskTitle/steps/stepsRef).

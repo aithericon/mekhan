@@ -30,7 +30,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use mekhan_service::models::runner::{mint_token, RUNNER_TOKEN_PREFIX};
-use mekhan_service::runners_presence::RunnerPresence;
+use mekhan_service::presence::RunnerPresence;
 
 /// One model the seeded runner advertises in its interface catalog. A base carries
 /// its per-engine concurrency `C` (vLLM `--max-num-seqs`); a LoRA omits `C` and

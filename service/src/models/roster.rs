@@ -1,6 +1,7 @@
 //! Humans as a Capacity — the roster (docs/33 §7).
 //!
-//! A "human capacity" is a `capacity` resource (`presence · offer · …`) backed
+//! A "human capacity" is a `capacity` resource (`presence · consent · …`,
+//! doc 35 §4) backed
 //! by a `pool-<resource_id>` net. The ROSTER is the set of `workspace_members`
 //! enrolled in it — the human counterpart to the `runners` fleet behind the
 //! runner pool. These structs mirror the migration column order (see

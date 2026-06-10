@@ -4143,6 +4143,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description The capacity-side half of bilateral eligibility (doc 35 §4):
+         *     `match = work-side predicate ∧ capacity-side acceptance`.
+         *
+         *     This replaces the deleted `Dispatch` axis: pull-vs-push derives from the
+         *     backend (doc 35 §2), and what `offer` actually smuggled in was acceptance —
+         *     what eligibility *means* when the capacity gets a say.
+         *
+         *     `policy` — a capacity-side *standing predicate* evaluated by the platform
+         *     (maintenance mode, tenant refusal) — is a documented-future third value and
+         *     is deliberately NOT a variant here (doc 35 §4/§9).
+         * @enum {string}
+         */
+        Acceptance: "auto" | "consent";
         AddMemberRequest: {
             /** @description One of: `owner`, `admin`, `editor`, `viewer`. */
             role: string;
@@ -4821,7 +4835,7 @@ export interface components {
             name: string;
         };
         /**
-         * @description How much concurrent work the capacity offers (doc 23 §3 "capacity amount").
+         * @description How much concurrent work the capacity offers (doc 35 §5 "capacity amount").
          *
          *     `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
          *     live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
@@ -4842,25 +4856,28 @@ export interface components {
             capacity_kind: "elastic";
         };
         /**
-         * @description The full point in the trait-space a `capacity` resource names. This is the
-         *     typed view of the axes stored as strings in `public_config`; the create
-         *     path parses the wire strings into this and runs [`CapacityAxes::validate`].
+         * @description The full point in the trait-space a `capacity` resource names (doc 35 §5 —
+         *     the four surviving axes). This is the typed view of the axes stored as
+         *     strings in `public_config`; the create path parses the wire strings into
+         *     this and runs [`CapacityAxes::validate`].
+         *
+         *     `acceptance` is REQUIRED — no serde default. An old persisted row missing it
+         *     (a pre-re-cut `dispatch`/`exclusivity`-shaped blob) must FAIL to parse:
+         *     fail-closed by design, no backcompat shim.
          */
         CapacityAxes: components["schemas"]["CapacityAmount"] & {
-            dispatch: components["schemas"]["Dispatch"];
+            acceptance: components["schemas"]["Acceptance"];
             eligibility: components["schemas"]["Eligibility"];
-            exclusivity: components["schemas"]["Exclusivity"];
             liveness: components["schemas"]["Liveness"];
         };
         /**
          * @description The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).
          *     Supersets the shared `aithericon_resources::pool::PoolBackend` (which only
-         *     names the three admission-net flavours) with the two **no-admission-net**
-         *     cases: `Queue` (a pull worker queue — no grant) and `Deferred` (the
-         *     `consume` quota path, whose admission mechanism is not yet built).
+         *     names the three admission-net flavours) with the one **no-admission-net**
+         *     case: `Queue` (a pull worker queue — no grant).
          * @enum {string}
          */
-        CapacityBackend: "queue" | "tokens" | "presence" | "scheduler" | "deferred";
+        CapacityBackend: "queue" | "tokens" | "presence" | "scheduler";
         /**
          * @description A binding to a Tokens or Presence `capacity` resource for executor-pool admission (`docs/14`).
          *     Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
@@ -4947,14 +4964,13 @@ export interface components {
             axes: components["schemas"]["CapacityAxes"];
             /** @description UI label. */
             display_name: string;
-            /** @description Stable wire id (`worker` / `limit` / `instrument`). */
+            /** @description Stable wire id (`worker` / `limit` / `instrument` / `human`). */
             name: string;
         };
         /** @description One capacity resource, classified + live. The unified Control-Plane row. */
         CapacitySummary: {
             axes?: null | components["schemas"]["CapacityAxes"];
-            /** @description The dispatch target, from the SINGLE authority `CapacityAxes::backend()`. */
-            backend: components["schemas"]["CapacityBackend"];
+            backend?: null | components["schemas"]["CapacityBackend"];
             /** @description Human display name. */
             display_name: string;
             /**
@@ -5941,11 +5957,6 @@ export interface components {
             size?: number | null;
         };
         /**
-         * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
-         * @enum {string}
-         */
-        Dispatch: "pull" | "push" | "offer";
-        /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
          *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
          *     per-step author choice on any `ExecutorJob` backend.
@@ -6024,10 +6035,11 @@ export interface components {
             type: "any";
         };
         /**
-         * @description The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate
-         *     shape rather than chosen by hand: a single coarse equality (`backend == x`)
-         *     IS a partition key (free competing-consumers, no matcher); a richer
-         *     conjunction needs the guarded matcher.
+         * @description The eligibility evaluation strategy (doc 23 §4 — incorporated whole by doc
+         *     35 §5), DERIVED from the predicate shape rather than chosen by hand: a
+         *     single coarse equality (`backend == x`) IS a partition key (free
+         *     competing-consumers, no matcher); a richer conjunction needs the guarded
+         *     matcher.
          * @enum {string}
          */
         Eligibility: "partition" | "predicate";
@@ -6204,11 +6216,6 @@ export interface components {
             tokens: components["schemas"]["TokenInfo"][];
             transition_name?: string | null;
         };
-        /**
-         * @description Hold-vs-consume (doc 23 §3 "exclusivity discipline" — the real fork of §5).
-         * @enum {string}
-         */
-        Exclusivity: "hold" | "consume";
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
          *
@@ -7328,10 +7335,9 @@ export interface components {
             value: number;
         };
         /**
-         * @description How a capacity proves it is available (doc 23 §3 "liveness"). This is the
-         *     axis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the
-         *     vocabulary is 1:1 with the backing-net flavour (modulo the `consume`
-         *     quota-admission override).
+         * @description How a capacity proves it is available (doc 35 §5 "liveness source"). This is
+         *     the axis the dispatch authority ([`CapacityAxes::backend`]) keys off — the
+         *     vocabulary is 1:1 with the backing-net flavour.
          * @enum {string}
          */
         Liveness: "competing_consumer" | "seeded" | "presence" | "lease";

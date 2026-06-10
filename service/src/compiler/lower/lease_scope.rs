@@ -184,7 +184,7 @@ mod presence_lease_tests {
     }
 
     /// A presence `capacity` resource whose axes resolve to the `Presence`
-    /// backend (the `instrument` preset: presence · push · hold · presence_driven
+    /// backend (the `instrument` preset: presence · auto · presence_driven
     /// · predicate). `axes_for_resource("capacity", public)` deserializes the
     /// full axes out of `public_config`.
     fn presence_pool_known(alias: &str) -> KnownResources {
@@ -197,8 +197,7 @@ mod presence_lease_tests {
                 latest_version: 1,
                 public_config: json!({
                     "liveness": "presence",
-                    "dispatch": "push",
-                    "exclusivity": "hold",
+                    "acceptance": "auto",
                     "capacity_kind": "presence_driven",
                     "eligibility": "predicate",
                 }),
@@ -313,8 +312,7 @@ mod presence_lease_tests {
                 latest_version: 1,
                 public_config: json!({
                     "liveness": "seeded",
-                    "dispatch": "push",
-                    "exclusivity": "hold",
+                    "acceptance": "auto",
                     "capacity_kind": "fixed",
                     "capacity_amount": 4,
                     "eligibility": "partition",

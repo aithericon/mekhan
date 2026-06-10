@@ -224,8 +224,8 @@ async fn main() -> anyhow::Result<()> {
     // and the AppState read API (`GET /api/v1/runners/presence`) reads through it.
     // The `fleet` clone receives the advisory backend mirror (telemetry only —
     // NOT the pool-net control binding, which stays inside this controller).
-    let runner_presence = mekhan_service::runners_presence::RunnerPresence::new();
-    mekhan_service::runners_presence::spawn_presence_controller(
+    let runner_presence = mekhan_service::presence::RunnerPresence::new();
+    mekhan_service::presence::spawn_presence_controller(
         runner_presence.clone(),
         mekhan_nats.clone(),
         db.clone(),
@@ -242,8 +242,8 @@ async fn main() -> anyhow::Result<()> {
     // verbatim, so no engine HTTP client is needed (pure NATS bridge + signal).
     // Construct the shared handle ONCE: the controller tasks mutate it and the
     // AppState read API reads through it.
-    let human_presence = mekhan_service::human_presence::HumanPresence::new();
-    mekhan_service::human_presence::spawn_human_presence_controller(
+    let human_presence = mekhan_service::presence::HumanPresence::new();
+    mekhan_service::presence::spawn_human_presence_controller(
         human_presence.clone(),
         mekhan_nats.clone(),
         db.clone(),

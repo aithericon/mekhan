@@ -368,7 +368,7 @@ questions (which models are live vs how much engine capacity exists) and must ne
 be merged.
 
 *Rationale.* `C` lives on `FleetLiveness::snapshot()` and in `runners_presence`
-slots but is never summed, and `RunnerPresenceSnapshot` lacks `concurrency` so
+(now `service/src/presence/runners.rs`) slots but is never summed, and `RunnerPresenceSnapshot` lacks `concurrency` so
 `serving_runner_counts` cannot C-weight — `FleetLiveness` is the single place already
 carrying the data, so summing it there avoids a parallel registry and the
 two-sources drift. *(Counted as the 8th — see the §3 header note.)*
@@ -521,7 +521,7 @@ the per-model Nomad job from default to fallback — the doc-30 fix.
 | Path | Change |
 |---|---|
 | `service/src/autoscaler/placement.rs` | NEW `reconcile_placement` pass in `run_autoscaler` (after node reconcile): for each `model_policy` with `demand>0` unserved, walk the mechanism cascade against Phase-0 engine-inventory headroom; the GREENFIELD publisher serializes the shared `ModelCommand` and does a CORE (ephemeral, NOT jetstream) `nats.publish("runner.{id}.load"/.unload, bytes)` on the runner-scoped client. |
-| `service/src/runners_nats.rs` | NEW (or EDIT) a mekhan NATS publish helper alongside it — publish `ModelCommand` on the existing `runner.{id}.>` grant (no JWT change; mirror `runners_presence.rs` publish but via `nats.client()` not `jetstream()`). |
+| `service/src/runners_nats.rs` | NEW (or EDIT) a mekhan NATS publish helper alongside it — publish `ModelCommand` on the existing `runner.{id}.>` grant (no JWT change; mirror `runners_presence.rs` (now `service/src/presence/runners.rs`) publish but via `nats.client()` not `jetstream()`). |
 | `executor/crates/executor-llm/src/model_command.rs` | Make `ModelCommand`/`LoadTarget` DTOs a shared dep of `service` (or move the DTO to `shared/inference-core`) so publisher + subscriber agree on the envelope by construction. |
 | `service/src/autoscaler/mod.rs` | WIRE `reconcile_placement` into `reconcile_once`; the existing `actuate_replica` call becomes the cascade's branch (d) FALLBACK (dedicated job, gated on `model_policy.dedicated=true`) instead of the default. |
 | `service/src/autoscaler/placement.rs` | Residency equality check (OQ-4, single-zone-per-pool) + cascade ordering (OQ-5) reusing the `actuate.rs:187` fail-closed shape and `routing.rs:88` zone-equality shape; placement writes `status=pending` for the raise-node leg, `status=failed`+`last_error` for residency mismatch. |

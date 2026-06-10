@@ -11821,6 +11821,14 @@
   },
   "components": {
     "schemas": {
+      "Acceptance": {
+        "type": "string",
+        "description": "The capacity-side half of bilateral eligibility (doc 35 §4):\n`match = work-side predicate ∧ capacity-side acceptance`.\n\nThis replaces the deleted `Dispatch` axis: pull-vs-push derives from the\nbackend (doc 35 §2), and what `offer` actually smuggled in was acceptance —\nwhat eligibility *means* when the capacity gets a say.\n\n`policy` — a capacity-side *standing predicate* evaluated by the platform\n(maintenance mode, tenant refusal) — is a documented-future third value and\nis deliberately NOT a variant here (doc 35 §4/§9).",
+        "enum": [
+          "auto",
+          "consent"
+        ]
+      },
       "AddMemberRequest": {
         "type": "object",
         "required": [
@@ -13249,7 +13257,7 @@
             }
           }
         ],
-        "description": "How much concurrent work the capacity offers (doc 23 §3 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
+        "description": "How much concurrent work the capacity offers (doc 35 §5 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
       },
       "CapacityAxes": {
         "allOf": [
@@ -13260,19 +13268,15 @@
             "type": "object",
             "required": [
               "liveness",
-              "dispatch",
-              "exclusivity",
+              "acceptance",
               "eligibility"
             ],
             "properties": {
-              "dispatch": {
-                "$ref": "#/components/schemas/Dispatch"
+              "acceptance": {
+                "$ref": "#/components/schemas/Acceptance"
               },
               "eligibility": {
                 "$ref": "#/components/schemas/Eligibility"
-              },
-              "exclusivity": {
-                "$ref": "#/components/schemas/Exclusivity"
               },
               "liveness": {
                 "$ref": "#/components/schemas/Liveness"
@@ -13280,17 +13284,16 @@
             }
           }
         ],
-        "description": "The full point in the trait-space a `capacity` resource names. This is the\ntyped view of the axes stored as strings in `public_config`; the create\npath parses the wire strings into this and runs [`CapacityAxes::validate`]."
+        "description": "The full point in the trait-space a `capacity` resource names (doc 35 §5 —\nthe four surviving axes). This is the typed view of the axes stored as\nstrings in `public_config`; the create path parses the wire strings into\nthis and runs [`CapacityAxes::validate`].\n\n`acceptance` is REQUIRED — no serde default. An old persisted row missing it\n(a pre-re-cut `dispatch`/`exclusivity`-shaped blob) must FAIL to parse:\nfail-closed by design, no backcompat shim."
       },
       "CapacityBackend": {
         "type": "string",
-        "description": "The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).\nSupersets the shared `aithericon_resources::pool::PoolBackend` (which only\nnames the three admission-net flavours) with the two **no-admission-net**\ncases: `Queue` (a pull worker queue — no grant) and `Deferred` (the\n`consume` quota path, whose admission mechanism is not yet built).",
+        "description": "The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).\nSupersets the shared `aithericon_resources::pool::PoolBackend` (which only\nnames the three admission-net flavours) with the one **no-admission-net**\ncase: `Queue` (a pull worker queue — no grant).",
         "enum": [
           "queue",
           "tokens",
           "presence",
-          "scheduler",
-          "deferred"
+          "scheduler"
         ]
       },
       "CapacityBinding": {
@@ -13454,7 +13457,7 @@
           },
           {
             "type": "object",
-            "description": "Deferred (`consume` quota) or any capacity with no live source.",
+            "description": "Any capacity with no live source (e.g. unparseable axes — not\ndispatchable).",
             "required": [
               "kind"
             ],
@@ -13489,7 +13492,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Stable wire id (`worker` / `limit` / `instrument`)."
+            "description": "Stable wire id (`worker` / `limit` / `instrument` / `human`)."
           }
         }
       },
@@ -13500,7 +13503,6 @@
           "id",
           "path",
           "display_name",
-          "backend",
           "live"
         ],
         "properties": {
@@ -13511,13 +13513,20 @@
               },
               {
                 "$ref": "#/components/schemas/CapacityAxes",
-                "description": "The resolved trait-space axes (`None` for a `capacity` whose\n`public_config` doesn't parse — it still lists, with `backend` defaulted)."
+                "description": "The resolved trait-space axes (`None` for a `capacity` whose\n`public_config` doesn't parse — it still lists, not dispatchable)."
               }
             ]
           },
           "backend": {
-            "$ref": "#/components/schemas/CapacityBackend",
-            "description": "The dispatch target, from the SINGLE authority `CapacityAxes::backend()`."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CapacityBackend",
+                "description": "The dispatch target, from the SINGLE authority `CapacityAxes::backend()`.\n`None` when the axes are unparseable — the capacity is not dispatchable\n(fail-closed; it still lists, with [`CapacityLive::None`])."
+              }
+            ]
           },
           "display_name": {
             "type": "string",
@@ -15731,15 +15740,6 @@
           }
         }
       },
-      "Dispatch": {
-        "type": "string",
-        "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
-        "enum": [
-          "pull",
-          "push",
-          "offer"
-        ]
-      },
       "DispatchMode": {
         "oneOf": [
           {
@@ -15985,7 +15985,7 @@
       },
       "Eligibility": {
         "type": "string",
-        "description": "The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate\nshape rather than chosen by hand: a single coarse equality (`backend == x`)\nIS a partition key (free competing-consumers, no matcher); a richer\nconjunction needs the guarded matcher.",
+        "description": "The eligibility evaluation strategy (doc 23 §4 — incorporated whole by doc\n35 §5), DERIVED from the predicate shape rather than chosen by hand: a\nsingle coarse equality (`backend == x`) IS a partition key (free\ncompeting-consumers, no matcher); a richer conjunction needs the guarded\nmatcher.",
         "enum": [
           "partition",
           "predicate"
@@ -16340,14 +16340,6 @@
             ]
           }
         }
-      },
-      "Exclusivity": {
-        "type": "string",
-        "description": "Hold-vs-consume (doc 23 §3 \"exclusivity discipline\" — the real fork of §5).",
-        "enum": [
-          "hold",
-          "consume"
-        ]
       },
       "ExecutionBackendType": {
         "type": "string",
@@ -19131,7 +19123,7 @@
       },
       "Liveness": {
         "type": "string",
-        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\"). This is the\naxis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the\nvocabulary is 1:1 with the backing-net flavour (modulo the `consume`\nquota-admission override).",
+        "description": "How a capacity proves it is available (doc 35 §5 \"liveness source\"). This is\nthe axis the dispatch authority ([`CapacityAxes::backend`]) keys off — the\nvocabulary is 1:1 with the backing-net flavour.",
         "enum": [
           "competing_consumer",
           "seeded",
@@ -27218,7 +27210,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/CapacityBinding",
-                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (the offer discipline).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
+                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (consent acceptance —\nthe offer/claim handshake, doc 35 §4).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
                   }
                 ]
               },

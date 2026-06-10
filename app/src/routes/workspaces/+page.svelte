@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import Building from '@lucide/svelte/icons/building';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
-	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Badge } from '$lib/components/ui/badge';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 
@@ -11,20 +11,22 @@
 	const list = $derived(workspaces.workspaces);
 </script>
 
-<div class="mx-auto max-w-3xl px-6 py-8" data-testid="workspaces-index">
-	<h1 class="text-2xl font-semibold tracking-tight">Workspaces</h1>
-	<p class="mt-1 text-sm text-muted-foreground">
-		Every workspace you're a member of. Click one to manage members, projects, and tags.
-	</p>
+<PageShell testid="workspaces-index">
+	{#snippet band()}
+		<PageHeader
+			title="Workspaces"
+			subtitle="Every workspace you're a member of. Click one to manage members, projects, and tags."
+		/>
+	{/snippet}
 
 	{#if !workspaces.loaded}
-		<div class="mt-6 text-sm text-muted-foreground">Loading…</div>
+		<div class="text-sm text-muted-foreground">Loading…</div>
 	{:else if list.length === 0}
-		<div class="mt-6 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
 			You don't belong to any workspace yet. Ask an admin to add you.
 		</div>
 	{:else}
-		<div class="mt-6 space-y-2" data-testid="workspaces-list">
+		<div class="space-y-2" data-testid="workspaces-list">
 			{#each list as ws (ws.id)}
 				<a
 					href={`/workspaces/${ws.id}`}
@@ -46,4 +48,4 @@
 			{/each}
 		</div>
 	{/if}
-</div>
+</PageShell>

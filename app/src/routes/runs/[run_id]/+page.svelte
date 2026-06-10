@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
+	import { PageShell } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { LabCanvas } from '$lib/components/petri';
@@ -180,222 +181,230 @@
 	}
 </script>
 
-<div class="flex h-full flex-col bg-background" data-testid="cloud-layer-run-view">
-	<!-- Header -->
-	<div class="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
-		<Button variant="ghost" size="icon-sm" href="/">
-			<ArrowLeft class="size-4" />
-		</Button>
-		<div class="flex items-center gap-2">
-			<Badge class="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">
-				cloud-layer
-			</Badge>
-			{#if runId}
-				<span class="font-mono text-xs text-muted-foreground" data-testid="cloud-layer-run-id">
-					run: {runId.slice(0, 8)}…
-				</span>
-			{/if}
-		</div>
-		<div class="ml-auto flex items-center gap-1">
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				onclick={() => (panelOpen = !panelOpen)}
-				title="Toggle event log"
-				data-testid="cloud-layer-toggle-panel"
-			>
-				{#if panelOpen}
-					<PanelLeftClose class="size-4" />
-				{:else}
-					<PanelLeftOpen class="size-4" />
-				{/if}
+<svelte:head>
+	<title>Run {runId} | Mekhan</title>
+</svelte:head>
+
+<!-- Full-bleed canvas page (PageShell `bleed`): the page owns its own
+     header band + flex layout; xyflow needs a definite-height unpadded parent. -->
+<PageShell width="bleed" testid="cloud-layer-run-view">
+	<div class="flex h-full flex-col bg-background">
+		<!-- Header -->
+		<div class="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
+			<Button variant="ghost" size="icon-sm" href="/">
+				<ArrowLeft class="size-4" />
 			</Button>
+			<div class="flex items-center gap-2">
+				<Badge class="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">
+					cloud-layer
+				</Badge>
+				{#if runId}
+					<span class="font-mono text-xs text-muted-foreground" data-testid="cloud-layer-run-id">
+						run: {runId.slice(0, 8)}…
+					</span>
+				{/if}
+			</div>
+			<div class="ml-auto flex items-center gap-1">
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					onclick={() => (panelOpen = !panelOpen)}
+					title="Toggle event log"
+					data-testid="cloud-layer-toggle-panel"
+				>
+					{#if panelOpen}
+						<PanelLeftClose class="size-4" />
+					{:else}
+						<PanelLeftOpen class="size-4" />
+					{/if}
+				</Button>
+			</div>
 		</div>
-	</div>
 
-	<!-- Main content -->
-	<div class="flex min-h-0 flex-1">
-		<!-- Canvas area -->
-		<div class="relative flex min-w-0 flex-1 flex-col">
-			{#if loading}
-				<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-					Loading cloud-layer topology…
-				</div>
-			{:else if error}
-				<div
-					class="flex h-full items-center justify-center text-sm text-destructive"
-					data-testid="cloud-layer-error"
-				>
-					{error}
-				</div>
-			{:else if topology}
-				<LabCanvas
-					{topology}
-					{marking}
-					bridgedOutTokens={new Map()}
-					enabledTransitions={[]}
-					transitionStatuses={{}}
-					groups={[]}
-					onFireTransition={() => {}}
-					onSelectToken={handleSelectToken}
-				/>
-			{:else}
-				<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-					No topology available
-				</div>
-			{/if}
+		<!-- Main content -->
+		<div class="flex min-h-0 flex-1">
+			<!-- Canvas area -->
+			<div class="relative flex min-w-0 flex-1 flex-col">
+				{#if loading}
+					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+						Loading cloud-layer topology…
+					</div>
+				{:else if error}
+					<div
+						class="flex h-full items-center justify-center text-sm text-destructive"
+						data-testid="cloud-layer-error"
+					>
+						{error}
+					</div>
+				{:else if topology}
+					<LabCanvas
+						{topology}
+						{marking}
+						bridgedOutTokens={new Map()}
+						enabledTransitions={[]}
+						transitionStatuses={{}}
+						groups={[]}
+						onFireTransition={() => {}}
+						onSelectToken={handleSelectToken}
+					/>
+				{:else}
+					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+						No topology available
+					</div>
+				{/if}
 
-			<!-- Token inspect popover (inline overlay) -->
-			{#if inspectedTokenId}
-				<div
-					class="absolute bottom-4 left-4 z-50 w-96 rounded-lg border border-border bg-background shadow-lg"
-					data-testid="cloud-layer-token-inspect"
-				>
-					<div class="flex items-center justify-between border-b border-border px-3 py-2">
-						<div class="flex items-center gap-2">
-							<span class="text-xs font-medium">Token payload</span>
-							{#if inspectedTokenPlaceId}
-								<span class="text-xs text-muted-foreground">
-									@ {placeNames.get(inspectedTokenPlaceId) ?? inspectedTokenPlaceId}
-								</span>
+				<!-- Token inspect popover (inline overlay) -->
+				{#if inspectedTokenId}
+					<div
+						class="absolute bottom-4 left-4 z-50 w-96 rounded-lg border border-border bg-background shadow-lg"
+						data-testid="cloud-layer-token-inspect"
+					>
+						<div class="flex items-center justify-between border-b border-border px-3 py-2">
+							<div class="flex items-center gap-2">
+								<span class="text-xs font-medium">Token payload</span>
+								{#if inspectedTokenPlaceId}
+									<span class="text-xs text-muted-foreground">
+										@ {placeNames.get(inspectedTokenPlaceId) ?? inspectedTokenPlaceId}
+									</span>
+								{/if}
+							</div>
+							<Button variant="ghost" size="icon-sm" onclick={closeTokenInspect}>
+								<X class="size-3.5" />
+							</Button>
+						</div>
+						<div class="max-h-64 overflow-auto p-3" data-testid="cloud-layer-token-payload">
+							{#if tokenPayloadLoading}
+								<span class="text-xs text-muted-foreground">Loading…</span>
+							{:else if tokenPayloadError}
+								<span class="text-xs text-destructive">{tokenPayloadError}</span>
+							{:else if tokenPayload}
+								<div class="space-y-1">
+									<div class="text-xs text-muted-foreground">
+										color: <span class="font-mono">{tokenPayload.token_color}</span>
+									</div>
+									<pre
+										class="whitespace-pre-wrap break-all font-mono text-xs">{JSON.stringify(
+											tokenPayload.value,
+											null,
+											2
+										)}</pre>
+								</div>
 							{/if}
 						</div>
-						<Button variant="ghost" size="icon-sm" onclick={closeTokenInspect}>
-							<X class="size-3.5" />
-						</Button>
+						<div class="border-t border-border px-3 py-1.5">
+							<span class="break-all font-mono text-xs text-muted-foreground">{inspectedTokenId}</span>
+						</div>
 					</div>
-					<div class="max-h-64 overflow-auto p-3" data-testid="cloud-layer-token-payload">
-						{#if tokenPayloadLoading}
-							<span class="text-xs text-muted-foreground">Loading…</span>
-						{:else if tokenPayloadError}
-							<span class="text-xs text-destructive">{tokenPayloadError}</span>
-						{:else if tokenPayload}
-							<div class="space-y-1">
-								<div class="text-xs text-muted-foreground">
-									color: <span class="font-mono">{tokenPayload.token_color}</span>
+				{/if}
+			</div>
+
+			<!-- Right panel: events + artifacts -->
+			{#if panelOpen}
+				<div
+					class="flex w-80 shrink-0 flex-col border-l border-border"
+					data-testid="cloud-layer-event-panel"
+				>
+					<!-- Tab bar -->
+					<div class="flex shrink-0 border-b border-border">
+						<button
+							class="flex-1 border-b-2 px-2 py-1.5 text-xs font-medium transition-colors
+								{panelTab === 'events'
+								? 'border-primary text-foreground'
+								: 'border-transparent text-muted-foreground hover:text-foreground'}"
+							onclick={() => (panelTab = 'events')}
+							data-testid="cloud-layer-events-tab"
+						>
+							Transitions
+						</button>
+						<button
+							class="flex-1 border-b-2 px-2 py-1.5 text-xs font-medium transition-colors
+								{panelTab === 'artifacts'
+								? 'border-primary text-foreground'
+								: 'border-transparent text-muted-foreground hover:text-foreground'}"
+							onclick={() => (panelTab = 'artifacts')}
+							data-testid="cloud-layer-artifacts-tab"
+						>
+							Artifacts
+							{#if artifacts.length > 0}
+								<Badge class="ml-1 px-1 py-0 text-[10px]">{artifacts.length}</Badge>
+							{/if}
+						</button>
+					</div>
+
+					<!-- Tab content -->
+					<div class="min-h-0 flex-1 overflow-y-auto">
+						{#if panelTab === 'events'}
+							{#if firedTransitions.length === 0}
+								<div class="flex h-32 items-center justify-center text-xs text-muted-foreground">
+									No transitions yet
 								</div>
-								<pre
-									class="whitespace-pre-wrap break-all font-mono text-xs">{JSON.stringify(
-										tokenPayload.value,
-										null,
-										2
-									)}</pre>
-							</div>
-						{/if}
-					</div>
-					<div class="border-t border-border px-3 py-1.5">
-						<span class="break-all font-mono text-xs text-muted-foreground">{inspectedTokenId}</span>
-					</div>
-				</div>
-			{/if}
-		</div>
-
-		<!-- Right panel: events + artifacts -->
-		{#if panelOpen}
-			<div
-				class="flex w-80 shrink-0 flex-col border-l border-border"
-				data-testid="cloud-layer-event-panel"
-			>
-				<!-- Tab bar -->
-				<div class="flex shrink-0 border-b border-border">
-					<button
-						class="flex-1 border-b-2 px-2 py-1.5 text-xs font-medium transition-colors
-							{panelTab === 'events'
-							? 'border-primary text-foreground'
-							: 'border-transparent text-muted-foreground hover:text-foreground'}"
-						onclick={() => (panelTab = 'events')}
-						data-testid="cloud-layer-events-tab"
-					>
-						Transitions
-					</button>
-					<button
-						class="flex-1 border-b-2 px-2 py-1.5 text-xs font-medium transition-colors
-							{panelTab === 'artifacts'
-							? 'border-primary text-foreground'
-							: 'border-transparent text-muted-foreground hover:text-foreground'}"
-						onclick={() => (panelTab = 'artifacts')}
-						data-testid="cloud-layer-artifacts-tab"
-					>
-						Artifacts
-						{#if artifacts.length > 0}
-							<Badge class="ml-1 px-1 py-0 text-[10px]">{artifacts.length}</Badge>
-						{/if}
-					</button>
-				</div>
-
-				<!-- Tab content -->
-				<div class="min-h-0 flex-1 overflow-y-auto">
-					{#if panelTab === 'events'}
-						{#if firedTransitions.length === 0}
+							{:else}
+								<ul class="divide-y divide-border">
+									{#each firedTransitions as ev (ev.transition_id + (ev.outcome ?? ''))}
+										<li
+											class="space-y-0.5 px-3 py-2 text-xs"
+											data-testid="cloud-layer-transition-event"
+										>
+											<div class="flex items-center justify-between gap-2">
+												<span class="truncate font-medium">{transitionName(ev.transition_id)}</span>
+												<Badge
+													class={ev.outcome === 'completed'
+														? 'bg-green-100 px-1 py-0 text-[10px] text-green-700 dark:bg-green-900/30 dark:text-green-400'
+														: 'bg-red-100 px-1 py-0 text-[10px] text-red-700 dark:bg-red-900/30 dark:text-red-400'}
+												>
+													{ev.outcome}
+												</Badge>
+											</div>
+											{#if ev.error_message}
+												<div class="truncate text-destructive" title={ev.error_message}>
+													{ev.error_message}
+												</div>
+											{/if}
+											<div class="truncate font-mono text-muted-foreground">
+												{ev.transition_id.slice(0, 8)}…
+											</div>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						{:else if artifacts.length === 0}
 							<div class="flex h-32 items-center justify-center text-xs text-muted-foreground">
-								No transitions yet
+								No artifacts published
 							</div>
 						{:else}
 							<ul class="divide-y divide-border">
-								{#each firedTransitions as ev (ev.transition_id + (ev.outcome ?? ''))}
+								{#each artifacts as artifact}
 									<li
 										class="space-y-0.5 px-3 py-2 text-xs"
-										data-testid="cloud-layer-transition-event"
+										data-testid="cloud-layer-artifact-event"
 									>
-										<div class="flex items-center justify-between gap-2">
-											<span class="truncate font-medium">{transitionName(ev.transition_id)}</span>
-											<Badge
-												class={ev.outcome === 'completed'
-													? 'bg-green-100 px-1 py-0 text-[10px] text-green-700 dark:bg-green-900/30 dark:text-green-400'
-													: 'bg-red-100 px-1 py-0 text-[10px] text-red-700 dark:bg-red-900/30 dark:text-red-400'}
-											>
-												{ev.outcome}
-											</Badge>
+										<div class="flex items-center gap-2">
+											<Layers class="size-3 shrink-0 text-violet-500" />
+											<span class="truncate font-medium">
+												{transitionName(artifact.transition_id)}
+											</span>
 										</div>
-										{#if ev.error_message}
-											<div class="truncate text-destructive" title={ev.error_message}>
-												{ev.error_message}
+										{#if artifact.artifact.artifact_ref}
+											<div class="truncate font-mono text-muted-foreground">
+												{String(artifact.artifact.artifact_ref)}
 											</div>
+										{:else if artifact.artifact.artifact_url}
+											<a
+												href={String(artifact.artifact.artifact_url)}
+												class="block truncate text-primary underline"
+												target="_blank"
+												rel="noopener noreferrer"
+											>
+												{String(artifact.artifact.artifact_url)}
+											</a>
 										{/if}
-										<div class="truncate font-mono text-muted-foreground">
-											{ev.transition_id.slice(0, 8)}…
-										</div>
 									</li>
 								{/each}
 							</ul>
 						{/if}
-					{:else if artifacts.length === 0}
-						<div class="flex h-32 items-center justify-center text-xs text-muted-foreground">
-							No artifacts published
-						</div>
-					{:else}
-						<ul class="divide-y divide-border">
-							{#each artifacts as artifact}
-								<li
-									class="space-y-0.5 px-3 py-2 text-xs"
-									data-testid="cloud-layer-artifact-event"
-								>
-									<div class="flex items-center gap-2">
-										<Layers class="size-3 shrink-0 text-violet-500" />
-										<span class="truncate font-medium">
-											{transitionName(artifact.transition_id)}
-										</span>
-									</div>
-									{#if artifact.artifact.artifact_ref}
-										<div class="truncate font-mono text-muted-foreground">
-											{String(artifact.artifact.artifact_ref)}
-										</div>
-									{:else if artifact.artifact.artifact_url}
-										<a
-											href={String(artifact.artifact.artifact_url)}
-											class="block truncate text-primary underline"
-											target="_blank"
-											rel="noopener noreferrer"
-										>
-											{String(artifact.artifact.artifact_url)}
-										</a>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
+					</div>
 				</div>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
-</div>
+</PageShell>
