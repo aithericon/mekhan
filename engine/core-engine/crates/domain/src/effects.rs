@@ -135,21 +135,12 @@ pub const EXECUTOR_CANCEL: EffectDescriptor = EffectDescriptor {
     default_output_schema: Some("#/definitions/ExecutorCancelled"),
 };
 
-/// Feed a data chunk into a running reducer job.
-pub const EXECUTOR_STREAM_FEED: EffectDescriptor = EffectDescriptor {
-    handler_id: "executor_stream_feed",
-    default_input_port: "feed",
-    default_output_port: "fed",
-    category: ServiceCategory::Executor,
-    default_input_schema: None,
-    default_output_schema: None,
-};
-
 /// Deposit a dynamically-emitted control token into a statically-declared
 /// channel place (docs/25 streaming-channels).
 ///
-/// A running executor job emits `signal` / `scatter` control tokens
-/// mid-execution; the worker publishes each as a `control_emit` executor event,
+/// A running executor job emits `open` / `item` / `close` channel control
+/// tokens mid-execution (the consumer-side join sizes itself on the episode's
+/// `close.count`); the worker publishes each as a `control_emit` executor event,
 /// the watcher routes it (via the job's `event_routes`) to the node's control
 /// inbox, and a transition draining that inbox carries THIS effect. The handler
 /// (`ControlEmitHandler`) resolves the emit's `channel` against the
@@ -442,7 +433,6 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_CANCEL,
     &EXECUTOR_SUBMIT,
     &EXECUTOR_CANCEL,
-    &EXECUTOR_STREAM_FEED,
     &CONTROL_EMIT,
     &TIMER_SCHEDULE,
     &TIMER_CANCEL,

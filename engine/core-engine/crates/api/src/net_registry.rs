@@ -40,7 +40,7 @@ use petri_application::{
 };
 #[cfg(feature = "executor")]
 use petri_application::{
-    ControlEmitHandler, ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler,
+    ControlEmitHandler, ExecutorCancelHandler, ExecutorSubmitHandler,
 };
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
@@ -904,19 +904,12 @@ where
                 .register_effect_handler(
                     effects::EXECUTOR_CANCEL.handler_id,
                     Arc::new(ExecutorCancelHandler::new(
-                        executor_client.clone(),
+                        executor_client,
                         effects::EXECUTOR_CANCEL.default_input_port,
                         effects::EXECUTOR_CANCEL.default_output_port,
                     )),
                 )
                 .expect("register executor_cancel effect handler");
-
-            service
-                .register_effect_handler(
-                    effects::EXECUTOR_STREAM_FEED.handler_id,
-                    Arc::new(ExecutorStreamFeedHandler::new(executor_client)),
-                )
-                .expect("register executor_stream_feed effect handler");
 
             // The control_emit handler (docs/25 streaming-channels) deposits a
             // job's dynamically-emitted control tokens into their declared

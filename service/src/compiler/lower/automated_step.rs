@@ -444,7 +444,6 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 process: true,
                 // Streaming channels (docs/25) are synthesized as a separate
                 // control-emit path, not via the lifecycle's Output side-channel.
-                stream_output: None,
                 // The pre-created control-emit inbox (docs/25). `Some` only when
                 // the node has ≥1 OUT control channel; the submit transition
                 // registers `event_routes["control_emit"]` → its id.
@@ -1365,7 +1364,6 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process: true,
                 // Streaming channels (docs/25) are synthesized as a separate
                 // control-emit path, not via the lifecycle's Output side-channel.
-                stream_output: None,
                 // Pre-created control-emit inbox (docs/25). `Some` only when the
                 // node has ≥1 OUT control channel.
                 control_in: p_control_in.clone(),

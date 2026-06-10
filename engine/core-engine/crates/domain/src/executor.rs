@@ -115,18 +115,6 @@ pub trait ExecutorClient: Send + Sync {
     /// Cancel a running execution.
     async fn cancel(&self, execution_id: &str) -> Result<(), ExecutorError>;
 
-    /// Feed a data chunk into a running reducer job.
-    ///
-    /// The client publishes to `executor.chunks.{execution_id}` with the
-    /// provided value and sequence.
-    async fn feed_chunk(
-        &self,
-        execution_id: &str,
-        value: serde_json::Value,
-        sequence: u64,
-        is_eof: bool,
-    ) -> Result<(), ExecutorError>;
-
     /// Human-readable name for this client (e.g., "executor-nats").
     fn name(&self) -> &str;
 }
