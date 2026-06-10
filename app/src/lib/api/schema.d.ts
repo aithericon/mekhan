@@ -1461,6 +1461,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{instance_id}/sinks/{node_id}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/instances/{instance_id}/sinks/{node_id}/data
+         * @description Stream a `stream_sink` node's sunk bytes out of the platform. The WI-2 sink
+         *     lowering parks the producer's `open` transport descriptor in
+         *     `p_{node_id}_data`, which the step_executions projector captures as the
+         *     node's `outputs` — this endpoint resolves that descriptor, extracts the
+         *     data-plane subject, and streams the reordered payload bytes through the
+         *     same tap core as `GET /executions/{id}/channels/{ch}/data` (replay from
+         *     seq 0; `?follow=1` live-tails until EOF). Until the upstream producer has
+         *     opened the channel there is no descriptor row yet — the endpoint answers
+         *     409 with `Retry-After: 2` so clients poll instead of hanging.
+         */
+        get: operations["tap_stream_sink_data"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/data
+         * @description Feed raw bytes into a `stream_source` node's DATA-plane Out channel —
+         *     mekhan acts as the virtual producer. On the first body byte the `open`
+         *     control emit (carrying the `{transport, subject, content_type}` descriptor)
+         *     is routed into the node's control inbox; the body is then chunked into
+         *     binary envelopes (~64 KiB, per-publish JetStream ack = backpressure) with
+         *     monotonic `seq` resuming from the subject's last envelope, so `?append=1`
+         *     re-POSTs continue the numbering. At body end the EOF sentinel + `close`
+         *     emit are published unless `?append=1`; `?eof=1` with an empty body closes a
+         *     previously appended stream.
+         */
+        post: operations["push_stream_source_data"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/emit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/emit
+         * @description Publish one fused CONTROL-plane episode into a `stream_source` node's
+         *     channel: `open` + `item`(idx 0..n) + `close`(count=n), all under one fresh
+         *     `episode_uid` minted per request — so the engine's `each` join fires
+         *     downstream once per item and a `gather` join can collect the episode as one
+         *     counted barrier. Each emit is routed into the node's control inbox via the
+         *     same `control_emit` metadata a real executor job would stamp.
+         */
+        post: operations["emit_stream_source_items"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inventory": {
         parameters: {
             query?: never;
@@ -9899,6 +9980,51 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** @description Request body of the control-plane emit endpoint: the episode's items. */
+        SourceEmitRequest: {
+            /**
+             * @description The episode's items, in order. Each is published as one `item` emit
+             *     (`item_idx` = its position); the episode closes with `count = len`.
+             */
+            items: unknown[];
+        };
+        /** @description Summary returned by the control-plane emit endpoint. */
+        SourceEmitResponse: {
+            /** @description The fresh per-request episode correlation id stamped on every emit. */
+            episode_uid: string;
+            /** @description The virtual execution id mekhan minted (`st-{instance_id}-{node_id}`). */
+            execution_id: string;
+            /**
+             * Format: int64
+             * @description Number of items published.
+             */
+            items: number;
+        };
+        /** @description Summary returned by the data-ingress POST. */
+        SourcePushResponse: {
+            /**
+             * Format: int64
+             * @description Payload bytes published by this request.
+             */
+            bytes: number;
+            /**
+             * Format: int64
+             * @description Data envelopes published by THIS request.
+             */
+            chunks: number;
+            /** @description Whether the stream was closed (EOF sentinel + `close` emit published). */
+            closed: boolean;
+            /** @description The virtual execution id mekhan minted (`st-{instance_id}-{node_id}`). */
+            execution_id: string;
+            /**
+             * Format: int64
+             * @description Next envelope seq on the subject after this request (also the running
+             *     element count while the stream is open).
+             */
+            next_seq: number;
+            /** @description The JetStream subject the bytes were published on. */
+            subject: string;
+        };
         /**
          * @description Git provenance recorded on a version published via `mekhan apply`.
          *     Serialized into the `workflow_templates.source_ref` JSONB column.
@@ -11526,6 +11652,28 @@ export interface components {
              *     explicit version. Either way the published parent is deterministic.
              */
             versionPin?: components["schemas"]["VersionPin"];
+        } | {
+            /**
+             * @description Declared streaming [`Channel`]s. Direction is expected to be `Out`
+             *     for every entry (the node *produces* into the net); enforced by
+             *     validation (WI-2), not the type. `#[serde(default)]` ⇒ existing
+             *     templates (field absent → empty) round-trip unchanged.
+             */
+            channels?: components["schemas"]["Channel"][];
+            description?: string | null;
+            label: string;
+            /** @enum {string} */
+            type: "stream_source";
+        } | {
+            /**
+             * @description Declared streaming [`Channel`]s — exactly one `In` entry in v1
+             *     (validation-enforced, WI-2). `#[serde(default)]` ⇒ absent → empty.
+             */
+            channels?: components["schemas"]["Channel"][];
+            description?: string | null;
+            label: string;
+            /** @enum {string} */
+            type: "stream_sink";
         };
         WorkflowTemplate: {
             air_json?: unknown;
@@ -14691,6 +14839,210 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    tap_stream_sink_data: {
+        parameters: {
+            query?: {
+                /** @description Live-tail an in-progress stream: `follow=1` widens the idle patience so long gaps don't end it early (ends at EOF or client disconnect). */
+                follow?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workflow instance id. */
+                instance_id: string;
+                /** @description stream_sink node id in the instance's template graph. */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Concatenated sunk payload bytes; Content-Type echoes the channel envelope's content_type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Malformed node_id path component or node is not a stream_sink. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown instance / node. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The producer has not opened the stream yet (no parked descriptor). Retry-After: 2. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JetStream consumer could not be opened. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    push_stream_source_data: {
+        parameters: {
+            query?: {
+                /** @description Keep the stream open after this body (skip EOF + close) so a later POST continues the seq numbering. */
+                append?: string;
+                /** @description Close the stream even with an empty body (publish EOF sentinel + close emit). */
+                eof?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workflow instance id. */
+                instance_id: string;
+                /** @description stream_source node id in the instance's template graph. */
+                node_id: string;
+                /** @description Declared data-plane Out channel name. */
+                channel: string;
+            };
+            cookie?: never;
+        };
+        /** @description Raw stream bytes. The request Content-Type is forwarded as the channel's content_type (fallback: the channel's declared Binary content_type). */
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Bytes published; summary of what was written. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePushResponse"];
+                };
+            };
+            /** @description Malformed path segment, wrong channel direction/plane, or body read error. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown instance / node / channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance is not running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description NATS/JetStream publish failed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    emit_stream_source_items: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workflow instance id. */
+                instance_id: string;
+                /** @description stream_source node id in the instance's template graph. */
+                node_id: string;
+                /** @description Declared control-plane Out channel name. */
+                channel: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceEmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Episode published (open + items + close). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceEmitResponse"];
+                };
+            };
+            /** @description Malformed path segment or wrong channel direction/plane. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown instance / node / channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Instance is not running. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description NATS/JetStream publish failed. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

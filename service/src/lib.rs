@@ -40,6 +40,7 @@ pub mod runners_nats;
 pub mod runners_presence;
 pub mod s3;
 pub mod scope;
+pub mod streams;
 pub mod triggers;
 pub mod worker_groups;
 pub mod yjs;
@@ -288,7 +289,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::model_replicas::get_model_replica))
         // Operator load/unload action — publishes a ModelCommand to a runner's
         // model agent (vLLM admin / Ollama Metal runtime). Control plane only.
-        .routes(routes!(handlers::model_commands::publish_runner_model_command))
+        .routes(routes!(
+            handlers::model_commands::publish_runner_model_command
+        ))
         // Official model-catalog browse (the operator's model browser): scrapes
         // ollama.com / calls the HF JSON API. Metadata only, cached ~10 min.
         .routes(routes!(handlers::model_catalog::browse_model_catalog))
@@ -298,12 +301,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         // Inference telemetry — live router /metrics proxy (point-in-time gauges)
         // + historical per-model timeseries over the durable ledger (TimescaleDB).
-        .routes(routes!(
-            handlers::inference_telemetry::router_live_metrics
-        ))
-        .routes(routes!(
-            handlers::inference_telemetry::inference_timeseries
-        ))
+        .routes(routes!(handlers::inference_telemetry::router_live_metrics))
+        .routes(routes!(handlers::inference_telemetry::inference_timeseries))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -341,6 +340,15 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // room (`lk_{execution_id}__{channel}`) the executor publishes annotated
         // video frames to, so the browser can join and watch.
         .routes(routes!(handlers::executions::livekit_viewer_token))
+        // Streams — workflow-as-streaming-endpoint (docs/25 §9 Phase 3).
+        // Ingress: mekhan acts as the VIRTUAL PRODUCER for a stream_source
+        // node (deterministic execution id `st-{instance}-{node}`, publishes
+        // on the same EXECUTOR_DATASTREAM / EXECUTOR_EVENTS surfaces a real
+        // executor job would). Egress: tap a stream_sink's sunk bytes via the
+        // descriptor parked in the step_executions projection.
+        .routes(routes!(handlers::streams::push_stream_source_data))
+        .routes(routes!(handlers::streams::emit_stream_source_items))
+        .routes(routes!(handlers::streams::tap_stream_sink_data))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))
