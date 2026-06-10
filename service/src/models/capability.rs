@@ -399,52 +399,22 @@ fn op_value_incompatibility(
     }
 }
 
-/// Best-effort Rust mirror of the engine `satisfies(requirements, caps)`
-/// matcher — used ONLY for the publish-time empty-fleet WARNING (never to
-/// hard-error; the engine guard is authoritative at runtime). Returns `true`
-/// iff EVERY constraint is satisfied by `caps` (the `runners.capabilities`
-/// JSONB `{ "<cap>": { "<field>": <value> } }`). Empty constraints ⇒ `true`.
-/// Total + never panics: any missing/malformed data ⇒ that constraint is not
-/// satisfied (`false`), matching the engine matcher's fail-safe semantics.
+/// Rust mirror of the engine `satisfies(requirements, caps)` matcher — used
+/// ONLY for the publish-time empty-fleet WARNING (never to hard-error; the
+/// engine guard is authoritative at runtime). Returns `true` iff EVERY
+/// constraint is satisfied by `caps` (the `runners.capabilities` JSONB
+/// `{ "<cap>": { "<field>": <value> } }`). Empty constraints ⇒ `true`.
+/// Total + never panics.
+///
+/// Thin adapter: serializes the typed constraints into the engine wire shape
+/// (`Constraint`/`ConstraintOp` serde already emit `{capability, field, op,
+/// value}` with lowercase ops) and delegates to the ONE shared
+/// [`inference_core::capability::satisfies`] — a line-by-line transcription of
+/// the engine's Rhai matcher, conformance-tested against the real Rhai in
+/// `service/tests/satisfies_conformance.rs`. Do NOT re-implement matching
+/// here; semantics live in the shared crate.
 pub fn caps_satisfy_constraints(constraints: &[Constraint], caps: &serde_json::Value) -> bool {
-    if constraints.is_empty() {
-        return true;
-    }
-    let Some(cap_obj) = caps.as_object() else {
-        return false;
-    };
-    constraints.iter().all(|c| {
-        let Some(field_value) = cap_obj
-            .get(&c.capability)
-            .and_then(|m| m.as_object())
-            .and_then(|m| m.get(&c.field))
-        else {
-            // `exists` and every other op require the field to be present.
-            return false;
-        };
-        match c.op {
-            ConstraintOp::Exists => true,
-            ConstraintOp::Eq => field_value == &c.value,
-            ConstraintOp::Neq => field_value != &c.value,
-            ConstraintOp::Gt | ConstraintOp::Gte | ConstraintOp::Lt | ConstraintOp::Lte => {
-                match (field_value.as_f64(), c.value.as_f64()) {
-                    (Some(a), Some(b)) => match c.op {
-                        ConstraintOp::Gt => a > b,
-                        ConstraintOp::Gte => a >= b,
-                        ConstraintOp::Lt => a < b,
-                        ConstraintOp::Lte => a <= b,
-                        _ => false,
-                    },
-                    _ => false,
-                }
-            }
-            ConstraintOp::In => c
-                .value
-                .as_array()
-                .map(|arr| arr.iter().any(|m| m == field_value))
-                .unwrap_or(false),
-        }
-    })
+    inference_core::capability::satisfies(&serde_json::json!({ "constraints": constraints }), caps)
 }
 
 /// The lowercase wire string for an op — for diagnostic messages (matches the

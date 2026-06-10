@@ -6,6 +6,12 @@
 //! auto-offload (doc 28 §7/§11). Among placeable replicas, pick the
 //! least-loaded one (the most free admission permits) so vLLM's continuous
 //! batcher on each engine stays fed without any single engine over-subscribed.
+//!
+//! Zone filtering here is a simple string match and stays as-is; if this
+//! module ever grows capability/requirements **constraint matching**, it MUST
+//! call the shared matcher `inference_core::capability::satisfies` (the
+//! conformance-tested transcription of the engine's authoritative Rhai
+//! `satisfies`) — do not hand-roll the relation.
 
 use std::sync::Arc;
 
