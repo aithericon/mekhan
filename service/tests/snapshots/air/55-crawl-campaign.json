@@ -5054,7 +5054,7 @@
     },
     {
       "guard": {
-        "source": "d_campaign.iteration < 20 && (d_crawl.detail.outputs.exhausted == false)",
+        "source": "d_campaign.iteration < 20 && (d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
         "type": "rhai"
       },
       "id": "t_campaign_continue",
@@ -5203,7 +5203,7 @@
     },
     {
       "guard": {
-        "source": "d_campaign.iteration >= 20 || !(d_crawl.detail.outputs.exhausted == false)",
+        "source": "d_campaign.iteration >= 20 || !(d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
         "type": "rhai"
       },
       "id": "t_campaign_exit",

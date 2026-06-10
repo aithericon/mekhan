@@ -3,7 +3,10 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 120 },
+      "position": {
+        "x": 0,
+        "y": 120
+      },
       "data": {
         "type": "start",
         "label": "Start",
@@ -27,7 +30,10 @@
       "id": "seed",
       "type": "automated_step",
       "slug": "seed",
-      "position": { "x": 290, "y": 90 },
+      "position": {
+        "x": 290,
+        "y": 90
+      },
       "data": {
         "type": "automated_step",
         "label": "Seed a synthetic NAS (63 files)",
@@ -49,8 +55,16 @@
           "id": "out",
           "label": "Seeded",
           "fields": [
-            { "name": "root", "label": "Root path", "kind": "text" },
-            { "name": "files_created", "label": "Files created", "kind": "number" }
+            {
+              "name": "root",
+              "label": "Root path",
+              "kind": "text"
+            },
+            {
+              "name": "files_created",
+              "label": "Files created",
+              "kind": "number"
+            }
           ]
         }
       }
@@ -59,15 +73,18 @@
       "id": "campaign",
       "type": "loop",
       "slug": "campaign",
-      "position": { "x": 600, "y": 0 },
+      "position": {
+        "x": 600,
+        "y": 0
+      },
       "width": 660,
       "height": 320,
       "data": {
         "type": "loop",
         "label": "Crawl campaign",
-        "description": "Cursor loop: each iteration crawls ONE bounded chunk (max_batches × batch_size files), resumes from the previous iteration's cursor, and exits when the walk reports `exhausted` (lister EOF — not a chunk-cap stop). The accumulators are the ONLY state crossing iterations: `cursor` folds `crawl.last_path`, `total` sums `crawl.count`. Engine work per iteration is constant no matter how big the corpus is.",
+        "description": "Cursor loop: each iteration crawls ONE bounded chunk (max_batches × batch_size files), resuming after the previous iteration's cursor. The accumulators are the ONLY state crossing iterations: `cursor` folds `crawl.last_path`, `total` sums `crawl.count`. Engine work per iteration is constant no matter how big the corpus is. ACCOUNTING PATTERN: the loop's mergeExpr folds on the CONTINUE transition only — the exit path skips it — so the condition keeps looping until a chunk comes back EMPTY (`exhausted && count == 0`). The merge-skipped exit chunk then contributes zero and `campaign.total` is exact; the price is one extra readdir-cheap iteration that walks nothing.",
         "maxIterations": 20,
-        "loopCondition": "crawl.exhausted == false",
+        "loopCondition": "crawl.exhausted == false || crawl.count > 0",
         "accumulators": [
           {
             "var": "cursor",
@@ -87,7 +104,10 @@
       "type": "automated_step",
       "slug": "crawl",
       "parentId": "campaign",
-      "position": { "x": 40, "y": 80 },
+      "position": {
+        "x": 40,
+        "y": 80
+      },
       "data": {
         "type": "automated_step",
         "label": "Crawl one chunk → fold sink",
@@ -98,7 +118,10 @@
           "config": {
             "operation": "crawl",
             "prefix": "mekhan-campaign-demo/",
-            "storage": { "backend": "local", "endpoint": "/tmp" },
+            "storage": {
+              "backend": "local",
+              "endpoint": "/tmp"
+            },
             "batch_size": 10,
             "max_batches": 2,
             "stat": true,
@@ -113,13 +136,41 @@
           "id": "out",
           "label": "Chunk summary",
           "fields": [
-            { "name": "prefix", "label": "Prefix", "kind": "text" },
-            { "name": "count", "label": "File count (this chunk)", "kind": "number" },
-            { "name": "last_path", "label": "Last path (resume cursor)", "kind": "text" },
-            { "name": "batches", "label": "Batches published", "kind": "number" },
-            { "name": "cancelled", "label": "Cancelled", "kind": "bool" },
-            { "name": "exhausted", "label": "Exhausted (walk reached EOF)", "kind": "bool" },
-            { "name": "endpoint_root", "label": "Endpoint root (canonical)", "kind": "text" }
+            {
+              "name": "prefix",
+              "label": "Prefix",
+              "kind": "text"
+            },
+            {
+              "name": "count",
+              "label": "File count (this chunk)",
+              "kind": "number"
+            },
+            {
+              "name": "last_path",
+              "label": "Last path (resume cursor)",
+              "kind": "text"
+            },
+            {
+              "name": "batches",
+              "label": "Batches published",
+              "kind": "number"
+            },
+            {
+              "name": "cancelled",
+              "label": "Cancelled",
+              "kind": "bool"
+            },
+            {
+              "name": "exhausted",
+              "label": "Exhausted (walk reached EOF)",
+              "kind": "bool"
+            },
+            {
+              "name": "endpoint_root",
+              "label": "Endpoint root (canonical)",
+              "kind": "text"
+            }
           ]
         }
       }
@@ -127,23 +178,66 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1360, "y": 110 },
+      "position": {
+        "x": 1360,
+        "y": 110
+      },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "files_crawled", "expression": "campaign.total" },
-          { "targetField": "iterations", "expression": "campaign.iteration" },
-          { "targetField": "files_seeded", "expression": "seed.files_created" }
+          {
+            "targetField": "files_crawled",
+            "expression": "campaign.total"
+          },
+          {
+            "targetField": "iterations",
+            "expression": "campaign.iteration"
+          },
+          {
+            "targetField": "files_seeded",
+            "expression": "seed.files_created"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e_start_seed", "source": "start", "target": "seed", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_seed_campaign", "source": "seed", "target": "campaign", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_campaign_crawl", "source": "campaign", "sourceHandle": "body_in", "target": "crawl", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_crawl_back", "source": "crawl", "target": "campaign", "targetHandle": "body_out", "type": "loop_back" },
-    { "id": "e_campaign_end", "source": "campaign", "target": "end", "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e_start_seed",
+      "source": "start",
+      "target": "seed",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_seed_campaign",
+      "source": "seed",
+      "target": "campaign",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_campaign_crawl",
+      "source": "campaign",
+      "sourceHandle": "body_in",
+      "target": "crawl",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_crawl_back",
+      "source": "crawl",
+      "target": "campaign",
+      "targetHandle": "body_out",
+      "type": "loop_back"
+    },
+    {
+      "id": "e_campaign_end",
+      "source": "campaign",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
   ]
 }
