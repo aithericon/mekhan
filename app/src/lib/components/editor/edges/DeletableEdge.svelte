@@ -72,6 +72,17 @@
 	const feedGetter = useEdgeFeeds();
 	const feed = $derived(feedGetter ? feedGetter(id) : null);
 
+	// The media box must match EdgeMediaWidget's per-kind frame height (video /
+	// mjpeg / 3d twins render 320×180; audio waveform and text console are the
+	// short 320×120 form factor) — an oversized label would paint dead space
+	// below the frame and skew the midpoint centering.
+	const feedBoxHeight = $derived.by(() => {
+		const p = feed?.plan;
+		if (!p) return undefined;
+		const short = p.kind === 'text' || p.mediaKind === 'audio';
+		return short ? 120 : 180;
+	});
+
 	// Control-channel join chip (docs/25): a consumer edge tapping a CONTROL
 	// channel carries the per-edge join discipline. `channelPlane`/`join` are
 	// stashed on `data` by toFlowEdges; the setter context is provided only by
@@ -127,16 +138,17 @@
 {/if}
 
 {#if feed}
-	<!-- Only claim the full media box for feeds with a live renderer. A
-	     plan-null feed (data-plane binary with no renderer, e.g. text/plain)
-	     collapses to a tiny liveness dot — a fixed 320×180 label would paint
-	     an empty var(--card) (near-black in dark mode) rectangle on the edge. -->
+	<!-- Only claim the full media box for feeds with a live renderer; a
+	     plan-null feed (data-plane binary with no renderer) collapses to a tiny
+	     liveness dot. Always transparent — the widget's frame paints its own
+	     background/border, and the label's default background would otherwise
+	     bleed wherever the frame is shorter than the label box. -->
 	<EdgeLabel
 		x={pathResult[1]}
 		y={pathResult[2]}
 		width={feed.plan ? 320 : undefined}
-		height={feed.plan ? 180 : undefined}
-		transparent={!feed.plan}
+		height={feedBoxHeight}
+		transparent
 	>
 		<EdgeMediaWidget {feed} />
 	</EdgeLabel>
