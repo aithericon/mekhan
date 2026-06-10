@@ -31,6 +31,14 @@ Every standard page is a **pinned header band over a scrolling body**:
 - `tabs` — the optional tab row, flush on the band border. Put a `PageTabs`
   (link tabs) or a `Tabs.List variant="underline"` trigger row (state tabs)
   here — never tab *content*, which belongs in `children`.
+- `sidebar` — an optional left rail (folder tree, filter rail) rendered
+  *under* the band, beside the body. The band always spans the full page
+  width — and its content sits **flush left** (no 6xl centering) so the
+  header reads as the browser's toolbar above the rail. Never wrap
+  `PageShell` in a flex row to bolt a sidebar on its left. The rail and the
+  body scroll independently. Use `SideRail` as the snippet's root — it is
+  THE rail chrome (one width, `border-r`, bg, `min-h-full`) so sidebar pages
+  line up page-to-page; don't hand-roll an `<aside>`.
 
 Pages that don't pass `band`/`tabs` fall back to the legacy in-flow layout
 (PageHeader inside the scroll content). That's a graceful default during
@@ -44,7 +52,10 @@ migration — **new pages use the band**.
    `PageShell width` caps the BODY only: `default`/`wide` (max-w-6xl, the
    standard) · `narrow` (max-w-2xl) form bodies · `full` (no cap)
    full-width detail bodies · `bleed` canvas opt-out. Hand-rolled bands on
-   bleed pages must wrap their content in `mx-auto w-full max-w-6xl` too.
+   bleed pages must wrap their content in `mx-auto w-full max-w-6xl` too —
+   UNLESS the body below is itself full-width (`sidebar` rail pages, bleed
+   run dashboards like `instances/[id]`): then the band anchors flush left
+   so header and body share the same left edge.
 2. **One h1 scale** (`PageHeader variant`): `page` = text-2xl for top-level
    pages, `detail` = text-lg for back-linked detail pages. Never a raw `<h1>`.
 3. **Tabs — pick by what changes:**

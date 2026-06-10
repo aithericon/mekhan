@@ -8,6 +8,9 @@
 				default: "bg-card border rounded-xl shadow-xs flex flex-col gap-4 py-4",
 				muted: "bg-muted/50 rounded-lg p-3",
 				inset: "bg-card rounded-lg p-3",
+				// Inverted khaki callout — at most one per view; a counterweight
+				// to the blue primary, not a second interactive surface.
+				warm: "bg-accent-warm text-accent-warm-foreground border border-transparent rounded-xl shadow-xs flex flex-col gap-4 py-4 [&_[data-slot=card-description]]:text-accent-warm-foreground/75",
 			},
 		},
 		defaultVariants: {

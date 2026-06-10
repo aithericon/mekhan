@@ -121,7 +121,7 @@
 		</div>
 	{/if}
 
-	{#if hasMetadata}
+	{#if hasMetadata && !ctx.hideProcessMetadata}
 		<div>
 			<button
 				type="button"

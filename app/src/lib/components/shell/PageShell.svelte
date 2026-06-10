@@ -24,6 +24,7 @@
 		testid,
 		band,
 		tabs,
+		sidebar,
 		class: className,
 		children
 	}: {
@@ -50,6 +51,14 @@
 		 * never tab CONTENT, which belongs in `children`.
 		 */
 		tabs?: Snippet;
+		/**
+		 * Optional left rail rendered UNDER the band (the band always spans
+		 * the full page width) and beside the independently-scrolling body —
+		 * folder trees, filter rails. The snippet's root owns its chrome
+		 * (width, border-r, bg) and should be `min-h-full` so that chrome
+		 * runs the rail's full height. Band anatomy only.
+		 */
+		sidebar?: Snippet;
 		/** Extra classes on the inner width-constrained wrapper. */
 		class?: string;
 		children: Snippet;
@@ -62,8 +71,9 @@
 		full: ''
 	};
 
-	// One grid for every header: band content (title row + tabs) always
-	// aligns to this, independent of the body's width variant.
+	// One grid for every header: band content (title row + tabs) aligns to
+	// this, independent of the body's width variant — except on sidebar
+	// pages, where the band sits flush left above the rail.
 	const BAND_MAX_W = 'max-w-6xl';
 </script>
 
@@ -81,7 +91,10 @@
 	     overlaps the band's border-b exactly (GitHub-style). -->
 	<div class="flex h-full flex-col" data-testid={testid}>
 		<div class={cn('shrink-0 border-b border-border bg-card px-6 pt-5', !tabs && 'pb-4')}>
-			<div class={cn('mx-auto w-full', BAND_MAX_W)}>
+			<!-- Sidebar pages anchor the band content flush left (it reads as the
+			     browser's toolbar, aligned with the rail below); centering on the
+			     6xl grid is for full-width-body pages without a rail. -->
+			<div class={cn('w-full', !sidebar && cn('mx-auto', BAND_MAX_W))}>
 				{#if band}
 					<div class="[&>header]:mb-0">
 						{@render band()}
@@ -94,11 +107,27 @@
 				{/if}
 			</div>
 		</div>
-		<div class="flex-1 overflow-y-auto">
-			<div class={cn('animate-rise mx-auto w-full px-6 py-6', MAX_W[width], className)}>
-				{@render children()}
+		{#if sidebar}
+			<!-- Rail + body row: both scroll independently, the band stays
+			     pinned above the pair. min-h-0 lets the row actually shrink
+			     to the flex column's remaining height. -->
+			<div class="flex min-h-0 flex-1">
+				<div class="shrink-0 overflow-y-auto">
+					{@render sidebar()}
+				</div>
+				<div class="min-w-0 flex-1 overflow-y-auto">
+					<div class={cn('animate-rise mx-auto w-full px-6 py-6', MAX_W[width], className)}>
+						{@render children()}
+					</div>
+				</div>
 			</div>
-		</div>
+		{:else}
+			<div class="flex-1 overflow-y-auto">
+				<div class={cn('animate-rise mx-auto w-full px-6 py-6', MAX_W[width], className)}>
+					{@render children()}
+				</div>
+			</div>
+		{/if}
 	</div>
 {:else}
 	<!-- The page owns its scroll container (the root layout's <main> is
