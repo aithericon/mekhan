@@ -57,6 +57,31 @@
 		crawl: 'Crawl'
 	};
 
+	// ---- Crawl sink (docs/32 batch-fold) -----------------------------------
+	// `sink: undefined` = stream batches over the `crawl` channel (demo-50
+	// shape); `index`/`reconcile` = publish each batch durably to the
+	// INVENTORY_FOLD stream, folded set-based into the inventory — the
+	// at-scale campaign shape (demo 55). Mirrors CrawlSinkConfig.
+	const crawlSink = $derived((config.sink as Record<string, unknown>) ?? null);
+	const crawlSinkMode = $derived((crawlSink?.mode as string) ?? '__none__');
+	const sinkModeLabels: Record<string, string> = {
+		__none__: 'None — stream over the crawl channel',
+		index: 'Index — fold into inventory (hashless observe)',
+		reconcile: 'Reconcile — classify against the legacy baseline'
+	};
+
+	function setSinkMode(v: string) {
+		if (v === '__none__') {
+			const { sink: _sink, ...rest } = config;
+			onchange(rest);
+		} else {
+			onchange({
+				...config,
+				sink: { mode: v, file_server_id: (crawlSink?.file_server_id as string) ?? '' }
+			});
+		}
+	}
+
 	const storageLabels: Record<string, string> = {
 		local: 'Local',
 		s3: 'S3',
@@ -201,6 +226,81 @@
 		/>
 		Stat each entry for size + modified time
 	</label>
+	<FormField label="Max batches (optional — chunk cap for campaigns)" for="fo-crawl-maxb">
+		<Input
+			id="fo-crawl-maxb"
+			type="number"
+			min={1}
+			value={(config.max_batches as number) ?? ''}
+			placeholder="Walk to exhaustion"
+			disabled={readonly}
+			oninput={(e) => {
+				const val = parseInt((e.currentTarget as HTMLInputElement).value);
+				onchange({ ...config, max_batches: isNaN(val) ? undefined : val });
+			}}
+		/>
+	</FormField>
+	<FormField label="Resume after (optional cursor)" for="fo-crawl-resume">
+		<Input
+			id="fo-crawl-resume"
+			type="text"
+			value={(config.resume_from as string) ?? ''}
+			placeholder={'{{ campaign.cursor }} or a literal path'}
+			disabled={readonly}
+			oninput={(e) => {
+				const v = (e.currentTarget as HTMLInputElement).value;
+				onchange({ ...config, resume_from: v === '' ? undefined : v });
+			}}
+			class="font-mono"
+		/>
+		<p class="text-xs text-muted-foreground">
+			Accepts a <code>{'{{ slug.field }}'}</code> borrow — e.g. a loop accumulator threading the
+			cursor between campaign iterations. Empty on the first iteration means from-the-start.
+		</p>
+	</FormField>
+	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
+		<span class="text-sm font-medium text-muted-foreground">Batch sink</span>
+		<Select.Root
+			type="single"
+			value={crawlSinkMode}
+			onValueChange={(v) => { if (v) setSinkMode(v); }}
+			disabled={readonly}
+		>
+			<Select.Trigger disabled={readonly} class="h-6 px-1.5 py-0.5 text-sm" data-testid="crawl-sink-mode">
+				{sinkModeLabels[crawlSinkMode] ?? crawlSinkMode}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="__none__" label={sinkModeLabels.__none__} />
+				<Select.Item value="index" label={sinkModeLabels.index} />
+				<Select.Item value="reconcile" label={sinkModeLabels.reconcile} />
+			</Select.Content>
+		</Select.Root>
+		{#if crawlSinkMode !== '__none__'}
+			<Input
+				type="text"
+				value={(crawlSink?.file_server_id as string) ?? ''}
+				placeholder={'campaign-nas or {{ start.file_server }}'}
+				disabled={readonly}
+				oninput={(e) =>
+					onchange({
+						...config,
+						sink: { mode: crawlSinkMode, file_server_id: (e.currentTarget as HTMLInputElement).value }
+					})}
+				class="h-6 px-1.5 py-0.5 font-mono text-sm"
+				data-testid="crawl-sink-server"
+			/>
+			<p class="text-xs text-muted-foreground">
+				Inventory server key the crawled paths belong to. In sink mode each batch is published
+				durably and folded set-based — no per-file tokens through the net, so this is the shape
+				for big crawls (see demo 55). No channel/gather wiring needed on this node.
+			</p>
+		{:else}
+			<p class="text-xs text-muted-foreground">
+				Batches ride the <code>crawl</code> control channel (wire a consumer with
+				<code>join: gather</code>) — fine for small crawls; for big ones use a sink.
+			</p>
+		{/if}
+	</div>
 {:else if operation === 'annotate'}
 	<FormField label="Path" for="fo-path">
 		<Input
