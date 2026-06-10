@@ -1,9 +1,24 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
-
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
+
+/* Hanken Grotesk — self-hosted variable font (static assets in /static/fonts).
+   One file per axis (weight 100–900); no external font CDN at runtime. */
+@font-face {
+	font-family: 'Hanken Grotesk';
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url('/fonts/hanken-grotesk-latin-wght-normal.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'Hanken Grotesk';
+	font-style: italic;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url('/fonts/hanken-grotesk-latin-wght-italic.woff2') format('woff2');
+}
 
 :root {
 	--radius: 0.25rem;
@@ -159,8 +174,7 @@
 
 	body {
 		@apply bg-background text-foreground antialiased;
-		font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
-		font-feature-settings: 'liga' 0, 'calt' 0;
+		font-family: 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
 		min-height: 100vh;
 		background-image: var(--paper-grain);
 		background-attachment: fixed;
@@ -171,7 +185,7 @@
 	h2,
 	h3,
 	h4 {
-		font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+		font-family: 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
