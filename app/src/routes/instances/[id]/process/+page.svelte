@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ProcessView } from '$lib/components/processes';
+	import { FilterPills } from '$lib/components/shell';
 	import { useInstanceContext } from '$lib/components/instances/instance-context';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 
@@ -33,17 +34,14 @@
 			{#if ctx.processes.length > 1}
 				<div class="mb-3 flex flex-wrap items-center gap-1.5 text-sm">
 					<span class="text-muted-foreground">Processes:</span>
-					{#each ctx.processes as p (p.process_id)}
-						<button
-							class="rounded-md px-2 py-0.5 transition-colors
-								{selectedProcessId === p.process_id
-								? 'bg-primary text-primary-foreground'
-								: 'bg-accent text-muted-foreground hover:text-foreground'}"
-							onclick={() => (selectedProcessId = p.process_id)}
-						>
-							{p.name ?? p.process_id.slice(0, 8)}
-						</button>
-					{/each}
+					<FilterPills
+						active={selectedProcessId}
+						onSelect={(v) => (selectedProcessId = v)}
+						options={ctx.processes.map((p) => ({
+							value: p.process_id,
+							label: p.name ?? p.process_id.slice(0, 8)
+						}))}
+					/>
 				</div>
 			{/if}
 			<ProcessView processId={selectedProcessId} instance={ctx.instance} />

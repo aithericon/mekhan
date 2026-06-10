@@ -13,6 +13,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
+		PageShell,
+		PageHeader,
+		PageTabs,
+		type PageTab
+	} from '$lib/components/shell';
+	import {
 		provideInstanceContext,
 		type InstanceContext
 	} from '$lib/components/instances/instance-context';
@@ -62,7 +68,6 @@
 	let { children } = $props();
 
 	const instanceId = $derived(page.params.id!);
-	const pathname = $derived(page.url.pathname);
 
 	// Single reactive store shared with every subroute. Subpages mutate
 	// `instance`/`processes`/etc. through `reload()`; we never re-assign the
@@ -247,188 +252,165 @@
 		return () => closeStream();
 	});
 
-	type TabDef = {
-		href: string;
-		match: string;
-		label: string;
-		icon: typeof LayoutDashboard;
-		tone?: 'muted';
-		title?: string;
-	};
-
-	const tabs = $derived<TabDef[]>([
+	// Tab subroutes: Process (HPI) is primary; Workflow shows the template
+	// graph overlaid with per-step runtime info; Steps is the same data as a
+	// table; Petri net is the engine debug view. Each is a proper subpage —
+	// navigation unmounts the previous view.
+	const tabs = $derived<PageTab[]>([
 		{
 			href: `/instances/${instanceId}/process`,
-			match: 'process',
 			label: 'Process',
-			icon: LayoutDashboard
+			icon: LayoutDashboard,
+			testid: 'instance-tab-process'
 		},
 		...(hasNet
 			? [
 					{
 						href: `/instances/${instanceId}/workflow`,
-						match: 'workflow',
 						label: 'Workflow',
 						icon: Workflow,
-						title: 'Template graph overlaid with per-step runtime status'
+						title: 'Template graph overlaid with per-step runtime status',
+						testid: 'instance-tab-workflow'
 					},
 					{
 						href: `/instances/${instanceId}/steps`,
-						match: 'steps',
 						label: 'Steps',
 						icon: ListChecks,
-						title: 'Per-step runtime as a table — every iteration as a row'
+						title: 'Per-step runtime as a table — every iteration as a row',
+						testid: 'instance-tab-steps'
 					},
 					{
 						href: `/instances/${instanceId}/petri-net`,
-						match: 'petri-net',
 						label: 'Petri net',
 						icon: Network,
-						tone: 'muted' as const,
-						title: 'Engine debug: the raw Petri net for this run'
+						title: 'Engine debug: the raw Petri net for this run',
+						testid: 'instance-tab-petri-net'
 					}
 				]
 			: [])
 	]);
-
-	function isActive(match: string): boolean {
-		return pathname.startsWith(`/instances/${instanceId}/${match}`);
-	}
 </script>
 
-<div class="flex h-full flex-col" data-testid="instance-page">
-	{#if ctx.loading && !ctx.instance}
-		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-			Loading...
-		</div>
-	{:else if ctx.error && !ctx.instance}
-		<div
-			class="mx-6 mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-		>
-			{ctx.error}
-		</div>
-	{:else if ctx.instance}
-		<div class="border-b border-border bg-card px-4 py-2 shrink-0">
-			{#if ctx.instance.parent_instance_id}
-				<!-- This run was spawned by a SubWorkflow node in a parent run.
-				     A plain <a> is correct: navigating to the parent is a fresh
-				     /instances/[id] mount (new InstanceContext). Each ancestor
-				     page shows its own parent link, so the chain is climbable. -->
-				<a
-					href={`/instances/${ctx.instance.parent_instance_id}/workflow`}
-					class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-					data-testid="parent-instance-breadcrumb"
-				>
-					<CornerLeftUp class="size-3.5" />
-					Parent run
-				</a>
-			{/if}
-			<div class="flex items-center justify-between gap-3">
-				<div class="flex items-center gap-3 min-w-0">
-					<h1 class="shrink-0 text-base font-semibold text-foreground">
-						{processName ?? 'Run'}
-					</h1>
-					<Badge class={statusColors[ctx.instance.status] ?? ''} variant="secondary">
-						{ctx.instance.status}
-					</Badge>
-					<span class="font-mono text-sm text-muted-foreground truncate">
-						{ctx.instance.net_id}
-					</span>
-				</div>
-				<div class="flex items-center gap-2 shrink-0">
-					<Button variant="ghost" size="sm" href="/templates/{ctx.instance.template_id}">
-						<FileText class="size-3.5" />
-						Template v{ctx.instance.template_version}
-					</Button>
-					{#if ctx.instance.mode !== 'test_run'}
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={handleRerun}
-							disabled={rerunLoading}
-							data-testid="rerun-instance"
-							title="Launch this template again, pre-filled with this run's start parameters"
-						>
-							<RotateCcw class="mr-1 size-3.5" />
-							{rerunLoading ? 'Loading…' : 'Rerun'}
-						</Button>
-					{/if}
-					{#if ctx.instance.status === 'running' || ctx.instance.status === 'created'}
-						<Button
-							variant="outline"
-							size="sm"
-							class="border-destructive/30 text-destructive hover:bg-destructive/10"
-							onclick={handleCancel}
-						>
-							Cancel
-						</Button>
-					{:else if ctx.instance.mode !== 'test_run'}
-						<Button
-							variant="outline"
-							size="sm"
-							onclick={() => (saveAsTestOpen = true)}
-							data-testid="save-as-test"
-						>
-							<FlaskConical class="mr-1 size-3.5" />
-							Save as test
-						</Button>
-					{/if}
-				</div>
+<!-- Full-bleed shell: the subpages (workflow / petri-net canvases, steps /
+     process scrollers) position `absolute inset-0` against the
+     `relative flex-1 min-h-0` wrapper below and own their own scroll, so the
+     band variant's padded scroll content area would break them. -->
+<PageShell width="bleed" testid="instance-page">
+	<div class="flex h-full flex-col">
+		{#if ctx.loading && !ctx.instance}
+			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+				Loading...
 			</div>
-			<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
-				<span>created {formatDate(ctx.instance.created_at)}</span>
-				<span>started {formatDate(ctx.instance.started_at ?? null)}</span>
-				<span>completed {formatDate(ctx.instance.completed_at ?? null)}</span>
-				{#if ctx.instance.current_step}
-					<span class="text-foreground">step: {ctx.instance.current_step}</span>
-				{/if}
-			</div>
-		</div>
-
-		{#if primaryProcess || hasNet}
-			<!-- Tab subroutes: Process (HPI) is primary; Workflow shows the
-			     template graph overlaid with per-step runtime info; Steps is the
-			     same data as a table; Petri net is the engine debug view. Each
-			     is a proper subpage — navigation unmounts the previous view. -->
-			<nav
-				class="flex items-center gap-1 border-b border-border bg-card px-3 py-1 shrink-0"
-				data-testid="instance-tabs"
-			>
-				{#each tabs as tab (tab.match)}
-					{@const active = isActive(tab.match)}
-					{@const Icon = tab.icon}
-					<a
-						href={tab.href}
-						class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors
-							{active
-							? tab.tone === 'muted'
-								? 'bg-accent text-foreground'
-								: 'bg-primary text-primary-foreground'
-							: tab.tone === 'muted'
-								? 'text-muted-foreground/70 hover:bg-accent hover:text-foreground'
-								: 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-						title={tab.title}
-						data-testid="instance-tab-{tab.match}"
-						aria-current={active ? 'page' : undefined}
-					>
-						<Icon class="size-3.5" />
-						{tab.label}
-					</a>
-				{/each}
-			</nav>
-
-			<div class="relative flex-1 min-h-0">
-				{@render children()}
-			</div>
-		{:else}
+		{:else if ctx.error && !ctx.instance}
 			<div
-				class="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground"
+				class="mx-6 mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
 			>
-				Instance has not started yet. No Petri net is available.
+				{ctx.error}
 			</div>
+		{:else if ctx.instance}
+			{@const instance = ctx.instance}
+			<!-- Hand-rolled band (bleed shell): same tokens/anatomy as PageShell's
+			     band variant — header row + flush tab row over one border-b, the
+			     tab underline overlapping it via -mb-px, inner content on the
+			     shared max-w-6xl band grid. -->
+			<div class="shrink-0 border-b border-border bg-card px-6 pt-4">
+				<div class="mx-auto w-full max-w-6xl">
+					{#if instance.parent_instance_id}
+						<!-- This run was spawned by a SubWorkflow node in a parent run.
+						     A plain <a> is correct: navigating to the parent is a fresh
+						     /instances/[id] mount (new InstanceContext). Each ancestor
+						     page shows its own parent link, so the chain is climbable. -->
+						<a
+							href={`/instances/${instance.parent_instance_id}/workflow`}
+							class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+							data-testid="parent-instance-breadcrumb"
+						>
+							<CornerLeftUp class="size-3.5" />
+							Parent run
+						</a>
+					{/if}
+					<PageHeader title={processName ?? 'Run'} variant="detail" class="mb-0">
+						<div
+							class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
+						>
+							<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
+								{instance.status}
+							</Badge>
+							<span class="font-mono truncate">{instance.net_id}</span>
+						</div>
+						<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
+							<span>created {formatDate(instance.created_at)}</span>
+							<span>started {formatDate(instance.started_at ?? null)}</span>
+							<span>completed {formatDate(instance.completed_at ?? null)}</span>
+							{#if instance.current_step}
+								<span class="text-foreground">step: {instance.current_step}</span>
+							{/if}
+						</div>
+						{#snippet actions()}
+							<Button variant="ghost" size="sm" href="/templates/{instance.template_id}">
+								<FileText class="size-3.5" />
+								Template v{instance.template_version}
+							</Button>
+							{#if instance.mode !== 'test_run'}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={handleRerun}
+									disabled={rerunLoading}
+									data-testid="rerun-instance"
+									title="Launch this template again, pre-filled with this run's start parameters"
+								>
+									<RotateCcw class="mr-1 size-3.5" />
+									{rerunLoading ? 'Loading…' : 'Rerun'}
+								</Button>
+							{/if}
+							{#if instance.status === 'running' || instance.status === 'created'}
+								<Button
+									variant="outline"
+									size="sm"
+									class="border-destructive/30 text-destructive hover:bg-destructive/10"
+									onclick={handleCancel}
+								>
+									Cancel
+								</Button>
+							{:else if instance.mode !== 'test_run'}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => (saveAsTestOpen = true)}
+									data-testid="save-as-test"
+								>
+									<FlaskConical class="mr-1 size-3.5" />
+									Save as test
+								</Button>
+							{/if}
+						{/snippet}
+					</PageHeader>
+
+					{#if primaryProcess || hasNet}
+						<div class="-mb-px mt-1">
+							<PageTabs testid="instance-tabs" {tabs} />
+						</div>
+					{:else}
+						<div class="pb-3"></div>
+					{/if}
+				</div>
+			</div>
+
+			{#if primaryProcess || hasNet}
+				<div class="relative flex-1 min-h-0">
+					{@render children()}
+				</div>
+			{:else}
+				<div
+					class="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground"
+				>
+					Instance has not started yet. No Petri net is available.
+				</div>
+			{/if}
 		{/if}
-	{/if}
-</div>
+	</div>
+</PageShell>
 
 {#if ctx.instance}
 	<SaveAsTestDialog

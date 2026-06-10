@@ -8,6 +8,7 @@
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
+	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 	// NodePropertyPanel is lazy-loaded — its static import drags in 17
 	// property-section files (every AutomatedStep config panel, HumanTask
@@ -329,98 +330,104 @@
 	});
 </script>
 
-{#if loading}
-	<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-		Loading editor...
-	</div>
-{:else}
-	<div class="flex h-full flex-col" data-testid="template-editor-page">
-		<EditorToolbar
-			templateName={template?.name ?? 'New Workflow'}
-			ownerId={template?.owner_template_id ?? undefined}
-			{ownerName}
-			published={template?.published ?? false}
-			{saving}
-			{templateId}
-			version={template?.version}
-			awareness={session.awareness}
-			provider={session.provider}
-			onpublish={() => handlePublish(false)}
-			onpreview={handlePreview}
-			onnewversion={handleNewVersion}
-			onrun={handleRun}
-			ontests={() => (testsPanelOpen = true)}
-			onsettings={template ? () => (settingsPanelOpen = true) : undefined}
-			onrename={handleRename}
-		/>
+<svelte:head>
+	<title>{template?.name ?? 'Editor'} | Mekhan</title>
+</svelte:head>
 
-		{#if error}
-			<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-				<span class="flex-1">{error}</span>
-				<CopyButton
-					getText={() =>
-						compileErrors.errors.length > 0
-							? `${error}\n\n${JSON.stringify(compileErrors.errors, null, 2)}`
-							: (error ?? '')}
-					title="Copy error (with compile diagnostics) as JSON"
-					class="text-amber-700 hover:text-amber-900"
-				/>
-				<button
-					type="button"
-					class="underline"
-					onclick={() => (error = null)}>dismiss</button
-				>
-			</div>
-		{/if}
-
-		<div class="relative flex flex-1 overflow-hidden">
-			<WorkflowCanvas
-				graph={binding.graph}
-				readonly={template?.published ?? false}
-				onselect={handleNodeSelect}
-				onAddNode={handleAddNode}
-				onRemoveNodes={handleRemoveNodes}
-				onMoveNodes={handleMoveNodes}
-				onReparentNodes={handleReparentNodes}
-				onResizeNodes={handleResizeNodes}
-				onAddEdge={handleAddEdge}
-				onRemoveEdges={handleRemoveEdges}
+<PageShell width="bleed" testid="template-editor-page">
+	{#if loading}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Loading editor...
+		</div>
+	{:else}
+		<div class="flex h-full flex-col">
+			<EditorToolbar
+				templateName={template?.name ?? 'New Workflow'}
+				ownerId={template?.owner_template_id ?? undefined}
+				{ownerName}
+				published={template?.published ?? false}
+				{saving}
+				{templateId}
+				version={template?.version}
+				awareness={session.awareness}
+				provider={session.provider}
+				onpublish={() => handlePublish(false)}
+				onpreview={handlePreview}
+				onnewversion={handleNewVersion}
+				onrun={handleRun}
+				ontests={() => (testsPanelOpen = true)}
+				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
+				onrename={handleRename}
 			/>
 
-			{#if selectedNodeData && nodePropertyPanelModule}
-				{@const NodePropertyPanel = nodePropertyPanelModule.default}
-				<NodePropertyPanel
-					data={selectedNodeData}
-					readonly={template?.published ?? false}
-					onchange={handleNodeDataChange}
-					onclose={() => (selectedNodeId = null)}
-					ondelete={handleDeleteSelectedNode}
-					{binding}
-					nodeId={selectedNodeId ?? undefined}
-					{templateId}
-					workspaceId={template?.workspace_id}
-					onselectnode={handleNodeSelect}
-				/>
-			{/if}
-		</div>
-
-		{#if airPreview}
-			<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
-				<div class="flex items-center justify-between px-3 py-1.5">
-					<span class="text-sm font-medium text-muted-foreground">AIR Preview</span>
+			{#if error}
+				<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+					<span class="flex-1">{error}</span>
+					<CopyButton
+						getText={() =>
+							compileErrors.errors.length > 0
+								? `${error}\n\n${JSON.stringify(compileErrors.errors, null, 2)}`
+								: (error ?? '')}
+						title="Copy error (with compile diagnostics) as JSON"
+						class="text-amber-700 hover:text-amber-900"
+					/>
 					<button
 						type="button"
-						class="text-sm text-muted-foreground underline"
-						onclick={() => (airPreview = null)}>close</button
+						class="underline"
+						onclick={() => (error = null)}>dismiss</button
 					>
 				</div>
-				<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-sm text-foreground">
-{JSON.stringify(airPreview, null, 2)}
-				</pre>
+			{/if}
+
+			<div class="relative flex flex-1 overflow-hidden">
+				<WorkflowCanvas
+					graph={binding.graph}
+					readonly={template?.published ?? false}
+					onselect={handleNodeSelect}
+					onAddNode={handleAddNode}
+					onRemoveNodes={handleRemoveNodes}
+					onMoveNodes={handleMoveNodes}
+					onReparentNodes={handleReparentNodes}
+					onResizeNodes={handleResizeNodes}
+					onAddEdge={handleAddEdge}
+					onRemoveEdges={handleRemoveEdges}
+				/>
+
+				{#if selectedNodeData && nodePropertyPanelModule}
+					{@const NodePropertyPanel = nodePropertyPanelModule.default}
+					<NodePropertyPanel
+						data={selectedNodeData}
+						readonly={template?.published ?? false}
+						onchange={handleNodeDataChange}
+						onclose={() => (selectedNodeId = null)}
+						ondelete={handleDeleteSelectedNode}
+						{binding}
+						nodeId={selectedNodeId ?? undefined}
+						{templateId}
+						workspaceId={template?.workspace_id}
+						onselectnode={handleNodeSelect}
+					/>
+				{/if}
 			</div>
-		{/if}
-	</div>
-{/if}
+
+			{#if airPreview}
+				<div class="border-t border-border bg-muted/50" data-testid="air-preview-panel">
+					<div class="flex items-center justify-between px-3 py-1.5">
+						<span class="text-sm font-medium text-muted-foreground">AIR Preview</span>
+						<button
+							type="button"
+							class="text-sm text-muted-foreground underline"
+							onclick={() => (airPreview = null)}>close</button
+						>
+					</div>
+					<pre class="max-h-64 overflow-auto px-3 pb-2 font-mono text-sm text-foreground">
+{JSON.stringify(airPreview, null, 2)}
+					</pre>
+				</div>
+			{/if}
+		</div>
+	{/if}
+</PageShell>
 
 <Sheet.Root open={testsPanelOpen} onOpenChange={(o: boolean) => (testsPanelOpen = o)}>
 	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">

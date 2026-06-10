@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { PageShell } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { NetWorkbench } from '$lib/components/petri';
@@ -31,6 +32,10 @@
 		}
 	}
 </script>
+
+<svelte:head>
+	<title>{netId} | Engine Nets | Mekhan</title>
+</svelte:head>
 
 {#snippet header(api: WorkbenchApi)}
 	<div class="flex items-center gap-3 border-b border-border px-4 py-2 shrink-0">
@@ -90,4 +95,9 @@
 	</div>
 {/snippet}
 
-<NetWorkbench {netId} onDeleteNet={handleDeleteNet} {header} />
+<!-- Full-bleed canvas page (PageShell `bleed`): NetWorkbench owns the whole
+     layout (toolbar band via the `header` snippet, net tree, xyflow canvas,
+     side panels) — no width container or scroll wrapper here. -->
+<PageShell width="bleed">
+	<NetWorkbench {netId} onDeleteNet={handleDeleteNet} {header} />
+</PageShell>
