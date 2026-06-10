@@ -861,6 +861,43 @@ pub enum WorkflowNodeData {
         )]
         input_contract: Port,
     },
+    /// Workflow-as-streaming-endpoint INGRESS (docs/25 §9 Phase 3). Declares
+    /// `Out` [`Channel`]s an external producer feeds through a mekhan ingress
+    /// endpoint; each declared channel surfaces as a named source handle the
+    /// graph wires downstream consumers off, exactly like an
+    /// [`WorkflowNodeData::AutomatedStep`]'s `Out` channels. A StreamSource
+    /// has NO control-flow handles in v1 — no inbound control edge, no
+    /// default `out`; its only handles are its channel handles. Lowering
+    /// synthesizes the standard per-channel place `p_{id}_{name}` (WI-2).
+    #[serde(rename = "stream_source")]
+    StreamSource {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Declared streaming [`Channel`]s. Direction is expected to be `Out`
+        /// for every entry (the node *produces* into the net); enforced by
+        /// validation (WI-2), not the type. `#[serde(default)]` ⇒ existing
+        /// templates (field absent → empty) round-trip unchanged.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        channels: Vec<Channel>,
+    },
+    /// Workflow-as-streaming-endpoint EGRESS (docs/25 §9 Phase 3). Declares
+    /// exactly ONE `In` [`Channel`] (enforced by validation in WI-2, not the
+    /// type — the field stays `Vec<Channel>` so the three channel-bearing
+    /// variants share one accessor shape, see
+    /// [`WorkflowNodeData::channels`]). The upstream producer edge wires to
+    /// the channel's named target handle; mekhan exposes the sunk stream on
+    /// an egress endpoint. No control-flow handles in v1.
+    #[serde(rename = "stream_sink")]
+    StreamSink {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Declared streaming [`Channel`]s — exactly one `In` entry in v1
+        /// (validation-enforced, WI-2). `#[serde(default)]` ⇒ absent → empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        channels: Vec<Channel>,
+    },
 }
 
 impl WorkflowNodeData {
@@ -884,7 +921,9 @@ impl WorkflowNodeData {
             | Self::Delay { label, .. }
             | Self::Timeout { label, .. }
             | Self::Trigger { label, .. }
-            | Self::SubWorkflow { label, .. } => label,
+            | Self::SubWorkflow { label, .. }
+            | Self::StreamSource { label, .. }
+            | Self::StreamSink { label, .. } => label,
         }
     }
 
@@ -917,7 +956,23 @@ impl WorkflowNodeData {
             | Self::Delay { description, .. }
             | Self::Timeout { description, .. }
             | Self::Trigger { description, .. }
-            | Self::SubWorkflow { description, .. } => description.as_deref(),
+            | Self::SubWorkflow { description, .. }
+            | Self::StreamSource { description, .. }
+            | Self::StreamSink { description, .. } => description.as_deref(),
+        }
+    }
+
+    /// The statically-declared streaming [`Channel`]s this variant carries.
+    /// The single accessor validation + lowering dispatch through so the
+    /// three channel-bearing variants (`AutomatedStep`, `StreamSource`,
+    /// `StreamSink`) can't drift; every other variant returns the empty
+    /// slice.
+    pub fn channels(&self) -> &[Channel] {
+        match self {
+            Self::AutomatedStep { channels, .. }
+            | Self::StreamSource { channels, .. }
+            | Self::StreamSink { channels, .. } => channels,
+            _ => &[],
         }
     }
 
@@ -2344,9 +2399,7 @@ pub fn agent_to_llm_config(
     let is_internal = model.provider == crate::backends::llm::INTERNAL_PROVIDER;
     config.insert(
         "provider".to_string(),
-        Value::String(
-            crate::backends::llm::remap_internal_provider(&model.provider).to_string(),
-        ),
+        Value::String(crate::backends::llm::remap_internal_provider(&model.provider).to_string()),
     );
     config.insert("model".to_string(), Value::String(model.model.clone()));
     // Off-router lock: an internal binding's endpoint + credentials come solely
@@ -3439,11 +3492,14 @@ pub mod dsl {
                 | WorkflowNodeData::Failure { .. }
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
-                | WorkflowNodeData::Map { .. } => {
+                | WorkflowNodeData::Map { .. }
+                | WorkflowNodeData::StreamSource { .. }
+                | WorkflowNodeData::StreamSink { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as
                     // triggers. (Map's body sub-graph + itemsRef/resultVar have
-                    // no DSL schema yet.)
+                    // no DSL schema yet; stream_source/stream_sink channel
+                    // declarations likewise have no DSL schema.)
                 }
                 WorkflowNodeData::Agent {
                     model,

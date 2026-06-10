@@ -668,9 +668,12 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 ///   `validate_repeaters`, but runs BEFORE `validate_guards` so its precise
 ///   `MapItemsRef*` errors win over the guard pass's generic `GuardUnresolved`
 ///   (which would otherwise fire first on the itemsRef read-arc).
-/// - `validate_channels` (docs/25) — each AutomatedStep's streaming channel
-///   declarations: unique names, resolvable `Json` element schemas, plane/wiring
-///   coherence, and consumer-edge `join` agreement.
+/// - `validate_channels` (docs/25) — each channel-bearing node's (AutomatedStep,
+///   StreamSource, StreamSink) streaming channel declarations: unique names,
+///   resolvable `Json` element schemas, plane/wiring coherence, and
+///   consumer-edge `join` agreement. The stream nodes' structural rules
+///   (cardinality/direction/transport/edges) live on their `NodeDecl::validate`
+///   hooks (`validate_stream_source` / `validate_stream_sink`).
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,

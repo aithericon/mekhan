@@ -780,8 +780,9 @@ pub fn analyze(
 
 /// The shape a CHANNEL edge contributes to its consumer's inbound token.
 /// `Some` iff `edge.source_handle` names a declared channel on `producer`
-/// (only AutomatedSteps declare channels); `None` means "not a channel edge —
-/// merge the producer's whole outbound envelope as before".
+/// (any channel-bearing variant — AutomatedStep or StreamSource, via the
+/// shared `WorkflowNodeData::channels()` accessor); `None` means "not a
+/// channel edge — merge the producer's whole outbound envelope as before".
 ///
 /// A channel edge's consumer receives the channel PAYLOAD, never the
 /// producer's executor envelope (docs/25 §7; `lower/channels.rs`):
@@ -812,10 +813,10 @@ pub(crate) fn channel_edge_contribution(
     definitions: &BTreeMap<String, serde_json::Value>,
 ) -> Option<TokenShape> {
     let handle = edge.source_handle.as_deref()?;
-    let WorkflowNodeData::AutomatedStep { channels, .. } = &producer.data else {
-        return None;
-    };
-    let ch = channels.iter().find(|c| c.name == handle)?;
+    // Shared accessor: AutomatedStep + StreamSource both declare Out channels
+    // (StreamSink only declares an In channel, which never appears as a
+    // source handle); every other variant returns the empty slice → None.
+    let ch = producer.data.channels().iter().find(|c| c.name == handle)?;
     if matches!(ch.plane, ChannelPlane::Data) {
         // Data channels are edge-wired only, never value-referenceable.
         return Some(TokenShape::object());
