@@ -67,7 +67,7 @@ No wire-format change, no executor-binary change, no engine change, no migration
   registry ingests both `worker.*.presence` (advisory, capacity-providing) and the **advisory
   facet** of `runner.*.presence`, exposing one snapshot + one eligibility query. `worker_coverage`'s
   `BackendCoverage` is absorbed/refaced onto it. Runner *capacity-binding* (inject/reap into the
-  pool net in `runners_presence.rs`) is **untouched** — that is the control plane, and it stays
+  pool net in `runners_presence.rs`, now `service/src/presence/runners.rs`) is **untouched** — that is the control plane, and it stays
   runner-only by design (refinement #2).
 
 - **S2 — Backend-as-capability at the eligibility layer.** A worker's advertised backends are
@@ -102,7 +102,7 @@ No wire-format change, no executor-binary change, no engine change, no migration
 - `service/src/worker_coverage.rs` → fold into a new `service/src/fleet/` module (or rename to
   `fleet_liveness.rs`); keep the NATS subjects and TTL sweep, generalise `WorkerEntry` to a
   `LivenessEntry { id, kind: Worker | Runner, caps, last_seen }`. Preserve the existing unit tests.
-- `service/src/runners_presence.rs` — feed the runner's **advisory facet** into `FleetLiveness`
+- `service/src/runners_presence.rs` (now `service/src/presence/runners.rs`) — feed the runner's **advisory facet** into `FleetLiveness`
   on each heartbeat; leave `inject_acquire`/`inject_expire`/the pool-net edges exactly as-is.
 - `service/src/process/publish.rs` — `warn_on_uncovered_backends` + `warn_on_uncovered_pool_backends`
   collapse to one `FleetLiveness`-backed eligibility check.
@@ -147,7 +147,7 @@ the model has a slot for it.
 Offline gates: `cargo check -p mekhan-service`, `cargo test -p mekhan-service` for the touched
 modules (liveness registry, cell validation), `ci::openapi-drift` after regen, `svelte-check`.
 Adversarial review focus: the instrument/presence-pool admission path must be byte-identical
-(no change to `runners_presence` inject/reap or `presence_pool_net`), and the worker telemetry
+(no change to `runners_presence` — now `presence/runners.rs` — inject/reap or `presence_pool_net`), and the worker telemetry
 must carry **no** control side-effect (a dropped worker never reaps an instance).
 
 ## D1 — Unified worker dispatch (correction to the original anonymous-pool decision)

@@ -105,7 +105,8 @@ ctx.transition("t_claim", "Claim Offer (unit-initiated)")
 ```
 
 `presence_claim` now carries `{ grant_id, runner_id }`. Update the AIR-shape test
-accordingly. `inject_claim` (in `runners_presence.rs`, drop `#[allow(dead_code)]`)
+accordingly. `inject_claim` (in `runners_presence.rs`, drop `#[allow(dead_code)]`;
+now `service/src/presence/core.rs`)
 publishes `token_color: { grant_id, runner_id }`, `dedup_id: "presence-claim:{grant_id}"`.
 
 ## 4. Projection seam — `causality/ingest.rs`
@@ -182,7 +183,7 @@ Update `HpiTask` (`process/model.rs`) with `workspace_id: Option<Uuid>`,
 - **B — Lowering:** `compiler/lower/human_task.rs` pooled variant (depends on A's
   template fields).
 - **C — Projection + delivery (parallel, disjoint):** `causality/ingest.rs`
-  (§4) ‖ `process/handlers.rs` + `runners_presence.rs` `inject_claim` (§6).
+  (§4) ‖ `process/handlers.rs` + `runners_presence.rs` (now `presence/core.rs`) `inject_claim` (§6).
 - **D — Wire:** `lib.rs` route mount + `openapi.rs` if needed, `just dev::openapi`
   regen, offline gates (`quality-rust`, `cargo test -p mekhan-service`, engine
   `cargo check`, `openapi-drift`, `svelte-check`).

@@ -1,5 +1,12 @@
 //! The model PLACEMENT controller — the only autoscaler.
 //!
+//! This controller is the embryo of the future SERVICE RECONCILER (docs/35
+//! §9): it reconciles desired replicas × placement constraints into held
+//! "serve model X on runner Y" assignments. It is allocation-plane — it
+//! decides placement — and never traffic-plane: it never sees an inference
+//! request. Extract the generic loop when the second consumer (the crawler
+//! fleet, docs/35 §10) exists, not before.
+//!
 //! Each tick, for every model with an autoscale policy folded onto its
 //! `model_states` row, the controller decides WHICH already-registered runners
 //! serve the model and publishes NATS load/unload to reach that state. There is no
@@ -51,8 +58,8 @@ use crate::handlers::model_pool::{serving_runner_catalogs, serving_runner_counts
 use crate::models::model_replicas::{in_cooldown, status};
 use crate::models::runner::{ModelInterfaceKind, RunnerInterfaceCatalog};
 use crate::nats::MekhanNats;
-use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
 use crate::presence::RunnerPresence;
+use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
 
 use super::demand::DemandSource;
 

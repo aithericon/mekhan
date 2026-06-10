@@ -26811,7 +26811,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/CapacityBinding",
-                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (the offer discipline).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
+                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (consent acceptance —\nthe offer/claim handshake, doc 35 §4).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
                   }
                 ]
               },

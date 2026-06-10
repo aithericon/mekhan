@@ -54,9 +54,7 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 /// exactly the live ∩ in-group runners the catalog reads gate on. Cross-workspace
 /// safe: a runner UUID belongs to one workspace, and each workspace's
 /// model-serving group shares the same `model_serving` alias.
-async fn model_serving_members(
-    runner_presence: &crate::presence::RunnerPresence,
-) -> HashSet<Uuid> {
+async fn model_serving_members(runner_presence: &crate::presence::RunnerPresence) -> HashSet<Uuid> {
     runner_presence
         .pool_membership()
         .await

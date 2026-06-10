@@ -18,7 +18,7 @@
 > is the consent value of the new acceptance axis — bilateral eligibility,
 > resolving doc 23 §9.5. The net topology, the t_claim inversion (§4), and
 > everything downstream are unchanged; only the classification moves. Code
-> rename pending.
+> rename landed (Acceptance{auto,consent}; see docs/35 §11).
 
 ## 1. Thesis
 
@@ -90,7 +90,7 @@ Capacity is presence-driven, not seeded. Units are tokens in a `pool` place:
 - `t_reap_free` / `t_reap_held` drop a unit on the `presence_expired { runner_id }`
   signal (held units fail their holder over the `"fail"` channel — doc 30).
 
-### 2.3 The presence controller (`service/src/runners_presence.rs`)
+### 2.3 The presence controller (`service/src/runners_presence.rs`, now `service/src/presence/runners.rs`)
 
 Turns runner heartbeats into pool admission: on the absent→present edge it injects
 `C` units `{ unit_id: "{runner_id}#{slot}", runner_id, executor_namespace, caps }`

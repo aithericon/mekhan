@@ -310,7 +310,8 @@ pub enum WorkflowNodeData {
         /// Mirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's
         /// unpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to
         /// eligible available members of the named capacity and lowered as the
-        /// pooled claim/acquire/register/release scaffold (the offer discipline).
+        /// pooled claim/acquire/register/release scaffold (consent acceptance —
+        /// the offer/claim handshake, doc 35 §4).
         /// Resolved at publish like `AutomatedStep` to the backing
         /// `pool-<capacity_id>` net.
         #[serde(default, skip_serializing_if = "Option::is_none")]

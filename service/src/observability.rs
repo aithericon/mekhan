@@ -188,6 +188,13 @@ pub async fn drain_silent_drops(nats: MekhanNats, mut rx: UnboundedReceiver<Sile
 mod tests {
     use super::*;
 
+    /// `SILENT_DROPS` is process-global and `counter_records_and_resets`
+    /// stores 0 into it; any sibling test that asserts on the counter must
+    /// hold this lock so the reset can't land between its increment and its
+    /// read (concurrent INCREMENTS from other tests are fine — the counter
+    /// is otherwise monotonic).
+    static COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn counter_records_and_resets() {
         // `SILENT_DROPS` is a process-global counter that OTHER unit tests
@@ -197,6 +204,7 @@ mod tests {
         // deltas rather than absolute values — that keeps the test robust
         // under cargo's parallel test runner instead of flaking on a count
         // bumped by a sibling test.
+        let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = silent_drops();
         record_silent_drop("test_kind_a", &"first failure");
         assert!(
@@ -248,6 +256,10 @@ mod tests {
         // Non-UTF-8 bytes mid-payload survive via `from_utf8_lossy` (the
         // 0xFF gets replaced with U+FFFD). Real call sites always carry
         // JSON, but the test guards the worst case.
+        //
+        // Hold the counter lock so `counter_records_and_resets`'s store-0
+        // can't land between our increment and the assert below.
+        let _guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         record_silent_drop_with(
             "test_lossy",
             &"oops",
