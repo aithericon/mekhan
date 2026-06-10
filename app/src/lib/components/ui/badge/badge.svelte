@@ -20,6 +20,8 @@
 					"bg-info/15 text-info [a&]:hover:bg-info/25 border-transparent",
 				muted:
 					"bg-muted text-muted-foreground [a&]:hover:bg-muted/80 border-transparent",
+				warm:
+					"bg-accent-warm text-accent-warm-foreground [a&]:hover:bg-accent-warm/90 border-transparent",
 			},
 			size: {
 				sm: "px-2 py-0.5 text-xs [&>svg]:size-3",

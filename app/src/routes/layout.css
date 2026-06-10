@@ -36,6 +36,10 @@
 	--muted-foreground: oklch(0.46 0.006 270);
 	--accent: oklch(0.90 0.010 264);
 	--accent-foreground: oklch(0.22 0.006 270);
+	/* Warm khaki counter-accent to the blue primary (hsl(60 6% 66%) family).
+	   Solid surface + dark warm text, never used for interactive-primary. */
+	--accent-warm: oklch(0.76 0.025 106);
+	--accent-warm-foreground: oklch(0.27 0.022 106);
 	--destructive: oklch(0.55 0.18 28);
 	--success: oklch(0.52 0.10 150);
 	--success-foreground: oklch(0.985 0.01 145);
@@ -86,6 +90,8 @@
 	--muted-foreground: oklch(0.625 0.006 270);
 	--accent: oklch(0.298 0.008 264);
 	--accent-foreground: oklch(0.925 0.004 270);
+	--accent-warm: oklch(0.78 0.022 106);
+	--accent-warm-foreground: oklch(0.21 0.020 106);
 	--destructive: oklch(0.62 0.18 28);
 	--success: oklch(0.66 0.11 150);
 	--success-foreground: oklch(0.16 0.04 145);
@@ -128,6 +134,8 @@
 	--color-muted-foreground: var(--muted-foreground);
 	--color-accent: var(--accent);
 	--color-accent-foreground: var(--accent-foreground);
+	--color-accent-warm: var(--accent-warm);
+	--color-accent-warm-foreground: var(--accent-warm-foreground);
 	--color-destructive: var(--destructive);
 	--color-success: var(--success);
 	--color-success-foreground: var(--success-foreground);
@@ -193,7 +201,7 @@
 	}
 
 	::selection {
-		background: color-mix(in oklch, var(--primary) 32%, transparent);
+		background: color-mix(in oklch, var(--accent-warm) 55%, transparent);
 	}
 }
 

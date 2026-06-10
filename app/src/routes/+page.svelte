@@ -15,6 +15,7 @@
 	import type { HumanTask } from '$lib/types/tasks';
 	import { findShowcaseTemplate } from '$lib/templates/showcase';
 	import BrandSpiral from '$lib/components/BrandSpiral.svelte';
+	import BrandCorners from '$lib/components/BrandCorners.svelte';
 	import { auth } from '$lib/auth/store.svelte';
 	import Rocket from '@lucide/svelte/icons/rocket';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -185,12 +186,21 @@
 	<title>Mekhan</title>
 </svelte:head>
 
-<div class="relative h-full overflow-x-hidden overflow-y-auto" data-testid="home-page">
-	<!-- Abstract brand motif, faint in the top-right corner. -->
+<div class="relative h-full overflow-hidden" data-testid="home-page">
+	<!-- Abstract brand motifs: spiral top-right (primary), nested corners
+	     bottom-left (warm accent) — the two accents bracketing the panel.
+	     They live OUTSIDE the scroll layer, pinned to the panel corners and
+	     clipped by it: an abspos child overhanging a scroll container's
+	     bottom edge would otherwise become scrollable overflow (phantom
+	     whitespace below the content). -->
 	<BrandSpiral
 		class="pointer-events-none absolute -top-16 -right-16 z-0 size-[22rem] text-primary opacity-[0.10] select-none dark:opacity-[0.16]"
 	/>
-	<div class="relative z-10 mx-auto max-w-6xl px-6 py-10 animate-rise">
+	<BrandCorners
+		class="pointer-events-none absolute -bottom-28 -left-28 z-0 size-[32rem] text-accent-warm opacity-[0.35] select-none dark:opacity-[0.30]"
+	/>
+	<div class="relative z-10 h-full overflow-x-hidden overflow-y-auto">
+		<div class="mx-auto max-w-6xl px-6 py-10 animate-rise">
 		<!-- Header: greeting + primary CTAs ----------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-4">
 			<div>
@@ -206,7 +216,7 @@
 			</div>
 			<div class="flex items-center gap-2">
 				<Button
-					variant="outline"
+					variant="warm"
 					data-testid="btn-try-demo"
 					disabled={openingDemo}
 					onclick={openDemo}
@@ -241,17 +251,17 @@
 			<a
 				href="/instances?status=running"
 				data-testid="btn-view-instances"
-				class="group rounded-xl border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+				class="group rounded-xl border border-transparent bg-accent-warm p-4 transition-colors hover:bg-accent-warm/90"
 			>
 				<div class="flex items-center justify-between">
-					<span class="text-sm font-medium uppercase tracking-wider text-muted-foreground/70">
+					<span class="text-sm font-medium uppercase tracking-wider text-accent-warm-foreground/70">
 						Running
 					</span>
-					<Activity class="size-4 text-blue-500/70" />
+					<Activity class="size-4 text-accent-warm-foreground/60" />
 				</div>
 				<div class="mt-2 flex items-baseline gap-1.5">
-					<span class="text-3xl font-semibold tabular-nums text-foreground">{loading ? '—' : stats.running}</span>
-					<span class="text-sm text-muted-foreground">
+					<span class="text-3xl font-semibold tabular-nums text-accent-warm-foreground">{loading ? '—' : stats.running}</span>
+					<span class="text-sm text-accent-warm-foreground/70">
 						{stats.running === 1 ? 'instance' : 'instances'}
 					</span>
 				</div>
@@ -324,7 +334,7 @@
 							<Hand class="size-3.5" />
 							Tasks to claim
 							{#if offeredTasks.length > 0}
-								<Badge variant="secondary" class="rounded-full">{offeredTasks.length}</Badge>
+								<Badge variant="warm" class="rounded-full">{offeredTasks.length}</Badge>
 							{/if}
 						</h2>
 						<a
@@ -380,7 +390,7 @@
 							<ClipboardList class="size-3.5" />
 							My open tasks
 							{#if myOpenTasks.length > 0}
-								<Badge variant="secondary" class="rounded-full">{myOpenTasks.length}</Badge>
+								<Badge variant="warm" class="rounded-full">{myOpenTasks.length}</Badge>
 							{/if}
 						</h2>
 						<a
@@ -586,5 +596,6 @@
 				</section>
 			</div>
 		{/if}
+		</div>
 	</div>
 </div>
