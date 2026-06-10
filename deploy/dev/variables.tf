@@ -212,9 +212,9 @@ variable "executor_cpu_mhz" {
 }
 
 variable "executor_memory_mb" {
-  description = "Executor memory reservation. HDF5 / NetCDF parsers + Python venvs need headroom."
+  description = "Executor memory reservation. HDF5 / NetCDF parsers + Python venvs need headroom. Bumped 1024 → 2048 (2026-06-10) after the meeting-recording workflow's transcribe step (whisper-small + faster-whisper BatchedInferencePipeline) got SIGKILLed during inference at the 1 GB ceiling — model weights + pip cache + working tensors exceed 1 GB during cold-start runs."
   type        = number
-  default     = 1024
+  default     = 2048
 }
 
 variable "executor_concurrency" {
