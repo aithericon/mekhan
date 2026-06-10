@@ -834,7 +834,9 @@ pub(crate) fn warn_unmerged_fan_in(
 ///   barrier is sized by the episode's own `close.count`, so no producer-side
 ///   cap is needed. Data edges must not set `join`.
 pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
-    use crate::models::template::{ChannelJoin, ChannelPlane, ChannelTransport, ElementType};
+    use crate::models::template::{
+        ChannelDirection, ChannelJoin, ChannelPlane, ChannelTransport, ElementType,
+    };
 
     for node in &graph.nodes {
         let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
@@ -965,6 +967,23 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
+        // A `join` is the CONSUMER-side fold discipline for a CONTROL OUT
+        // channel episode. An edge carrying one while its source handle names
+        // anything else — an IN-direction channel, or a data-plane channel —
+        // is misauthored: the fold would silently never apply (the lowering
+        // only consults `join` for control OUT channels). The single resolver
+        // (`channel_edge_contribution`) types the consumer's input off this
+        // same predicate, so reject the drift loudly here.
+        if edge.join.is_some()
+            && !(matches!(src_ch.plane, ChannelPlane::Control)
+                && matches!(src_ch.direction, ChannelDirection::Out))
+        {
+            return Err(CompileError::ChannelInvalid {
+                node_id: edge.source.clone(),
+                channel: src_h.to_string(),
+                message: "join may only be set on a control OUT channel edge".to_string(),
+            });
+        }
         let Some(tgt_ch) = node_channels
             .get(edge.target.as_str())
             .and_then(|m| m.get(tgt_h))

@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::{topo_order, WorkflowDiGraph};
 use crate::models::template::{
-    DeploymentModel, JoinMode, MergeStrategy, TaskBlockConfig, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    ChannelJoin, ChannelPlane, DeploymentModel, ElementType, JoinMode, MergeStrategy,
+    TaskBlockConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 
 use super::*; // ─── Per-node shape derivation ──────────────────────────────────────────────
@@ -621,19 +621,52 @@ pub fn analyze(
                     ..
                 }
             );
+            // EDGE-AWARE propagation: a CHANNEL edge (one whose `source_handle`
+            // names a declared channel on the producer) contributes the channel
+            // PAYLOAD shape — the `each`/`gather` projection IS the consumer's
+            // input token (`lower/channels.rs`) — NOT the producer's whole
+            // outbound envelope (which never reaches the consumer's input place
+            // on that edge). Non-channel edges keep the existing
+            // whole-envelope merge byte-identical.
+            //
+            // LIMITATION: a channel-`each` edge with a NON-OBJECT element (a
+            // scalar / `Any` payload) makes the consumer's whole input token
+            // that bare value. With a sole inbound edge we model it directly;
+            // under a multi-predecessor merge there is no key to merge it
+            // under, so the inbound degrades to `Any` rather than inventing
+            // one.
             let mut inbound = TokenShape::object();
             let mut had_pred = false;
-            for pred_ni in wg
-                .dag
-                .neighbors_directed(*ni, petgraph::Direction::Incoming)
-            {
-                let pred = *wg.dag.node_weight(pred_ni).unwrap();
-                if let Some(p_out) = node_out.get(&pred.id) {
+            let mut contributions = 0usize;
+            let mut non_object_channel: Option<TokenShape> = None;
+            for eref in wg.dag.edges_directed(*ni, petgraph::Direction::Incoming) {
+                use petgraph::visit::EdgeRef;
+                let pred = *wg.dag.node_weight(eref.source()).unwrap();
+                let edge: &WorkflowEdge = eref.weight();
+                if let Some(contrib) = channel_edge_contribution(pred, edge, &graph.definitions) {
+                    had_pred = true;
+                    contributions += 1;
+                    match contrib {
+                        TokenShape::Object(_) => inbound.merge_from(&contrib, deep),
+                        other => non_object_channel = Some(other),
+                    }
+                } else if let Some(p_out) = node_out.get(&pred.id) {
                     inbound.merge_from(p_out, deep);
                     had_pred = true;
+                    contributions += 1;
                 }
             }
-            let inbound = if had_pred { inbound } else { TokenShape::Any };
+            let inbound = if !had_pred {
+                TokenShape::Any
+            } else if let Some(payload) = non_object_channel {
+                if contributions == 1 {
+                    payload
+                } else {
+                    TokenShape::Any // see the LIMITATION note above
+                }
+            } else {
+                inbound
+            };
 
             let outbound = out_shape(node, &inbound);
             node_in.insert(node.id.clone(), inbound);
@@ -743,6 +776,89 @@ pub fn analyze(
         scopes,
         diagnostics,
     })
+}
+
+/// The shape a CHANNEL edge contributes to its consumer's inbound token.
+/// `Some` iff `edge.source_handle` names a declared channel on `producer`
+/// (only AutomatedSteps declare channels); `None` means "not a channel edge —
+/// merge the producer's whole outbound envelope as before".
+///
+/// A channel edge's consumer receives the channel PAYLOAD, never the
+/// producer's executor envelope (docs/25 §7; `lower/channels.rs`):
+///
+/// - **control + `each`** (the default join) — `t_{id}_{name}_each` projects
+///   `item.payload` as the consumer's input token, so the contribution is the
+///   channel's declared ELEMENT shape: `Json{schema}` parsed via
+///   [`json_schema_to_token_shape`] against the workflow `definitions`
+///   (`#/definitions/*` + `#/$defs/*` resolve), `Any` → [`TokenShape::Any`],
+///   `Binary` (shouldn't occur on a control channel) → opaque.
+/// - **control + `gather`** — the counted barrier reduces the episode to
+///   `#{ output: [<element>…] }` (key hardcoded in `lower/gather.rs`), so the
+///   contribution is `Object{ output: Array(<element>) }`.
+/// - **data plane** — bulk bytes ride out-of-band and the OPEN descriptor is
+///   never value-referenceable (docs/25 §7), so the contribution is an EMPTY
+///   object: the consumer keeps a predecessor (no `Any` degrade) but gains no
+///   pickable fields, and a guard ref into the channel stays the existing
+///   `UnresolvedGuardPath` diagnostic.
+///
+/// Top-level fields of a control contribution carry channel-stamped
+/// [`Provenance`] (`node_id`/`label` = the producer, `channel: Some(name)`) so
+/// `reachable_scope` keeps them visible as genuinely token-resident
+/// `input.<path>` entries even though the producer is a parked producer (the
+/// qualified `<slug>.<field>` form would NOT bind for a channel payload).
+pub(crate) fn channel_edge_contribution(
+    producer: &WorkflowNode,
+    edge: &WorkflowEdge,
+    definitions: &BTreeMap<String, serde_json::Value>,
+) -> Option<TokenShape> {
+    let handle = edge.source_handle.as_deref()?;
+    let WorkflowNodeData::AutomatedStep { channels, .. } = &producer.data else {
+        return None;
+    };
+    let ch = channels.iter().find(|c| c.name == handle)?;
+    if matches!(ch.plane, ChannelPlane::Data) {
+        // Data channels are edge-wired only, never value-referenceable.
+        return Some(TokenShape::object());
+    }
+    let elem = match &ch.element {
+        ElementType::Json { schema } => json_schema_to_token_shape(schema, definitions),
+        ElementType::Any => TokenShape::Any,
+        // Binary is a data-plane concept; on a (mis-declared) control channel
+        // the payload is opaque bytes — never drillable.
+        ElementType::Binary { content_type } => {
+            TokenShape::Opaque(format!("binary channel element ({content_type})"))
+        }
+    };
+    let join = edge.join.unwrap_or_default();
+    let prov = |join_label: &str| {
+        let mut p = Provenance::new(
+            producer,
+            format!("control channel '{}' (join: {join_label})", ch.name),
+        );
+        p.channel = Some(ch.name.clone());
+        p
+    };
+    match join {
+        ChannelJoin::Each => {
+            // The element IS the consumer's input token. Stamp the channel
+            // provenance onto its top-level fields (nested fields keep the
+            // structural-shadow provenance). A non-object element has no
+            // field slot to carry provenance — the caller models it as the
+            // whole inbound shape directly (sole-edge case) or degrades.
+            let mut shape = elem;
+            if let TokenShape::Object(map) = &mut shape {
+                for f in map.values_mut() {
+                    f.prov = prov("each");
+                }
+            }
+            Some(shape)
+        }
+        ChannelJoin::Gather => {
+            let mut o = TokenShape::object();
+            o.insert("output", TokenShape::Array(Box::new(elem)), prov("gather"));
+            Some(o)
+        }
+    }
 }
 
 /// Every `(dotted_path, type_label, provenance)` leaf of a shape.
