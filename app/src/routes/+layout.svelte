@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { ModeWatcher } from 'mode-watcher';
+	import { Toaster } from '$lib/components/ui/sonner';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import NavMenu, { type NavMenuItem } from '$lib/components/NavMenu.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
@@ -63,6 +64,8 @@
 </script>
 
 <ModeWatcher defaultMode="dark" />
+<!-- Global toast outlet — every `toast.*()` call in the app renders here. -->
+<Toaster richColors closeButton />
 <TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
