@@ -6,9 +6,12 @@
 	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import BookOpen from '@lucide/svelte/icons/book-open';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 	import {
@@ -19,6 +22,9 @@
 		type Folder
 	} from '$lib/api/client';
 	import FolderTree from '$lib/components/FolderTree.svelte';
+	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
+	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
+	import FolderSettingsPanel from '$lib/components/folders/FolderSettingsPanel.svelte';
 
 	// Top-level folders are scoped to the active workspace — same implicit
 	// scoping every other top-level page (Templates, Instances, …) uses.
@@ -27,11 +33,16 @@
 	let folders = $state<Folder[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let selectedId = $state<string | null>(null);
+
+	// Selection is URL-addressable (`/folders?folder=<id>`) so a folder's
+	// contract can be deep-linked / shared without a separate detail route.
+	let selectedId = $state<string | null>(page.url.searchParams.get('folder'));
 
 	const selected = $derived(folders.find((f) => f.id === selectedId) ?? null);
 
-	// New-folder form. Parent defaults to whatever folder is selected in the tree.
+	// New-folder form (collapsible, lives in the tree pane). Parent defaults
+	// to whatever folder is selected in the tree.
+	let createOpen = $state(false);
 	let newSlug = $state('');
 	let newName = $state('');
 	let newParentId = $state<string | null>(null);
@@ -88,6 +99,11 @@
 		selectedId = id;
 		renaming = false;
 		moving = false;
+		goto(id ? `/folders?folder=${id}` : '/folders', {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
 	}
 
 	// Inline "new subfolder" affordance from a tree row: select the folder (which
@@ -96,6 +112,7 @@
 		selectFolder(parent.id);
 		newSlug = '';
 		newName = '';
+		createOpen = true;
 		queueMicrotask(() => {
 			document
 				.querySelector<HTMLInputElement>('[data-testid="input-new-folder-slug"]')
@@ -120,6 +137,8 @@
 			folders = [...folders, f];
 			newSlug = '';
 			newName = '';
+			createOpen = false;
+			selectFolder(f.id);
 		} catch (err) {
 			createError = err instanceof Error ? err.message : 'Failed to create folder';
 		} finally {
@@ -184,11 +203,17 @@
 			return;
 		try {
 			await deleteFolder(f.id);
-			selectedId = f.parent_id ?? null;
+			selectFolder(f.parent_id ?? null);
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to delete folder';
 		}
+	}
+
+	// Folder edits from the Settings tab (slug changes re-root subtree paths).
+	function handleUpdated(next: Folder) {
+		folders = folders.map((x) => (x.id === next.id ? next : x));
+		load();
 	}
 
 	function bundleUrl(f: Folder): string {
@@ -228,84 +253,118 @@
 	</button>
 {/snippet}
 
-<PageShell testid="folders-index">
-	{#snippet band()}
-		<PageHeader title="Folders">
-			<p class="mt-1 text-sm text-muted-foreground">
-				Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
-				with a runnable contract for every published template in its subtree, plus a
-				dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
-					Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
-			</p>
-		</PageHeader>
-	{/snippet}
-
-	{#if !workspaceId}
-		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-			No active workspace. Pick one from the workspace switcher first.
-		</div>
-	{:else}
-		<form
-			onsubmit={handleCreate}
-			class="mb-6 flex flex-wrap items-end gap-2 rounded-lg border border-border bg-card/50 p-4"
-		>
-			<label class="flex-1 space-y-1 text-sm">
-				<span class="text-muted-foreground">Slug</span>
-				<Input placeholder="slug" bind:value={newSlug} data-testid="input-new-folder-slug" />
-			</label>
-			<label class="flex-1 space-y-1 text-sm">
-				<span class="text-muted-foreground">Display name</span>
-				<Input placeholder="Display name" bind:value={newName} data-testid="input-new-folder-name" />
-			</label>
-			<label class="flex-1 space-y-1 text-sm">
-				<span class="text-muted-foreground">Parent</span>
-				<Select.Root
-					type="single"
-					value={newParentId ?? ROOT}
-					onValueChange={(v) => (newParentId = v === ROOT ? null : (v ?? null))}
-				>
-					<Select.Trigger class="h-9 w-full text-sm" data-testid="select-new-folder-parent">
-						<span class="truncate">{newParentLabel}</span>
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value={ROOT} label="Workspace root" />
-						{#each sorted as t (t.id)}
-							<Select.Item value={t.id} label={t.path} />
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</label>
-			<Button type="submit" disabled={creating} data-testid="btn-create-folder">
-				<Plus class="size-4" />
-				{creating ? 'Creating…' : 'Create folder'}
-			</Button>
-		</form>
-		{#if createError}
-			<div class="mb-4 text-sm text-destructive">{createError}</div>
-		{/if}
-		{#if error}
-			<div class="mb-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-				{error}
+<!-- Full-bleed browser shell: hand-rolled band (same anatomy/tokens as
+     PageShell's band variant) over a two-pane body — tree sidebar + detail
+     pane, each owning its own scroll. -->
+<PageShell width="bleed" testid="folders-index">
+	<div class="flex h-full flex-col">
+		<!-- Browser page: band content sits flush left (no 6xl centering) so the
+		     header lines up with the tree pane below it. -->
+		<div class="shrink-0 border-b border-border bg-card px-6 pt-5 pb-4">
+			<div class="[&>header]:mb-0">
+				<PageHeader title="Folders">
+					<p class="mt-1 text-sm text-muted-foreground">
+						Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
+						with a runnable contract for every published template in its subtree, plus a
+						dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
+							Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
+					</p>
+				</PageHeader>
 			</div>
-		{/if}
+		</div>
 
-		{#if loading}
-			<p class="text-sm text-muted-foreground">Loading…</p>
+		{#if !workspaceId}
+			<div class="m-6 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+				No active workspace. Pick one from the workspace switcher first.
+			</div>
+		{:else if loading}
+			<p class="m-6 text-sm text-muted-foreground">Loading…</p>
 		{:else}
-			<div class="grid gap-4 md:grid-cols-[18rem_1fr]">
+			<div class="flex min-h-0 flex-1">
 				<!-- Tree -->
-				<aside class="rounded-lg border border-border bg-card/30 p-3" data-testid="folders-tree-panel">
-					<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
+				<aside
+					class="flex w-72 shrink-0 flex-col border-r border-border bg-card/30"
+					data-testid="folders-tree-panel"
+				>
+					<div class="shrink-0 border-b border-border/60 p-2">
+						{#if createOpen}
+							<form onsubmit={handleCreate} class="space-y-2 p-1">
+								<Input
+									placeholder="slug"
+									bind:value={newSlug}
+									data-testid="input-new-folder-slug"
+								/>
+								<Input
+									placeholder="Display name"
+									bind:value={newName}
+									data-testid="input-new-folder-name"
+								/>
+								<Select.Root
+									type="single"
+									value={newParentId ?? ROOT}
+									onValueChange={(v) => (newParentId = v === ROOT ? null : (v ?? null))}
+								>
+									<Select.Trigger class="h-9 w-full text-sm" data-testid="select-new-folder-parent">
+										<span class="truncate">{newParentLabel}</span>
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={ROOT} label="Workspace root" />
+										{#each sorted as t (t.id)}
+											<Select.Item value={t.id} label={t.path} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								{#if createError}
+									<div class="text-sm text-destructive">{createError}</div>
+								{/if}
+								<div class="flex gap-2">
+									<Button type="submit" size="sm" disabled={creating} data-testid="btn-create-folder">
+										<Plus class="size-3.5" />
+										{creating ? 'Creating…' : 'Create'}
+									</Button>
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										onclick={() => {
+											createOpen = false;
+											createError = null;
+										}}
+									>
+										Cancel
+									</Button>
+								</div>
+							</form>
+						{:else}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="w-full justify-start"
+								onclick={() => (createOpen = true)}
+								data-testid="btn-new-folder"
+							>
+								<Plus class="size-4" /> New folder
+							</Button>
+						{/if}
+					</div>
+					<div class="min-h-0 flex-1 overflow-y-auto p-3">
+						<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
+					</div>
 				</aside>
 
 				<!-- Detail -->
-				<section class="min-w-0 rounded-lg border border-border bg-card/50 p-4" data-testid="folder-detail">
+				<section class="min-w-0 flex-1 overflow-y-auto" data-testid="folder-detail">
+					{#if error}
+						<div class="mx-6 mt-6 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+							{error}
+						</div>
+					{/if}
 					{#if !selected}
 						<div class="flex h-full items-center justify-center py-12 text-center text-sm text-muted-foreground">
-							Select a folder from the tree to manage it, or create one above.
+							Select a folder from the tree to see its API contract, or create one.
 						</div>
 					{:else}
-						<div class="space-y-4">
+						<div class="space-y-4 px-6 py-6">
 							<div class="flex items-start justify-between gap-2">
 								<div class="min-w-0">
 									{#if renaming}
@@ -410,10 +469,42 @@
 									</a>
 								</div>
 							</div>
+
+							<!-- Contract + management tabs. Keyed by folder so per-folder
+							     state (active tab, drafts) resets on selection change. -->
+							{#key selected.id}
+								<Tabs.Root value="endpoints">
+									<!-- Full-width rule under the tab row; the -mb-px pulls the
+									     triggers' 2px active underline down to overlap it
+									     (same anatomy as the PageShell band tabs). -->
+									<div class="border-b border-border">
+										<Tabs.List variant="underline" class="-mb-px">
+											<Tabs.Trigger variant="underline" value="endpoints" data-testid="tab-endpoints">
+												Endpoints
+											</Tabs.Trigger>
+											<Tabs.Trigger variant="underline" value="templates" data-testid="tab-templates">
+												Templates
+											</Tabs.Trigger>
+											<Tabs.Trigger variant="underline" value="settings" data-testid="tab-settings">
+												Settings
+											</Tabs.Trigger>
+										</Tabs.List>
+									</div>
+									<Tabs.Content value="endpoints" class="pt-4">
+										<FolderApiContract workspaceId={selected.workspace_id} folderId={selected.id} />
+									</Tabs.Content>
+									<Tabs.Content value="templates" class="pt-4">
+										<FolderTemplatesPanel folderId={selected.id} />
+									</Tabs.Content>
+									<Tabs.Content value="settings" class="pt-4">
+										<FolderSettingsPanel folder={selected} onUpdated={handleUpdated} />
+									</Tabs.Content>
+								</Tabs.Root>
+							{/key}
 						</div>
 					{/if}
 				</section>
 			</div>
 		{/if}
-	{/if}
+	</div>
 </PageShell>
