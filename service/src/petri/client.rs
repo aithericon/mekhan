@@ -122,6 +122,23 @@ impl PetriClient {
         Ok(resp.json().await?)
     }
 
+    /// List every net the engine knows about (hot AND hibernated) with its
+    /// lifecycle metadata — `GET /api/nets/metadata`, backed by the engine's
+    /// `KV_NET_METADATA` bucket. Returns the raw engine payload (an array of
+    /// `{ net_id, status, in_memory, template_id?, created_by?, label? }`);
+    /// the admin-nets handler joins instance rows + event counts and
+    /// re-serializes.
+    pub async fn list_nets_metadata(&self) -> Result<Value, PetriError> {
+        let url = format!("{}/api/nets/metadata", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(PetriError::Response { status, body });
+        }
+        Ok(resp.json().await?)
+    }
+
     /// Remove net from in-memory registry. Idempotent (404 is OK).
     pub async fn delete_net(&self, net_id: &str) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}", self.base_url, net_id);

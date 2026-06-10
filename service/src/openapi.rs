@@ -265,6 +265,11 @@ use utoipa::OpenApi;
             // `GET /api/v1/runners/model-serving` response, so register it for
             // frontend codegen + the OpenAPI contract.
             crate::models::runner::ModelServingRunner,
+            // Admin engine-net overview + kill-switch / cleanup. `AdminNetRow`
+            // is reached only through `Vec<_>` in the `GET /api/v1/admin/nets`
+            // response, so register it explicitly for frontend codegen.
+            crate::handlers::admin_nets::AdminNetRow,
+            crate::handlers::admin_nets::PurgeEventsResponse,
             // Model-pool reconciliation (docs/31 Phase 0) — per-node engine
             // inventory read. The nested per-node / per-engine / per-adapter
             // shapes are reached only through `Vec<_>` in the

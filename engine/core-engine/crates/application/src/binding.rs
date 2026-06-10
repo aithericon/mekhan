@@ -248,6 +248,19 @@ fn build_binding_for_indices(
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize)?;
 
+                // A zero-width gather (k == 0) must HOLD, never fire. With
+                // k == 0 the barrier is trivially satisfied but consumes
+                // nothing (the coordinator is a read arc), so the transition
+                // stays enabled and refires at eval speed — an infinite
+                // event flood. Zero-width fan-outs are completed on the
+                // producer side instead (the scatter emits the gathered
+                // empty result directly and skips the coordinator), so a
+                // barrier waiting on k == 0 is always a bug upstream, not a
+                // satisfiable state.
+                if k == 0 {
+                    return None;
+                }
+
                 // Filter the place's tokens to the matching subset.
                 let matching: Vec<&&Token> = if let Some(field) = &arc.correlate_on {
                     // Eligible tokens are those whose correlate field equals the
@@ -964,6 +977,30 @@ mod tests {
         assert!(
             binding.is_none(),
             "barrier must hold while fewer than K results present"
+        );
+    }
+
+    #[test]
+    fn gather_barrier_holds_when_k_is_zero() {
+        // k == 0 would be trivially satisfied, consume nothing (coordinator
+        // is a read arc), and leave the transition permanently enabled —
+        // firing forever at eval speed (prod incident 2026-06-10: an empty
+        // scatter's barrier flooded PETRI_GLOBAL at ~35 events/s). The
+        // barrier must HOLD; the empty fan-out is completed by the scatter
+        // side, never by the barrier.
+        let (executor, transition, results_place, expected_place, expected_arc, results_arc) =
+            gather_setup();
+
+        let mut marking = Marking::new();
+        marking.add_token(expected_place.clone(), data_token(json!({ "k": 0 })));
+        // Even with stray result tokens present, k == 0 must not bind.
+        marking.add_token(results_place.clone(), data_token(json!({ "v": 0 })));
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None);
+        assert!(
+            binding.is_none(),
+            "a zero-width gather barrier must hold, not fire with an empty consumed set"
         );
     }
 

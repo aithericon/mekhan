@@ -534,6 +534,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::roster::update_roster_member,
             handlers::roster::revoke_roster_member
         ))
+        // Admin engine-net overview + kill-switch / cleanup (2026-06-10
+        // incident follow-up). Engine-wide list with per-net event counts,
+        // DELETE = engine terminate-with-cleanup, purge-events = PETRI_GLOBAL
+        // subject purge for terminal nets. All require workspace Admin.
+        .routes(routes!(handlers::admin_nets::list_admin_nets))
+        .routes(routes!(handlers::admin_nets::kill_admin_net))
+        .routes(routes!(handlers::admin_nets::purge_admin_net_events))
         // Capability types (Phase 4 — typed capability registry). Admin-curated,
         // workspace-scoped vocabulary the enroll path validates runner caps
         // against and the publish path validates step Requirements against.

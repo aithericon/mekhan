@@ -6363,7 +6363,7 @@
         }
       ],
       "logic": {
-        "source": "#{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
+        "source": "if close.count == 0 { #{ gathered: #{ output: [] } } } else { #{ count: #{ count: close.count, \"__map_id\": close.__map_id } } }",
         "type": "rhai"
       },
       "name": "Transcribe (faster-whisper) - Channel 'parts' Close",
@@ -6371,6 +6371,11 @@
         {
           "cardinality": "single",
           "name": "count",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "gathered",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -6386,6 +6391,11 @@
         {
           "place": "p_transcribe_parts_count",
           "port": "count",
+          "weight": 1
+        },
+        {
+          "place": "p_transcribe_parts_gathered",
+          "port": "gathered",
           "weight": 1
         }
       ]

@@ -357,6 +357,9 @@ impl MekhanNats {
                     filter_subjects: vec!["petri.events.>".into(), "petri.bridge.>".into()],
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
+                    // Reap the durable if this projection is ever removed
+                    // (see step_executions_consumer for the incident rationale).
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
                     ..Default::default()
                 },
             )
@@ -367,6 +370,23 @@ impl MekhanNats {
     /// Create or get the durable consumer for the step-executions projection.
     /// Consumes `petri.events.>` and folds events into per-step rows via the
     /// projector in `service/src/projections/step_executions/`.
+    ///
+    /// Two non-default knobs, both born from the 2026-06-10 prod incident
+    /// (84k-message redelivery spiral):
+    /// - `ack_wait: 120s` (default 30s) — processing an event can legitimately
+    ///   take seconds (bootstrap history fetch + whole-net refold + row
+    ///   upserts). With the default, prefetched messages expired in the client
+    ///   buffer faster than the loop could drain them: every message was
+    ///   redelivered, the ack floor froze, and the consumer made ~0 forward
+    ///   progress. The loop also caps its pull batch (see
+    ///   `start_step_executions_ingest`) so at most a couple minutes of work
+    ///   is ever buffered ahead of the acks. Both fields are JetStream
+    ///   consumer-update-safe, so existing durables pick this up on restart.
+    /// - `inactive_threshold: 30 days` — if this projection is ever removed
+    ///   (or the service decommissioned), the server reaps the durable instead
+    ///   of letting it accumulate pending forever (the fate of the orphaned
+    ///   `mekhan-{node,model}-replicas` durables). A live service pulls
+    ///   continuously, so the threshold never fires in normal operation.
     pub async fn step_executions_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
         let durable = self.durable_name("mekhan-step-executions");
@@ -378,6 +398,8 @@ impl MekhanNats {
                     filter_subject: "petri.events.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
+                    ack_wait: Duration::from_secs(120),
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
                     ..Default::default()
                 },
             )
@@ -406,6 +428,9 @@ impl MekhanNats {
                     filter_subject: "petri.events.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
+                    // Reap the durable if this projection is ever removed
+                    // (see step_executions_consumer for the incident rationale).
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
                     ..Default::default()
                 },
             )
@@ -430,6 +455,9 @@ impl MekhanNats {
                     filter_subject: "petri.events.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
+                    // Reap the durable if this projection is ever removed
+                    // (see step_executions_consumer for the incident rationale).
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
                     ..Default::default()
                 },
             )
@@ -451,6 +479,9 @@ impl MekhanNats {
                     filter_subject: "petri.events.>".into(),
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
+                    // Reap the durable if this projection is ever removed
+                    // (see step_executions_consumer for the incident rationale).
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
                     ..Default::default()
                 },
             )

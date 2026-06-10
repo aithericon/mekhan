@@ -80,7 +80,19 @@ pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
         }
     };
 
-    let mut messages = match consumer.messages().await {
+    // Cap the pull batch well below the default (~200): processing one event
+    // can take seconds (bootstrap fetch + whole-net refold + upserts), and
+    // anything prefetched but not acked within the consumer's `ack_wait` is
+    // redelivered. With the default batch a backlog turned into a permanent
+    // redelivery carousel (2026-06-10 prod incident: ack floor frozen,
+    // delivered_seq stuck, ~0 net progress). 16 messages × worst-case seconds
+    // each stays comfortably inside the 120s ack_wait.
+    let mut messages = match consumer
+        .stream()
+        .max_messages_per_batch(16)
+        .messages()
+        .await
+    {
         Ok(m) => m,
         Err(e) => {
             tracing::error!("failed to start step-executions message stream: {e}");
