@@ -16,7 +16,7 @@
 	// curate + run it (Set) → watch it live (Engines) → observe inference
 	// (Telemetry). Autoscaling places models across registered runners — there
 	// is no node provisioning, so no separate capacity tab.
-	const tabs: PageTab[] = [
+	const poolTabs: PageTab[] = [
 		{
 			href: '/models/catalog',
 			label: 'Catalog',
@@ -53,9 +53,10 @@
 		<PageHeader
 			title="Model Pool"
 			subtitle="Self-hosted LLM serving — operator curates the model set, the autoscaler manages count + placement. Inference bypasses the engine net (HTTP router)."
-			class="mb-3"
 		/>
-		<PageTabs testid="model-pool-tabs" {tabs} />
+	{/snippet}
+	{#snippet tabs()}
+		<PageTabs testid="model-pool-tabs" tabs={poolTabs} />
 	{/snippet}
 	{@render children()}
 </PageShell>

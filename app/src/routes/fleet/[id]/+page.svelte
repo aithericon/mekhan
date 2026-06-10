@@ -86,54 +86,55 @@
 </script>
 
 <PageShell width="wide">
-	<PageHeader
-		title={name}
-		variant="detail"
-		back={{ href: '/fleet', label: 'Control Plane' }}
-		headTitle={`${name} | Control Plane | Mekhan`}
-		titleTestid="group-detail-title"
-		class="mb-4"
-	>
-		{#snippet children()}
-			<div class="mt-1 flex items-center gap-2 text-sm">
-				<Badge variant="secondary">{backend ?? 'capacity'}</Badge>
-				{#if capacity}
-					<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
-					{#if capacity.live.kind === 'presence'}
-						<span class="text-xs text-muted-foreground tabular-nums">
-							{capacity.live.online}/{capacity.live.total} online
-						</span>
-					{:else if capacity.live.kind === 'queue'}
-						<span class="text-xs text-muted-foreground tabular-nums">
-							{capacity.live.online}/{capacity.live.enrolled} online
-						</span>
-					{:else if capacity.live.kind === 'tokens'}
-						<span class="text-xs text-muted-foreground tabular-nums">
-							{capacity.live.in_use}/{capacity.live.seeded} in use
-						</span>
+	{#snippet band()}
+		<PageHeader
+			title={name}
+			variant="detail"
+			back={{ href: '/fleet', label: 'Control Plane' }}
+			headTitle={`${name} | Control Plane | Mekhan`}
+			titleTestid="group-detail-title"
+		>
+			{#snippet children()}
+				<div class="mt-1 flex items-center gap-2 text-sm">
+					<Badge variant="secondary">{backend ?? 'capacity'}</Badge>
+					{#if capacity}
+						<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
+						{#if capacity.live.kind === 'presence'}
+							<span class="text-xs text-muted-foreground tabular-nums">
+								{capacity.live.online}/{capacity.live.total} online
+							</span>
+						{:else if capacity.live.kind === 'queue'}
+							<span class="text-xs text-muted-foreground tabular-nums">
+								{capacity.live.online}/{capacity.live.enrolled} online
+							</span>
+						{:else if capacity.live.kind === 'tokens'}
+							<span class="text-xs text-muted-foreground tabular-nums">
+								{capacity.live.in_use}/{capacity.live.seeded} in use
+							</span>
+						{/if}
+					{:else}
+						<span class="font-mono text-xs text-muted-foreground">{resourceId}</span>
 					{/if}
-				{:else}
-					<span class="font-mono text-xs text-muted-foreground">{resourceId}</span>
+				</div>
+			{/snippet}
+			{#snippet actions()}
+				{#if groupAlias && backend === 'queue'}
+					<!-- Presence enroll lives in the runner-cards header row (RunnerList);
+						 the worker roster has no such row, so it keeps the header action. -->
+					<Button
+						variant="outline"
+						size="sm"
+						class="gap-1.5"
+						onclick={() => (enrollOpen = true)}
+						data-testid="group-enroll-here"
+					>
+						<UserPlus class="size-4" />
+						Enroll worker here
+					</Button>
 				{/if}
-			</div>
-		{/snippet}
-		{#snippet actions()}
-			{#if groupAlias && backend === 'queue'}
-				<!-- Presence enroll lives in the runner-cards header row (RunnerList);
-					 the worker roster has no such row, so it keeps the header action. -->
-				<Button
-					variant="outline"
-					size="sm"
-					class="gap-1.5"
-					onclick={() => (enrollOpen = true)}
-					data-testid="group-enroll-here"
-				>
-					<UserPlus class="size-4" />
-					Enroll worker here
-				</Button>
-			{/if}
-		{/snippet}
-	</PageHeader>
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
 	{#if error}
 		<div

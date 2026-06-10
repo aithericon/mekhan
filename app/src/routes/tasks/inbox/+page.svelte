@@ -160,13 +160,15 @@
 </script>
 
 <PageShell testid="inbox-page">
-	<PageHeader title="Inbox" subtitle="Tasks offered to you, and the work you've claimed">
-		{#snippet actions()}
-			<Button variant="ghost" size="sm" onclick={refresh} data-testid="inbox-refresh">
-				<RefreshCw class="size-4" />
-			</Button>
-		{/snippet}
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader title="Inbox" subtitle="Tasks offered to you, and the work you've claimed">
+			{#snippet actions()}
+				<Button variant="ghost" size="sm" onclick={refresh} data-testid="inbox-refresh">
+					<RefreshCw class="size-4" />
+				</Button>
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
 	{#if error}
 		<div

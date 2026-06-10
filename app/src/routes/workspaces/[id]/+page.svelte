@@ -91,16 +91,12 @@
 </script>
 
 <PageShell testid="workspace-detail">
-	{#if loading}
-		<div class="text-sm text-muted-foreground">Loading workspace…</div>
-	{:else if error}
-		<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-			{error}
-		</div>
-	{:else if workspace}
+	{#snippet band()}
 		<PageHeader
-			title={workspace.display_name}
-			subtitle="{workspace.slug} · {members.length} {members.length === 1 ? 'member' : 'members'}"
+			title={workspace?.display_name ?? 'Workspace'}
+			subtitle={workspace
+				? `${workspace.slug} · ${members.length} ${members.length === 1 ? 'member' : 'members'}`
+				: undefined}
 		>
 			{#snippet actions()}
 				{#if workspace?.is_system}
@@ -108,7 +104,14 @@
 				{/if}
 			{/snippet}
 		</PageHeader>
-
+	{/snippet}
+	{#if loading}
+		<div class="text-sm text-muted-foreground">Loading workspace…</div>
+	{:else if error}
+		<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{error}
+		</div>
+	{:else if workspace}
 		<div class="grid gap-6 md:grid-cols-2">
 			<!-- Members -->
 			<Card data-testid="members-card">

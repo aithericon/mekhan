@@ -309,7 +309,10 @@
 			</div>
 		{:else if ctx.instance}
 			{@const instance = ctx.instance}
-			<div class="shrink-0 border-b border-border bg-card px-4 py-2">
+			<!-- Hand-rolled band (bleed shell): same tokens/anatomy as PageShell's
+			     band variant — header row + flush tab row over one border-b, the
+			     tab underline overlapping it via -mb-px. -->
+			<div class="shrink-0 border-b border-border bg-card px-6 pt-4">
 				{#if instance.parent_instance_id}
 					<!-- This run was spawned by a SubWorkflow node in a parent run.
 					     A plain <a> is correct: navigating to the parent is a fresh
@@ -381,13 +384,17 @@
 						{/if}
 					{/snippet}
 				</PageHeader>
+
+				{#if primaryProcess || hasNet}
+					<div class="-mb-px mt-1">
+						<PageTabs testid="instance-tabs" {tabs} />
+					</div>
+				{:else}
+					<div class="pb-3"></div>
+				{/if}
 			</div>
 
 			{#if primaryProcess || hasNet}
-				<div class="shrink-0 border-b border-border bg-card px-3 py-1">
-					<PageTabs testid="instance-tabs" {tabs} />
-				</div>
-
 				<div class="relative flex-1 min-h-0">
 					{@render children()}
 				</div>

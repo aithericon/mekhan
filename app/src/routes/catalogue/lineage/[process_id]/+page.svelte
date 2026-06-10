@@ -7,7 +7,6 @@
 	} from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import FileBox from '@lucide/svelte/icons/file-box';
@@ -112,38 +111,39 @@
 </script>
 
 <PageShell testid="lineage-page">
-	<PageHeader
-		title="Process Lineage"
-		variant="detail"
-		icon={GitBranch}
-		back={{ href: '/data', label: 'Back to Data' }}
-	>
-		{#snippet children()}
-			{#if lineage}
-				<p class="mt-1 font-mono text-sm text-muted-foreground">
-					{lineage.process_id}
-				</p>
-				<div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
-					<span class="flex items-center gap-1.5">
-						<FileBox class="size-4" />
-						{lineage.total_artifacts} artifact{lineage.total_artifacts === 1 ? '' : 's'}
-					</span>
-					<span>{lineage.steps.length} step{lineage.steps.length === 1 ? '' : 's'}</span>
-				</div>
-			{/if}
-		{/snippet}
-		{#snippet actions()}
-			{#if instanceId}
-				<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="gap-1.5">
-					<Activity class="size-4" />
-					Open instance
-				</Button>
-			{/if}
-		{/snippet}
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader
+			title="Process Lineage"
+			variant="detail"
+			icon={GitBranch}
+			back={{ href: '/data', label: 'Back to Data' }}
+		>
+			{#snippet children()}
+				{#if lineage}
+					<p class="mt-1 font-mono text-sm text-muted-foreground">
+						{lineage.process_id}
+					</p>
+					<div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
+						<span class="flex items-center gap-1.5">
+							<FileBox class="size-4" />
+							{lineage.total_artifacts} artifact{lineage.total_artifacts === 1 ? '' : 's'}
+						</span>
+						<span>{lineage.steps.length} step{lineage.steps.length === 1 ? '' : 's'}</span>
+					</div>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				{#if instanceId}
+					<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="gap-1.5">
+						<Activity class="size-4" />
+						Open instance
+					</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
 	{#if lineage}
-		<Separator class="mb-6" />
 
 		<!-- Timeline -->
 		<div class="relative">

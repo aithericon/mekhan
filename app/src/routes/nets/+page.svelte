@@ -70,7 +70,7 @@
      scrolling below it (deliberately not a max-w card list), hence `bleed`. -->
 <PageShell width="bleed">
 	<div class="flex h-full flex-col">
-		<div class="shrink-0 border-b border-border px-6 py-4">
+		<div class="shrink-0 border-b border-border bg-card px-6 py-4">
 			<PageHeader
 				title="Engine Nets"
 				icon={Server}
@@ -78,15 +78,6 @@
 				class="mb-0"
 			>
 				{#snippet actions()}
-					<FilterPills
-						active={filter}
-						onSelect={(v) => (filter = v as typeof filter)}
-						options={[
-							{ value: 'active', label: 'Active' },
-							{ value: 'terminal', label: 'Terminal' },
-							{ value: 'all', label: 'All' }
-						]}
-					/>
 					<Button variant="outline" size="sm" onclick={load}>
 						<RefreshCw class="size-3.5" />
 						Refresh
@@ -96,6 +87,17 @@
 		</div>
 
 		<div class="flex-1 overflow-y-auto">
+			<div class="px-6 py-4">
+				<FilterPills
+					active={filter}
+					onSelect={(v) => (filter = v as typeof filter)}
+					options={[
+						{ value: 'active', label: 'Active' },
+						{ value: 'terminal', label: 'Terminal' },
+						{ value: 'all', label: 'All' }
+					]}
+				/>
+			</div>
 			{#if loading}
 				<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
 					Loading nets from engine...

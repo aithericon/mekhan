@@ -104,42 +104,43 @@
 </script>
 
 <PageShell width="wide">
-	<PageHeader
-		title={name}
-		variant="detail"
-		back={{ href: '/fleet', label: 'Control Plane' }}
-		headTitle={`${name} | Clusters | Mekhan`}
-		class="mb-4"
-	>
-		{#snippet children()}
-			<div class="mt-1 flex items-center gap-2 text-sm">
-				{#if cluster}
-					<Badge variant="secondary">{cluster.flavor}</Badge>
-					<Badge variant="secondary">{cluster.watcher_state}</Badge>
-					<span class="font-mono text-xs text-muted-foreground">{poolNetId}</span>
-				{:else}
-					<span class="font-mono text-xs text-muted-foreground">{poolNetId}</span>
-				{/if}
-			</div>
-		{/snippet}
-		{#snippet actions()}
-			{#if cluster && cluster.resource_id !== '_env'}
-				<div class="flex items-center gap-1.5">
-					<Button variant="outline" size="sm" disabled={busy} onclick={() => act(reconnectCluster)}>
-						<RotateCcw class="mr-1.5 size-4" /> Reconnect
-					</Button>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={busy || cluster.draining}
-						onclick={() => act(drainCluster)}
-					>
-						Drain
-					</Button>
+	{#snippet band()}
+		<PageHeader
+			title={name}
+			variant="detail"
+			back={{ href: '/fleet', label: 'Control Plane' }}
+			headTitle={`${name} | Clusters | Mekhan`}
+		>
+			{#snippet children()}
+				<div class="mt-1 flex items-center gap-2 text-sm">
+					{#if cluster}
+						<Badge variant="secondary">{cluster.flavor}</Badge>
+						<Badge variant="secondary">{cluster.watcher_state}</Badge>
+						<span class="font-mono text-xs text-muted-foreground">{poolNetId}</span>
+					{:else}
+						<span class="font-mono text-xs text-muted-foreground">{poolNetId}</span>
+					{/if}
 				</div>
-			{/if}
-		{/snippet}
-	</PageHeader>
+			{/snippet}
+			{#snippet actions()}
+				{#if cluster && cluster.resource_id !== '_env'}
+					<div class="flex items-center gap-1.5">
+						<Button variant="outline" size="sm" disabled={busy} onclick={() => act(reconnectCluster)}>
+							<RotateCcw class="mr-1.5 size-4" /> Reconnect
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={busy || cluster.draining}
+							onclick={() => act(drainCluster)}
+						>
+							Drain
+						</Button>
+					</div>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
 	{#if error}
 		<div class="mb-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">

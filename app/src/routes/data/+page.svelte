@@ -36,19 +36,31 @@
 	}
 </script>
 
-<PageShell width="wide" testid="data-page">
-	<PageHeader
-		title="Data"
-		icon={Database}
-		subtitle="Catalogued content, the physical copies behind it, and the file servers the platform tracks — one browser."
-	/>
-
-	<Tabs.Root value={tab} onValueChange={onTab}>
-		<Tabs.List class="mb-4">
-			<Tabs.Trigger value="entries" data-testid="data-tab-entries">Entries</Tabs.Trigger>
-			<Tabs.Trigger value="copies" data-testid="data-tab-copies">Copies</Tabs.Trigger>
-			<Tabs.Trigger value="servers" data-testid="data-tab-servers">Servers</Tabs.Trigger>
-		</Tabs.List>
+<!-- Tabs.Root wraps the WHOLE shell so the trigger row can live in the band's
+     `tabs` snippet while the panels stay in the scrolling body (bits-ui
+     context spans both). -->
+<Tabs.Root value={tab} onValueChange={onTab} class="h-full gap-0">
+	<PageShell width="wide" testid="data-page">
+		{#snippet band()}
+			<PageHeader
+				title="Data"
+				icon={Database}
+				subtitle="Catalogued content, the physical copies behind it, and the file servers the platform tracks — one browser."
+			/>
+		{/snippet}
+		{#snippet tabs()}
+			<Tabs.List variant="underline">
+				<Tabs.Trigger variant="underline" value="entries" data-testid="data-tab-entries">
+					Entries
+				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="copies" data-testid="data-tab-copies">
+					Copies
+				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="servers" data-testid="data-tab-servers">
+					Servers
+				</Tabs.Trigger>
+			</Tabs.List>
+		{/snippet}
 
 		<Tabs.Content value="entries">
 			<EntriesTab onViewServer={viewServer} />
@@ -59,5 +71,5 @@
 		<Tabs.Content value="servers">
 			<ServersTab focusKey={focusServer} />
 		</Tabs.Content>
-	</Tabs.Root>
-</PageShell>
+	</PageShell>
+</Tabs.Root>

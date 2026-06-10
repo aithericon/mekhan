@@ -125,31 +125,33 @@
 </script>
 
 <PageShell testid="task-detail-page">
-	<PageHeader
-		title={task?.title ?? 'Task'}
-		variant="detail"
-		back={{ href: backHref, label: backLabel }}
-	>
-		{#snippet children()}
-			{#if statusBadge}
-				<div class="mt-1">
-					<Badge class="bg-amber-100 text-amber-700" variant="secondary">{statusBadge}</Badge>
-				</div>
-			{/if}
-		{/snippet}
-		{#snippet actions()}
-			{#if task?.process_id && process}
-				<Button
-					variant="ghost"
-					size="sm"
-					href="/processes/{process.process_id}"
-					class="text-muted-foreground"
-				>
-					View Process
-				</Button>
-			{/if}
-		{/snippet}
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader
+			title={task?.title ?? 'Task'}
+			variant="detail"
+			back={{ href: backHref, label: backLabel }}
+		>
+			{#snippet children()}
+				{#if statusBadge}
+					<div class="mt-1">
+						<Badge class="bg-amber-100 text-amber-700" variant="secondary">{statusBadge}</Badge>
+					</div>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				{#if task?.process_id && process}
+					<Button
+						variant="ghost"
+						size="sm"
+						href="/processes/{process.process_id}"
+						class="text-muted-foreground"
+					>
+						View Process
+					</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
 	{#if error}
 		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

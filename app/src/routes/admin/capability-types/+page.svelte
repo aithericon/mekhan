@@ -6,12 +6,14 @@
 </script>
 
 <PageShell testid="capability-types-page">
-	<PageHeader title="Capability Types">
-		<!-- Subtitle needs inline markup (<code>) — rendered via children. -->
-		<p class="mt-1 text-sm text-muted-foreground">
-			Typed schemas that lab runners advertise at enrolment. Workflow steps use
-			<code>requirements</code> constraints to select a matching runner.
-		</p>
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader title="Capability Types">
+			<!-- Subtitle needs inline markup (<code>) — rendered via children. -->
+			<p class="mt-1 text-sm text-muted-foreground">
+				Typed schemas that lab runners advertise at enrolment. Workflow steps use
+				<code>requirements</code> constraints to select a matching runner.
+			</p>
+		</PageHeader>
+	{/snippet}
 	<CapabilityTypesList />
 </PageShell>

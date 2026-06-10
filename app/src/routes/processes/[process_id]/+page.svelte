@@ -104,58 +104,59 @@
 </script>
 
 <PageShell width="full">
-	{#if detail}
-		{@const d = detail}
-		<!-- Meta rows shared between display + rename header states -->
-		{#snippet metaRows()}
-			<div class="mt-2 mb-2 flex flex-wrap items-center gap-2">
-				<Badge class={statusColor(d.status)} variant="secondary">
-					{d.status}
-				</Badge>
-				{#if d.kind}
-					<Badge class={kindColor(d.kind)} variant="secondary">
-						{d.kind}
+	{#snippet band()}
+		{#if detail}
+			{@const d = detail}
+			<!-- Meta rows shared between display + rename header states -->
+			{#snippet metaRows()}
+				<div class="mt-2 mb-2 flex flex-wrap items-center gap-2">
+					<Badge class={statusColor(d.status)} variant="secondary">
+						{d.status}
 					</Badge>
-				{/if}
-				{#if d.owner}
-					<span class="text-sm text-muted-foreground">Owner: {d.owner}</span>
-				{/if}
-			</div>
-
-			<p class="font-mono text-sm text-muted-foreground mb-1">{d.process_id}</p>
-			{#if d.instance_id}
-				<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
-					<span class="text-muted-foreground">Origin:</span>
-					<a
-						href="/instances/{d.instance_id}"
-						class="inline-flex items-center gap-1 text-primary hover:underline"
-						data-testid="process-instance-link"
-					>
-						Instance
-						<ChevronRight class="size-3" />
-					</a>
-					{#if linkedInstance}
-						<a
-							href="/templates/{linkedInstance.template_id}"
-							class="inline-flex items-center gap-1 text-primary hover:underline"
-							data-testid="process-template-link"
-						>
-							Template v{linkedInstance.template_version}
-							<ChevronRight class="size-3" />
-						</a>
+					{#if d.kind}
+						<Badge class={kindColor(d.kind)} variant="secondary">
+							{d.kind}
+						</Badge>
+					{/if}
+					{#if d.owner}
+						<span class="text-sm text-muted-foreground">Owner: {d.owner}</span>
 					{/if}
 				</div>
-			{/if}
-			<div class="flex items-center gap-4 text-sm text-muted-foreground">
-				<span>Created {formatDate(d.created_at)}</span>
-				<span>Updated {relativeTime(d.updated_at)}</span>
-			</div>
+
+				<p class="font-mono text-sm text-muted-foreground mb-1">{d.process_id}</p>
+				{#if d.instance_id}
+					<div class="mb-1 flex flex-wrap items-center gap-1.5 text-sm">
+						<span class="text-muted-foreground">Origin:</span>
+						<a
+							href="/instances/{d.instance_id}"
+							class="inline-flex items-center gap-1 text-primary hover:underline"
+							data-testid="process-instance-link"
+						>
+							Instance
+							<ChevronRight class="size-3" />
+						</a>
+						{#if linkedInstance}
+							<a
+								href="/templates/{linkedInstance.template_id}"
+								class="inline-flex items-center gap-1 text-primary hover:underline"
+								data-testid="process-template-link"
+							>
+								Template v{linkedInstance.template_version}
+								<ChevronRight class="size-3" />
+							</a>
+						{/if}
+					</div>
+				{/if}
+				<div class="flex items-center gap-4 text-sm text-muted-foreground">
+					<span>Created {formatDate(d.created_at)}</span>
+					<span>Updated {relativeTime(d.updated_at)}</span>
+				</div>
 		{/snippet}
 
 		{#if editingName}
 			<!-- Inline-rename state: the title is an input, so PageHeader (string
 			     title) steps aside for this transient editing header. -->
-			<header class="mb-6">
+			<header>
 				<div class="mb-3">
 					<a
 						href="/processes"
@@ -206,12 +207,9 @@
 					{@render metaRows()}
 				{/snippet}
 			</PageHeader>
-		{/if}
-
-		<Separator class="mb-4" />
-	{:else}
-		<!-- Back link while the process is still loading -->
-		<div class="mb-6">
+			{/if}
+		{:else}
+			<!-- Back link while the process is still loading -->
 			<a
 				href="/processes"
 				class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -219,8 +217,8 @@
 				<ChevronLeft class="size-4" />
 				Back to processes
 			</a>
-		</div>
-	{/if}
+		{/if}
+	{/snippet}
 
 	<ProcessView {processId} bind:detail />
 </PageShell>

@@ -8,9 +8,11 @@
 </script>
 
 <PageShell testid="assets-page">
-	<PageHeader
-		title="Assets"
-		subtitle="Curated, user-typed static content (material parameters, scripts, reference data). Define a schema, populate records via the table builder or CSV, and bind collections into workflow nodes as ordinary staged inputs."
-	/>
+	{#snippet band()}
+		<PageHeader
+			title="Assets"
+			subtitle="Curated, user-typed static content (material parameters, scripts, reference data). Define a schema, populate records via the table builder or CSV, and bind collections into workflow nodes as ordinary staged inputs."
+		/>
+	{/snippet}
 	<AssetList />
 </PageShell>

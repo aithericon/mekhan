@@ -9,9 +9,11 @@
 </script>
 
 <PageShell testid="resources-page">
-	<PageHeader
-		title="Resources"
-		subtitle="Typed credentials workflows bind by alias at launch (Postgres, OpenAI, S3, Slack, …). Secrets live in Vault; only public fields are listed here."
-	/>
+	{#snippet band()}
+		<PageHeader
+			title="Resources"
+			subtitle="Typed credentials workflows bind by alias at launch (Postgres, OpenAI, S3, Slack, …). Secrets live in Vault; only public fields are listed here."
+		/>
+	{/snippet}
 	<ResourceList />
 </PageShell>

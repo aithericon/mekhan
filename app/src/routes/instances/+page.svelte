@@ -93,11 +93,11 @@
 </script>
 
 <PageShell testid="instances-page">
-	<PageHeader title="Instances" subtitle="Running and completed workflow instances">
-		{#snippet actions()}
-			<FilterPills testid="mode-filter" active={activeMode} options={modeOptions} />
-		{/snippet}
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader title="Instances" subtitle="Running and completed workflow instances" />
+	{/snippet}
+
+	<FilterPills class="mb-4" testid="mode-filter" active={activeMode} options={modeOptions} />
 
 	{#if templateFilter}
 		<div

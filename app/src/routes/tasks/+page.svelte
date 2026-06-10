@@ -76,7 +76,9 @@
 </script>
 
 <PageShell testid="tasks-page">
-	<PageHeader title="Tasks" subtitle="Human tasks from running workflows" />
+	{#snippet band()}
+		<PageHeader title="Tasks" subtitle="Human tasks from running workflows" />
+	{/snippet}
 
 	<!-- Status filter -->
 	<FilterPills

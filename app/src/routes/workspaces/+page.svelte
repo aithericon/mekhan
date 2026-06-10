@@ -12,10 +12,12 @@
 </script>
 
 <PageShell testid="workspaces-index">
-	<PageHeader
-		title="Workspaces"
-		subtitle="Every workspace you're a member of. Click one to manage members, projects, and tags."
-	/>
+	{#snippet band()}
+		<PageHeader
+			title="Workspaces"
+			subtitle="Every workspace you're a member of. Click one to manage members, projects, and tags."
+		/>
+	{/snippet}
 
 	{#if !workspaces.loaded}
 		<div class="text-sm text-muted-foreground">Loading…</div>

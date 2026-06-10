@@ -44,10 +44,12 @@
 </script>
 
 <PageShell width="narrow" testid="profile-page">
-	<PageHeader
-		title="Profile"
-		subtitle="Your signed-in identity, as resolved by the server from the session cookie."
-	/>
+	{#snippet band()}
+		<PageHeader
+			title="Profile"
+			subtitle="Your signed-in identity, as resolved by the server from the session cookie."
+		/>
+	{/snippet}
 
 	{#if user}
 		<Card>

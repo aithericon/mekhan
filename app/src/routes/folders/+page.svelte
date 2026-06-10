@@ -229,14 +229,16 @@
 {/snippet}
 
 <PageShell testid="folders-index">
-	<PageHeader title="Folders">
-		<p class="mt-1 text-sm text-muted-foreground">
-			Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
-			with a runnable contract for every published template in its subtree, plus a
-			dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
-				Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
-		</p>
-	</PageHeader>
+	{#snippet band()}
+		<PageHeader title="Folders">
+			<p class="mt-1 text-sm text-muted-foreground">
+				Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
+				with a runnable contract for every published template in its subtree, plus a
+				dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
+					Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
+			</p>
+		</PageHeader>
+	{/snippet}
 
 	{#if !workspaceId}
 		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">

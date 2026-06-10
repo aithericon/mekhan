@@ -178,36 +178,42 @@
 </script>
 
 <PageShell width="wide" testid="control-plane-page">
-	<PageHeader
-		title="Control Plane"
-		subtitle="The runners (the actual nodes) that pick up work, and the dispatch capacities that back them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and scheduler clusters."
-	>
-		{#snippet actions()}
-			{#if activeTab === 'capacities'}
-				<Button
-					variant="default"
-					size="sm"
-					class="gap-1.5"
-					onclick={openCreate}
-					data-testid="new-capacity-button"
-				>
-					<Plus class="size-4" />
-					New capacity
-				</Button>
-			{/if}
-		{/snippet}
-	</PageHeader>
-
-	<Tabs.Root
-		value={activeTab}
-		onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
-		class="mb-6"
-	>
-		<Tabs.List>
-			<Tabs.Trigger value="runners" data-testid="cp-tab-runners">Runners</Tabs.Trigger>
-			<Tabs.Trigger value="capacities" data-testid="cp-tab-capacities">Capacities</Tabs.Trigger>
-		</Tabs.List>
-	</Tabs.Root>
+	{#snippet band()}
+		<PageHeader
+			title="Control Plane"
+			subtitle="The runners (the actual nodes) that pick up work, and the dispatch capacities that back them — presence-driven runner groups, pull worker pools, seeded concurrency limits, and scheduler clusters."
+		>
+			{#snippet actions()}
+				{#if activeTab === 'capacities'}
+					<Button
+						variant="default"
+						size="sm"
+						class="gap-1.5"
+						onclick={openCreate}
+						data-testid="new-capacity-button"
+					>
+						<Plus class="size-4" />
+						New capacity
+					</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
+	{#snippet tabs()}
+		<Tabs.Root
+			value={activeTab}
+			onValueChange={(v) => (activeTab = (v as 'runners' | 'capacities') ?? 'runners')}
+		>
+			<Tabs.List variant="underline">
+				<Tabs.Trigger variant="underline" value="runners" data-testid="cp-tab-runners">
+					Runners
+				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="capacities" data-testid="cp-tab-capacities">
+					Capacities
+				</Tabs.Trigger>
+			</Tabs.List>
+		</Tabs.Root>
+	{/snippet}
 
 	{#if activeTab === 'runners'}
 		<!-- The runner roster IS the unified machine view; Engines is this list

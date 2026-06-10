@@ -135,11 +135,13 @@
 </script>
 
 <PageShell>
-	<PageHeader
-		title="Processes"
-		icon={Activity}
-		subtitle="Track and inspect running workflows, campaigns and pipelines"
-	/>
+	{#snippet band()}
+		<PageHeader
+			title="Processes"
+			icon={Activity}
+			subtitle="Track and inspect running workflows, campaigns and pipelines"
+		/>
+	{/snippet}
 
 	<!-- Stats cards -->
 	{#if stats}

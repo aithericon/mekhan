@@ -53,7 +53,9 @@
 </script>
 
 <PageShell width="narrow" testid="new-template-page">
-	<PageHeader title="New Template" subtitle="Create a new workflow template" />
+	{#snippet band()}
+		<PageHeader title="New Template" subtitle="Create a new workflow template" />
+	{/snippet}
 
 	{#if error}
 		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

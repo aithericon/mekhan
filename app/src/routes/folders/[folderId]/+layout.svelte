@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import Settings from '@lucide/svelte/icons/settings';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -72,61 +71,52 @@
 <svelte:head><title>{ctx.folder?.display_name ?? 'Folder'} | Mekhan</title></svelte:head>
 
 <PageShell>
-	{#if ctx.loading && !ctx.folder}
-		<a
-			href="/folders"
-			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-		>
-			<ChevronLeft class="size-4" /> Folders
-		</a>
-		<p class="text-sm text-muted-foreground">Loading…</p>
-	{:else if ctx.error && !ctx.folder}
-		<a
-			href="/folders"
-			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-		>
-			<ChevronLeft class="size-4" /> Folders
-		</a>
-		<div class="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-			{ctx.error}
-		</div>
-	{:else if ctx.folder}
-		{@const folder = ctx.folder}
+	{#snippet band()}
 		<!-- Static folder header — shared across every tab subroute. -->
 		<PageHeader
-			title={folder.display_name}
+			title={ctx.folder?.display_name ?? 'Folder'}
 			variant="detail"
 			back={{ href: '/folders', label: 'Folders' }}
 			headTitle={false}
-			class="mb-5"
 		>
-			<div class="mt-1 flex items-center gap-2">
-				<Badge variant="secondary" class="font-mono text-sm">{folder.path}</Badge>
-				{#if folder.description}
-					<span class="truncate text-sm text-muted-foreground">{folder.description}</span>
-				{/if}
-			</div>
+			{#if ctx.folder}
+				<div class="mt-1 flex items-center gap-2">
+					<Badge variant="secondary" class="font-mono text-sm">{ctx.folder.path}</Badge>
+					{#if ctx.folder.description}
+						<span class="truncate text-sm text-muted-foreground">{ctx.folder.description}</span>
+					{/if}
+				</div>
+			{/if}
 			{#snippet actions()}
-				<Button
-					variant={onSettings ? 'secondary' : 'ghost'}
-					size="sm"
-					title="Folder settings"
-					onclick={() => goto(`/folders/${ctx.folderId}/settings`)}
-					data-testid="btn-folder-settings"
-				>
-					<Settings class="size-4" /> Settings
-				</Button>
+				{#if ctx.folder}
+					<Button
+						variant={onSettings ? 'secondary' : 'ghost'}
+						size="sm"
+						title="Folder settings"
+						onclick={() => goto(`/folders/${ctx.folderId}/settings`)}
+						data-testid="btn-folder-settings"
+					>
+						<Settings class="size-4" /> Settings
+					</Button>
+				{/if}
 			{/snippet}
 		</PageHeader>
-
+	{/snippet}
+	{#snippet tabs()}
 		<PageTabs
-			class="mb-5"
 			tabs={[
 				{ href: `/folders/${ctx.folderId}/templates`, label: 'Templates', testid: 'tab-templates' },
 				{ href: `/folders/${ctx.folderId}/api`, label: 'API', testid: 'tab-api' }
 			]}
 		/>
-
+	{/snippet}
+	{#if ctx.loading && !ctx.folder}
+		<p class="text-sm text-muted-foreground">Loading…</p>
+	{:else if ctx.error && !ctx.folder}
+		<div class="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+			{ctx.error}
+		</div>
+	{:else if ctx.folder}
 		{@render children()}
 	{/if}
 </PageShell>
