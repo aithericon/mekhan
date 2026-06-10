@@ -103,7 +103,7 @@
 		<p class="text-xs text-muted-foreground">
 			{#if pools.length === 0}
 				No human-task pools exist yet. Create a capacity with the
-				<span class="font-mono">human</span> preset (presence · offer) in the Control Plane, enroll
+				<span class="font-mono">human</span> preset (presence · offer) on the Fleet page, enroll
 				members, then bind it here.
 			{:else}
 				Bind a pool to <em>offer</em> this task to its enrolled members — the first available member

@@ -108,7 +108,7 @@
 		<PageHeader
 			title={name}
 			variant="detail"
-			back={{ href: '/fleet', label: 'Control Plane' }}
+			back={{ href: '/fleet', label: 'Fleet' }}
 			headTitle={`${name} | Clusters | Mekhan`}
 		>
 			{#snippet children()}

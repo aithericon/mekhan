@@ -71,7 +71,7 @@
 	const KINDS: { kind: Kind; label: string; preset?: string; hint: string }[] = [
 		{
 			kind: 'runner_group',
-			label: 'Runner group',
+			label: 'Machine pool',
 			preset: 'instrument',
 			hint: 'Presence-driven — one unit per live runner. Enroll runners into it.'
 		},
@@ -83,7 +83,7 @@
 		},
 		{
 			kind: 'worker',
-			label: 'Worker group',
+			label: 'Worker pool',
 			preset: 'worker',
 			hint: "Competing-consumer workers that pull from this group's queue. Enroll workers into it."
 		},
@@ -310,12 +310,12 @@
 		<div class="space-y-5 p-2" data-testid="new-capacity-modal">
 			<div class="space-y-1">
 				<SheetTitle class="text-lg font-semibold">
-					{isEdit ? 'Edit capacity' : 'New capacity'}
+					{isEdit ? 'Edit pool' : 'New pool'}
 				</SheetTitle>
 				<SheetDescription class="text-sm text-muted-foreground">
 					{isEdit
-						? 'Update this capacity. Its kind and name are fixed; change the editable fields below.'
-						: 'Pick the kind of dispatch capacity to add.'}
+						? 'Update this pool. Its kind and name are fixed; change the editable fields below.'
+						: 'Pick the kind of pool to add.'}
 				</SheetDescription>
 			</div>
 
@@ -425,7 +425,7 @@
 							: 'Creating…'
 						: isEdit
 							? 'Save changes'
-							: 'Create capacity'}
+							: 'Create pool'}
 				</Button>
 			</div>
 		</div>
