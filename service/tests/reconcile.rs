@@ -186,23 +186,28 @@ async fn reconcile_classifies_every_class() {
                 path: "/data/verified.bin".into(),
                 size: 100,
                 mtime: None,
+                hash: None,
             },
             ObservedItem {
                 path: "/data/mismatch.bin".into(),
                 size: 999,
                 mtime: None,
+                hash: None,
             },
             ObservedItem {
                 path: "/data/orphan_disk.bin".into(), // no legacy row
                 size: 7,
                 mtime: None,
+                hash: None,
             },
             ObservedItem {
                 path: "/data/dup.bin".into(),
                 size: 300,
                 mtime: None,
+                hash: None,
             },
         ],
+        &reconcile::ObservationContext::default(),
     )
     .await
     .expect("reconcile_batch server");
@@ -220,7 +225,9 @@ async fn reconcile_classifies_every_class() {
             path: "/data/dup.bin".into(),
             size: 300,
             mtime: None,
+            hash: None,
         }],
+        &reconcile::ObservationContext::default(),
     )
     .await
     .expect("reconcile_batch server_b");

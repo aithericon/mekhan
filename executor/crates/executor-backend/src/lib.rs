@@ -23,4 +23,4 @@ pub use resource::{
 };
 pub use sandbox::SandboxConfig;
 pub use tail::{TailBuffer, DEFAULT_MAX_OUTPUT_BYTES};
-pub use traits::{EventStream, ExecutionBackend, StatusCallback};
+pub use traits::{BatchSink, EventStream, ExecutionBackend, StatusCallback};

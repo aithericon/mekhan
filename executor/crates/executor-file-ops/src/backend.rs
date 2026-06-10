@@ -6,11 +6,13 @@
 
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::traits::{BatchSink, ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
     RunContext,
@@ -41,6 +43,10 @@ use crate::ops;
 #[derive(Default)]
 pub struct FileOpsBackend {
     default_storage: Option<StorageConfig>,
+    /// Durable sink for crawl batches in sink mode (docs/32 batch-fold).
+    /// Injected by the host (NATS-backed in executor-worker) — `None` means
+    /// sink-mode crawls fail validation with a clear error.
+    batch_sink: Option<Arc<dyn BatchSink>>,
 }
 
 impl FileOpsBackend {
@@ -54,6 +60,12 @@ impl FileOpsBackend {
     /// globally-configured object store.
     pub fn with_default_storage(mut self, storage: Option<StorageConfig>) -> Self {
         self.default_storage = storage;
+        self
+    }
+
+    /// Inject the durable batch sink crawl publishes to in sink mode.
+    pub fn with_batch_sink(mut self, sink: Option<Arc<dyn BatchSink>>) -> Self {
+        self.batch_sink = sink;
         self
     }
 }
@@ -143,7 +155,7 @@ impl ExecutionBackend for FileOpsBackend {
                     None,
                 ))
             },
-            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref(), event_stream.clone(), &cancel) => {
+            result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref(), event_stream.clone(), self.batch_sink.clone(), &run_context.execution_id, &cancel) => {
                 let duration = start.elapsed();
                 match result {
                     Ok(outputs) => {

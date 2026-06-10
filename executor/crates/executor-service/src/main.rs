@@ -6,6 +6,7 @@ use apalis::prelude::*;
 use apalis_nats::{NatsStorage, ProgressHeartbeatLayer};
 use tracing::{error, info, warn};
 
+use aithericon_executor_backend::BatchSink;
 #[cfg(feature = "docker")]
 use aithericon_executor_docker::DockerBackend;
 use aithericon_executor_domain::ExecutionJob;
@@ -48,8 +49,8 @@ use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_fileserve_handler, spawn_presence_task,
     spawn_worker_presence_task, BackendRegistry, BatchRunner, CancellationRegistry,
     CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
-    LiveModelState, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
-    TransportRegistry,
+    LiveModelState, NatsBatchSink, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig,
+    StatusReporter, TransportRegistry,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -356,12 +357,14 @@ async fn run_nats_daemon(
     // Build the JobExecutor. `registered_wires` is the set of backend
     // wire-names that actually registered (feature-gated arms may skip) —
     // exactly the set the worker pool can serve.
+    let batch_sink = build_batch_sink(&jetstream, &config).await?;
     let (executor, registered_wires) = build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
         transports,
+        batch_sink,
     )?;
     let executor = Arc::new(executor);
 
@@ -695,12 +698,14 @@ async fn run_nats_drain(
     // Drain mode is PerJob (Slurm/Nomad-dispatched, exact-filter) or a
     // single-namespace pool drain — it does not fan out per backend, so the
     // registered wire set is unused here.
+    let batch_sink = build_batch_sink(&jetstream, &config).await?;
     let (mut executor, _registered_wires) = build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
         transports,
+        batch_sink,
     )?;
     executor.completion_tracker = Some(tracker);
     let executor = Arc::new(executor);
@@ -828,12 +833,14 @@ async fn run_manifest(
     ));
     // Manifest mode is its own single-namespace dispatcher — no per-backend
     // fan-out, so the registered wire set is unused here.
+    let batch_sink = build_batch_sink(&jetstream, &config).await?;
     let (executor, _registered_wires) = build_executor(
         &config,
         reporter.clone(),
         &nats_client,
         cancel_registry,
         transports,
+        batch_sink,
     )?;
     let executor = Arc::new(executor);
 
@@ -901,6 +908,7 @@ fn register_executor_backend(
     meta: &aithericon_backends::BackendMeta,
     config: &ExecutorConfig,
     #[allow(unused_variables)] base_dir: &Path,
+    #[allow(unused_variables)] batch_sink: &Option<Arc<dyn BatchSink>>,
 ) -> BackendRegistry {
     // Enabled-sandbox config, shared by the process + python backends. The
     // fail-closed `validate()` already ran once at startup in `main`, so an
@@ -967,7 +975,10 @@ fn register_executor_backend(
             info!("file_ops backend registered");
             registry.register(
                 aithericon_executor_file_ops::FileOpsBackend::new()
-                    .with_default_storage(config.storage.clone()),
+                    .with_default_storage(config.storage.clone())
+                    // Durable fold sink for sink-mode crawls (docs/32). NATS
+                    // stays behind the trait — the backend never sees it.
+                    .with_batch_sink(batch_sink.clone()),
             )
         }
         #[cfg(feature = "kreuzberg")]
@@ -1015,6 +1026,28 @@ fn register_executor_backend(
     }
 }
 
+/// Build the durable NATS fold sink injected into the file-ops backend
+/// (sink-mode crawl batches, docs/32). Shared by all three operating modes.
+/// Ensures the `INVENTORY_FOLD` stream; the stamped serve identity uses the
+/// SAME precedence as `JobExecutor.serve_group` / the fileserve binding
+/// (runner_id first, then the worker routing partition).
+async fn build_batch_sink(
+    jetstream: &async_nats::jetstream::Context,
+    config: &ExecutorConfig,
+) -> Result<Option<Arc<dyn BatchSink>>, Box<dyn std::error::Error + Send + Sync>> {
+    let sink = NatsBatchSink::new(
+        jetstream.clone(),
+        config.status_replicas,
+        config.subject_prefix.clone(),
+        config
+            .runner_id
+            .clone()
+            .or_else(|| config.worker_routing_partition.clone()),
+    )
+    .await?;
+    Ok(Some(Arc::new(sink)))
+}
+
 /// Build a `JobExecutor` from config — shared by both service and batch modes.
 ///
 /// Backend registration is driven by `aithericon_backends::BACKENDS`. Every
@@ -1037,6 +1070,7 @@ fn build_executor(
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
     transports: Option<TransportRegistry>,
+    batch_sink: Option<Arc<dyn BatchSink>>,
 ) -> Result<(JobExecutor, Vec<&'static str>), Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
@@ -1052,7 +1086,7 @@ fn build_executor(
             continue;
         }
         let before = registry.len();
-        registry = register_executor_backend(registry, meta, config, &base_dir);
+        registry = register_executor_backend(registry, meta, config, &base_dir, &batch_sink);
         // A feature-gated arm that skipped (unbuilt feature / unavailable
         // backend) leaves the count unchanged; only count the wire-name when
         // the backend truly landed in the registry.

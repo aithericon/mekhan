@@ -5567,15 +5567,26 @@ export interface components {
         CrawlConfig: {
             /** @description Number of `{path,size,mtime}` entries per emitted `item` batch. */
             batch_size?: number;
+            /**
+             * Format: int64
+             * @description Optional cap on the number of *filled* batches per invocation — the
+             *     chunking knob for cursor-loop campaigns (`resume_from` carries the
+             *     cursor between invocations). `None` walks to exhaustion.
+             */
+            max_batches?: number | null;
             /** @description Prefix (relative to the storage root) to walk recursively. */
             prefix: string;
             /**
-             * @description Optional resume cursor: the walk resumes *after* this path
-             *     (`lister_with(...).start_after(resume_from)`). Best-effort; true
-             *     idempotency comes from the inventory `UNIQUE(file_server_id, path)`
-             *     upsert downstream.
+             * @description Optional resume cursor: the walk resumes *after* this path. Native
+             *     `start_after` on backends that support it (S3); elsewhere a
+             *     client-side skip-until-cursor (readdir-cheap, assumes stable
+             *     enumeration order on an unchanged tree). An empty string counts as
+             *     absent (interpolated campaign configs deliver `""` on iteration 0).
+             *     True idempotency comes from the inventory
+             *     `UNIQUE(file_server_id, path)` upsert downstream.
              */
             resume_from?: string | null;
+            sink?: null | components["schemas"]["CrawlSinkConfig"];
             /**
              * @description Whether to `stat()` each entry for size+mtime. Defaults to `true` because
              *     the OpenDAL `fs` lister omits `content_length`/`last_modified`.
@@ -5586,6 +5597,19 @@ export interface components {
              *     file server.
              */
             storage: components["schemas"]["StorageConfig"];
+        };
+        /** @description Where (and how) sink-mode crawl batches are folded. */
+        CrawlSinkConfig: {
+            /**
+             * @description Inventory server key the crawled paths belong to
+             *     (`file_inventory.file_server_id`).
+             */
+            file_server_id: string;
+            /**
+             * @description Fold discipline: `"reconcile"` (classify against the legacy baseline)
+             *     or `"index"` (plain inventory upsert).
+             */
+            mode: string;
         };
         /** @description Request body for `POST /api/v1/assets`. */
         CreateAssetRequest: {
@@ -8107,8 +8131,16 @@ export interface components {
              */
             runner_id: string;
         };
-        /** @description A single crawl-observed item: metadata only, no hash. */
+        /**
+         * @description A single crawl-observed item: metadata only — `hash` is present only for
+         *     hash-bearing publishers (e.g. a probe-fed flow), never plain crawl.
+         */
         ObservedItem: {
+            /**
+             * @description Observed content hash (bare lowercase hex). When present it wins over
+             *     the inherited legacy hash and triggers catalogue coupling.
+             */
+            hash?: string | null;
             /**
              * Format: date-time
              * @description Observed modification time (RFC 3339). Carried through to provenance;
@@ -9211,8 +9243,15 @@ export interface components {
          *     (`{path,size,mtime}` — no hash). The live crawl→driver transport is Phase 6.
          */
         ReconcileBatchRequest: {
+            /**
+             * @description Canonical endpoint root the observed paths are anchored to — stamped
+             *     into each row's provenance so `adopt` can auto-fill the endpoint.
+             */
+            endpoint_root?: string | null;
             file_server_id: string;
             items: components["schemas"]["ObservedItem"][];
+            /** @description Serve identity of the observing runner (runner_id or partition). */
+            serve_group?: string | null;
         };
         /** @description Counts returned by [`reconcile_batch`], one bucket per classification. */
         ReconcileCounts: {

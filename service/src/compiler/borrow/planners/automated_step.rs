@@ -392,6 +392,37 @@ pub(crate) fn resolve_backend_ref(
         .find(|n| n.id == prod_id)
         .ok_or_else(|| CompileError::Compilation(format!("producer node '{prod_id}' not found")))?;
 
+    // Loop producers have NO port fields (`output_ports()` is pass-through) —
+    // their parked `p_<id>_data` envelope is `{iteration, <accumulators…>}`.
+    // Resolve attrs against that shape directly (mirrors the guard
+    // resolver's dedicated Loop branch), so a campaign body's
+    // `resume_from: "{{ campaign.cursor }}"` config borrow compiles. The
+    // loop's `hoist_path()` is flat, so the generic read-arc + pluck apply
+    // machinery downstream works unchanged.
+    if let WorkflowNodeData::Loop { accumulators, .. } = &producer_node.data {
+        if attr == "iteration" {
+            return Ok((prod_id, FieldKind::Number));
+        }
+        if accumulators.iter().any(|a| a.var == attr) {
+            // Accumulator values are author-defined Rhai folds — no static
+            // kind. Json is the permissive content-site kind (path sites
+            // still get rejected by File-requiring backends).
+            return Ok((prod_id, FieldKind::Json));
+        }
+        let mut available: Vec<String> = vec!["iteration".to_string()];
+        available.extend(accumulators.iter().map(|a| a.var.clone()));
+        return Err(CompileError::BackendRefUnresolved {
+            node_id: consumer_id.to_string(),
+            backend: backend_label.to_string(),
+            site: site_label.to_string(),
+            slug: slug.to_string(),
+            field: attr.to_string(),
+            kind: "field".to_string(),
+            name: attr.to_string(),
+            available,
+        });
+    }
+
     let data_port = producer_node
         .data
         .output_ports()

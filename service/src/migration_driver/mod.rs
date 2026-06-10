@@ -141,7 +141,19 @@ impl EventStream for ReconcileSink {
             return;
         }
         let items = Self::parse_batch(&payload);
-        match reconcile_batch(&self.pool, &self.file_server_id, &items).await {
+        // Events-mode batch items carry `endpoint_root` per item; lift it into
+        // the observation context so provenance keeps the adopt-autostamp keys.
+        let ctx = crate::inventory::reconcile::ObservationContext {
+            endpoint_root: payload
+                .get("items")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+                .and_then(|e| e.get("endpoint_root"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            serve_group: None,
+        };
+        match reconcile_batch(&self.pool, &self.file_server_id, &items, &ctx).await {
             Ok(c) => {
                 let mut totals = self.counts.lock().await;
                 totals.verified += c.verified;

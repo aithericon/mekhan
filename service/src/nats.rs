@@ -305,6 +305,62 @@ impl MekhanNats {
         Ok(consumer)
     }
 
+    /// Create or get the durable consumer for inventory fold batches
+    /// (docs/32 batch-fold): sink-mode `crawl` runners publish one
+    /// `FoldBatch` per filled batch to `inventory.fold.batch.<server>`;
+    /// the fold ingest (`inventory::fold`) upserts each batch set-based into
+    /// `file_inventory` (+ catalogue coupling for hash-carrying items).
+    ///
+    /// The `INVENTORY_FOLD` stream is created by WHICHEVER side boots first
+    /// (executor `NatsBatchSink` or this) via a race-safe get-then-create —
+    /// not `get_or_create_stream`, whose byte-identical-config requirement
+    /// would couple the two binaries' literals forever.
+    ///
+    /// Consumer conventions mirror `step_executions_consumer`:
+    /// `ack_wait: 120s` (a 5000-item batch is thousands of statements today —
+    /// the per-item loop; a set-based UNNEST rewrite is the flagged 4M-scale
+    /// follow-up) and a 30-day `inactive_threshold`.
+    pub async fn inventory_fold_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        use aithericon_executor_domain::{INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
+
+        let stream = match self.jetstream.get_stream(INVENTORY_FOLD_STREAM).await {
+            Ok(s) => s,
+            Err(_) => {
+                let cfg = jetstream::stream::Config {
+                    name: INVENTORY_FOLD_STREAM.into(),
+                    subjects: vec![format!("{INVENTORY_FOLD_SUBJECT}.>")],
+                    retention: jetstream::stream::RetentionPolicy::Limits,
+                    max_age: Duration::from_secs(7 * 24 * 60 * 60),
+                    duplicate_window: Duration::from_secs(120),
+                    storage: jetstream::stream::StorageType::File,
+                    ..Default::default()
+                };
+                match self.jetstream.create_stream(cfg).await {
+                    Ok(s) => s,
+                    // Lost the create race (an executor booted concurrently).
+                    Err(_) => self.jetstream.get_stream(INVENTORY_FOLD_STREAM).await?,
+                }
+            }
+        };
+
+        let durable = self.durable_name("mekhan-inventory-fold");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: format!("{INVENTORY_FOLD_SUBJECT}.>"),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ack_wait: Duration::from_secs(120),
+                    inactive_threshold: Duration::from_secs(30 * 24 * 60 * 60),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
     /// Create or get the durable consumer for engine-initiated human task
     /// cancellations. The engine publishes to `human.cancel.{net_id}.{place}`
     /// when the `human_cancel` effect handler fires (e.g. a Timeout's drain

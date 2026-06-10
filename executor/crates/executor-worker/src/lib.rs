@@ -6,6 +6,7 @@ pub mod config;
 pub mod drain;
 pub mod event_emitter;
 pub mod fileserve;
+pub mod fold_sink;
 pub mod executor;
 pub mod handler;
 pub mod host_probe;
@@ -37,6 +38,7 @@ pub use fileserve::{
     ServeAck, ServeErrorKind, ServeRequest,
 };
 pub use executor::JobExecutor;
+pub use fold_sink::NatsBatchSink;
 pub use handler::handle_execution;
 pub use host_probe::{probe_host, HostInfo};
 pub use ipc_sidecar::{start_ipc_sidecar, SidecarLogConfig, SidecarResult};

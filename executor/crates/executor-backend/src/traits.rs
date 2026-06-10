@@ -8,8 +8,8 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use aithericon_executor_domain::{
-    ExecutionJob, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, LlmStopReason,
-    LlmToolCall, LlmUsage, LogLevel, RunContext,
+    ExecutionJob, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, FoldBatch,
+    LlmStopReason, LlmToolCall, LlmUsage, LogLevel, RunContext,
 };
 
 /// Callback invoked by backends to report mid-execution status updates.
@@ -111,6 +111,25 @@ pub trait EventStream: Send + Sync {
     /// terminates, then emits the data `close` control bracket carrying `{count,
     /// status}`. MUST follow every `data_chunk`. Default no-op.
     async fn data_close(&self, _channel: String, _final_seq: u64, _count: u64) {}
+}
+
+/// Durable sink for inventory fold batches (docs/32 batch-fold transport).
+///
+/// The file-ops `crawl` op hands each filled batch here when its config opts
+/// into sink mode — instead of emitting per-file channel items through
+/// [`EventStream`]. The NATS-backed implementation lives in executor-worker
+/// (backends never touch NATS); it publishes to the `INVENTORY_FOLD`
+/// JetStream stream and stamps the runner's serve identity onto the batch.
+///
+/// `publish` resolves only after the message is durably accepted (JetStream
+/// publish-ack) — the crawl op advances its resume cursor strictly AFTER a
+/// successful publish, so a failure means the job errors and a retry replays
+/// from the last durable batch (consumer upserts are idempotent).
+#[async_trait]
+pub trait BatchSink: Send + Sync {
+    /// Durably publish one fold batch. Errors are terminal for the calling
+    /// operation (stringly-typed to keep this crate transport-agnostic).
+    async fn publish(&self, batch: &FoldBatch) -> Result<(), String>;
 }
 
 /// Trait for execution backends. Each backend knows how to execute

@@ -3,6 +3,7 @@ pub mod batch;
 pub mod error;
 pub mod event;
 pub mod execute_contract;
+pub mod fold;
 pub mod job;
 pub mod llm;
 pub mod logs;
@@ -20,6 +21,7 @@ pub use event::{
     ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, StagedEvent, StatusDetail,
 };
 pub use execute_contract::{ExecuteRequest, ExecuteResponse};
+pub use fold::{FoldBatch, FoldItem, FoldMode, INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 pub use job::{
     ChannelManifestEntry, ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority,
     OutputDeclaration, OutputUploadConfig,

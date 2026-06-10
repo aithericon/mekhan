@@ -1,0 +1,18 @@
+{
+  "name": "Seed 63 files, then run the cursor-loop campaign: each iteration crawls one bounded chunk (batch_size 10 × max_batches 2 = 20 files) resuming from the previous cursor, publishing every batch durably to the INVENTORY_FOLD stream (sink mode — no engine channel tokens); mekhan's fold consumer upserts file_inventory idempotently. 63 files / 20 per chunk → 4 iterations (20+20+20+3), exiting when `exhausted` goes true. `iterations` is the loop's parked counter, which finishes at 3 (0-based enter + three continues).",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "file_server": "campaign-nas"
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.files_seeded", "op": "eq", "value": 63 },
+    { "path": "result.value.files_crawled", "op": "eq", "value": 63 },
+    { "path": "result.value.iterations", "op": "eq", "value": 3 }
+  ]
+}

@@ -14785,6 +14785,15 @@
             "description": "Number of `{path,size,mtime}` entries per emitted `item` batch.",
             "minimum": 0
           },
+          "max_batches": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional cap on the number of *filled* batches per invocation — the\nchunking knob for cursor-loop campaigns (`resume_from` carries the\ncursor between invocations). `None` walks to exhaustion.",
+            "minimum": 0
+          },
           "prefix": {
             "type": "string",
             "description": "Prefix (relative to the storage root) to walk recursively."
@@ -14794,7 +14803,18 @@
               "string",
               "null"
             ],
-            "description": "Optional resume cursor: the walk resumes *after* this path\n(`lister_with(...).start_after(resume_from)`). Best-effort; true\nidempotency comes from the inventory `UNIQUE(file_server_id, path)`\nupsert downstream."
+            "description": "Optional resume cursor: the walk resumes *after* this path. Native\n`start_after` on backends that support it (S3); elsewhere a\nclient-side skip-until-cursor (readdir-cheap, assumes stable\nenumeration order on an unchanged tree). An empty string counts as\nabsent (interpolated campaign configs deliver `\"\"` on iteration 0).\nTrue idempotency comes from the inventory\n`UNIQUE(file_server_id, path)` upsert downstream."
+          },
+          "sink": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CrawlSinkConfig",
+                "description": "Opt-in batch-fold sink (docs/32): when set, each batch is published\ndurably to the `INVENTORY_FOLD` stream for set-based folding into the\ninventory, and NO per-file channel items are emitted. When `None`\n(default), batches ride the `crawl` EventStream channel as before."
+              }
+            ]
           },
           "stat": {
             "type": "boolean",
@@ -14803,6 +14823,24 @@
           "storage": {
             "$ref": "#/components/schemas/StorageConfig",
             "description": "Storage the walk targets — typically an `fs://` mount co-located with a\nfile server."
+          }
+        }
+      },
+      "CrawlSinkConfig": {
+        "type": "object",
+        "description": "Where (and how) sink-mode crawl batches are folded.",
+        "required": [
+          "mode",
+          "file_server_id"
+        ],
+        "properties": {
+          "file_server_id": {
+            "type": "string",
+            "description": "Inventory server key the crawled paths belong to\n(`file_inventory.file_server_id`)."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Fold discipline: `\"reconcile\"` (classify against the legacy baseline)\nor `\"index\"` (plain inventory upsert)."
           }
         }
       },
@@ -20510,12 +20548,19 @@
       },
       "ObservedItem": {
         "type": "object",
-        "description": "A single crawl-observed item: metadata only, no hash.",
+        "description": "A single crawl-observed item: metadata only — `hash` is present only for\nhash-bearing publishers (e.g. a probe-fed flow), never plain crawl.",
         "required": [
           "path",
           "size"
         ],
         "properties": {
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Observed content hash (bare lowercase hex). When present it wins over\nthe inherited legacy hash and triggers catalogue coupling."
+          },
           "mtime": {
             "type": [
               "string",
@@ -23173,6 +23218,13 @@
           "items"
         ],
         "properties": {
+          "endpoint_root": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Canonical endpoint root the observed paths are anchored to — stamped\ninto each row's provenance so `adopt` can auto-fill the endpoint."
+          },
           "file_server_id": {
             "type": "string"
           },
@@ -23181,6 +23233,13 @@
             "items": {
               "$ref": "#/components/schemas/ObservedItem"
             }
+          },
+          "serve_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Serve identity of the observing runner (runner_id or partition)."
           }
         }
       },

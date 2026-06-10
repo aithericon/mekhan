@@ -249,6 +249,43 @@ inventory.** Dev-tested on a sampled subset of the real dump.
   (`probe.rs` already computes Sha256 via `aithericon_file_metadata` — make it deterministic +
   unit-test the output format; this is the reconcile-match linchpin).
 
+### Batch-fold transport + crawl campaigns (the at-scale shape) — BUILT 2026-06-10
+
+The demo-50 shape (crawl batches → engine channel tokens → `join: gather` → per-file
+`log_artifact`) does not survive the 4M-file corpus: the gathered collection token outgrows the
+NATS max payload, and 4M per-file causality-projector events is ~50× the known 80k
+projection-backlog meltdown. The production shape keeps the control plane flat — **cursors and
+counts move through the net; files move through a durable side-channel; the DB is written
+set-based**:
+
+- **Crawl sink mode** (`CrawlConfig.sink: { mode: "reconcile"|"index", file_server_id }`): the
+  op publishes one `FoldBatch` per filled batch to the `INVENTORY_FOLD` JetStream stream
+  (subject `inventory.fold.batch.<server>`) instead of emitting channel items. The publish-ack
+  lands BEFORE the resume cursor advances; `Nats-Msg-Id = {execution_id}-{episode}-{batch_idx}`
+  dedups republishes. The `BatchSink` trait lives in `executor-backend` (backends never touch
+  NATS); the NATS impl (`executor-worker/src/fold_sink.rs`) stamps the runner's serve identity
+  (`runner_id` || routing partition) onto every batch as `serve_group`.
+- **Fold consumer** (`service/src/inventory/fold.rs`, durable `mekhan-inventory-fold`):
+  `reconcile` batches reuse `reconcile_batch` (legacy classify, hash inherit); `index` batches
+  upsert hashless observations (status `indexed`), and hash-carrying items couple the catalogue
+  half in the same tx. Both stamp `endpoint_root` + `serve_group` into provenance, keeping the
+  file-server `adopt` autostamp chain intact for batch-crawled servers. All upserts idempotent
+  on `(file_server_id, path)` → at-least-once delivery is harmless. NOTE: `reconcile_batch` is
+  still a per-item statement loop — a set-based `UNNEST` rewrite is the flagged follow-up before
+  the real 4M run.
+- **Chunking**: `CrawlConfig.max_batches` caps one invocation; new `exhausted` output (lister
+  EOF, not a cap/cancel stop) is the campaign's exit condition. Resume is capability-aware:
+  native `start_after` on S3; client-side skip-until-cursor elsewhere (the `fs` lister silently
+  ignores `start_after` — without this a resumed fs chunk would re-walk from the start forever).
+  A vanished cursor is a hard error, not a silent restart.
+- **Campaign template** (demo `55-crawl-campaign`): a Loop with accumulators
+  `cursor ← crawl.last_path`, `total ← total + crawl.count`, condition
+  `crawl.exhausted == false`, body = sink-mode crawl with
+  `resume_from: "{{ campaign.cursor }}"` — a Loop-accumulator borrow interpolated into a backend
+  config (file_ops configs now run the same PerField placeholder pipeline as LLM prompts).
+  Engine work per iteration is constant regardless of corpus size; cancel/resume granularity is
+  one chunk.
+
 ### Reconcile + targeted-hash + migrate scaffold (`service` + campaign)
 - Reconcile: SQL views (new migration) joining `file_inventory ⋈ legacy_file_index ⋈
   catalogue_entries` → classify `verified/mismatch/orphan_disk/orphan_db/duplicate` (pick one

@@ -123,6 +123,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // live-only (an external client must POST bytes to the ingress endpoint
     // and tap the egress endpoint).
     "54-streaming-echo",
+    // 55-crawl-campaign: the at-scale crawl shape (docs/32 batch-fold). Pins
+    // the cursor-loop lowering with a Loop-accumulator borrow INTERPOLATED
+    // INTO A BACKEND CONFIG (`resume_from: "{{ campaign.cursor }}"` → the
+    // PerField rewrite to `{{input:__borrow_campaign__cursor}}` + read-arc
+    // into `p_campaign_data`), the `{{ start.file_server }}` sink borrow, and
+    // the sink-mode crawl step compiling with NO channels. RUNNING it is
+    // live-only (publishes to INVENTORY_FOLD, folded by mekhan's consumer).
+    "55-crawl-campaign",
 ];
 
 fn repo_root() -> PathBuf {
@@ -389,6 +397,11 @@ fn snapshot_50_legacy_crawl_register() {
 #[test]
 fn snapshot_54_streaming_echo() {
     run("54-streaming-echo");
+}
+
+#[test]
+fn snapshot_55_crawl_campaign() {
+    run("55-crawl-campaign");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

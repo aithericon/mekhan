@@ -4113,6 +4113,225 @@ mod tests {
         );
     }
 
+    #[test]
+    /// file_ops config strings get the same `{{<slug>.<field>}}` borrow
+    /// pipeline as LLM prompts: per-borrow `job_inputs.push` + the config
+    /// blob rewritten to `{{input:__borrow_*}}` (which the file_ops
+    /// backend's `resolve_inputs` already resolves at prepare time).
+    fn file_ops_config_borrow_rewrites_placeholders_and_stages_field() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"review","type":"human_task","slug":"review","position":{"x":0,"y":0},
+             "data":{"type":"human_task","label":"Review","taskTitle":"R",
+                     "steps":[{"id":"s","title":"S","blocks":[
+                       {"type":"input","field":{"name":"cursor","label":"C","kind":"text","required":true}}
+                     ]}]}},
+            {"id":"crawl","type":"automated_step","slug":"crawl","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Crawl",
+                     "executionSpec":{"backendType":"file_ops","config":{
+                        "operation":"crawl",
+                        "prefix":"data/",
+                        "resume_from":"{{ review.cursor }}",
+                        "storage":{"backend":"local","endpoint":"/tmp"}
+                     }},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"review","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"review","target":"crawl","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"crawl","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let (scenario, _interfaces, node_configs) =
+            super::compile_to_scenario_and_interfaces_with_configs(
+                &graph,
+                "fileops-borrow-test",
+                "",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &crate::compiler::SubWorkflowAir::new(),
+                &crate::compiler::named_global::KnownGlobals::new(),
+                &std::collections::HashMap::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("compile fileops-borrow graph");
+
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "crawl/prepare")
+            .expect("crawl prepare transition exists");
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+        assert!(
+            source.contains(r#""name": "__borrow_review__cursor""#),
+            "prepare must stage __borrow_review__cursor; source: {source}"
+        );
+        let cfg = node_configs.get("crawl").expect("crawl parked config");
+        let cfg_str = cfg.to_string();
+        assert!(
+            cfg_str.contains("{{input:__borrow_review__cursor}}"),
+            "blob must rewrite to {{input:__borrow_*}}; got: {cfg_str}"
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_review_data" && a.read),
+            "read-arc into p_review_data missing; got: {:?}",
+            prepare.inputs
+        );
+    }
+
+    #[test]
+    /// The crawl-campaign shape: a Loop accumulator (`campaign.cursor`)
+    /// borrowed from the BODY step's file_ops config, plus a loopCondition
+    /// reading the body's `exhausted` output. Loop producers have no port
+    /// fields — `resolve_backend_ref` resolves accumulator attrs off the
+    /// `WorkflowNodeData::Loop` variant directly.
+    fn crawl_campaign_loop_accumulator_borrow_compiles() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"campaign","type":"loop","slug":"campaign","position":{"x":0,"y":0},
+             "data":{"type":"loop","label":"Campaign","maxIterations":20,
+                     "loopCondition":"crawl.exhausted == false",
+                     "accumulators":[
+                       {"var":"cursor","init":"\"\"",
+                        "mergeExpr":"if crawl.last_path == () { campaign.cursor } else { crawl.last_path }"}
+                     ]}},
+            {"id":"crawl","type":"automated_step","slug":"crawl","parentId":"campaign","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Crawl chunk",
+                     "executionSpec":{"backendType":"file_ops","config":{
+                        "operation":"crawl",
+                        "prefix":"data/",
+                        "batch_size":10,
+                        "max_batches":2,
+                        "resume_from":"{{ campaign.cursor }}",
+                        "sink":{"mode":"index","file_server_id":"demo-nas"},
+                        "storage":{"backend":"local","endpoint":"/tmp"}
+                     }},
+                     "output":{"id":"out","label":"Crawl chunk","fields":[
+                       {"name":"count","label":"Count","kind":"number"},
+                       {"name":"last_path","label":"Cursor","kind":"text"},
+                       {"name":"batches","label":"Batches","kind":"number"},
+                       {"name":"exhausted","label":"Exhausted","kind":"bool"}
+                     ]},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"campaign","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"campaign","sourceHandle":"body_in","target":"crawl","targetHandle":"in","type":"sequence"},
+            {"id":"e3","source":"crawl","target":"campaign","targetHandle":"body_out","type":"loop_back"},
+            {"id":"e4","source":"campaign","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let (scenario, _interfaces, node_configs) =
+            super::compile_to_scenario_and_interfaces_with_configs(
+                &graph,
+                "crawl-campaign-test",
+                "",
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                &crate::compiler::SubWorkflowAir::new(),
+                &crate::compiler::named_global::KnownGlobals::new(),
+                &std::collections::HashMap::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("compile crawl-campaign graph");
+
+        // The body step's prepare stages the loop accumulator borrow and
+        // read-arcs the loop's parked data place.
+        let prepare = scenario
+            .transitions
+            .iter()
+            .find(|t| t.id == "crawl/prepare")
+            .expect("crawl prepare transition exists");
+        let source = match &prepare.logic {
+            aithericon_sdk::scenario::TransitionLogic::Rhai { source } => source,
+            other => panic!("expected Rhai logic, got {other:?}"),
+        };
+        assert!(
+            source.contains(r#""name": "__borrow_campaign__cursor""#),
+            "prepare must stage __borrow_campaign__cursor; source: {source}"
+        );
+        assert!(
+            prepare
+                .inputs
+                .iter()
+                .any(|a| a.place == "p_campaign_data" && a.read),
+            "read-arc into p_campaign_data missing; got: {:?}",
+            prepare.inputs
+        );
+        let cfg_str = node_configs
+            .get("crawl")
+            .expect("crawl parked config")
+            .to_string();
+        assert!(
+            cfg_str.contains("{{input:__borrow_campaign__cursor}}"),
+            "blob must rewrite the accumulator borrow; got: {cfg_str}"
+        );
+    }
+
+    #[test]
+    /// A malformed `{{ … }}` body in a file_ops config string fails compile
+    /// with placeholder-syntax attribution (mirrors the LLM prompt rule).
+    fn file_ops_rejects_malformed_placeholder() {
+        let json = r#"{
+          "nodes":[
+            {"id":"start","type":"start","slug":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"crawl","type":"automated_step","slug":"crawl","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Crawl",
+                     "executionSpec":{"backendType":"file_ops","config":{
+                        "operation":"crawl",
+                        "prefix":"data/",
+                        "resume_from":"{{ bad..attr }}",
+                        "storage":{"backend":"local","endpoint":"/tmp"}
+                     }},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"crawl","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"crawl","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }"#;
+        let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
+        let err = super::compile_to_scenario_and_interfaces_with_configs(
+            &graph,
+            "fileops-bad-placeholder",
+            "",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &crate::compiler::SubWorkflowAir::new(),
+            &crate::compiler::named_global::KnownGlobals::new(),
+            &std::collections::HashMap::new(),
+            ConfigStorage::ephemeral(),
+        )
+        .expect_err("malformed placeholder must fail compile")
+        .to_string();
+        assert!(
+            err.contains("placeholder") || err.contains("resume_from"),
+            "error should attribute the placeholder site: {err}"
+        );
+    }
+
     /// Kreuzberg with an upstream file ref stages StoragePath against the
     /// HumanTask's parked FileRef.url, and the `file:` placeholder in the
     /// config becomes `{{input_path:__borrow_*}}` for the resolver.

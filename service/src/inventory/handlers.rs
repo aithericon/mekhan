@@ -135,6 +135,13 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<InventoryStats>
 pub struct ReconcileBatchRequest {
     pub file_server_id: String,
     pub items: Vec<ObservedItem>,
+    /// Canonical endpoint root the observed paths are anchored to — stamped
+    /// into each row's provenance so `adopt` can auto-fill the endpoint.
+    #[serde(default)]
+    pub endpoint_root: Option<String>,
+    /// Serve identity of the observing runner (runner_id or partition).
+    #[serde(default)]
+    pub serve_group: Option<String>,
 }
 
 /// `{ updated }` — rows whose `is_canonical` flag actually changed.
@@ -162,7 +169,11 @@ pub async fn reconcile_batch(
     State(state): State<AppState>,
     Json(req): Json<ReconcileBatchRequest>,
 ) -> Result<Json<ReconcileCounts>, ApiError> {
-    let counts = reconcile::reconcile_batch(&state.db, &req.file_server_id, &req.items)
+    let ctx = reconcile::ObservationContext {
+        endpoint_root: req.endpoint_root.clone(),
+        serve_group: req.serve_group.clone(),
+    };
+    let counts = reconcile::reconcile_batch(&state.db, &req.file_server_id, &req.items, &ctx)
         .await
         .map_err(|e| {
             tracing::warn!("reconcile-batch: {e}");

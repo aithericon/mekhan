@@ -22,7 +22,7 @@ use opendal::Operator;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use aithericon_executor_backend::traits::EventStream;
+use aithericon_executor_backend::traits::{BatchSink, EventStream};
 use aithericon_executor_storage::StorageConfig;
 
 use crate::config::FileOpsConfig;
@@ -86,6 +86,8 @@ pub async fn dispatch(
     run_dir: &Path,
     default_storage: Option<&StorageConfig>,
     event_stream: Option<Arc<dyn EventStream>>,
+    batch_sink: Option<Arc<dyn BatchSink>>,
+    execution_id: &str,
     cancel: &CancellationToken,
 ) -> FileOpsResult {
     match config {
@@ -139,7 +141,17 @@ pub async fn dispatch(
             // stamp the endpoint root. Zero path arithmetic: OpenDAL already
             // roots at this, so its yielded paths are root-relative.
             let endpoint_root = c.storage.endpoint_root();
-            crawl::execute(c, &op, &pfx, &endpoint_root, event_stream, cancel).await
+            crawl::execute(
+                c,
+                &op,
+                &pfx,
+                &endpoint_root,
+                event_stream,
+                batch_sink,
+                execution_id,
+                cancel,
+            )
+            .await
         }
     }
 }
@@ -214,6 +226,20 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
             }
             if c.batch_size == 0 {
                 return Err("crawl: batch_size must be greater than 0".into());
+            }
+            if c.max_batches == Some(0) {
+                return Err("crawl: max_batches must be greater than 0 when set".into());
+            }
+            if let Some(ref sink) = c.sink {
+                if !matches!(sink.mode.as_str(), "reconcile" | "index") {
+                    return Err(format!(
+                        "crawl: sink.mode must be 'reconcile' or 'index', got '{}'",
+                        sink.mode
+                    ));
+                }
+                if sink.file_server_id.trim().is_empty() {
+                    return Err("crawl: sink.file_server_id must not be empty".into());
+                }
             }
             validate_storage(&c.storage, "crawl.storage")?;
         }

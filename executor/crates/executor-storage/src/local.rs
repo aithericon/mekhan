@@ -245,6 +245,7 @@ mod tests {
             by_reference: false,
             file_server_id: None,
             reference_path: None,
+            endpoint_root: None,
             metadata: HashMap::new(),
             created_at: Utc::now(),
         }

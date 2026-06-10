@@ -168,16 +168,42 @@ pub struct CrawlConfig {
     /// Number of `{path,size,mtime}` entries per emitted `item` batch.
     #[serde(default = "default_crawl_batch_size")]
     pub batch_size: usize,
-    /// Optional resume cursor: the walk resumes *after* this path
-    /// (`lister_with(...).start_after(resume_from)`). Best-effort; true
-    /// idempotency comes from the inventory `UNIQUE(file_server_id, path)`
-    /// upsert downstream.
+    /// Optional resume cursor: the walk resumes *after* this path. Native
+    /// `start_after` on backends that support it (S3); elsewhere a
+    /// client-side skip-until-cursor (readdir-cheap, assumes stable
+    /// enumeration order on an unchanged tree). An empty string counts as
+    /// absent (interpolated campaign configs deliver `""` on iteration 0).
+    /// True idempotency comes from the inventory
+    /// `UNIQUE(file_server_id, path)` upsert downstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_from: Option<String>,
     /// Whether to `stat()` each entry for size+mtime. Defaults to `true` because
     /// the OpenDAL `fs` lister omits `content_length`/`last_modified`.
     #[serde(default = "default_crawl_stat")]
     pub stat: bool,
+    /// Optional cap on the number of *filled* batches per invocation — the
+    /// chunking knob for cursor-loop campaigns (`resume_from` carries the
+    /// cursor between invocations). `None` walks to exhaustion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batches: Option<u64>,
+    /// Opt-in batch-fold sink (docs/32): when set, each batch is published
+    /// durably to the `INVENTORY_FOLD` stream for set-based folding into the
+    /// inventory, and NO per-file channel items are emitted. When `None`
+    /// (default), batches ride the `crawl` EventStream channel as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sink: Option<CrawlSinkConfig>,
+}
+
+/// Where (and how) sink-mode crawl batches are folded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct CrawlSinkConfig {
+    /// Fold discipline: `"reconcile"` (classify against the legacy baseline)
+    /// or `"index"` (plain inventory upsert).
+    pub mode: String,
+    /// Inventory server key the crawled paths belong to
+    /// (`file_inventory.file_server_id`).
+    pub file_server_id: String,
 }
 
 #[cfg(test)]
@@ -259,6 +285,43 @@ mod tests {
                 assert_eq!(c.batch_size, 5000);
                 assert!(c.stat);
                 assert!(c.resume_from.is_none());
+                assert!(c.max_batches.is_none());
+                assert!(c.sink.is_none());
+            }
+            other => panic!("expected Crawl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crawl_config_sink_and_max_batches_roundtrip() {
+        let json = serde_json::json!({
+            "operation": "crawl",
+            "prefix": "Data/",
+            "max_batches": 50,
+            "sink": { "mode": "reconcile", "file_server_id": "legacy-nas-2" },
+            "storage": local_storage_json()
+        });
+        let config: FileOpsConfig = serde_json::from_value(json).unwrap();
+        match config {
+            FileOpsConfig::Crawl(c) => {
+                assert_eq!(c.max_batches, Some(50));
+                let sink = c.sink.expect("sink");
+                assert_eq!(sink.mode, "reconcile");
+                assert_eq!(sink.file_server_id, "legacy-nas-2");
+                // Optional fields stay off the wire when unset (events-mode
+                // configs remain byte-identical to pre-sink ones).
+                let back = serde_json::to_value(FileOpsConfig::Crawl(CrawlConfig {
+                    sink: None,
+                    max_batches: None,
+                    prefix: "Data/".into(),
+                    storage: serde_json::from_value(local_storage_json()).unwrap(),
+                    batch_size: 5000,
+                    resume_from: None,
+                    stat: true,
+                }))
+                .unwrap();
+                assert!(back.get("sink").is_none());
+                assert!(back.get("max_batches").is_none());
             }
             other => panic!("expected Crawl, got {other:?}"),
         }

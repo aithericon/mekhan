@@ -1659,6 +1659,300 @@ async fn backend_crawl_no_event_stream_still_counts() {
     assert_eq!(result.outputs["count"], serde_json::json!(2));
     // default batch_size (5000) ⇒ a single trailing batch ⇒ batches == 1
     assert_eq!(result.outputs["batches"], serde_json::json!(1));
+    // Natural EOF ⇒ exhausted (the cursor-loop exit condition).
+    assert_eq!(result.outputs["exhausted"], serde_json::json!(true));
+}
+
+// ---------------------------------------------------------------------------
+// Crawl chunking + sink mode (docs/32 batch-fold)
+// ---------------------------------------------------------------------------
+
+/// Capturing `BatchSink` — records every published `FoldBatch`; optionally
+/// fails every publish to exercise the hard-error path.
+#[derive(Default)]
+struct CapturingBatchSink {
+    batches: Mutex<Vec<aithericon_executor_domain::FoldBatch>>,
+    fail: bool,
+}
+
+#[async_trait]
+impl aithericon_executor_backend::BatchSink for CapturingBatchSink {
+    async fn publish(&self, batch: &aithericon_executor_domain::FoldBatch) -> Result<(), String> {
+        if self.fail {
+            return Err("synthetic publish failure".into());
+        }
+        self.batches.lock().unwrap().push(batch.clone());
+        Ok(())
+    }
+}
+
+/// Seed 5 files under `nas/` and return the expected count.
+async fn seed_five(env: &TestEnv) -> u64 {
+    env.operator.write("nas/a.txt", "aaaa").await.unwrap();
+    env.operator.write("nas/b.txt", "bbbbbb").await.unwrap();
+    env.operator.write("nas/sub/c.txt", "cc").await.unwrap();
+    env.operator
+        .write("nas/sub/deep/d.txt", "dddddddd")
+        .await
+        .unwrap();
+    env.operator.write("nas/sub/deep/e.txt", "ee").await.unwrap();
+    5
+}
+
+#[tokio::test]
+async fn backend_crawl_max_batches_chunks_with_cursor() {
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+    seed_five(&env).await;
+
+    // batch_size 2, max_batches 1 ⇒ stop after 2 files; NOT exhausted.
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 2,
+        "max_batches": 1,
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(matches!(result.outcome, ExecutionOutcome::Success));
+    assert_eq!(result.outputs["count"], serde_json::json!(2));
+    assert_eq!(result.outputs["batches"], serde_json::json!(1));
+    assert_eq!(result.outputs["exhausted"], serde_json::json!(false));
+    assert_eq!(result.outputs["cancelled"], serde_json::json!(false));
+    let cursor = result.outputs["last_path"].as_str().expect("cursor");
+
+    // Resume from the cursor with no cap ⇒ the remaining 3 files, exhausted.
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 2,
+        "resume_from": cursor,
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(matches!(result.outcome, ExecutionOutcome::Success));
+    assert_eq!(result.outputs["count"], serde_json::json!(3));
+    assert_eq!(result.outputs["exhausted"], serde_json::json!(true));
+}
+
+#[tokio::test]
+async fn backend_crawl_vanished_cursor_is_terminal() {
+    // A client-side resume whose cursor no longer exists must error (silent
+    // restart could re-emit the same chunk forever in a campaign loop).
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+    seed_five(&env).await;
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "resume_from": "nas/deleted-since-last-chunk.txt",
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::BackendError { .. }),
+        "vanished cursor must error, got {:?}",
+        result.outcome
+    );
+}
+
+#[tokio::test]
+async fn backend_crawl_empty_resume_from_means_from_start() {
+    // Interpolated campaign configs deliver `""` on iteration 0 — must walk
+    // everything, not `start_after("")`.
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+    let expected = seed_five(&env).await;
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "resume_from": "",
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(matches!(result.outcome, ExecutionOutcome::Success));
+    assert_eq!(result.outputs["count"], serde_json::json!(expected));
+    assert_eq!(result.outputs["exhausted"], serde_json::json!(true));
+}
+
+#[tokio::test]
+async fn backend_crawl_sink_mode_publishes_no_channel_items() {
+    let env = TestEnv::new();
+    let sink = Arc::new(CapturingBatchSink::default());
+    let backend = FileOpsBackend::new().with_batch_sink(Some(sink.clone()));
+    let expected = seed_five(&env).await;
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 2,
+        "sink": { "mode": "index", "file_server_id": "demo-nas" },
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    // Hand an EventStream too — sink mode must NOT emit on it.
+    let stream = Arc::new(CapturingEventStream::default());
+    let result = backend
+        .execute(
+            &ctx,
+            noop_callback(),
+            Some(stream.clone()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::Success),
+        "expected Success, got {:?}",
+        result.outcome
+    );
+    assert_eq!(result.outputs["count"], serde_json::json!(expected));
+    assert_eq!(result.outputs["batches"], serde_json::json!(3));
+    assert_eq!(result.outputs["exhausted"], serde_json::json!(true));
+
+    // No channel traffic at all in sink mode.
+    assert!(stream.items.lock().unwrap().is_empty(), "no item() calls");
+    assert!(stream.closes.lock().unwrap().is_empty(), "no close() calls");
+
+    // Published batches: 3 (2+2+1 trailing partial), monotonic idx, shared
+    // episode, envelope carries mode/server/root, items carry path+size.
+    let batches = sink.batches.lock().unwrap().clone();
+    assert_eq!(batches.len(), 3);
+    let episode = &batches[0].episode_uid;
+    let mut total = 0;
+    for (i, b) in batches.iter().enumerate() {
+        assert_eq!(b.batch_idx, i as u64);
+        assert_eq!(&b.episode_uid, episode);
+        assert_eq!(b.mode, aithericon_executor_domain::FoldMode::Index);
+        assert_eq!(b.file_server_id, "demo-nas");
+        assert!(!b.endpoint_root.is_empty(), "endpoint_root on envelope");
+        for item in &b.items {
+            assert!(item.size > 0, "per-entry stat populated size");
+            assert!(item.path.starts_with("nas/"), "user-facing path");
+        }
+        total += b.items.len() as u64;
+    }
+    assert_eq!(total, expected);
+    assert_eq!(batches[2].items.len(), 1, "trailing partial batch");
+}
+
+#[tokio::test]
+async fn backend_crawl_sink_publish_failure_is_terminal() {
+    let env = TestEnv::new();
+    let sink = Arc::new(CapturingBatchSink {
+        fail: true,
+        ..Default::default()
+    });
+    let backend = FileOpsBackend::new().with_batch_sink(Some(sink));
+    seed_five(&env).await;
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "batch_size": 2,
+        "sink": { "mode": "reconcile", "file_server_id": "demo-nas" },
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::BackendError { .. }),
+        "publish failure must fail the job, got {:?}",
+        result.outcome
+    );
+}
+
+#[tokio::test]
+async fn backend_crawl_sink_mode_without_injected_sink_errors() {
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new(); // no sink injected
+    seed_five(&env).await;
+
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "sink": { "mode": "index", "file_server_id": "demo-nas" },
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let ctx = backend.prepare(&job, ctx).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::BackendError { .. }),
+        "sink mode without a host sink must error, got {:?}",
+        result.outcome
+    );
+}
+
+#[tokio::test]
+async fn backend_crawl_sink_mode_rejects_bad_config() {
+    let env = TestEnv::new();
+    let backend = FileOpsBackend::new();
+
+    // Bad mode fails prepare-time validation.
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "sink": { "mode": "yolo", "file_server_id": "demo-nas" },
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let err = backend.prepare(&job, ctx).await.unwrap_err().to_string();
+    assert!(err.contains("sink.mode"), "got: {err}");
+
+    // Empty file_server_id fails too.
+    let spec = make_spec(serde_json::json!({
+        "operation": "crawl",
+        "prefix": "nas/",
+        "sink": { "mode": "index", "file_server_id": "  " },
+        "storage": env.storage()
+    }));
+    let job = make_job(&spec);
+    let ctx = make_run_context(spec, DEFAULT_TIMEOUT);
+    let err = backend.prepare(&job, ctx).await.unwrap_err().to_string();
+    assert!(err.contains("file_server_id"), "got: {err}");
 }
 
 #[tokio::test]

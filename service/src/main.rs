@@ -154,6 +154,15 @@ async fn main() -> anyhow::Result<()> {
         object_store_id,
     ));
 
+    // Inventory fold ingest (docs/32 batch-fold): sink-mode crawl batches →
+    // set-based file_inventory upserts (+ catalogue coupling on hash). The
+    // scale path for multi-million-file campaigns — per-file rows never touch
+    // the engine or the causality projector.
+    tokio::spawn(mekhan_service::inventory::fold::start_inventory_fold_ingest(
+        mekhan_nats.clone(),
+        db.clone(),
+    ));
+
     // Step-executions projection (PETRI_GLOBAL domain events → step_execution
     // table). Folds per-step inputs/outputs/metrics for the instance-view
     // canvas overlay.

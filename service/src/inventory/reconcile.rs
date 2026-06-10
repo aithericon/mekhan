@@ -23,7 +23,8 @@ use utoipa::ToSchema;
 
 use crate::query::pagination::{PageQuery, Paginated};
 
-/// A single crawl-observed item: metadata only, no hash.
+/// A single crawl-observed item: metadata only — `hash` is present only for
+/// hash-bearing publishers (e.g. a probe-fed flow), never plain crawl.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct ObservedItem {
     pub path: String,
@@ -33,6 +34,36 @@ pub struct ObservedItem {
     /// not used for classification.
     #[serde(default)]
     pub mtime: Option<DateTime<Utc>>,
+    /// Observed content hash (bare lowercase hex). When present it wins over
+    /// the inherited legacy hash and triggers catalogue coupling.
+    #[serde(default)]
+    pub hash: Option<String>,
+}
+
+/// Where a batch of observations came from — persisted into every upserted
+/// row's provenance so file-server `adopt` can auto-stamp a servable endpoint
+/// (`inventory_endpoint_root` / `inventory_serve_group` read these keys).
+#[derive(Debug, Clone, Default)]
+pub struct ObservationContext {
+    /// Canonical endpoint root the observed paths are anchored to.
+    pub endpoint_root: Option<String>,
+    /// Serve identity of the observing runner (runner_id or partition).
+    pub serve_group: Option<String>,
+}
+
+impl ObservationContext {
+    /// Merge the context keys into a provenance JSON object (no-ops for
+    /// `None`s, so legacy callers' provenance stays byte-identical).
+    fn stamp(&self, provenance: &mut serde_json::Value) {
+        if let Some(obj) = provenance.as_object_mut() {
+            if let Some(root) = self.endpoint_root.as_deref().filter(|s| !s.is_empty()) {
+                obj.insert("endpoint_root".into(), serde_json::json!(root));
+            }
+            if let Some(group) = self.serve_group.as_deref().filter(|s| !s.is_empty()) {
+                obj.insert("serve_group".into(), serde_json::json!(group));
+            }
+        }
+    }
 }
 
 /// Counts returned by [`reconcile_batch`], one bucket per classification.
@@ -83,6 +114,7 @@ pub async fn reconcile_batch(
     pool: &PgPool,
     file_server_id: &str,
     items: &[ObservedItem],
+    ctx: &ObservationContext,
 ) -> Result<ReconcileCounts, sqlx::Error> {
     let mut counts = ReconcileCounts::default();
     let mut tx = pool.begin().await?;
@@ -98,7 +130,7 @@ pub async fn reconcile_batch(
         .fetch_optional(&mut *tx)
         .await?;
 
-        let (status, content_hash, provenance) = match legacy {
+        let (status, content_hash, mut provenance) = match legacy {
             Some((hash, legacy_size)) => {
                 // A legacy row with a NULL size can't be size-compared; treat a
                 // present-and-equal size as verified, otherwise mismatch.
@@ -126,6 +158,27 @@ pub async fn reconcile_batch(
                 serde_json::json!({ "observed_size": item.size, "mtime": item.mtime }),
             ),
         };
+
+        // An OBSERVED hash wins over the inherited legacy one, and a hashful
+        // observation couples the catalogue half in the same tx ("register
+        // fills both, never half").
+        let observed_hash = item.hash.as_deref().filter(|h| !h.trim().is_empty());
+        let content_hash = observed_hash.map(str::to_string).or(content_hash);
+        if let Some(hash) = observed_hash {
+            let name = item.path.rsplit('/').next().filter(|n| !n.is_empty());
+            super::queries::upsert_catalogue_by_hash(
+                &mut tx,
+                hash,
+                "legacy",
+                name,
+                Some(item.size),
+                None,
+            )
+            .await?;
+        }
+
+        // Where the observation came from (adopt autostamp chain).
+        ctx.stamp(&mut provenance);
 
         // `verified`/`mismatch` set last_verified (we just compared against the
         // baseline); `orphan_disk` leaves it NULL (nothing was verified).

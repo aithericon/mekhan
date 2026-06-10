@@ -1,0 +1,149 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Crawl Campaign (cursor loop + batch-fold sink)",
+        "initial": {
+          "id": "in",
+          "label": "Campaign parameters",
+          "fields": [
+            {
+              "name": "file_server",
+              "label": "File server id",
+              "kind": "text",
+              "required": true,
+              "default": "campaign-nas"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "seed",
+      "type": "automated_step",
+      "slug": "seed",
+      "position": { "x": 290, "y": 90 },
+      "data": {
+        "type": "automated_step",
+        "label": "Seed a synthetic NAS (63 files)",
+        "description": "Writes a deterministic 63-file tree into /tmp/mekhan-campaign-demo (cleaning any prior run first). 63 is deliberately NOT divisible by the campaign's 20-files-per-chunk so the final iteration exercises the trailing-partial-batch path: 20 + 20 + 20 + 3.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Seeded",
+          "fields": [
+            { "name": "root", "label": "Root path", "kind": "text" },
+            { "name": "files_created", "label": "Files created", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "campaign",
+      "type": "loop",
+      "slug": "campaign",
+      "position": { "x": 600, "y": 0 },
+      "width": 660,
+      "height": 320,
+      "data": {
+        "type": "loop",
+        "label": "Crawl campaign",
+        "description": "Cursor loop: each iteration crawls ONE bounded chunk (max_batches × batch_size files), resumes from the previous iteration's cursor, and exits when the walk reports `exhausted` (lister EOF — not a chunk-cap stop). The accumulators are the ONLY state crossing iterations: `cursor` folds `crawl.last_path`, `total` sums `crawl.count`. Engine work per iteration is constant no matter how big the corpus is.",
+        "maxIterations": 20,
+        "loopCondition": "crawl.exhausted == false",
+        "accumulators": [
+          {
+            "var": "cursor",
+            "init": "\"\"",
+            "mergeExpr": "if crawl.last_path == () { campaign.cursor } else { crawl.last_path }"
+          },
+          {
+            "var": "total",
+            "init": "0",
+            "mergeExpr": "campaign.total + crawl.count"
+          }
+        ]
+      }
+    },
+    {
+      "id": "crawl",
+      "type": "automated_step",
+      "slug": "crawl",
+      "parentId": "campaign",
+      "position": { "x": 40, "y": 80 },
+      "data": {
+        "type": "automated_step",
+        "label": "Crawl one chunk → fold sink",
+        "description": "The file-ops `crawl` op in SINK MODE (docs/32 batch-fold): walks /tmp/mekhan-campaign-demo resuming after `{{ campaign.cursor }}` (a Loop-accumulator borrow interpolated into the config — empty string on iteration 0 means from-the-start), stops after `max_batches: 2` filled batches of `batch_size: 10`, and PUBLISHES each batch durably to the `INVENTORY_FOLD` JetStream stream instead of emitting channel items (note: no channels declared on this node). The publish-ack lands BEFORE the cursor advances, and mekhan's fold consumer upserts rows idempotently on (file_server_id, path) — so a retried or re-run chunk never duplicates. `sink.file_server_id` is itself a borrow (`{{ start.file_server }}`). Outputs are slim scalars; `exhausted` is the loop's exit signal and `last_path` the next iteration's cursor.",
+        "channels": [],
+        "executionSpec": {
+          "backendType": "file_ops",
+          "config": {
+            "operation": "crawl",
+            "prefix": "mekhan-campaign-demo/",
+            "storage": { "backend": "local", "endpoint": "/tmp" },
+            "batch_size": 10,
+            "max_batches": 2,
+            "stat": true,
+            "resume_from": "{{ campaign.cursor }}",
+            "sink": {
+              "mode": "index",
+              "file_server_id": "{{ start.file_server }}"
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Chunk summary",
+          "fields": [
+            { "name": "prefix", "label": "Prefix", "kind": "text" },
+            { "name": "count", "label": "File count (this chunk)", "kind": "number" },
+            { "name": "last_path", "label": "Last path (resume cursor)", "kind": "text" },
+            { "name": "batches", "label": "Batches published", "kind": "number" },
+            { "name": "cancelled", "label": "Cancelled", "kind": "bool" },
+            { "name": "exhausted", "label": "Exhausted (walk reached EOF)", "kind": "bool" },
+            { "name": "endpoint_root", "label": "Endpoint root (canonical)", "kind": "text" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1360, "y": 110 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "files_crawled", "expression": "campaign.total" },
+          { "targetField": "iterations", "expression": "campaign.iteration" },
+          { "targetField": "files_seeded", "expression": "seed.files_created" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_seed", "source": "start", "target": "seed", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_seed_campaign", "source": "seed", "target": "campaign", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_campaign_crawl", "source": "campaign", "sourceHandle": "body_in", "target": "crawl", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_crawl_back", "source": "crawl", "target": "campaign", "targetHandle": "body_out", "type": "loop_back" },
+    { "id": "e_campaign_end", "source": "campaign", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

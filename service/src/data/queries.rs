@@ -17,6 +17,21 @@ use super::model::*;
 /// Max uncatalogued rows returned inline (the UI gets a count for the rest).
 const UNCATALOGUED_PEEK: i64 = 50;
 
+/// TTL for the uncatalogued count+peek cache (see [`uncatalogued_cached`]).
+const UNCATALOGUED_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Process-wide cache for the uncatalogued section of the response.
+///
+/// The anti-join COUNT (+ the peek's `ORDER BY updated_at` sort) scans all of
+/// `file_inventory` — fine at demo scale, a multi-second full pass per
+/// pageview at the 4M-file corpus. The section is workspace-global (the
+/// underlying queries carry no workspace filter), so one short-TTL entry
+/// serves every request; 15 s staleness is invisible next to a crawl
+/// campaign's own batch cadence. `(checked_at, count, peek_rows)`.
+static UNCATALOGUED_CACHE: tokio::sync::RwLock<
+    Option<(std::time::Instant, i64, Vec<InventoryEntry>)>,
+> = tokio::sync::RwLock::const_new(None);
+
 /// Resolve `file_server_id` (== `file_servers.key`) → (display_name, kind) for a
 /// workspace's servers. `kind` now lives on the child endpoints, so we surface
 /// the highest-priority endpoint's `access_method` as the server's effective
@@ -153,7 +168,41 @@ pub async fn list_entries(
 
     // 4. Uncatalogued (index-only) files: inventory rows whose content_hash
     //    matches no catalogue row (NULL hash, or hashed-but-not-registered).
-    let uncatalogued_count: i64 = sqlx::query_scalar(
+    //    Served through the short-TTL cache; per-request server resolution
+    //    (display name / servable) still happens below, so a server rename or
+    //    endpoint verify shows up immediately even on a cached peek.
+    let (uncatalogued_count, peek_rows) = uncatalogued_cached(pool).await?;
+    let uncatalogued = peek_rows
+        .into_iter()
+        .map(|r| {
+            let name = r.path.rsplit('/').next().unwrap_or(&r.path).to_string();
+            let content_hash = r.content_hash.clone();
+            let first_seen = r.first_seen;
+            UncataloguedFile {
+                name,
+                content_hash,
+                first_seen,
+                copies: vec![to_copy(r, &servers)],
+            }
+        })
+        .collect();
+
+    Ok(DataEntriesResponse {
+        page: page_out,
+        uncatalogued,
+        uncatalogued_count,
+    })
+}
+
+/// Count + peek of uncatalogued inventory rows, through [`UNCATALOGUED_CACHE`].
+async fn uncatalogued_cached(pool: &PgPool) -> Result<(i64, Vec<InventoryEntry>), sqlx::Error> {
+    if let Some((at, count, rows)) = UNCATALOGUED_CACHE.read().await.as_ref() {
+        if at.elapsed() < UNCATALOGUED_TTL {
+            return Ok((*count, rows.clone()));
+        }
+    }
+
+    let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::bigint FROM file_inventory fi \
          LEFT JOIN catalogue_entries c ON c.content_hash = fi.content_hash \
          WHERE c.entry_id IS NULL",
@@ -161,35 +210,19 @@ pub async fn list_entries(
     .fetch_one(pool)
     .await?;
 
-    let uncatalogued = if uncatalogued_count > 0 {
-        let rows = sqlx::query_as::<_, InventoryEntry>(
+    let rows = if count > 0 {
+        sqlx::query_as::<_, InventoryEntry>(
             "SELECT fi.* FROM file_inventory fi \
              LEFT JOIN catalogue_entries c ON c.content_hash = fi.content_hash \
              WHERE c.entry_id IS NULL ORDER BY fi.updated_at DESC LIMIT $1",
         )
         .bind(UNCATALOGUED_PEEK)
         .fetch_all(pool)
-        .await?;
-        rows.into_iter()
-            .map(|r| {
-                let name = r.path.rsplit('/').next().unwrap_or(&r.path).to_string();
-                let content_hash = r.content_hash.clone();
-                let first_seen = r.first_seen;
-                UncataloguedFile {
-                    name,
-                    content_hash,
-                    first_seen,
-                    copies: vec![to_copy(r, &servers)],
-                }
-            })
-            .collect()
+        .await?
     } else {
         Vec::new()
     };
 
-    Ok(DataEntriesResponse {
-        page: page_out,
-        uncatalogued,
-        uncatalogued_count,
-    })
+    *UNCATALOGUED_CACHE.write().await = Some((std::time::Instant::now(), count, rows.clone()));
+    Ok((count, rows))
 }
