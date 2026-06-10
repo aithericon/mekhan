@@ -33,6 +33,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { useStore } from '@xyflow/svelte';
+	import { authFetch } from '$lib/auth/fetch';
 	import { subscribe as subscribeLiveTap } from '$lib/channels/liveTapRegistry';
 	import { playMseStream, type LiveMediaHandle, type LiveMediaStatus } from '$lib/channels/mseStreamPlayer';
 	import { playMjpegStream } from '$lib/channels/mjpegStreamPlayer';
@@ -362,6 +363,50 @@
 			freezeStream();
 		}
 	});
+
+	// ENDED-TEXT BACKFILL. A short-lived producer can end before this widget
+	// ever attaches (no slot held → no live freeze), which would leave a durable
+	// text channel showing only the inert badge. Text is the one render kind
+	// whose end-state is a cheap, meaningful static artifact (the tail), so
+	// replay the bytes ONCE from the durable tap (no `?follow=1` — the response
+	// closes at EOF) straight into the frozen console. Other kinds keep the
+	// inert badge — a video "replay" would mean decoding the whole stream for a
+	// freeze-frame. Gated like live feeds (viewport + LOD); a fetch that yields
+	// no bytes (channel never produced) leaves the badge untouched.
+	let replayed = $state(false);
+	$effect(() => {
+		if (
+			isText &&
+			ended &&
+			!frozen &&
+			!holdsSlot &&
+			!replayed &&
+			inViewport &&
+			zoom >= ZOOM_LOD_THRESHOLD
+		) {
+			replayed = true;
+			void replayTextTail();
+		}
+	});
+
+	async function replayTextTail() {
+		try {
+			const r = await authFetch(
+				`/api/v1/executions/${feed.executionId}/channels/${encodeURIComponent(feed.channelName)}/data`
+			);
+			if (!r.ok || !r.body) return; // never produced → keep the badge
+			player = playTextStream({
+				stream: r.body,
+				onText: (t) => {
+					edgeText = tailCap(edgeText + t, EDGE_TEXT_CAP);
+					// First text mounts the frame in end-state (frozen) styling.
+					frozen = true;
+				}
+			});
+		} catch {
+			/* keep the badge */
+		}
+	}
 
 	// Open / close the live tap as the gate + forced flag change. We acquire a
 	// slot here; a denied auto-attempt leaves us on the badge until the user
