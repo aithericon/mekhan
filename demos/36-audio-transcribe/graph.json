@@ -45,8 +45,8 @@
           "entrypoint": "main.py",
           "config": {
             "python": "python3",
-            "requirements": [],
-            "virtualenv": false,
+            "requirements": ["audioop-lts"],
+            "virtualenv": true,
             "sdk": true,
             "inherit_env": true,
             "env": {}

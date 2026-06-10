@@ -61,6 +61,12 @@ steps:
 
       - vault kv get -field=key secret/zitadel/iac-jwt > /tmp/zitadel-iac-jwt.json
       - export TF_VAR_zitadel_jwt_file=/tmp/zitadel-iac-jwt.json
+      # Cluster's default org ID — required by every resource in
+      # deploy/dev/zitadel.tf. Without it the provider sees the live
+      # org_id as drift against an implicit-null config and force-replaces
+      # all 5 apps on every plan (rotates client_id, invalidates every
+      # CLI token + browser session). See deploy/dev/variables.tf.
+      - export TF_VAR_zitadel_org_id=$(vault kv get -field=org_id secret/services/mekhan/dev)
 
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
