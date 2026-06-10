@@ -127,7 +127,17 @@
 {/if}
 
 {#if feed}
-	<EdgeLabel x={pathResult[1]} y={pathResult[2]} width={320} height={180}>
+	<!-- Only claim the full media box for feeds with a live renderer. A
+	     plan-null feed (data-plane binary with no renderer, e.g. text/plain)
+	     collapses to a tiny liveness dot — a fixed 320×180 label would paint
+	     an empty var(--card) (near-black in dark mode) rectangle on the edge. -->
+	<EdgeLabel
+		x={pathResult[1]}
+		y={pathResult[2]}
+		width={feed.plan ? 320 : undefined}
+		height={feed.plan ? 180 : undefined}
+		transparent={!feed.plan}
+	>
 		<EdgeMediaWidget {feed} />
 	</EdgeLabel>
 {/if}
