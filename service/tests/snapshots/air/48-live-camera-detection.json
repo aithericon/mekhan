@@ -9276,7 +9276,7 @@
         }
       ],
       "logic": {
-        "source": "#{ count: #{ count: close.count, \"__map_id\": close.__map_id } }",
+        "source": "if close.count == 0 { #{ gathered: #{ output: [] } } } else { #{ count: #{ count: close.count, \"__map_id\": close.__map_id } } }",
         "type": "rhai"
       },
       "name": "Detect + annotate (YOLO26 + ByteTrack) - Channel 'detections' Close",
@@ -9284,6 +9284,11 @@
         {
           "cardinality": "single",
           "name": "count",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "gathered",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -9299,6 +9304,11 @@
         {
           "place": "p_detector_detections_count",
           "port": "count",
+          "weight": 1
+        },
+        {
+          "place": "p_detector_detections_gathered",
+          "port": "gathered",
           "weight": 1
         }
       ]

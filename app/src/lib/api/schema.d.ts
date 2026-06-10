@@ -47,6 +47,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/nets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/admin/nets` — engine-wide net overview (admin). */
+        get: operations["list_admin_nets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/nets/{net_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/admin/nets/{net_id}` — kill switch (admin).
+         * @description Proxies the engine's terminate-with-cleanup: rehydrates a hibernated
+         *     active net, drains lease finalizers, emits `NetCancelled`, cancels tasks.
+         *     Idempotent — an already-terminal or unknown net is a no-op success.
+         */
+        delete: operations["kill_admin_net"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/nets/{net_id}/purge-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/admin/nets/{net_id}/purge-events` — cleanup (admin).
+         * @description Purges the net's event + signal subjects from PETRI_GLOBAL. Refused (409)
+         *     while the engine still reports the net active — an active net's event log
+         *     is its authoritative state and purging it would corrupt rehydration.
+         *     A net UNKNOWN to the engine is purgeable: that is exactly the orphan-
+         *     garbage case this endpoint exists for.
+         */
+        post: operations["purge_admin_net_events"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analyze": {
         parameters: {
             query?: never;
@@ -4166,6 +4229,32 @@ export interface components {
              *     email→subject resolver for the admin UI.
              */
             subject: string;
+        };
+        /** @description One row of the admin net overview. */
+        AdminNetRow: {
+            /** @description Principal recorded at deploy time. */
+            created_by?: string | null;
+            /**
+             * Format: int64
+             * @description Messages currently on `petri.events.{net_id}.>` in PETRI_GLOBAL.
+             *     `None` when the stream scan failed (fail-soft — the list still renders).
+             */
+            event_count?: number | null;
+            /** @description Hot (in the engine registry) vs hibernated. */
+            in_memory: boolean;
+            /**
+             * Format: uuid
+             * @description Owning workflow instance, when this net is a mekhan-managed instance.
+             */
+            instance_id?: string | null;
+            /** @description Human label from the net metadata, when the deployer set one. */
+            label?: string | null;
+            /** @description Engine net id (`mekhan-<instance>`, `pool-<resource>`, …). */
+            net_id: string;
+            /** @description Engine lifecycle status: `created | running | completed | cancelled | failed`. */
+            status: string;
+            /** @description Engine-side template reference from the net metadata. */
+            template_id?: string | null;
         };
         /**
          * @description Response shape for `GET /api/v1/instances/{id}/allocations` and
@@ -9079,6 +9168,15 @@ export interface components {
          * @enum {string}
          */
         PullPolicy: "always" | "if_not_present" | "never";
+        /** @description Result of a purge: how many messages were removed from PETRI_GLOBAL. */
+        PurgeEventsResponse: {
+            /**
+             * Format: int64
+             * @description Total messages purged across `petri.events.{id}.>` and
+             *     `petri.signal.{id}.>`.
+             */
+            purged_messages: number;
+        };
         /**
          * @description Configuration for the Python execution backend.
          *
@@ -11837,6 +11935,151 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_admin_nets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every engine net with status, event count and instance join */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNetRow"][];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Engine unreachable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    kill_admin_net: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Engine net id */
+                net_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Net terminated (or already gone) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid net id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Engine unreachable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    purge_admin_net_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Engine net id */
+                net_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events purged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurgeEventsResponse"];
+                };
+            };
+            /** @description Invalid net id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Net is still active — terminate it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Engine unreachable */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

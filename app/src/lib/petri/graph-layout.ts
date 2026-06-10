@@ -37,7 +37,7 @@ export const TRANSITION_MAX_WIDTH = 320;
 
 // Per-character width estimates for text-sm (14px). Deliberately generous
 // so the rendered chip never exceeds the dagre reservation.
-const SANS_CHAR_W = 7.5; // Space Grotesk text-sm font-semibold
+const SANS_CHAR_W = 7.5; // Hanken Grotesk text-sm font-semibold
 const MONO_CHAR_W = 8.4; // ui-monospace text-sm font-mono
 
 // Header geometry — must match the header row in TransitionNode.svelte.

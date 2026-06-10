@@ -107,6 +107,179 @@
         }
       }
     },
+    "/api/v1/admin/nets": {
+      "get": {
+        "tags": [
+          "admin-nets"
+        ],
+        "summary": "`GET /api/v1/admin/nets` — engine-wide net overview (admin).",
+        "operationId": "list_admin_nets",
+        "responses": {
+          "200": {
+            "description": "Every engine net with status, event count and instance join",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminNetRow"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/nets/{net_id}": {
+      "delete": {
+        "tags": [
+          "admin-nets"
+        ],
+        "summary": "`DELETE /api/v1/admin/nets/{net_id}` — kill switch (admin).",
+        "description": "Proxies the engine's terminate-with-cleanup: rehydrates a hibernated\nactive net, drains lease finalizers, emits `NetCancelled`, cancels tasks.\nIdempotent — an already-terminal or unknown net is a no-op success.",
+        "operationId": "kill_admin_net",
+        "parameters": [
+          {
+            "name": "net_id",
+            "in": "path",
+            "description": "Engine net id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Net terminated (or already gone)"
+          },
+          "400": {
+            "description": "Invalid net id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/nets/{net_id}/purge-events": {
+      "post": {
+        "tags": [
+          "admin-nets"
+        ],
+        "summary": "`POST /api/v1/admin/nets/{net_id}/purge-events` — cleanup (admin).",
+        "description": "Purges the net's event + signal subjects from PETRI_GLOBAL. Refused (409)\nwhile the engine still reports the net active — an active net's event log\nis its authoritative state and purging it would corrupt rehydration.\nA net UNKNOWN to the engine is purgeable: that is exactly the orphan-\ngarbage case this endpoint exists for.",
+        "operationId": "purge_admin_net_events",
+        "parameters": [
+          {
+            "name": "net_id",
+            "in": "path",
+            "description": "Engine net id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events purged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeEventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid net id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Net is still active — terminate it first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analyze": {
       "post": {
         "tags": [
@@ -11846,6 +12019,67 @@
           }
         }
       },
+      "AdminNetRow": {
+        "type": "object",
+        "description": "One row of the admin net overview.",
+        "required": [
+          "net_id",
+          "status",
+          "in_memory"
+        ],
+        "properties": {
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Principal recorded at deploy time."
+          },
+          "event_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Messages currently on `petri.events.{net_id}.>` in PETRI_GLOBAL.\n`None` when the stream scan failed (fail-soft — the list still renders).",
+            "minimum": 0
+          },
+          "in_memory": {
+            "type": "boolean",
+            "description": "Hot (in the engine registry) vs hibernated."
+          },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owning workflow instance, when this net is a mekhan-managed instance."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human label from the net metadata, when the deployer set one."
+          },
+          "net_id": {
+            "type": "string",
+            "description": "Engine net id (`mekhan-<instance>`, `pool-<resource>`, …)."
+          },
+          "status": {
+            "type": "string",
+            "description": "Engine lifecycle status: `created | running | completed | cancelled | failed`."
+          },
+          "template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Engine-side template reference from the net metadata."
+          }
+        }
+      },
       "AllocationResponse": {
         "type": "object",
         "description": "Response shape for `GET /api/v1/instances/{id}/allocations` and\n`GET /api/v1/clusters/{id}/leases`.\n\nOne row of the `allocations` projection table — a resource grant on the\nPetri substrate: either a `datacenter_lease` (an external-cluster\nSlurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a\n`concurrency_limit_grant` (an admission against one of our own worker pools).\nMaterialized field-for-field by the allocations projection consumer\n(sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a\ncomputed `duration_ms` overlaid the same way `StepExecutionResponse` does.\n\nEvery nullable column mirrors a `NULL`-able DB column: pool grants carry no\n`cluster_resource_id` / `scheduler_flavor`; pool-management nets carry no\n`instance_id`; timing/accounting fields fill in as the grant progresses.",
@@ -22862,6 +23096,21 @@
           "if_not_present",
           "never"
         ]
+      },
+      "PurgeEventsResponse": {
+        "type": "object",
+        "description": "Result of a purge: how many messages were removed from PETRI_GLOBAL.",
+        "required": [
+          "purged_messages"
+        ],
+        "properties": {
+          "purged_messages": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total messages purged across `petri.events.{id}.>` and\n`petri.signal.{id}.>`.",
+            "minimum": 0
+          }
+        }
       },
       "PythonConfig": {
         "type": "object",

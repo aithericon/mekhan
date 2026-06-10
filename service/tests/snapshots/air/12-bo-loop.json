@@ -8102,7 +8102,7 @@
         }
       ],
       "logic": {
-        "source": "let __src = d_propose.detail.outputs.candidates; let __arr = if type_of(__src) == \"array\" { __src } else { [] }; let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ \"cand\": __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"mp\" }); __i += 1; } #{ count: #{ expected: __arr.len(), \"__map_id\": \"mp\" }, items: __items }",
+        "source": "let __src = d_propose.detail.outputs.candidates; let __arr = if type_of(__src) == \"array\" { __src } else { [] }; if __arr.len() == 0 { #{ gathered: #{ output: [] } } } else { let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ \"cand\": __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"mp\" }); __i += 1; } #{ count: #{ expected: __arr.len(), \"__map_id\": \"mp\" }, items: __items } }",
         "type": "rhai"
       },
       "name": "Evaluate K candidates - Scatter",
@@ -8115,6 +8115,11 @@
         {
           "cardinality": "batch",
           "name": "items",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "gathered",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -8135,6 +8140,11 @@
         {
           "place": "p_mp_items",
           "port": "items",
+          "weight": 1
+        },
+        {
+          "place": "p_mp_gathered",
+          "port": "gathered",
           "weight": 1
         }
       ]
