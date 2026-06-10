@@ -1045,6 +1045,15 @@ export function catalogueDownloadUrl(storagePath: string): string {
 	return `${API_BASE}/catalogue/download/${storagePath}`;
 }
 
+/**
+ * Routed serve of a logical entry's bytes by content hash — mekhan picks the
+ * cheapest verification-clean endpoint (presigned-302 s3, runner-relayed
+ * local_mount, opendal sftp) and falls back across copies on a miss.
+ */
+export function dataEntryContentUrl(contentHash: string): string {
+	return `${API_BASE}/data/entries/${contentHash}/content`;
+}
+
 // ── File inventory (content-addressed catalogue companion, docs/32) ──────────
 
 /**

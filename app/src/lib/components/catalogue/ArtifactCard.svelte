@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { catalogueDownloadUrl, type CatalogueEntry } from '$lib/api/client';
+	import { catalogueDownloadUrl, dataEntryContentUrl, type CatalogueEntry } from '$lib/api/client';
 	import type { DataCopy } from '$lib/api/data';
 	import { Badge } from '$lib/components/ui/badge';
 	import { CopyButton } from '$lib/components/ui/copy-button';
@@ -342,6 +342,21 @@
 						</a>
 					</Tooltip.Trigger>
 					<Tooltip.Content>Download</Tooltip.Content>
+				</Tooltip.Root>
+			{:else if entry.content_hash && copies.length > 0}
+				<!-- By-reference entry: no platform-store copy, but physical copies are
+				     servable through the routed endpoint data plane. -->
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<a
+							href={dataEntryContentUrl(entry.content_hash)}
+							class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							download={entry.filename ?? entry.name ?? true}
+						>
+							<Download class="size-4" />
+						</a>
+					</Tooltip.Trigger>
+					<Tooltip.Content>Download from file server</Tooltip.Content>
 				</Tooltip.Root>
 			{/if}
 
