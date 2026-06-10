@@ -38,10 +38,13 @@ migration — **new pages use the band**.
 
 ## The rules
 
-1. **One width per archetype** (`PageShell width`):
-   `narrow` (max-w-2xl) forms/profile · `default` (max-w-5xl) lists ·
-   `wide` (max-w-6xl) dense operator surfaces (fleet, data, models) ·
-   `full` (no cap) full-width detail · `bleed` canvas opt-out.
+1. **One header grid, few body widths.** The band's inner content (title
+   row + tabs) ALWAYS aligns to the max-w-6xl grid — the header must sit at
+   the same x on every page; navigation never makes the title jump.
+   `PageShell width` caps the BODY only: `default`/`wide` (max-w-6xl, the
+   standard) · `narrow` (max-w-2xl) form bodies · `full` (no cap)
+   full-width detail bodies · `bleed` canvas opt-out. Hand-rolled bands on
+   bleed pages must wrap their content in `mx-auto w-full max-w-6xl` too.
 2. **One h1 scale** (`PageHeader variant`): `page` = text-2xl for top-level
    pages, `detail` = text-lg for back-linked detail pages. Never a raw `<h1>`.
 3. **Tabs — pick by what changes:**

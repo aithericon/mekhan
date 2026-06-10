@@ -1,11 +1,16 @@
 <script lang="ts" module>
 	/**
 	 * Canonical page widths — one per archetype (see README.md):
-	 *  - narrow  → max-w-2xl  forms / profile / simple create pages
-	 *  - default → max-w-5xl  standard list pages
-	 *  - wide    → max-w-6xl  dense operator surfaces (fleet, data, models, dashboard)
-	 *  - full    → no max-w   full-width detail pages (keeps px-6 padding + scroll)
+	 *  - narrow  → max-w-2xl  form BODIES (profile, simple create pages)
+	 *  - default → max-w-6xl  the standard page width (lists, operator surfaces)
+	 *  - wide    → max-w-6xl  alias of default (kept for call-site readability)
+	 *  - full    → no max-w   full-width detail bodies (keeps px-6 padding + scroll)
 	 *  - bleed   → opt-out    canvas/editor pages: no scroll, no padding, no width cap
+	 *
+	 * The width variant caps the BODY only. The band's inner content always
+	 * aligns to the max-w-6xl grid (BAND_MAX_W) so the title/tabs sit at the
+	 * same x on every page — page-to-page navigation must never make the
+	 * header jump horizontally.
 	 */
 	export type PageWidth = 'narrow' | 'default' | 'wide' | 'full' | 'bleed';
 </script>
@@ -52,10 +57,14 @@
 
 	const MAX_W: Record<Exclude<PageWidth, 'bleed'>, string> = {
 		narrow: 'max-w-2xl',
-		default: 'max-w-5xl',
+		default: 'max-w-6xl',
 		wide: 'max-w-6xl',
 		full: ''
 	};
+
+	// One grid for every header: band content (title row + tabs) always
+	// aligns to this, independent of the body's width variant.
+	const BAND_MAX_W = 'max-w-6xl';
 </script>
 
 {#if width === 'bleed'}
@@ -72,7 +81,7 @@
 	     overlaps the band's border-b exactly (GitHub-style). -->
 	<div class="flex h-full flex-col" data-testid={testid}>
 		<div class={cn('shrink-0 border-b border-border bg-card px-6 pt-5', !tabs && 'pb-4')}>
-			<div class={cn('mx-auto w-full', MAX_W[width])}>
+			<div class={cn('mx-auto w-full', BAND_MAX_W)}>
 				{#if band}
 					<div class="[&>header]:mb-0">
 						{@render band()}

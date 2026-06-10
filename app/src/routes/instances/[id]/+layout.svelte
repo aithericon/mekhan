@@ -311,87 +311,90 @@
 			{@const instance = ctx.instance}
 			<!-- Hand-rolled band (bleed shell): same tokens/anatomy as PageShell's
 			     band variant — header row + flush tab row over one border-b, the
-			     tab underline overlapping it via -mb-px. -->
+			     tab underline overlapping it via -mb-px, inner content on the
+			     shared max-w-6xl band grid. -->
 			<div class="shrink-0 border-b border-border bg-card px-6 pt-4">
-				{#if instance.parent_instance_id}
-					<!-- This run was spawned by a SubWorkflow node in a parent run.
-					     A plain <a> is correct: navigating to the parent is a fresh
-					     /instances/[id] mount (new InstanceContext). Each ancestor
-					     page shows its own parent link, so the chain is climbable. -->
-					<a
-						href={`/instances/${instance.parent_instance_id}/workflow`}
-						class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-						data-testid="parent-instance-breadcrumb"
-					>
-						<CornerLeftUp class="size-3.5" />
-						Parent run
-					</a>
-				{/if}
-				<PageHeader title={processName ?? 'Run'} variant="detail" class="mb-0">
-					<div
-						class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
-					>
-						<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
-							{instance.status}
-						</Badge>
-						<span class="font-mono truncate">{instance.net_id}</span>
-					</div>
-					<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
-						<span>created {formatDate(instance.created_at)}</span>
-						<span>started {formatDate(instance.started_at ?? null)}</span>
-						<span>completed {formatDate(instance.completed_at ?? null)}</span>
-						{#if instance.current_step}
-							<span class="text-foreground">step: {instance.current_step}</span>
-						{/if}
-					</div>
-					{#snippet actions()}
-						<Button variant="ghost" size="sm" href="/templates/{instance.template_id}">
-							<FileText class="size-3.5" />
-							Template v{instance.template_version}
-						</Button>
-						{#if instance.mode !== 'test_run'}
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={handleRerun}
-								disabled={rerunLoading}
-								data-testid="rerun-instance"
-								title="Launch this template again, pre-filled with this run's start parameters"
-							>
-								<RotateCcw class="mr-1 size-3.5" />
-								{rerunLoading ? 'Loading…' : 'Rerun'}
+				<div class="mx-auto w-full max-w-6xl">
+					{#if instance.parent_instance_id}
+						<!-- This run was spawned by a SubWorkflow node in a parent run.
+						     A plain <a> is correct: navigating to the parent is a fresh
+						     /instances/[id] mount (new InstanceContext). Each ancestor
+						     page shows its own parent link, so the chain is climbable. -->
+						<a
+							href={`/instances/${instance.parent_instance_id}/workflow`}
+							class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+							data-testid="parent-instance-breadcrumb"
+						>
+							<CornerLeftUp class="size-3.5" />
+							Parent run
+						</a>
+					{/if}
+					<PageHeader title={processName ?? 'Run'} variant="detail" class="mb-0">
+						<div
+							class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
+						>
+							<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
+								{instance.status}
+							</Badge>
+							<span class="font-mono truncate">{instance.net_id}</span>
+						</div>
+						<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
+							<span>created {formatDate(instance.created_at)}</span>
+							<span>started {formatDate(instance.started_at ?? null)}</span>
+							<span>completed {formatDate(instance.completed_at ?? null)}</span>
+							{#if instance.current_step}
+								<span class="text-foreground">step: {instance.current_step}</span>
+							{/if}
+						</div>
+						{#snippet actions()}
+							<Button variant="ghost" size="sm" href="/templates/{instance.template_id}">
+								<FileText class="size-3.5" />
+								Template v{instance.template_version}
 							</Button>
-						{/if}
-						{#if instance.status === 'running' || instance.status === 'created'}
-							<Button
-								variant="outline"
-								size="sm"
-								class="border-destructive/30 text-destructive hover:bg-destructive/10"
-								onclick={handleCancel}
-							>
-								Cancel
-							</Button>
-						{:else if instance.mode !== 'test_run'}
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={() => (saveAsTestOpen = true)}
-								data-testid="save-as-test"
-							>
-								<FlaskConical class="mr-1 size-3.5" />
-								Save as test
-							</Button>
-						{/if}
-					{/snippet}
-				</PageHeader>
+							{#if instance.mode !== 'test_run'}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={handleRerun}
+									disabled={rerunLoading}
+									data-testid="rerun-instance"
+									title="Launch this template again, pre-filled with this run's start parameters"
+								>
+									<RotateCcw class="mr-1 size-3.5" />
+									{rerunLoading ? 'Loading…' : 'Rerun'}
+								</Button>
+							{/if}
+							{#if instance.status === 'running' || instance.status === 'created'}
+								<Button
+									variant="outline"
+									size="sm"
+									class="border-destructive/30 text-destructive hover:bg-destructive/10"
+									onclick={handleCancel}
+								>
+									Cancel
+								</Button>
+							{:else if instance.mode !== 'test_run'}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => (saveAsTestOpen = true)}
+									data-testid="save-as-test"
+								>
+									<FlaskConical class="mr-1 size-3.5" />
+									Save as test
+								</Button>
+							{/if}
+						{/snippet}
+					</PageHeader>
 
-				{#if primaryProcess || hasNet}
-					<div class="-mb-px mt-1">
-						<PageTabs testid="instance-tabs" {tabs} />
-					</div>
-				{:else}
-					<div class="pb-3"></div>
-				{/if}
+					{#if primaryProcess || hasNet}
+						<div class="-mb-px mt-1">
+							<PageTabs testid="instance-tabs" {tabs} />
+						</div>
+					{:else}
+						<div class="pb-3"></div>
+					{/if}
+				</div>
 			</div>
 
 			{#if primaryProcess || hasNet}
