@@ -13,6 +13,8 @@
 		listAdminNets,
 		killNet,
 		purgeNetEvents,
+		bulkKillNets,
+		purgeTerminalNets,
 		AdminNetsForbidden,
 		type AdminNetRow
 	} from '$lib/api/admin-nets';
@@ -31,6 +33,10 @@
 	let isAdmin = $state(true);
 	/** net_ids with an action in flight — disables that row's buttons. */
 	let busy = $state<Set<string>>(new Set());
+	/** Opt-in: let bulk Kill all also target infrastructure nets. */
+	let includeInfra = $state(false);
+	/** A bulk op is running — disables the bulk buttons. */
+	let bulkBusy = $state(false);
 
 	const statusColors: Record<string, string> = {
 		running: 'bg-blue-100 text-blue-700',
@@ -42,6 +48,11 @@
 
 	const isActive = (n: AdminNetRow) => n.status === 'running' || n.status === 'created';
 
+	/** Infra net (`pool-*`, `staging-*`, …) vs a `mekhan-` workflow instance.
+	 *  Bulk Kill all excludes these by default — killing the pool/staging nets
+	 *  that keep the platform running is the catastrophic case we guard against. */
+	const isInfra = (n: AdminNetRow) => !n.net_id.startsWith('mekhan-');
+
 	const filteredNets = $derived(
 		filter === 'all'
 			? nets
@@ -52,6 +63,13 @@
 
 	const isRunaway = (n: AdminNetRow) =>
 		isActive(n) && (n.event_count ?? 0) >= RUNAWAY_EVENT_THRESHOLD;
+
+	// Bulk-action targets, derived from the full net list (independent of the
+	// active/terminal view filter so the buttons are predictable).
+	const activeInstances = $derived(nets.filter((n) => isActive(n) && !isInfra(n)));
+	const activeInfra = $derived(nets.filter((n) => isActive(n) && isInfra(n)));
+	const killTargets = $derived(includeInfra ? nets.filter(isActive) : activeInstances);
+	const terminalNets = $derived(nets.filter((n) => !isActive(n)));
 
 	function formatCount(c: number | undefined | null): string {
 		if (c == null) return '—';
@@ -133,6 +151,64 @@
 		}
 	}
 
+	async function handleBulkKill() {
+		const targets = killTargets;
+		if (targets.length === 0) return;
+		const infraNote =
+			includeInfra && activeInfra.length > 0
+				? `\n\n⚠️ This INCLUDES ${activeInfra.length} infrastructure net(s) (pool/staging/…). ` +
+					'Killing those can take down platform capacity, in-flight publishes, or model serving.'
+				: '';
+		if (
+			!confirm(
+				`Kill ${targets.length} active net(s)?\n\n` +
+					'Each is terminated: held leases released, NetCancelled emitted, tasks cancelled.' +
+					infraNote
+			)
+		)
+			return;
+		bulkBusy = true;
+		try {
+			const res = await bulkKillNets(
+				targets.map((n) => n.net_id),
+				includeInfra
+			);
+			const parts = [`killed ${res.killed.length}`];
+			if (res.skipped_infrastructure.length > 0)
+				parts.push(`skipped ${res.skipped_infrastructure.length} infra`);
+			if (res.failed.length > 0) parts.push(`${res.failed.length} failed`);
+			notice = `Bulk kill: ${parts.join(', ')}`;
+			await load();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Bulk kill failed';
+		} finally {
+			bulkBusy = false;
+		}
+	}
+
+	async function handlePurgeTerminal() {
+		if (terminalNets.length === 0) return;
+		if (
+			!confirm(
+				`Purge events of all ${terminalNets.length} terminal net(s) from PETRI_GLOBAL?\n\n` +
+					'This permanently deletes their event history (projection rows already written are kept). ' +
+					'Active nets are never touched.'
+			)
+		)
+			return;
+		bulkBusy = true;
+		try {
+			const res = await purgeTerminalNets();
+			const failNote = res.failed.length > 0 ? `, ${res.failed.length} failed` : '';
+			notice = `Purged ${res.total_messages} messages across ${res.nets_purged} terminal net(s)${failNote}`;
+			await load();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Purge-terminal failed';
+		} finally {
+			bulkBusy = false;
+		}
+	}
+
 	$effect(() => {
 		load();
 	});
@@ -161,7 +237,7 @@
 		</div>
 
 		<div class="flex-1 overflow-y-auto">
-			<div class="px-6 py-4">
+			<div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
 				<FilterPills
 					active={filter}
 					onSelect={(v) => (filter = v as typeof filter)}
@@ -171,6 +247,37 @@
 						{ value: 'all', label: 'All' }
 					]}
 				/>
+				{#if isAdmin}
+					<div class="flex flex-wrap items-center gap-3">
+						<label
+							class="flex items-center gap-1.5 text-sm text-muted-foreground"
+							title="Also target infrastructure nets (pool/staging/…) in Kill all — dangerous"
+						>
+							<input type="checkbox" bind:checked={includeInfra} class="size-3.5 accent-destructive" />
+							Include infrastructure
+						</label>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={bulkBusy || killTargets.length === 0}
+							class="gap-1.5 text-destructive hover:text-destructive"
+							onclick={handleBulkKill}
+						>
+							<OctagonX class="size-3.5" />
+							Kill all{includeInfra ? '' : ' instances'} ({killTargets.length})
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={bulkBusy || terminalNets.length === 0}
+							class="gap-1.5"
+							onclick={handlePurgeTerminal}
+						>
+							<Eraser class="size-3.5" />
+							Purge all terminal ({terminalNets.length})
+						</Button>
+					</div>
+				{/if}
 			</div>
 			{#if notice}
 				<div class="px-6 pb-2 text-sm text-muted-foreground">{notice}</div>
@@ -204,6 +311,14 @@
 											<Badge class="gap-1 bg-red-100 text-red-700">
 												<Flame class="size-3" />
 												runaway?
+											</Badge>
+										{/if}
+										{#if isInfra(net)}
+											<Badge
+												class="bg-amber-100 text-amber-700"
+												title="Infrastructure net — excluded from bulk Kill all unless 'Include infrastructure' is checked"
+											>
+												system
 											</Badge>
 										{/if}
 									</span>

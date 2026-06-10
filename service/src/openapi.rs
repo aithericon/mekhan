@@ -270,6 +270,10 @@ use utoipa::OpenApi;
             // response, so register it explicitly for frontend codegen.
             crate::handlers::admin_nets::AdminNetRow,
             crate::handlers::admin_nets::PurgeEventsResponse,
+            crate::handlers::admin_nets::BulkKillRequest,
+            crate::handlers::admin_nets::BulkKillResponse,
+            crate::handlers::admin_nets::BulkFailure,
+            crate::handlers::admin_nets::PurgeTerminalResponse,
             // Model-pool reconciliation (docs/31 Phase 0) — per-node engine
             // inventory read. The nested per-node / per-engine / per-adapter
             // shapes are reached only through `Vec<_>` in the

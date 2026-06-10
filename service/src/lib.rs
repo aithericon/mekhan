@@ -539,6 +539,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // DELETE = engine terminate-with-cleanup, purge-events = PETRI_GLOBAL
         // subject purge for terminal nets. All require workspace Admin.
         .routes(routes!(handlers::admin_nets::list_admin_nets))
+        .routes(routes!(handlers::admin_nets::bulk_kill_nets))
+        .routes(routes!(handlers::admin_nets::purge_terminal_nets))
         .routes(routes!(handlers::admin_nets::kill_admin_net))
         .routes(routes!(handlers::admin_nets::purge_admin_net_events))
         // Capability types (Phase 4 — typed capability registry). Admin-curated,
