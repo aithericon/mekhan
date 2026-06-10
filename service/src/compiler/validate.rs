@@ -65,11 +65,25 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         }
     }
 
-    // Reachability: BFS on full graph (includes loop_back edges)
-    let mut bfs = Bfs::new(&wg.full, wg.start);
+    // Reachability: BFS on full graph (includes loop_back edges). A
+    // StreamSource is an external ENTRY point (fed by the mekhan ingress
+    // endpoint, not by Start — it has no inbound edges by design, see
+    // `validate_stream_source`), so its streaming sub-graph is legitimately
+    // unreachable from Start. Root the BFS at Start AND at every
+    // StreamSource so a consumer fed solely by an ingress channel isn't
+    // rejected as unreachable.
     let mut visited = HashSet::new();
-    while let Some(ni) = bfs.next(&wg.full) {
-        visited.insert(ni);
+    let stream_roots: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.data, WorkflowNodeData::StreamSource { .. }))
+        .map(|n| wg.indices[n.id.as_str()])
+        .collect();
+    for root in std::iter::once(wg.start).chain(stream_roots) {
+        let mut bfs = Bfs::new(&wg.full, root);
+        while let Some(ni) = bfs.next(&wg.full) {
+            visited.insert(ni);
+        }
     }
 
     let tool_target_ids: HashSet<&str> = graph
@@ -86,7 +100,8 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
             let node = wg.full.node_weight(ni).unwrap();
             // Scope nodes are containers — they have no edges and are not reachable via BFS.
             // Trigger nodes are inputs to the workflow, not part of it — they're never
-            // reachable from Start either.
+            // reachable from Start either. (StreamSources need no exemption here:
+            // they are BFS roots above, so they always mark themselves visited.)
             // Tool nodes (target of an agent's `tools`-handle edge) are reached
             // structurally, not via the normal flow — the agent compiler
             // dispatches to them via the tools-edge index in compile.rs.
@@ -820,7 +835,150 @@ pub(crate) fn warn_unmerged_fan_in(
 
 // --- Streaming-channel validation (docs/25, Phase 1a) ---
 
-/// Validate every AutomatedStep's declared streaming [`Channel`]s:
+/// StreamSource structural rules (docs/25 §9 Phase 3 — workflow ingress).
+/// Registered as `STREAM_SOURCE_DECL.validate`; the generic per-channel rules
+/// (unique names, schema refs, plane coherence) stay in [`validate_channels`],
+/// which dispatches through the shared `WorkflowNodeData::channels()` accessor.
+///
+/// - **≥1 channel, ALL direction `Out`** — the node produces into the net;
+///   nothing on the net feeds it, so an `In` channel could never receive.
+/// - **Transport `jetstream` | `nats-latest` only (v1)** — the ingress
+///   endpoint publishes elements as they arrive; `s3` (poll-an-object-store)
+///   and `livekit` (browser-egress, no node-side producer seam) have no
+///   ingress adapter yet.
+/// - **No control-flow edges** — no inbound edge (the external ingress is the
+///   only feeder; an inbound token would strand in the control inbox), and
+///   every outbound edge must wire off a declared channel handle (there is no
+///   default `out`).
+pub(crate) fn validate_stream_source(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    use crate::models::template::{ChannelDirection, ChannelTransport};
+
+    let channels = node.data.channels();
+    if channels.is_empty() {
+        return Err(CompileError::Validation(format!(
+            "stream_source '{}' must declare at least one Out channel — the channel \
+             handles are its only wiring surface",
+            node.id
+        )));
+    }
+    let mut names: HashSet<&str> = HashSet::new();
+    for ch in channels {
+        names.insert(ch.name.as_str());
+        if !matches!(ch.direction, ChannelDirection::Out) {
+            return Err(CompileError::ChannelInvalid {
+                node_id: node.id.clone(),
+                channel: ch.name.clone(),
+                message: "stream_source channels must all be direction 'out' — the node \
+                          produces into the net; nothing on the net feeds it"
+                    .to_string(),
+            });
+        }
+        if !matches!(
+            ch.transport,
+            ChannelTransport::Jetstream | ChannelTransport::NatsLatest
+        ) {
+            return Err(CompileError::ChannelInvalid {
+                node_id: node.id.clone(),
+                channel: ch.name.clone(),
+                message: format!(
+                    "stream_source channels must use the 'jetstream' or 'nats-latest' \
+                     transport; '{}' has no ingress adapter in v1",
+                    ch.transport.wire_tag()
+                ),
+            });
+        }
+    }
+    for edge in &graph.edges {
+        if edge.target == node.id {
+            return Err(CompileError::Validation(format!(
+                "stream_source '{}' cannot have inbound edges (edge '{}'): it is fed \
+                 by the external ingress endpoint, not by the net",
+                node.id, edge.id
+            )));
+        }
+        if edge.source == node.id
+            && !edge
+                .source_handle
+                .as_deref()
+                .is_some_and(|h| names.contains(h))
+        {
+            return Err(CompileError::Validation(format!(
+                "stream_source '{}' has no control-flow output: edge '{}' must wire \
+                 off a declared channel handle ({})",
+                node.id,
+                edge.id,
+                channels
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// StreamSink structural rules (docs/25 §9 Phase 3 — workflow egress).
+/// Registered as `STREAM_SINK_DECL.validate`.
+///
+/// - **Exactly ONE channel, direction `In`** — the lowering parks/drains a
+///   single stream; multi-channel egress is post-v1.
+/// - **No `livekit` transport** — livekit is an egress/presentation transport
+///   with NO node-side consumer; a sink cannot drain it.
+/// - **No outbound edges** — the sink terminates the stream at the mekhan
+///   egress endpoint; nothing downstream may consume it.
+pub(crate) fn validate_stream_sink(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    use crate::models::template::{ChannelDirection, ChannelTransport};
+
+    let channels = node.data.channels();
+    let [ch] = channels else {
+        return Err(CompileError::Validation(format!(
+            "stream_sink '{}' must declare exactly one In channel, found {}",
+            node.id,
+            channels.len()
+        )));
+    };
+    if !matches!(ch.direction, ChannelDirection::In) {
+        return Err(CompileError::ChannelInvalid {
+            node_id: node.id.clone(),
+            channel: ch.name.clone(),
+            message: "stream_sink's channel must be direction 'in' — the upstream \
+                      producer edge feeds it; the node emits nothing"
+                .to_string(),
+        });
+    }
+    if matches!(ch.transport, ChannelTransport::LiveKit) {
+        return Err(CompileError::ChannelInvalid {
+            node_id: node.id.clone(),
+            channel: ch.name.clone(),
+            message: "the 'livekit' transport has no node-side consumer (it is \
+                      browser-egress only); a stream_sink cannot drain it"
+                .to_string(),
+        });
+    }
+    for edge in &graph.edges {
+        if edge.source == node.id {
+            return Err(CompileError::Validation(format!(
+                "stream_sink '{}' cannot have outbound edges (edge '{}'): it \
+                 terminates the stream at the egress endpoint",
+                node.id, edge.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate every channel-bearing node's declared streaming [`Channel`]s
+/// (AutomatedStep, StreamSource, StreamSink — dispatched through the shared
+/// `WorkflowNodeData::channels()` accessor so the three can't drift):
 ///
 /// - **No duplicate names** on one node (the synthesized place id
 ///   `p_{id}_{name}` and the `channel_routes` map key must be unique).
@@ -834,12 +992,12 @@ pub(crate) fn warn_unmerged_fan_in(
 ///   barrier is sized by the episode's own `close.count`, so no producer-side
 ///   cap is needed. Data edges must not set `join`.
 pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
-    use crate::models::template::{ChannelJoin, ChannelPlane, ChannelTransport, ElementType};
+    use crate::models::template::{
+        ChannelDirection, ChannelJoin, ChannelPlane, ChannelTransport, ElementType,
+    };
 
     for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
-            continue;
-        };
+        let channels = node.data.channels();
         if channels.is_empty() {
             continue;
         }
@@ -925,9 +1083,10 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
     let mut node_channels: HashMap<&str, HashMap<&str, &crate::models::template::Channel>> =
         HashMap::new();
     for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
+        let channels = node.data.channels();
+        if channels.is_empty() {
             continue;
-        };
+        }
         let entry = node_channels.entry(node.id.as_str()).or_default();
         for ch in channels {
             entry.insert(ch.name.as_str(), ch);
@@ -965,6 +1124,23 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             }
             continue;
         };
+        // A `join` is the CONSUMER-side fold discipline for a CONTROL OUT
+        // channel episode. An edge carrying one while its source handle names
+        // anything else — an IN-direction channel, or a data-plane channel —
+        // is misauthored: the fold would silently never apply (the lowering
+        // only consults `join` for control OUT channels). The single resolver
+        // (`channel_edge_contribution`) types the consumer's input off this
+        // same predicate, so reject the drift loudly here.
+        if edge.join.is_some()
+            && !(matches!(src_ch.plane, ChannelPlane::Control)
+                && matches!(src_ch.direction, ChannelDirection::Out))
+        {
+            return Err(CompileError::ChannelInvalid {
+                node_id: edge.source.clone(),
+                channel: src_h.to_string(),
+                message: "join may only be set on a control OUT channel edge".to_string(),
+            });
+        }
         let Some(tgt_ch) = node_channels
             .get(edge.target.as_str())
             .and_then(|m| m.get(tgt_h))

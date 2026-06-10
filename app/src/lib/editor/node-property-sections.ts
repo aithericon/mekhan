@@ -14,6 +14,8 @@ import LeaseScopeNodeSection from '$lib/components/editor/panels/property-sectio
 import TriggerNodeSection from '$lib/components/editor/panels/property-sections/TriggerNodeSection.svelte';
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
+import StreamSourceSection from '$lib/components/editor/panels/property-sections/StreamSourceSection.svelte';
+import StreamSinkSection from '$lib/components/editor/panels/property-sections/StreamSinkSection.svelte';
 // Config-spec layer migrations: start, end, map, phase_update, progress_update,
 // failure, delay, timeout are driven by spec wrappers. Their bespoke section
 // files still exist; these wrappers replace the registry entries so the
@@ -46,7 +48,9 @@ const SECTIONS = {
 	timeout: TimeoutSpecSection,
 	trigger: TriggerNodeSection,
 	sub_workflow: SubWorkflowSection,
-	agent: AgentNodeSection
+	agent: AgentNodeSection,
+	stream_source: StreamSourceSection,
+	stream_sink: StreamSinkSection
 } satisfies Record<NodeKind, Component<any>>;
 
 /**

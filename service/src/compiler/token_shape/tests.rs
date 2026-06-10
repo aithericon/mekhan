@@ -1256,11 +1256,9 @@ mod scope_reachability_tests {
         let binds = guard_readarc_plan(&g, &Default::default())
             .expect("End result mapping must resolve the cross-scope Map borrow");
         assert!(
-            binds
-                .iter()
-                .any(|b| b.consumer_node_id == "end"
-                    && b.referenced == "work[*].done"
-                    && b.producer_node == "mp"),
+            binds.iter().any(|b| b.consumer_node_id == "end"
+                && b.referenced == "work[*].done"
+                && b.producer_node == "mp"),
             "End must read-arc the lease-contained Map's gathered output, got {:?}",
             binds
                 .iter()
@@ -1567,6 +1565,299 @@ mod schema_override_drilldown_tests {
         assert!(
             matches!(&map["list"].shape, TokenShape::Array(inner) if matches!(**inner, TokenShape::Any)),
             "schemaless Array field -> Array<Any>"
+        );
+    }
+}
+
+#[cfg(test)]
+mod channel_scope_tests {
+    //! docs/25 §7: a CHANNEL edge's consumer sees the channel PAYLOAD on its
+    //! input token — typed off the channel's declared element and the edge's
+    //! `join` — never the producer's executor envelope. The single resolver
+    //! (`channel_edge_contribution` feeding both `analyze` and the compile
+    //! path) is what these tests pin down.
+    use super::*;
+    use crate::compiler::token_shape::analyze::ShapeDiagnostic;
+    use serde_json::json;
+
+    /// `start → step → sink`, where `step` declares ONE control OUT channel
+    /// `events` whose element is `#/definitions/Reading` (an object with
+    /// `temp: number`, `msg: string`) and `sink` consumes it via a channel
+    /// edge carrying the given `join` (`"each"` / `"gather"` / absent).
+    fn channel_consumer_graph(join: Option<&str>) -> WorkflowGraph {
+        let mut consume_edge = json!({
+            "id": "e_chan", "source": "step", "sourceHandle": "events",
+            "target": "sink", "targetHandle": "events", "type": "sequence"
+        });
+        if let Some(j) = join {
+            consume_edge["join"] = json!(j);
+        }
+        serde_json::from_value(json!({
+          "definitions": {
+            "Reading": { "type": "object", "properties": {
+                "temp": { "type": "number" },
+                "msg": { "type": "string" } } }
+          },
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Producer",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "channels":[{ "name": "events", "direction": "out", "plane": "control",
+                                   "element": { "type": "json",
+                                                "schema": { "$ref": "#/definitions/Reading" } } }]}},
+            {"id":"sink","type":"automated_step","slug":"sink","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Consumer",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "channels":[{ "name": "events", "direction": "in", "plane": "control",
+                                   "element": { "type": "any" } }]}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            consume_edge,
+            {"id":"e3","source":"sink","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }))
+        .expect("channel consumer graph fixture")
+    }
+
+    fn scope_paths(report: &ShapeReport, node: &str) -> Vec<String> {
+        report
+            .scopes
+            .get(node)
+            .unwrap_or_else(|| panic!("scope for {node}"))
+            .iter()
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// `each` join: the consumer's input token IS the element, so the scope
+    /// offers `input.temp` typed off the element schema, attributed to the
+    /// PRODUCER with the channel note — and NOT the gather `input.output`.
+    #[test]
+    fn each_join_scope_shows_element_fields_typed_and_channel_attributed() {
+        let g = channel_consumer_graph(Some("each"));
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        let scope = report.scopes.get("sink").expect("sink scope");
+
+        let temp = scope
+            .iter()
+            .find(|e| e.path == "input.temp")
+            .unwrap_or_else(|| {
+                panic!(
+                    "input.temp must be offered at the channel consumer; offered: {:?}",
+                    scope_paths(&report, "sink")
+                )
+            });
+        assert_eq!(temp.ty.kind_label(), "Number");
+        assert_eq!(temp.producer_node, "step");
+        assert_eq!(temp.producer_label, "Producer");
+        assert!(
+            temp.note.contains("control channel 'events'") && temp.note.contains("each"),
+            "channel note must name the channel + join, got: {}",
+            temp.note
+        );
+        let msg = scope
+            .iter()
+            .find(|e| e.path == "input.msg")
+            .expect("input.msg offered");
+        assert_eq!(msg.ty.kind_label(), "String");
+        // No gather collection key under `each`.
+        assert!(
+            !scope.iter().any(|e| e.path == "input.output"),
+            "each join must not surface the gather `output` collection"
+        );
+    }
+
+    /// `gather` join: the barrier reduces the episode to `#{ output: [..] }`,
+    /// so the scope offers `input.output` as array<element>; the per-item
+    /// element fields are NOT input-resident. Together with the `each` test
+    /// this proves flipping the edge's `join` flips the surfaced type.
+    #[test]
+    fn gather_join_scope_shows_output_array_of_element() {
+        let g = channel_consumer_graph(Some("gather"));
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        let scope = report.scopes.get("sink").expect("sink scope");
+
+        let out = scope
+            .iter()
+            .find(|e| e.path == "input.output")
+            .unwrap_or_else(|| {
+                panic!(
+                    "input.output must be offered at a gather consumer; offered: {:?}",
+                    scope_paths(&report, "sink")
+                )
+            });
+        assert_eq!(out.ty.kind_label(), "Array");
+        assert_eq!(out.producer_node, "step");
+        assert!(
+            out.note.contains("control channel 'events'") && out.note.contains("gather"),
+            "channel note must name the channel + join, got: {}",
+            out.note
+        );
+        // The array element carries the parsed element schema.
+        let TyDescriptor::Array { element } = &out.ty else {
+            panic!("expected array descriptor, got {:?}", out.ty);
+        };
+        let TyDescriptor::Object { fields, .. } = element.as_ref() else {
+            panic!("expected object element, got {element:?}");
+        };
+        assert_eq!(fields["temp"].kind_label(), "Number");
+        // The per-item form is not offered under gather.
+        assert!(
+            !scope.iter().any(|e| e.path == "input.temp"),
+            "gather join must not surface the per-item element fields"
+        );
+
+        // The consumer's derived inbound shape (and thus its input place
+        // schema) is the gather collection, not the producer envelope.
+        let in_shape = report.node_in.get("sink").expect("sink node_in");
+        assert!(
+            in_shape.resolve(&["output".to_string()]).is_some(),
+            "gather inbound must carry `output`"
+        );
+        assert!(
+            in_shape.resolve(&["execution_id".to_string()]).is_none(),
+            "producer envelope must not leak into the channel consumer's inbound"
+        );
+    }
+
+    /// The producer-envelope leak is gone: a channel-only consumer no longer
+    /// sees `input.task_id` / `input.status` / `input.execution_id` etc. —
+    /// the producer's outbound envelope never reaches its input place.
+    #[test]
+    fn channel_consumer_no_longer_sees_producer_envelope() {
+        let g = channel_consumer_graph(Some("each"));
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        let paths = scope_paths(&report, "sink");
+        for leaked in [
+            "input.task_id",
+            "input.status",
+            "input.execution_id",
+            "input.job_id",
+            "input.run",
+            "input.source",
+        ] {
+            assert!(
+                !paths.iter().any(|p| p == leaked),
+                "producer envelope leaked into channel consumer scope: {leaked} in {paths:?}"
+            );
+        }
+    }
+
+    /// A guard ref into a channel-`each` payload resolves as Control (the
+    /// payload is genuinely token-resident) — no UnresolvedGuardPath. Wires
+    /// the channel edge straight into a Decision so `check_guard` runs.
+    fn decision_after_channel_graph(channel: serde_json::Value, guard: &str) -> WorkflowGraph {
+        serde_json::from_value(json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Producer",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "channels":[channel]}},
+            {"id":"dec","type":"decision","position":{"x":0,"y":0},
+             "data":{"type":"decision","label":"D",
+                "conditions":[{"edgeId":"hi","label":"hi","guard":guard}],
+                "defaultBranch":"default"}},
+            {"id":"end1","type":"end","position":{"x":0,"y":0},"data":{"type":"end","label":"E1"}},
+            {"id":"end2","type":"end","position":{"x":0,"y":0},"data":{"type":"end","label":"E2"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"step","sourceHandle":"frames",
+             "target":"dec","targetHandle":"in","type":"sequence"},
+            {"id":"e4","source":"dec","target":"end1","sourceHandle":"hi","type":"sequence"},
+            {"id":"e5","source":"dec","target":"end2","sourceHandle":"default","type":"sequence"}
+          ]
+        }))
+        .expect("decision-after-channel graph fixture")
+    }
+
+    /// A DATA channel contributes NOTHING value-referenceable: the consumer's
+    /// scope has no `input.frames`, and a guard ref into the channel yields
+    /// the existing `UnresolvedGuardPath` diagnostic.
+    #[test]
+    fn data_channel_contributes_nothing_and_guard_ref_is_unresolved() {
+        let g = decision_after_channel_graph(
+            json!({ "name": "frames", "direction": "out", "plane": "data",
+                    "element": { "type": "binary", "content_type": "image/jpeg" } }),
+            "input.frames == 1",
+        );
+        let report = analyze(&g, &Default::default()).expect("analyze");
+
+        let paths = scope_paths(&report, "dec");
+        assert!(
+            !paths.iter().any(|p| p.starts_with("input.frames")),
+            "data channel payload must not be value-referenceable, got {paths:?}"
+        );
+        assert!(
+            report.diagnostics.iter().any(|d| matches!(d,
+                ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
+                    if node_id == "dec" && referenced == "input.frames")),
+            "guard ref into a data channel must be UnresolvedGuardPath, got {:?}",
+            report
+                .diagnostics
+                .iter()
+                .map(|d| d.dto())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The dual of the data test: the same guard over a CONTROL `each`
+    /// channel resolves (the payload is token-resident on the decision's
+    /// inbound token) — no UnresolvedGuardPath.
+    #[test]
+    fn control_each_payload_guard_ref_resolves() {
+        let g = decision_after_channel_graph(
+            json!({ "name": "frames", "direction": "out", "plane": "control",
+                    "element": { "type": "json", "schema": { "type": "object",
+                        "properties": { "frames": { "type": "number" } } } } }),
+            "input.frames == 1",
+        );
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        assert!(
+            !report.diagnostics.iter().any(|d| matches!(d,
+                ShapeDiagnostic::UnresolvedGuardPath { referenced, .. }
+                    if referenced == "input.frames")),
+            "control each payload ref must resolve, got {:?}",
+            report
+                .diagnostics
+                .iter()
+                .map(|d| d.dto())
+                .collect::<Vec<_>>()
+        );
+        let paths = scope_paths(&report, "dec");
+        assert!(
+            paths.iter().any(|p| p == "input.frames"),
+            "control each payload must be offered at the decision, got {paths:?}"
+        );
+    }
+
+    /// Edge case: a sole inbound channel-`each` edge with a NON-OBJECT
+    /// element sets the consumer's inbound shape to the bare element.
+    #[test]
+    fn sole_each_edge_with_any_element_sets_inbound_directly() {
+        let g = decision_after_channel_graph(
+            json!({ "name": "frames", "direction": "out", "plane": "control",
+                    "element": { "type": "any" } }),
+            "",
+        );
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        assert!(
+            matches!(report.node_in.get("dec"), Some(TokenShape::Any)),
+            "sole non-object each payload must become the inbound shape, got {:?}",
+            report.node_in.get("dec")
         );
     }
 }

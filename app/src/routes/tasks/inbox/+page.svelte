@@ -6,6 +6,7 @@
 	import { connectSse, type SseConnection } from '$lib/net/sse';
 	import { authFetch } from '$lib/auth/fetch';
 	import type { HumanTask } from '$lib/types/tasks';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import Inbox from '@lucide/svelte/icons/inbox';
@@ -158,66 +159,119 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
-		<div class="mb-6 flex items-start justify-between gap-3">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Inbox</h1>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Tasks offered to you, and the work you've claimed
-				</p>
-			</div>
-			<Button variant="ghost" size="sm" onclick={refresh} data-testid="inbox-refresh">
-				<RefreshCw class="size-4" />
-			</Button>
-		</div>
+<PageShell testid="inbox-page">
+	{#snippet band()}
+		<PageHeader title="Inbox" subtitle="Tasks offered to you, and the work you've claimed">
+			{#snippet actions()}
+				<Button variant="ghost" size="sm" onclick={refresh} data-testid="inbox-refresh">
+					<RefreshCw class="size-4" />
+				</Button>
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
-		{#if error}
-			<div
-				class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-			>
-				{error}
+	{#if error}
+		<div
+			class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+		>
+			{error}
+		</div>
+	{/if}
+
+	<!-- Availability — one toggle per enrolled human capacity -->
+	<div class="mb-6 rounded-xl border border-border bg-card p-4">
+		<div class="mb-3 text-sm font-semibold text-foreground">Availability</div>
+		{#if enrollments.length === 0}
+			<p class="text-sm text-muted-foreground">
+				You aren't enrolled in any human capacity yet. An admin enrolls members on the
+				<a class="underline" href="/fleet">Fleet</a> page.
+			</p>
+		{:else}
+			<div class="space-y-2">
+				{#each enrollments as m (m.capacity_id)}
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<div class="truncate text-sm font-medium text-foreground">
+								{capName(m.capacity_id)}
+							</div>
+							<div class="text-xs text-muted-foreground">
+								{#if m.available}
+									Available since {formatDate(m.available_since)}
+								{:else}
+									Offline
+								{/if}
+							</div>
+						</div>
+						<Button
+							variant={m.available ? 'default' : 'outline'}
+							size="sm"
+							disabled={togglingCaps.has(m.capacity_id)}
+							onclick={() => toggleAvailability(m)}
+							data-testid="availability-toggle"
+						>
+							{#if togglingCaps.has(m.capacity_id)}
+								…
+							{:else if m.available}
+								Available
+							{:else}
+								Go available
+							{/if}
+						</Button>
+					</div>
+				{/each}
 			</div>
 		{/if}
+	</div>
 
-		<!-- Availability — one toggle per enrolled human capacity -->
-		<div class="mb-6 rounded-xl border border-border bg-card p-4">
-			<div class="mb-3 text-sm font-semibold text-foreground">Availability</div>
-			{#if enrollments.length === 0}
-				<p class="text-sm text-muted-foreground">
-					You aren't enrolled in any human capacity yet. An admin enrolls members on the
-					<a class="underline" href="/fleet">Fleet</a> page.
-				</p>
+	{#if loading}
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+			Loading…
+		</div>
+	{:else}
+		<!-- Offered to you -->
+		<div class="mb-6">
+			<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+				<Hand class="size-4 text-muted-foreground" />
+				Offered to you
+				{#if offered.length > 0}
+					<Badge variant="outline" class="rounded-full">{offered.length}</Badge>
+				{/if}
+			</div>
+			{#if offered.length === 0}
+				<div
+					class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-10"
+				>
+					<Inbox class="size-8 text-muted-foreground/40" />
+					<p class="mt-2 text-sm text-muted-foreground">No open offers</p>
+					<p class="text-xs text-muted-foreground">
+						Offers appear here when a workflow reaches a human task bound to a capacity you're
+						available for
+					</p>
+				</div>
 			{:else}
 				<div class="space-y-2">
-					{#each enrollments as m (m.capacity_id)}
-						<div class="flex items-center justify-between gap-3">
-							<div class="min-w-0">
-								<div class="truncate text-sm font-medium text-foreground">
-									{capName(m.capacity_id)}
+					{#each offered as task (task.task_id)}
+						<div
+							class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="truncate text-sm font-semibold leading-snug text-foreground">
+									{task.title}
 								</div>
-								<div class="text-xs text-muted-foreground">
-									{#if m.available}
-										Available since {formatDate(m.available_since)}
-									{:else}
-										Offline
+								<div class="mt-1 text-xs text-muted-foreground">
+									Offered {formatDate(task.created_at)}
+									{#if task.process_id}
+										· <span class="font-mono">{task.process_id}</span>
 									{/if}
 								</div>
 							</div>
 							<Button
-								variant={m.available ? 'default' : 'outline'}
 								size="sm"
-								disabled={togglingCaps.has(m.capacity_id)}
-								onclick={() => toggleAvailability(m)}
-								data-testid="availability-toggle"
+								disabled={claiming.has(task.task_id)}
+								onclick={() => onClaim(task)}
+								data-testid="claim-button"
 							>
-								{#if togglingCaps.has(m.capacity_id)}
-									…
-								{:else if m.available}
-									Available
-								{:else}
-									Go available
-								{/if}
+								{claiming.has(task.task_id) ? 'Claiming…' : 'Claim'}
 							</Button>
 						</div>
 					{/each}
@@ -225,138 +279,81 @@
 			{/if}
 		</div>
 
-		{#if loading}
-			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-				Loading…
-			</div>
-		{:else}
-			<!-- Offered to you -->
+		<!-- Open to anyone — unpooled tasks (no capacity), claimable by any
+		     workspace member. Claiming is a soft assign; anyone can still
+		     complete an unclaimed one. -->
+		{#if open.length > 0}
 			<div class="mb-6">
 				<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-					<Hand class="size-4 text-muted-foreground" />
-					Offered to you
-					{#if offered.length > 0}
-						<Badge variant="outline" class="rounded-full">{offered.length}</Badge>
-					{/if}
+					<ClipboardList class="size-4 text-muted-foreground" />
+					Open to anyone
+					<Badge variant="outline" class="rounded-full">{open.length}</Badge>
 				</div>
-				{#if offered.length === 0}
-					<div
-						class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-10"
-					>
-						<Inbox class="size-8 text-muted-foreground/40" />
-						<p class="mt-2 text-sm text-muted-foreground">No open offers</p>
-						<p class="text-xs text-muted-foreground">
-							Offers appear here when a workflow reaches a human task bound to a capacity you're
-							available for
-						</p>
-					</div>
-				{:else}
-					<div class="space-y-2">
-						{#each offered as task (task.task_id)}
-							<div
-								class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
-							>
-								<div class="min-w-0 flex-1">
-									<div class="truncate text-sm font-semibold leading-snug text-foreground">
-										{task.title}
-									</div>
-									<div class="mt-1 text-xs text-muted-foreground">
-										Offered {formatDate(task.created_at)}
-										{#if task.process_id}
-											· <span class="font-mono">{task.process_id}</span>
-										{/if}
-									</div>
+				<div class="space-y-2">
+					{#each open as task (task.task_id)}
+						<div
+							class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="truncate text-sm font-semibold leading-snug text-foreground">
+									{task.title}
 								</div>
-								<Button
-									size="sm"
-									disabled={claiming.has(task.task_id)}
-									onclick={() => onClaim(task)}
-									data-testid="claim-button"
-								>
-									{claiming.has(task.task_id) ? 'Claiming…' : 'Claim'}
-								</Button>
+								<div class="mt-1 text-xs text-muted-foreground">
+									Anyone in your workspace can take this on · {formatDate(task.created_at)}
+								</div>
 							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
-
-			<!-- Open to anyone — unpooled tasks (no capacity), claimable by any
-			     workspace member. Claiming is a soft assign; anyone can still
-			     complete an unclaimed one. -->
-			{#if open.length > 0}
-				<div class="mb-6">
-					<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-						<ClipboardList class="size-4 text-muted-foreground" />
-						Open to anyone
-						<Badge variant="outline" class="rounded-full">{open.length}</Badge>
-					</div>
-					<div class="space-y-2">
-						{#each open as task (task.task_id)}
-							<div
-								class="flex items-start justify-between gap-3 rounded-xl border border-border bg-card p-4 transition hover:border-primary/40"
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={claiming.has(task.task_id)}
+								onclick={() => onClaim(task)}
+								data-testid="claim-button"
 							>
-								<div class="min-w-0 flex-1">
-									<div class="truncate text-sm font-semibold leading-snug text-foreground">
-										{task.title}
-									</div>
-									<div class="mt-1 text-xs text-muted-foreground">
-										Anyone in your workspace can take this on · {formatDate(task.created_at)}
-									</div>
-								</div>
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={claiming.has(task.task_id)}
-									onclick={() => onClaim(task)}
-									data-testid="claim-button"
-								>
-									{claiming.has(task.task_id) ? 'Claiming…' : 'Claim'}
-								</Button>
-							</div>
-						{/each}
-					</div>
+								{claiming.has(task.task_id) ? 'Claiming…' : 'Claim'}
+							</Button>
+						</div>
+					{/each}
 				</div>
-			{/if}
-
-			<!-- Claimed by you -->
-			<div>
-				<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-					In progress
-					{#if claimed.length > 0}
-						<Badge variant="outline" class="rounded-full">{claimed.length}</Badge>
-					{/if}
-				</div>
-				{#if claimed.length === 0}
-					<p class="px-1 text-sm text-muted-foreground">Nothing in progress</p>
-				{:else}
-					<div class="space-y-2">
-						{#each claimed as task (task.task_id)}
-							<a
-								href="/tasks/{task.task_id}"
-								class="group block rounded-xl border border-border bg-card p-4 transition hover:border-primary/40 hover:shadow-md"
-							>
-								<div class="flex items-start justify-between gap-3">
-									<div class="min-w-0 flex-1">
-										<div class="truncate text-sm font-semibold leading-snug text-foreground">
-											{task.title}
-										</div>
-										<div class="mt-1 text-xs text-muted-foreground">
-											Claimed {formatDate(task.created_at)}
-										</div>
-									</div>
-									<Badge
-										variant="outline"
-										class="shrink-0 rounded-full border-sky-200 bg-sky-50 text-sky-700"
-									>
-										Claimed
-									</Badge>
-								</div>
-							</a>
-						{/each}
-					</div>
-				{/if}
 			</div>
 		{/if}
-	</div>
-</div>
+
+		<!-- Claimed by you -->
+		<div>
+			<div class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+				In progress
+				{#if claimed.length > 0}
+					<Badge variant="outline" class="rounded-full">{claimed.length}</Badge>
+				{/if}
+			</div>
+			{#if claimed.length === 0}
+				<p class="px-1 text-sm text-muted-foreground">Nothing in progress</p>
+			{:else}
+				<div class="space-y-2">
+					{#each claimed as task (task.task_id)}
+						<a
+							href="/tasks/{task.task_id}"
+							class="group block rounded-xl border border-border bg-card p-4 transition hover:border-primary/40 hover:shadow-md"
+						>
+							<div class="flex items-start justify-between gap-3">
+								<div class="min-w-0 flex-1">
+									<div class="truncate text-sm font-semibold leading-snug text-foreground">
+										{task.title}
+									</div>
+									<div class="mt-1 text-xs text-muted-foreground">
+										Claimed {formatDate(task.created_at)}
+									</div>
+								</div>
+								<Badge
+									variant="outline"
+									class="shrink-0 rounded-full border-sky-200 bg-sky-50 text-sky-700"
+								>
+									Claimed
+								</Badge>
+							</div>
+						</a>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+</PageShell>

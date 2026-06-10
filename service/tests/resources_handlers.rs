@@ -95,8 +95,8 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
         runner_nats_signer: Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
-        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
-        human_presence: mekhan_service::human_presence::HumanPresence::new(),
+        runner_presence: mekhan_service::presence::RunnerPresence::new(),
+        human_presence: mekhan_service::presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
@@ -145,7 +145,9 @@ async fn post_create(app: &Router, body: Value) -> (StatusCode, Value) {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn list_returns_empty_for_fresh_workspace() {
+async fn list_returns_only_the_seeded_default_group_for_fresh_workspace() {
+    // A fresh workspace is not empty: migration 20240144 seeds the per-workspace
+    // `default` worker-group capacity (doc 24 D1). It must be the ONLY item.
     let (app, _db, _store) = resources_test_app().await;
     let resp = app
         .oneshot(
@@ -159,8 +161,11 @@ async fn list_returns_empty_for_fresh_workspace() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    assert_eq!(body["items"].as_array().unwrap().len(), 0);
-    assert_eq!(body["total"].as_i64(), Some(0));
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(body["total"].as_i64(), Some(1));
+    assert_eq!(items[0]["path"], "default");
+    assert_eq!(items[0]["resource_type"], "capacity");
 }
 
 #[tokio::test]

@@ -1139,6 +1139,43 @@ mod tests {
         assert_eq!(err.kind(), "channel_invalid");
     }
 
+    /// A `join` on an edge whose source handle names a channel that is NOT a
+    /// control OUT channel (here: an IN-direction control channel) is
+    /// rejected — the fold discipline only exists for control OUT episodes,
+    /// so the join would silently never apply.
+    #[test]
+    fn validate_rejects_join_when_source_handle_is_not_control_out() {
+        let graph: WorkflowGraph = serde_json::from_value(json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Producer",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"},
+                     "channels":[{ "name": "events", "direction": "in", "plane": "control",
+                                   "element": { "type": "any" } }]}},
+            {"id":"sink","type":"automated_step","slug":"sink","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Consumer",
+                     "executionSpec":{"backendType":"docker","config":{"image":"alpine:latest"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"step","sourceHandle":"events","target":"sink",
+             "targetHandle":"in","type":"sequence","join":"each"},
+            {"id":"e3","source":"sink","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }))
+        .expect("in-channel join graph fixture");
+        let err = validate_channels(&graph).unwrap_err();
+        assert_eq!(err.kind(), "channel_invalid");
+    }
+
     #[test]
     fn validate_rejects_unresolved_json_element_schema() {
         let graph = graph_with_channels(json!([

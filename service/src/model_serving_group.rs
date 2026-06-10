@@ -7,7 +7,7 @@
 //! This module makes membership first-class and consistent with the rest of the
 //! fleet: model runners enrol into a presence-backed `capacity` resource at path
 //! [`MODEL_SERVING_GROUP_PATH`] (the `instrument` preset: `presence` liveness +
-//! `push` dispatch), exactly like workers enrol into the `default` worker group.
+//! `auto` acceptance), exactly like workers enrol into the `default` worker group.
 //! The model-pool reads then gate on group membership (the runner's
 //! `runner_group` alias, mirrored onto the presence snapshot) instead of sniffing
 //! `base_url`; the catalog's `base_url`/`models`/`residency_zone` stay as the
@@ -37,8 +37,9 @@ const MODEL_SERVING_GROUP_SEEDER_AUTHOR_ID: Uuid =
 
 /// Resolve the model-serving group ALIAS (workspace-scoped resource `path`) to
 /// its capacity-resource UUID. Matches the `instrument` preset axes: a live
-/// `capacity` resource with `presence` liveness + `push` dispatch. Returns
-/// `Ok(None)` when no such backed group exists. DB read only.
+/// `capacity` resource with `presence` liveness + `auto` acceptance (which
+/// excludes `consent` / human-roster pools). Returns `Ok(None)` when no such
+/// backed group exists. DB read only.
 pub async fn resolve_model_serving_group_uuid(
     db: &sqlx::PgPool,
     workspace_id: Uuid,
@@ -51,7 +52,7 @@ pub async fn resolve_model_serving_group_uuid(
          WHERE r.workspace_id = $1 AND r.path = $2 \
            AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
            AND rv.public_config ->> 'liveness' = 'presence' \
-           AND rv.public_config ->> 'dispatch' = 'push'",
+           AND rv.public_config ->> 'acceptance' = 'auto'",
     )
     .bind(workspace_id)
     .bind(alias)

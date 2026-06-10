@@ -39,9 +39,7 @@ use petri_application::{
     CatalogueUnsubscribeHandler,
 };
 #[cfg(feature = "executor")]
-use petri_application::{
-    ControlEmitHandler, ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler,
-};
+use petri_application::{ControlEmitHandler, ExecutorCancelHandler, ExecutorSubmitHandler};
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
@@ -904,19 +902,12 @@ where
                 .register_effect_handler(
                     effects::EXECUTOR_CANCEL.handler_id,
                     Arc::new(ExecutorCancelHandler::new(
-                        executor_client.clone(),
+                        executor_client,
                         effects::EXECUTOR_CANCEL.default_input_port,
                         effects::EXECUTOR_CANCEL.default_output_port,
                     )),
                 )
                 .expect("register executor_cancel effect handler");
-
-            service
-                .register_effect_handler(
-                    effects::EXECUTOR_STREAM_FEED.handler_id,
-                    Arc::new(ExecutorStreamFeedHandler::new(executor_client)),
-                )
-                .expect("register executor_stream_feed effect handler");
 
             // The control_emit handler (docs/25 streaming-channels) deposits a
             // job's dynamically-emitted control tokens into their declared
@@ -2651,10 +2642,13 @@ mod tests {
             .logic_rhai(r#"#{ release: #{ grant_id: held.grant_id } }"#)
             .done();
 
-        let scenario =
-            petri_test_harness::fixtures::TestScenario::from_sdk(sdk.build());
+        let scenario = petri_test_harness::fixtures::TestScenario::from_sdk(sdk.build());
         let held_pid = scenario.places.get("held").expect("held place").clone();
-        let release_pid = scenario.places.get("release").expect("release place").clone();
+        let release_pid = scenario
+            .places
+            .get("release")
+            .expect("release place")
+            .clone();
 
         // Bring the net up HOT in the registry and seed ONLY the held token —
         // i.e. the lease was acquired but the body never ran (mid-run cancel).

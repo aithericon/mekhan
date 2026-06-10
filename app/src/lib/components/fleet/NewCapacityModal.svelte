@@ -71,7 +71,7 @@
 	const KINDS: { kind: Kind; label: string; preset?: string; hint: string }[] = [
 		{
 			kind: 'runner_group',
-			label: 'Runner group',
+			label: 'Machine pool',
 			preset: 'instrument',
 			hint: 'Presence-driven — one unit per live runner. Enroll runners into it.'
 		},
@@ -83,7 +83,7 @@
 		},
 		{
 			kind: 'worker',
-			label: 'Worker group',
+			label: 'Worker pool',
 			preset: 'worker',
 			hint: "Competing-consumer workers that pull from this group's queue. Enroll workers into it."
 		},
@@ -96,7 +96,7 @@
 			kind: 'human',
 			label: 'Human pool',
 			preset: 'human',
-			hint: 'Self-claiming pool of people — offer-dispatched. Enroll members after creating.'
+			hint: 'Pool of people — members consent to (claim) offered work. Enroll members after creating.'
 		}
 	];
 	const KIND_ICON: Record<Kind, typeof Server> = {
@@ -157,7 +157,7 @@
 		error = null;
 		// Reset the form each open (create defaults; overwritten below on edit).
 		// `presence` is ambiguous — runner groups AND human pools share it — so
-		// `resolveEditKind` peeks at the dispatch axis (`offer` ⇒ human).
+		// `resolveEditKind` peeks at the acceptance axis (`consent` ⇒ human).
 		kind = target ? resolveEditKind(target) : 'runner_group';
 		path = target ? target.path : '';
 		displayName = target ? target.display_name : '';
@@ -267,9 +267,9 @@
 					});
 				}
 			} else {
-				// runner_group / worker / (deferred) — no editable config field. On
-				// edit only the display name changes; never re-send the axes (a
-				// name-only update leaves a deferred/consume capacity untouched).
+				// runner_group / worker / (null-backend) — no editable config field.
+				// On edit only the display name changes; never re-send the axes (a
+				// name-only update leaves a backend-less capacity untouched).
 				if (isEdit && editing) {
 					// The display name is the only mutable field here; the backend
 					// rejects an empty update, so require one.
@@ -310,12 +310,12 @@
 		<div class="space-y-5 p-2" data-testid="new-capacity-modal">
 			<div class="space-y-1">
 				<SheetTitle class="text-lg font-semibold">
-					{isEdit ? 'Edit capacity' : 'New capacity'}
+					{isEdit ? 'Edit pool' : 'New pool'}
 				</SheetTitle>
 				<SheetDescription class="text-sm text-muted-foreground">
 					{isEdit
-						? 'Update this capacity. Its kind and name are fixed; change the editable fields below.'
-						: 'Pick the kind of dispatch capacity to add.'}
+						? 'Update this pool. Its kind and name are fixed; change the editable fields below.'
+						: 'Pick the kind of pool to add.'}
 				</SheetDescription>
 			</div>
 
@@ -425,7 +425,7 @@
 							: 'Creating…'
 						: isEdit
 							? 'Save changes'
-							: 'Create capacity'}
+							: 'Create pool'}
 				</Button>
 			</div>
 		</div>

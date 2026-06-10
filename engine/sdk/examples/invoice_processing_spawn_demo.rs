@@ -168,7 +168,6 @@ fn executor_child_net(child: &mut Context, io: SpawnChildIO) {
             process_step: None,
             catalogue: true,
             process: false,
-            stream_output: None,
             control_in: None,
         },
     );
@@ -267,6 +266,7 @@ fn definition(ctx: &mut Context) {
             &entry_form,
             vec![HumanTaskRequest {
                 task_id: None,
+                forced_task_id: None,
                 net_id: None,
                 org_id: None,
                 place: None,

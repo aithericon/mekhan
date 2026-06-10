@@ -4156,6 +4156,322 @@
         }
       }
     },
+    "/api/v1/instances/{instance_id}/sinks/{node_id}/data": {
+      "get": {
+        "tags": [
+          "streams"
+        ],
+        "summary": "GET /api/v1/instances/{instance_id}/sinks/{node_id}/data",
+        "description": "Stream a `stream_sink` node's sunk bytes out of the platform. The WI-2 sink\nlowering parks the producer's `open` transport descriptor in\n`p_{node_id}_data`, which the step_executions projector captures as the\nnode's `outputs` — this endpoint resolves that descriptor, extracts the\ndata-plane subject, and streams the reordered payload bytes through the\nsame tap core as `GET /executions/{id}/channels/{ch}/data` (replay from\nseq 0; `?follow=1` live-tails until EOF). Until the upstream producer has\nopened the channel there is no descriptor row yet — the endpoint answers\n409 with `Retry-After: 2` so clients poll instead of hanging.",
+        "operationId": "tap_stream_sink_data",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "description": "Workflow instance id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "stream_sink node id in the instance's template graph.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "description": "Live-tail an in-progress stream: `follow=1` widens the idle patience so long gaps don't end it early (ends at EOF or client disconnect).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Concatenated sunk payload bytes; Content-Type echoes the channel envelope's content_type.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Malformed node_id path component or node is not a stream_sink.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown instance / node.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The producer has not opened the stream yet (no parked descriptor). Retry-After: 2.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "JetStream consumer could not be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/data": {
+      "post": {
+        "tags": [
+          "streams"
+        ],
+        "summary": "POST /api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/data",
+        "description": "Feed raw bytes into a `stream_source` node's DATA-plane Out channel —\nmekhan acts as the virtual producer. On the first body byte the `open`\ncontrol emit (carrying the `{transport, subject, content_type}` descriptor)\nis routed into the node's control inbox; the body is then chunked into\nbinary envelopes (~64 KiB, per-publish JetStream ack = backpressure) with\nmonotonic `seq` resuming from the subject's last envelope, so `?append=1`\nre-POSTs continue the numbering. At body end the EOF sentinel + `close`\nemit are published unless `?append=1`; `?eof=1` with an empty body closes a\npreviously appended stream.",
+        "operationId": "push_stream_source_data",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "description": "Workflow instance id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "stream_source node id in the instance's template graph.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "Declared data-plane Out channel name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "append",
+            "in": "query",
+            "description": "Keep the stream open after this body (skip EOF + close) so a later POST continues the seq numbering.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "eof",
+            "in": "query",
+            "description": "Close the stream even with an empty body (publish EOF sentinel + close emit).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Raw stream bytes. The request Content-Type is forwarded as the channel's content_type (fallback: the channel's declared Binary content_type).",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bytes published; summary of what was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePushResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed path segment, wrong channel direction/plane, or body read error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown instance / node / channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance is not running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "NATS/JetStream publish failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/emit": {
+      "post": {
+        "tags": [
+          "streams"
+        ],
+        "summary": "POST /api/v1/instances/{instance_id}/sources/{node_id}/channels/{channel}/emit",
+        "description": "Publish one fused CONTROL-plane episode into a `stream_source` node's\nchannel: `open` + `item`(idx 0..n) + `close`(count=n), all under one fresh\n`episode_uid` minted per request — so the engine's `each` join fires\ndownstream once per item and a `gather` join can collect the episode as one\ncounted barrier. Each emit is routed into the node's control inbox via the\nsame `control_emit` metadata a real executor job would stamp.",
+        "operationId": "emit_stream_source_items",
+        "parameters": [
+          {
+            "name": "instance_id",
+            "in": "path",
+            "description": "Workflow instance id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "stream_source node id in the instance's template graph.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "Declared control-plane Out channel name.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceEmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Episode published (open + items + close).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceEmitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed path segment or wrong channel direction/plane.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown instance / node / channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instance is not running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "NATS/JetStream publish failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inventory": {
       "get": {
         "tags": [
@@ -11505,6 +11821,14 @@
   },
   "components": {
     "schemas": {
+      "Acceptance": {
+        "type": "string",
+        "description": "The capacity-side half of bilateral eligibility (doc 35 §4):\n`match = work-side predicate ∧ capacity-side acceptance`.\n\nThis replaces the deleted `Dispatch` axis: pull-vs-push derives from the\nbackend (doc 35 §2), and what `offer` actually smuggled in was acceptance —\nwhat eligibility *means* when the capacity gets a say.\n\n`policy` — a capacity-side *standing predicate* evaluated by the platform\n(maintenance mode, tenant refusal) — is a documented-future third value and\nis deliberately NOT a variant here (doc 35 §4/§9).",
+        "enum": [
+          "auto",
+          "consent"
+        ]
+      },
       "AddMemberRequest": {
         "type": "object",
         "required": [
@@ -12933,7 +13257,7 @@
             }
           }
         ],
-        "description": "How much concurrent work the capacity offers (doc 23 §3 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
+        "description": "How much concurrent work the capacity offers (doc 35 §5 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
       },
       "CapacityAxes": {
         "allOf": [
@@ -12944,19 +13268,15 @@
             "type": "object",
             "required": [
               "liveness",
-              "dispatch",
-              "exclusivity",
+              "acceptance",
               "eligibility"
             ],
             "properties": {
-              "dispatch": {
-                "$ref": "#/components/schemas/Dispatch"
+              "acceptance": {
+                "$ref": "#/components/schemas/Acceptance"
               },
               "eligibility": {
                 "$ref": "#/components/schemas/Eligibility"
-              },
-              "exclusivity": {
-                "$ref": "#/components/schemas/Exclusivity"
               },
               "liveness": {
                 "$ref": "#/components/schemas/Liveness"
@@ -12964,17 +13284,16 @@
             }
           }
         ],
-        "description": "The full point in the trait-space a `capacity` resource names. This is the\ntyped view of the axes stored as strings in `public_config`; the create\npath parses the wire strings into this and runs [`CapacityAxes::validate`]."
+        "description": "The full point in the trait-space a `capacity` resource names (doc 35 §5 —\nthe four surviving axes). This is the typed view of the axes stored as\nstrings in `public_config`; the create path parses the wire strings into\nthis and runs [`CapacityAxes::validate`].\n\n`acceptance` is REQUIRED — no serde default. An old persisted row missing it\n(a pre-re-cut `dispatch`/`exclusivity`-shaped blob) must FAIL to parse:\nfail-closed by design, no backcompat shim."
       },
       "CapacityBackend": {
         "type": "string",
-        "description": "The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).\nSupersets the shared `aithericon_resources::pool::PoolBackend` (which only\nnames the three admission-net flavours) with the two **no-admission-net**\ncases: `Queue` (a pull worker queue — no grant) and `Deferred` (the\n`consume` quota path, whose admission mechanism is not yet built).",
+        "description": "The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).\nSupersets the shared `aithericon_resources::pool::PoolBackend` (which only\nnames the three admission-net flavours) with the one **no-admission-net**\ncase: `Queue` (a pull worker queue — no grant).",
         "enum": [
           "queue",
           "tokens",
           "presence",
-          "scheduler",
-          "deferred"
+          "scheduler"
         ]
       },
       "CapacityBinding": {
@@ -13138,7 +13457,7 @@
           },
           {
             "type": "object",
-            "description": "Deferred (`consume` quota) or any capacity with no live source.",
+            "description": "Any capacity with no live source (e.g. unparseable axes — not\ndispatchable).",
             "required": [
               "kind"
             ],
@@ -13173,7 +13492,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Stable wire id (`worker` / `limit` / `instrument`)."
+            "description": "Stable wire id (`worker` / `limit` / `instrument` / `human`)."
           }
         }
       },
@@ -13184,7 +13503,6 @@
           "id",
           "path",
           "display_name",
-          "backend",
           "live"
         ],
         "properties": {
@@ -13195,13 +13513,20 @@
               },
               {
                 "$ref": "#/components/schemas/CapacityAxes",
-                "description": "The resolved trait-space axes (`None` for a `capacity` whose\n`public_config` doesn't parse — it still lists, with `backend` defaulted)."
+                "description": "The resolved trait-space axes (`None` for a `capacity` whose\n`public_config` doesn't parse — it still lists, not dispatchable)."
               }
             ]
           },
           "backend": {
-            "$ref": "#/components/schemas/CapacityBackend",
-            "description": "The dispatch target, from the SINGLE authority `CapacityAxes::backend()`."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CapacityBackend",
+                "description": "The dispatch target, from the SINGLE authority `CapacityAxes::backend()`.\n`None` when the axes are unparseable — the capacity is not dispatchable\n(fail-closed; it still lists, with [`CapacityLive::None`])."
+              }
+            ]
           },
           "display_name": {
             "type": "string",
@@ -15415,15 +15740,6 @@
           }
         }
       },
-      "Dispatch": {
-        "type": "string",
-        "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
-        "enum": [
-          "pull",
-          "push",
-          "offer"
-        ]
-      },
       "DispatchMode": {
         "oneOf": [
           {
@@ -15669,7 +15985,7 @@
       },
       "Eligibility": {
         "type": "string",
-        "description": "The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate\nshape rather than chosen by hand: a single coarse equality (`backend == x`)\nIS a partition key (free competing-consumers, no matcher); a richer\nconjunction needs the guarded matcher.",
+        "description": "The eligibility evaluation strategy (doc 23 §4 — incorporated whole by doc\n35 §5), DERIVED from the predicate shape rather than chosen by hand: a\nsingle coarse equality (`backend == x`) IS a partition key (free\ncompeting-consumers, no matcher); a richer conjunction needs the guarded\nmatcher.",
         "enum": [
           "partition",
           "predicate"
@@ -16024,14 +16340,6 @@
             ]
           }
         }
-      },
-      "Exclusivity": {
-        "type": "string",
-        "description": "Hold-vs-consume (doc 23 §3 \"exclusivity discipline\" — the real fork of §5).",
-        "enum": [
-          "hold",
-          "consume"
-        ]
       },
       "ExecutionBackendType": {
         "type": "string",
@@ -18815,7 +19123,7 @@
       },
       "Liveness": {
         "type": "string",
-        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\"). This is the\naxis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the\nvocabulary is 1:1 with the backing-net flavour (modulo the `consume`\nquota-admission override).",
+        "description": "How a capacity proves it is available (doc 35 §5 \"liveness source\"). This is\nthe axis the dispatch authority ([`CapacityAxes::backend`]) keys off — the\nvocabulary is 1:1 with the backing-net flavour.",
         "enum": [
           "competing_consumer",
           "seeded",
@@ -24134,6 +24442,89 @@
           }
         }
       },
+      "SourceEmitRequest": {
+        "type": "object",
+        "description": "Request body of the control-plane emit endpoint: the episode's items.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {},
+            "description": "The episode's items, in order. Each is published as one `item` emit\n(`item_idx` = its position); the episode closes with `count = len`."
+          }
+        }
+      },
+      "SourceEmitResponse": {
+        "type": "object",
+        "description": "Summary returned by the control-plane emit endpoint.",
+        "required": [
+          "execution_id",
+          "episode_uid",
+          "items"
+        ],
+        "properties": {
+          "episode_uid": {
+            "type": "string",
+            "description": "The fresh per-request episode correlation id stamped on every emit."
+          },
+          "execution_id": {
+            "type": "string",
+            "description": "The virtual execution id mekhan minted (`st-{instance_id}-{node_id}`)."
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of items published.",
+            "minimum": 0
+          }
+        }
+      },
+      "SourcePushResponse": {
+        "type": "object",
+        "description": "Summary returned by the data-ingress POST.",
+        "required": [
+          "execution_id",
+          "subject",
+          "chunks",
+          "bytes",
+          "next_seq",
+          "closed"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Payload bytes published by this request.",
+            "minimum": 0
+          },
+          "chunks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Data envelopes published by THIS request.",
+            "minimum": 0
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "Whether the stream was closed (EOF sentinel + `close` emit published)."
+          },
+          "execution_id": {
+            "type": "string",
+            "description": "The virtual execution id mekhan minted (`st-{instance_id}-{node_id}`)."
+          },
+          "next_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Next envelope seq on the subject after this request (also the running\nelement count while the stream is open).",
+            "minimum": 0
+          },
+          "subject": {
+            "type": "string",
+            "description": "The JetStream subject the bytes were published on."
+          }
+        }
+      },
       "SourceRef": {
         "type": "object",
         "description": "Git provenance recorded on a version published via `mekhan apply`.\nSerialized into the `workflow_templates.source_ref` JSONB column.",
@@ -26819,7 +27210,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/CapacityBinding",
-                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (the offer discipline).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
+                    "description": "Bind this human task to a Presence `capacity` resource (docs/33/34).\nMirrors [`DeploymentModel::Executor`]'s `capacity`: `None` ⇒ today's\nunpooled lowering (byte-identical); `Some` ⇒ the task is *offered* to\neligible available members of the named capacity and lowered as the\npooled claim/acquire/register/release scaffold (consent acceptance —\nthe offer/claim handshake, doc 35 §4).\nResolved at publish like `AutomatedStep` to the backing\n`pool-<capacity_id>` net."
                   }
                 ]
               },
@@ -27586,6 +27977,70 @@
               "versionPin": {
                 "$ref": "#/components/schemas/VersionPin",
                 "description": "Which concrete version of the child to embed. `Latest` resolves the\nfamily's `is_latest` row *at the parent's publish time* and freezes\nthat concrete version into the embedded AIR; `Pinned` freezes an\nexplicit version. Either way the published parent is deterministic."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Workflow-as-streaming-endpoint INGRESS (docs/25 §9 Phase 3). Declares\n`Out` [`Channel`]s an external producer feeds through a mekhan ingress\nendpoint; each declared channel surfaces as a named source handle the\ngraph wires downstream consumers off, exactly like an\n[`WorkflowNodeData::AutomatedStep`]'s `Out` channels. A StreamSource\nhas NO control-flow handles in v1 — no inbound control edge, no\ndefault `out`; its only handles are its channel handles. Lowering\nsynthesizes the standard per-channel place `p_{id}_{name}` (WI-2).",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Channel"
+                },
+                "description": "Declared streaming [`Channel`]s. Direction is expected to be `Out`\nfor every entry (the node *produces* into the net); enforced by\nvalidation (WI-2), not the type. `#[serde(default)]` ⇒ existing\ntemplates (field absent → empty) round-trip unchanged."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stream_source"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Workflow-as-streaming-endpoint EGRESS (docs/25 §9 Phase 3). Declares\nexactly ONE `In` [`Channel`] (enforced by validation in WI-2, not the\ntype — the field stays `Vec<Channel>` so the three channel-bearing\nvariants share one accessor shape, see\n[`WorkflowNodeData::channels`]). The upstream producer edge wires to\nthe channel's named target handle; mekhan exposes the sunk stream on\nan egress endpoint. No control-flow handles in v1.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Channel"
+                },
+                "description": "Declared streaming [`Channel`]s — exactly one `In` entry in v1\n(validation-enforced, WI-2). `#[serde(default)]` ⇒ absent → empty."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stream_sink"
+                ]
               }
             }
           }

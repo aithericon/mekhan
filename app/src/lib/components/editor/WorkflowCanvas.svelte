@@ -20,6 +20,7 @@
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
 	import { RESIZE_REPORT_CONTEXT_KEY, type ResizeReport } from './nodes/resize-context';
+	import { provideEdgeJoin, type SetEdgeJoin } from './edges/edge-join-context';
 	import { layoutWorkflowGraph } from '$lib/editor/workflow-layout';
 	import {
 		createDefaultNodeData,
@@ -29,7 +30,7 @@
 		type WorkflowGraph
 	} from '$lib/types/editor';
 	import type { XYPosition } from '@xyflow/svelte';
-	import { edgeLaneColor } from '$lib/editor/edge-lane';
+	import { edgeLaneColor, channelForSourceHandle } from '$lib/editor/edge-lane';
 
 	type Props = {
 		graph: WorkflowGraph;
@@ -65,6 +66,13 @@
 		onAddEdge?: (edge: WorkflowEdge) => void;
 		onRemoveEdges?: (ids: string[]) => void;
 		/**
+		 * Emitted when an existing edge's own properties change (today: the
+		 * channel join discipline toggled via the on-edge chip). The patch is
+		 * sparse — only the touched keys are present; `join: null` means
+		 * "restore the 'each' default" (the persisted key is deleted).
+		 */
+		onUpdateEdge?: (edgeId: string, patch: { join?: 'gather' | null }) => void;
+		/**
 		 * Emitted when a resizable container node (Scope, Loop) finishes a
 		 * resize gesture. `position` is only set when the gesture moved the
 		 * node's top-left corner (top/left-edge resize); pure bottom-right
@@ -80,9 +88,9 @@
 		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onUpdateEdge, onResizeNodes }: Props = $props();
 
-	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onResizeNodes));
+	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onUpdateEdge || onResizeNodes));
 
 	// Container nodes report resize gesture-end through this context. xyflow's
 	// NodeResizer has already mutated the bound `nodes` array with the new
@@ -115,6 +123,22 @@
 			}
 		};
 		setContext<ResizeReport>(RESIZE_REPORT_CONTEXT_KEY, reportResize);
+
+		// Control-channel join chip (DeletableEdge) toggles each ⇄ gather through
+		// this context. Update the local edge data first (the chip re-renders
+		// immediately), then persist through the granular sink or the bulk
+		// serializer. `join: null` restores the 'each' default.
+		const setEdgeJoin: SetEdgeJoin = (edgeId, join) => {
+			edges = edges.map((e) =>
+				e.id === edgeId ? { ...e, data: { ...e.data, join: join ?? undefined } } : e
+			);
+			if (useGranular && onUpdateEdge) {
+				onUpdateEdge(edgeId, { join });
+			} else {
+				serializeAndEmit();
+			}
+		};
+		provideEdgeJoin(setEdgeJoin);
 	}
 
 	// Track graph identity to avoid re-syncing our own changes
@@ -287,10 +311,14 @@
 			deletable: !isReadonly,
 			// Tint the edge to match the ports it connects so it reads as a lane:
 			// a gradient from the source port's color to the target port's color.
-			// View-only — not part of the serialized graph.
+			// `channelPlane` (which declared Channel the edge taps, if any) and
+			// `join` (the consumer-side discipline) feed the on-edge join chip;
+			// lane colors are view-only, `join` round-trips via serializeAndEmit.
 			data: {
 				laneFrom: edgeLaneColor(byId.get(e.source), e.sourceHandle),
-				laneTo: edgeLaneColor(byId.get(e.target), e.targetHandle)
+				laneTo: edgeLaneColor(byId.get(e.target), e.targetHandle),
+				channelPlane: channelForSourceHandle(byId.get(e.source), e.sourceHandle)?.plane,
+				join: e.join ?? undefined
 			}
 		}));
 	}
@@ -340,7 +368,11 @@
 				// xyflow's Connection (see onConnect).
 				targetHandle: (e.targetHandle as string | undefined) ?? 'in',
 				label: typeof e.label === 'string' ? e.label : undefined,
-				type: e.animated ? ('loop_back' as const) : ('sequence' as const)
+				type: e.animated ? ('loop_back' as const) : ('sequence' as const),
+				// Channel join discipline: only the non-default 'gather' is
+				// serialized — an absent key IS the 'each' default, so legacy
+				// edges round-trip byte-stable.
+				...(e.data?.join === 'gather' ? { join: 'gather' as const } : {})
 			}))
 		};
 		lastGraphRef = serialized;
@@ -378,7 +410,13 @@
 				laneTo: edgeLaneColor(
 					nodes.find((n) => n.id === connection.target),
 					connection.targetHandle
-				)
+				),
+				// A freshly drawn control-channel edge gets its join chip
+				// immediately (join is unset ⇒ the 'each' default).
+				channelPlane: channelForSourceHandle(
+					nodes.find((n) => n.id === connection.source),
+					connection.sourceHandle
+				)?.plane
 			}
 		};
 		edges = [...edges, newEdge];

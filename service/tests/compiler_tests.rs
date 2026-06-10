@@ -6563,17 +6563,11 @@ fn pool_resource_kinds_and_pool_registry() {
     use mekhan_service::models::capacity::{axes_for_resource, CapacityBackend};
 
     // capacity: the unified contended-capacity kind. Its axes (liveness /
-    // dispatch / … + `capacity_amount` for fixed) live in public_config; no
+    // acceptance / … + `capacity_amount` for fixed) live in public_config; no
     // secret fields — CRUD's split_config puts everything in public_config.
     let cap = lookup("capacity").expect("capacity kind registered");
     assert!(cap.secret_fields.is_empty());
-    for f in [
-        "liveness",
-        "dispatch",
-        "exclusivity",
-        "capacity_kind",
-        "eligibility",
-    ] {
+    for f in ["liveness", "acceptance", "capacity_kind", "eligibility"] {
         assert!(
             cap.public_fields.contains(&f),
             "capacity.public_fields missing `{f}`; got {:?}",
@@ -6613,8 +6607,7 @@ fn pool_resource_kinds_and_pool_registry() {
     // net-backed PoolBackend whose schemas `schemas_for_backend` returns.
     let seeded = serde_json::json!({
         "liveness": "seeded",
-        "dispatch": "push",
-        "exclusivity": "hold",
+        "acceptance": "auto",
         "capacity_kind": "fixed",
         "capacity_amount": 4,
         "eligibility": "partition",

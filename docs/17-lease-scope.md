@@ -6,6 +6,10 @@
 > per-flavor allocators), and the shipped `feat/slurm-lease` work (loop-scoped
 > lease → persistent drain executor, `runOnLease` body enqueue).
 
+**Plane vocabulary (2026-06-09).** LeaseScope is the allocation plane's hold
+semantics ([35](35-allocation-and-traffic-planes.md) §3) — with consume deleted
+from the model, hold + LeaseScope is the only allocation discipline.
+
 ## 1. Problem
 
 Today "hold one cluster allocation across N body runs" is fused onto the **Loop**

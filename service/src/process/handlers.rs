@@ -786,8 +786,7 @@ pub async fn claim_task(
     // Publish the claim onto the capacity pool's existing cross-net bridge. This
     // is fire-and-forget; the `claimed` status is projected from the pool net's
     // `in_use` token (docs/34 §4.2), not set here.
-    crate::runners_presence::inject_claim(&state.nats, &pool_net_id, &id, &member_id.to_string())
-        .await;
+    crate::presence::inject_claim(&state.nats, &pool_net_id, &id, &member_id.to_string()).await;
 
     tracing::info!(
         task_id = %id,

@@ -7,9 +7,8 @@
 	} from '$lib/api/client';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
 	import { ArtifactCard } from '$lib/components/catalogue';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import { PageShell, PageHeader } from '$lib/components/shell';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Activity from '@lucide/svelte/icons/activity';
@@ -111,123 +110,115 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto">
-	<div class="mx-auto max-w-4xl px-6 py-8 animate-rise">
-
-		<!-- Back link -->
-		<a
-			href="/data"
-			class="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+<PageShell testid="lineage-page">
+	{#snippet band()}
+		<PageHeader
+			title="Process Lineage"
+			variant="detail"
+			icon={GitBranch}
+			back={{ href: '/data', label: 'Back to Data' }}
 		>
-			<ArrowLeft class="size-4" />
-			Back to Data
-		</a>
+			{#snippet children()}
+				{#if lineage}
+					<p class="mt-1 font-mono text-sm text-muted-foreground">
+						{lineage.process_id}
+					</p>
+					<div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
+						<span class="flex items-center gap-1.5">
+							<FileBox class="size-4" />
+							{lineage.total_artifacts} artifact{lineage.total_artifacts === 1 ? '' : 's'}
+						</span>
+						<span>{lineage.steps.length} step{lineage.steps.length === 1 ? '' : 's'}</span>
+					</div>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				{#if instanceId}
+					<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="gap-1.5">
+						<Activity class="size-4" />
+						Open instance
+					</Button>
+				{/if}
+			{/snippet}
+		</PageHeader>
+	{/snippet}
 
-		<!-- Header -->
-		{#if lineage}
-			<div class="mb-6">
-				<div class="flex items-center gap-2">
-					<GitBranch class="size-6 text-muted-foreground" />
-					<h1 class="text-2xl font-semibold tracking-tight text-foreground">
-						Process Lineage
-					</h1>
-					{#if instanceId}
-						<Button variant="outline" size="sm" href="/instances/{instanceId}/process" class="ml-auto gap-1.5">
-							<Activity class="size-4" />
-							Open instance
-						</Button>
-					{/if}
-				</div>
-				<p class="mt-1 font-mono text-sm text-muted-foreground">
-					{lineage.process_id}
-				</p>
-				<div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
-					<span class="flex items-center gap-1.5">
-						<FileBox class="size-4" />
-						{lineage.total_artifacts} artifact{lineage.total_artifacts === 1 ? '' : 's'}
-					</span>
-					<span>{lineage.steps.length} step{lineage.steps.length === 1 ? '' : 's'}</span>
-				</div>
-			</div>
+	{#if lineage}
 
-			<Separator class="mb-6" />
+		<!-- Timeline -->
+		<div class="relative">
+			<!-- Vertical line -->
+			<div class="absolute left-[88px] top-0 bottom-0 w-px bg-border"></div>
 
-			<!-- Timeline -->
-			<div class="relative">
-				<!-- Vertical line -->
-				<div class="absolute left-[88px] top-0 bottom-0 w-px bg-border"></div>
-
-				<div class="space-y-6">
-					{#each lineage.steps as step, idx}
-						{@const ts = stepTime(step)}
-						{@const prevTs = idx > 0 ? stepTime(lineage.steps[idx - 1]) : null}
-						<div class="relative flex gap-0">
-							<!-- Timestamp left of the line -->
-							<div class="w-[80px] shrink-0 pt-3 pr-3 text-right">
-								{#if ts}
-									<p class="text-sm font-medium tabular-nums text-foreground">
-										{formatTime(ts)}
+			<div class="space-y-6">
+				{#each lineage.steps as step, idx}
+					{@const ts = stepTime(step)}
+					{@const prevTs = idx > 0 ? stepTime(lineage.steps[idx - 1]) : null}
+					<div class="relative flex gap-0">
+						<!-- Timestamp left of the line -->
+						<div class="w-[80px] shrink-0 pt-3 pr-3 text-right">
+							{#if ts}
+								<p class="text-sm font-medium tabular-nums text-foreground">
+									{formatTime(ts)}
+								</p>
+								{#if prevTs}
+									<p class="text-sm text-muted-foreground">
+										+{relativeTime(prevTs, ts)}
 									</p>
-									{#if prevTs}
-										<p class="text-sm text-muted-foreground">
-											+{relativeTime(prevTs, ts)}
-										</p>
-									{:else}
-										<p class="text-sm text-muted-foreground">
-											{formatFullDate(ts)}
-										</p>
-									{/if}
+								{:else}
+									<p class="text-sm text-muted-foreground">
+										{formatFullDate(ts)}
+									</p>
 								{/if}
+							{/if}
+						</div>
+
+						<!-- Timeline dot -->
+						<div class="absolute left-[84px] top-3.5 size-3 rounded-full border-2 border-primary bg-background"></div>
+
+						<!-- Step card -->
+						<div class="ml-4 flex-1 rounded-lg border border-border bg-card">
+							<div class="flex items-center gap-3 px-4 py-3 border-b border-border">
+								{#if step.iteration !== null}
+									<span class="inline-flex size-6 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground tabular-nums">
+										{step.iteration}
+									</span>
+								{/if}
+								<span class="text-sm font-semibold text-foreground">
+									{step.step}
+								</span>
+								<span class="ml-auto text-sm text-muted-foreground">
+									{step.artifacts.length} artifact{step.artifacts.length === 1 ? '' : 's'}
+								</span>
 							</div>
 
-							<!-- Timeline dot -->
-							<div class="absolute left-[84px] top-3.5 size-3 rounded-full border-2 border-primary bg-background"></div>
-
-							<!-- Step card -->
-							<div class="ml-4 flex-1 rounded-lg border border-border bg-card">
-								<div class="flex items-center gap-3 px-4 py-3 border-b border-border">
-									{#if step.iteration !== null}
-										<span class="inline-flex size-6 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground tabular-nums">
-											{step.iteration}
-										</span>
-									{/if}
-									<span class="text-sm font-semibold text-foreground">
-										{step.step}
-									</span>
-									<span class="ml-auto text-sm text-muted-foreground">
-										{step.artifacts.length} artifact{step.artifacts.length === 1 ? '' : 's'}
-									</span>
-								</div>
-
-								<!-- Artifact rows -->
-								<div class="space-y-0">
-									{#each step.artifacts as artifact}
-										<div id="artifact-{artifact.id}">
-											<ArtifactCard
-												entry={artifact}
-												highlighted={highlightArtifact === artifact.id}
-												expanded={expandedId === artifact.id}
-												onToggle={() => { expandedId = expandedId === artifact.id ? null : artifact.id; }}
-											/>
-										</div>
-									{/each}
-								</div>
+							<!-- Artifact rows -->
+							<div class="space-y-0">
+								{#each step.artifacts as artifact}
+									<div id="artifact-{artifact.id}">
+										<ArtifactCard
+											entry={artifact}
+											highlighted={highlightArtifact === artifact.id}
+											expanded={expandedId === artifact.id}
+											onToggle={() => { expandedId = expandedId === artifact.id ? null : artifact.id; }}
+										/>
+									</div>
+								{/each}
 							</div>
 						</div>
-					{/each}
-				</div>
+					</div>
+				{/each}
 			</div>
+		</div>
 
-		{:else if loading}
-			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-				Loading lineage...
-			</div>
+	{:else if loading}
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
+			Loading lineage...
+		</div>
 
-		{:else if error}
-			<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-				{error}
-			</div>
-		{/if}
-
-	</div>
-</div>
+	{:else if error}
+		<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+			{error}
+		</div>
+	{/if}
+</PageShell>

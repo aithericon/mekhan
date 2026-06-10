@@ -21,7 +21,9 @@
 //! - **Scheduler** (datacenter) — the live cluster summary for that datacenter,
 //!   assembled by the shared [`crate::handlers::clusters::assemble_cluster_summaries`]
 //!   so the cluster page and this aggregator cannot drift.
-//! - **Deferred** (the `consume` quota path, no net yet) — [`CapacityLive::None`].
+//! - **unparseable axes** (a `capacity` whose `public_config` doesn't parse —
+//!   e.g. a pre-re-cut row, fail-closed by design) — `backend: None`,
+//!   [`CapacityLive::None`].
 //!
 //! Read-only and fail-soft: if a live source (engine, presence map) is
 //! unreachable it degrades to zeros rather than failing the whole list — it must
@@ -88,7 +90,8 @@ pub enum CapacityLive {
         success_rate: Option<f64>,
         draining: bool,
     },
-    /// Deferred (`consume` quota) or any capacity with no live source.
+    /// Any capacity with no live source (e.g. unparseable axes — not
+    /// dispatchable).
     None,
 }
 
@@ -102,9 +105,11 @@ pub struct CapacitySummary {
     /// Human display name.
     pub display_name: String,
     /// The dispatch target, from the SINGLE authority `CapacityAxes::backend()`.
-    pub backend: CapacityBackend,
+    /// `None` when the axes are unparseable — the capacity is not dispatchable
+    /// (fail-closed; it still lists, with [`CapacityLive::None`]).
+    pub backend: Option<CapacityBackend>,
     /// The resolved trait-space axes (`None` for a `capacity` whose
-    /// `public_config` doesn't parse — it still lists, with `backend` defaulted).
+    /// `public_config` doesn't parse — it still lists, not dispatchable).
     pub axes: Option<CapacityAxes>,
     /// Live utilization, tagged by backend.
     pub live: CapacityLive,
@@ -163,20 +168,18 @@ pub async fn list_capacities(
         let public_map: Map<String, Value> = public_config.as_object().cloned().unwrap_or_default();
 
         let axes = axes_for_resource(&resource_type, &public_map);
-        // A `capacity` whose config doesn't parse still lists; default its
-        // backend to Deferred (no live source) rather than dropping the row.
-        let backend = axes
-            .map(|a| a.backend())
-            .unwrap_or(CapacityBackend::Deferred);
+        // A `capacity` whose config doesn't parse still lists, with NO backend:
+        // unparseable axes are not dispatchable (fail-closed), never defaulted.
+        let backend = axes.map(|a| a.backend());
 
         let live = match backend {
-            CapacityBackend::Tokens => tokens_live(&state, id, axes).await,
-            CapacityBackend::Presence => {
+            Some(CapacityBackend::Tokens) => tokens_live(&state, id, axes).await,
+            Some(CapacityBackend::Presence) => {
                 presence_live(&state, workspace_id, &path, &presence).await
             }
-            CapacityBackend::Queue => queue_live(&state, workspace_id, &path).await,
-            CapacityBackend::Scheduler => scheduler_live(clusters.get(&id.to_string())),
-            CapacityBackend::Deferred => CapacityLive::None,
+            Some(CapacityBackend::Queue) => queue_live(&state, workspace_id, &path).await,
+            Some(CapacityBackend::Scheduler) => scheduler_live(clusters.get(&id.to_string())),
+            None => CapacityLive::None,
         };
 
         out.push(CapacitySummary {

@@ -83,7 +83,7 @@ describe('YjsGraphBinding', () => {
 	});
 
 	it('human_task capacity binding + requirements survive the updateNodeData round-trip', () => {
-		// docs/33: a HumanTask bound to an offer-dispatch `capacity` must round-trip
+		// docs/33: a HumanTask bound to a consent-acceptance `capacity` must round-trip
 		// through Yjs, and clearing it (selecting "Anyone") must strip both keys so
 		// no stale binding reappears on reload. Regression for the dropped-binding
 		// bug (the human_task case used to map only taskTitle/steps/stepsRef).
@@ -519,6 +519,79 @@ describe('YjsGraphBinding', () => {
 		expect(bindingB.graph.nodes[0].id).toBe('n1');
 
 		bindingB.destroy();
+	});
+
+	// ── Channel join discipline (docs/25) ──
+	//
+	// `join` lives on the CONSUMER edge: absent ⇒ the 'each' default, 'gather'
+	// is the only stored value (normalize-to-default so legacy graphs keep a
+	// stable byte shape). Regression for the dropped-join bug: the edge
+	// round-trip (rematerialize ⇄ addEdge) used to omit the key entirely.
+
+	it('edge join survives addEdge + rematerialize', () => {
+		binding.addEdge({
+			id: 'e1',
+			source: 'n1',
+			target: 'n2',
+			type: 'sequence',
+			sourceHandle: 'detections',
+			join: 'gather'
+		});
+
+		expect(binding.graph.edges[0].join).toBe('gather');
+		// Other fields are untouched by the join plumbing.
+		expect(binding.graph.edges[0].sourceHandle).toBe('detections');
+
+		// A second binding on the same doc rematerializes from the stored
+		// objects — join must survive that independent read.
+		const bindingB = new YjsGraphBinding(doc);
+		expect(bindingB.graph.edges[0].join).toBe('gather');
+		bindingB.destroy();
+	});
+
+	it("addEdge normalizes the 'each' default to an absent key", () => {
+		binding.addEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'sequence', join: 'each' });
+		binding.addEdge({ id: 'e2', source: 'n2', target: 'n3', type: 'sequence' });
+
+		const stored = doc.getArray('edges');
+		expect('join' in (stored.get(0) as Record<string, unknown>)).toBe(false);
+		expect('join' in (stored.get(1) as Record<string, unknown>)).toBe(false);
+		expect(binding.graph.edges[0].join).toBeUndefined();
+	});
+
+	it("updateEdgeJoin('gather') sets and survives rematerialize; null and 'each' delete the key", () => {
+		binding.addEdge({
+			id: 'e1',
+			source: 'n1',
+			target: 'n2',
+			type: 'sequence',
+			sourceHandle: 'progress',
+			label: 'Live'
+		});
+
+		binding.updateEdgeJoin('e1', 'gather');
+		expect(binding.graph.edges[0].join).toBe('gather');
+		// The delete+insert dance must preserve every other stored field.
+		expect(binding.graph.edges[0].sourceHandle).toBe('progress');
+		expect(binding.graph.edges[0].label).toBe('Live');
+		expect(binding.graph.edges[0].type).toBe('sequence');
+
+		// null ⇒ back to the 'each' default ⇒ key deleted (NOT join: null).
+		binding.updateEdgeJoin('e1', null);
+		expect(binding.graph.edges[0].join).toBeUndefined();
+		let stored = doc.getArray('edges').get(0) as Record<string, unknown>;
+		expect('join' in stored).toBe(false);
+
+		// 'each' is the same normalize-to-default path as null.
+		binding.updateEdgeJoin('e1', 'gather');
+		binding.updateEdgeJoin('e1', 'each');
+		expect(binding.graph.edges[0].join).toBeUndefined();
+		stored = doc.getArray('edges').get(0) as Record<string, unknown>;
+		expect('join' in stored).toBe(false);
+
+		// Unknown edge id is a no-op (no throw, no edge churn).
+		binding.updateEdgeJoin('missing', 'gather');
+		expect(binding.graph.edges).toHaveLength(1);
 	});
 
 	it('edge with optional fields', () => {

@@ -6,6 +6,13 @@
 > and the exact edit surface — derived from the 2026-06-04 dialogue that added three refinements
 > to doc 23.
 
+> **Model superseded; record intact (2026-06-09).** The axis vocabulary this slice shipped
+> (dispatch ∈ {pull,push}, exclusivity ∈ {hold,consume}) is superseded by the two-plane model of
+> [35-allocation-and-traffic-planes](35-allocation-and-traffic-planes.md): dispatch derives from
+> the backend, exclusivity is hold-only, and the new axis is Acceptance{auto,consent}. §1's
+> three planes map onto 35's two: identity+liveness+capacity → allocation plane; dispatch →
+> traffic plane behind the grant's address. The edit surface and D1 remain the accurate build record.
+
 ## 0. The three refinements this slice encodes
 
 The design dialogue confirmed doc 23 and added three sharper claims, which drive the cut:
@@ -45,6 +52,8 @@ The design dialogue confirmed doc 23 and added three sharper claims, which drive
 | **Liveness & telemetry** | who's online, what caps — advisory, no side-effects | `worker_coverage` → **shared `FleetLiveness`** | advisory facet → shared registry | roster / on-shift |
 | **Capacity & dispatch** | pull-queue vs push-grant; the control/cancel binding | pull, no binding (unchanged wire) | push + match + reap (unchanged) | push or pull + form |
 
+*Mapping to [35](35-allocation-and-traffic-planes.md) §1–§2: the first two planes (plus the grant/hold side of the third) are the allocation plane; the dispatch side of the third is the traffic plane behind the grant's address.*
+
 Each plane is independent; a kind is a coherent point across all three. "worker / instrument /
 hpc / operator" stay as **legible presets over the shared substrate** — presets for legibility,
 substrate for the missing cells.
@@ -58,7 +67,7 @@ No wire-format change, no executor-binary change, no engine change, no migration
   registry ingests both `worker.*.presence` (advisory, capacity-providing) and the **advisory
   facet** of `runner.*.presence`, exposing one snapshot + one eligibility query. `worker_coverage`'s
   `BackendCoverage` is absorbed/refaced onto it. Runner *capacity-binding* (inject/reap into the
-  pool net in `runners_presence.rs`) is **untouched** — that is the control plane, and it stays
+  pool net in `runners_presence.rs`, now `service/src/presence/runners.rs`) is **untouched** — that is the control plane, and it stays
   runner-only by design (refinement #2).
 
 - **S2 — Backend-as-capability at the eligibility layer.** A worker's advertised backends are
@@ -82,6 +91,8 @@ No wire-format change, no executor-binary change, no engine change, no migration
   - `capacity_amount ∈ { fixed(N), presence_driven, elastic }`
   - `eligibility` (derived: `partition` when the predicate is a single coarse equality, else `predicate`)
 
+  *Vocabulary superseded; see [35](35-allocation-and-traffic-planes.md) §5–§6 — validation now mostly derives.*
+
   Plus **create-time cell validation** (refinement #1) that rejects incoherent combinations with a
   real message, and **presets** (`worker`, `instrument`, `hpc`) as named factory descriptors that
   prefill coherent axis sets.
@@ -91,7 +102,7 @@ No wire-format change, no executor-binary change, no engine change, no migration
 - `service/src/worker_coverage.rs` → fold into a new `service/src/fleet/` module (or rename to
   `fleet_liveness.rs`); keep the NATS subjects and TTL sweep, generalise `WorkerEntry` to a
   `LivenessEntry { id, kind: Worker | Runner, caps, last_seen }`. Preserve the existing unit tests.
-- `service/src/runners_presence.rs` — feed the runner's **advisory facet** into `FleetLiveness`
+- `service/src/runners_presence.rs` (now `service/src/presence/runners.rs`) — feed the runner's **advisory facet** into `FleetLiveness`
   on each heartbeat; leave `inject_acquire`/`inject_expire`/the pool-net edges exactly as-is.
 - `service/src/process/publish.rs` — `warn_on_uncovered_backends` + `warn_on_uncovered_pool_backends`
   collapse to one `FleetLiveness`-backed eligibility check.
@@ -116,6 +127,8 @@ No wire-format change, no executor-binary change, no engine change, no migration
 - **The `consume` discipline / non-integer capacity** (LLM/HTTP quota), **elastic** capacity
   (HPC, mostly built via `datacenter` + `Scheduled{operation:lease}` — doc 23 §7/§9.1), and the
   **ranking/fairness negotiator** (doc 23 §4.4) — all per doc 23 §11 step 2+.
+  *Consume / non-integer capacity resolved differently: deleted from the model,
+  [35](35-allocation-and-traffic-planes.md) §3.*
 - **Capability trust / attestation** + **bilateral acceptance** (doc 23 §9.4–9.5).
 
 ## 5. Datacenter / scheduler note (for the record)
@@ -134,7 +147,7 @@ the model has a slot for it.
 Offline gates: `cargo check -p mekhan-service`, `cargo test -p mekhan-service` for the touched
 modules (liveness registry, cell validation), `ci::openapi-drift` after regen, `svelte-check`.
 Adversarial review focus: the instrument/presence-pool admission path must be byte-identical
-(no change to `runners_presence` inject/reap or `presence_pool_net`), and the worker telemetry
+(no change to `runners_presence` — now `presence/runners.rs` — inject/reap or `presence_pool_net`), and the worker telemetry
 must carry **no** control side-effect (a dropped worker never reaps an instance).
 
 ## D1 — Unified worker dispatch (correction to the original anonymous-pool decision)

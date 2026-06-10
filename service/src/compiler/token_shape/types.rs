@@ -104,6 +104,16 @@ pub struct Provenance {
     /// subkeys at runtime). `collect_leaves` emits the container path with
     /// this scalar type *and* continues into the children.
     pub anchor: Option<ScalarTy>,
+    /// Set when the field arrived via a streaming CONTROL channel edge
+    /// (docs/25 §7): `Some(<channel name>)` on the top-level fields a
+    /// channel-edge contribution stamps onto the consumer's inbound shape
+    /// (see `analyze::channel_edge_contribution`). Channel payloads are
+    /// genuinely token-resident on the consumer's input — the each/gather
+    /// projection *is* the consumer's input token — so `reachable_scope`
+    /// keeps these visible as `input.<path>` entries even though their
+    /// producer is a parked producer (the qualified `<slug>.<field>` form
+    /// would NOT bind for them).
+    pub channel: Option<String>,
 }
 
 impl Provenance {
@@ -113,6 +123,7 @@ impl Provenance {
             node_label: node.data.label().to_string(),
             note: note.into(),
             anchor: None,
+            channel: None,
         }
     }
 
@@ -134,6 +145,7 @@ pub(super) fn structural_provenance() -> Provenance {
         node_label: String::new(),
         note: "JSON Schema field".to_string(),
         anchor: None,
+        channel: None,
     }
 }
 

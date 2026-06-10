@@ -32,9 +32,22 @@
 		readonly?: boolean;
 		onchange: (channel: Channel) => void;
 		onremove: () => void;
+		/** Force the channel's direction (StreamSource ⇒ 'out', StreamSink ⇒
+		 *  'in'). The direction picker renders as a fixed badge instead of a
+		 *  Select. Absent ⇒ free authoring. */
+		lockDirection?: ChannelDirection;
+		/** Restrict the transport picker to this subset. Absent ⇒ all. */
+		allowedTransports?: ChannelTransport[];
 	};
 
-	let { channel, readonly = false, onchange, onremove }: Props = $props();
+	let {
+		channel,
+		readonly = false,
+		onchange,
+		onremove,
+		lockDirection,
+		allowedTransports
+	}: Props = $props();
 
 	let expanded = $state(false);
 
@@ -63,7 +76,10 @@
 	const DIRECTIONS: ChannelDirection[] = ['out', 'in'];
 	const PLANES: ChannelPlane[] = ['data', 'control'];
 	const ELEMENT_KINDS: ElementKind[] = ['binary', 'json', 'any'];
-	const TRANSPORTS: ChannelTransport[] = ['jetstream', 'nats-latest', 's3', 'livekit'];
+	const ALL_TRANSPORTS: ChannelTransport[] = ['jetstream', 'nats-latest', 's3', 'livekit'];
+	// Some node kinds restrict the transports their channels may ride (e.g. a
+	// StreamSource ingests live bytes → jetstream | nats-latest only).
+	const transports = $derived<ChannelTransport[]>(allowedTransports ?? ALL_TRANSPORTS);
 
 	const transport = $derived<ChannelTransport>(channel.transport ?? 'jetstream');
 	// Transport only governs a DATA channel's out-of-band bytes; it's ignored for
@@ -137,21 +153,32 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1.5">
 					<Label class="text-sm text-muted-foreground">Direction</Label>
-					<Select.Root
-						type="single"
-						value={channel.direction}
-						onValueChange={(v) => v && patch({ direction: v as ChannelDirection })}
-						disabled={readonly}
-					>
-						<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
-							{directionLabels[channel.direction]}
-						</Select.Trigger>
-						<Select.Content>
-							{#each DIRECTIONS as d (d)}
-								<Select.Item value={d} label={directionLabels[d]} />
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					{#if lockDirection}
+						<!-- Direction is fixed by the owning node kind (Source produces,
+						     Sink consumes) — render the value, not a picker. -->
+						<div
+							class="flex h-9 items-center rounded-md border border-border/60 bg-muted/30 px-2 text-sm text-muted-foreground"
+							title="Direction is fixed by this node type"
+						>
+							{directionLabels[lockDirection]}
+						</div>
+					{:else}
+						<Select.Root
+							type="single"
+							value={channel.direction}
+							onValueChange={(v) => v && patch({ direction: v as ChannelDirection })}
+							disabled={readonly}
+						>
+							<Select.Trigger disabled={readonly} class="h-9 px-2 text-sm">
+								{directionLabels[channel.direction]}
+							</Select.Trigger>
+							<Select.Content>
+								{#each DIRECTIONS as d (d)}
+									<Select.Item value={d} label={directionLabels[d]} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					{/if}
 				</div>
 
 				<div class="space-y-1.5">
@@ -248,7 +275,7 @@
 							{transportLabels[transport]}
 						</Select.Trigger>
 						<Select.Content>
-							{#each TRANSPORTS as t (t)}
+							{#each transports as t (t)}
 								<Select.Item value={t} label={transportLabels[t]} />
 							{/each}
 						</Select.Content>

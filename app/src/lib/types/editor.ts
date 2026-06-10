@@ -64,6 +64,8 @@ export type TimeoutNodeData = Extract<SchemaWorkflowNodeData, { type: 'timeout' 
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
+export type StreamSourceNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_source' }>;
+export type StreamSinkNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_sink' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -219,6 +221,37 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				onToolError: 'feedback',
 				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
 				deploymentModel: { mode: 'executor' }
+			};
+		case 'stream_source':
+			// Seed ONE durable binary data-OUT channel so the dropped node is
+			// immediately wireable (its only handles are its channel handles).
+			return {
+				type: 'stream_source',
+				label: 'Stream Source',
+				channels: [
+					{
+						name: 'stream',
+						direction: 'out',
+						plane: 'data',
+						element: { type: 'binary', content_type: 'application/octet-stream' },
+						transport: 'jetstream'
+					}
+				]
+			};
+		case 'stream_sink':
+			// Exactly one IN channel in v1 (validation-enforced server-side).
+			return {
+				type: 'stream_sink',
+				label: 'Stream Sink',
+				channels: [
+					{
+						name: 'stream',
+						direction: 'in',
+						plane: 'data',
+						element: { type: 'binary', content_type: 'application/octet-stream' },
+						transport: 'jetstream'
+					}
+				]
 			};
 	}
 }

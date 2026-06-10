@@ -2,31 +2,27 @@ import { describe, it, expect } from 'vitest';
 import { resolveEditKind } from './new-capacity-kind';
 import type { CapacitySummary } from '$lib/api/capacities';
 
-// Minimal axes stub — only `dispatch` is read by the resolver.
+// Minimal axes stub — only `acceptance` is read by the resolver.
 function summary(
 	backend: CapacitySummary['backend'],
-	dispatch?: 'pull' | 'push' | 'offer' | null
+	acceptance?: 'auto' | 'consent' | null
 ): Pick<CapacitySummary, 'backend' | 'axes'> {
 	const axes =
-		dispatch === undefined || dispatch === null
-			? dispatch === undefined
+		acceptance === undefined || acceptance === null
+			? acceptance === undefined
 				? undefined
 				: null
-			: ({ dispatch } as unknown as NonNullable<CapacitySummary['axes']>);
+			: ({ acceptance } as unknown as NonNullable<CapacitySummary['axes']>);
 	return { backend, axes };
 }
 
 describe('resolveEditKind', () => {
-	it('presence + offer ⇒ human', () => {
-		expect(resolveEditKind(summary('presence', 'offer'))).toBe('human');
+	it('presence + consent ⇒ human', () => {
+		expect(resolveEditKind(summary('presence', 'consent'))).toBe('human');
 	});
 
-	it('presence + pull ⇒ runner_group', () => {
-		expect(resolveEditKind(summary('presence', 'pull'))).toBe('runner_group');
-	});
-
-	it('presence + push ⇒ runner_group', () => {
-		expect(resolveEditKind(summary('presence', 'push'))).toBe('runner_group');
+	it('presence + auto ⇒ runner_group', () => {
+		expect(resolveEditKind(summary('presence', 'auto'))).toBe('runner_group');
 	});
 
 	it('presence with null axes ⇒ runner_group', () => {
@@ -38,18 +34,22 @@ describe('resolveEditKind', () => {
 	});
 
 	it('tokens ⇒ limit (axes ignored)', () => {
-		expect(resolveEditKind(summary('tokens', 'offer'))).toBe('limit');
+		expect(resolveEditKind(summary('tokens', 'consent'))).toBe('limit');
 	});
 
 	it('queue ⇒ worker', () => {
-		expect(resolveEditKind(summary('queue', 'pull'))).toBe('worker');
+		expect(resolveEditKind(summary('queue', 'auto'))).toBe('worker');
 	});
 
 	it('scheduler ⇒ cluster', () => {
 		expect(resolveEditKind(summary('scheduler'))).toBe('cluster');
 	});
 
-	it('deferred ⇒ worker', () => {
-		expect(resolveEditKind(summary('deferred'))).toBe('worker');
+	it('null backend ⇒ worker (name-only fallback)', () => {
+		expect(resolveEditKind(summary(null))).toBe('worker');
+	});
+
+	it('absent backend ⇒ worker (name-only fallback)', () => {
+		expect(resolveEditKind({ axes: undefined })).toBe('worker');
 	});
 });

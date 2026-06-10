@@ -86,14 +86,21 @@ pub struct TapQuery {
 impl TapQuery {
     /// Truthy if `follow` is present and not an explicit falsy value. A bare
     /// `?follow` (empty value) counts as on.
-    fn follow(&self) -> bool {
-        match self.follow.as_deref() {
-            None => false,
-            Some(v) => !matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "no" | "off"
-            ),
-        }
+    pub(crate) fn follow(&self) -> bool {
+        flag_on(self.follow.as_deref())
+    }
+}
+
+/// Shared query-flag truthiness: present and not an explicit falsy value is
+/// on; a bare flag (empty value) counts as on. Used by `?follow`, `?append`,
+/// `?eof` across the datastream tap + stream-source ingress endpoints.
+pub(crate) fn flag_on(value: Option<&str>) -> bool {
+    match value {
+        None => false,
+        Some(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
     }
 }
 
@@ -102,7 +109,7 @@ impl TapQuery {
 /// untrusted path params; both are Rhai-identifier-safe slugs at the producer,
 /// so any `.`/`*`/`>`/whitespace/`/` here is malformed and we refuse it rather
 /// than risk subject injection / an over-broad subscription.
-fn validate_subject_token(label: &str, value: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_subject_token(label: &str, value: &str) -> Result<(), ApiError> {
     if value.is_empty()
         || value
             .chars()
@@ -197,14 +204,24 @@ pub async fn tap_channel_data(
 ) -> Result<Response, ApiError> {
     validate_subject_token("execution_id", &execution_id)?;
     validate_subject_token("channel", &channel)?;
-    // Replay (bounded) vs follow (live tail with wide idle patience).
-    let idle = if query.follow() {
-        FOLLOW_IDLE
-    } else {
-        IDLE_TIMEOUT
-    };
-
     let subject = format!("executor.datastream.{execution_id}.{channel}");
+    tap_datastream_subject(&state, subject, query.follow()).await
+}
+
+/// Shared tap core — open an ephemeral consumer on one `EXECUTOR_DATASTREAM`
+/// subject, reorder, and stream the concatenated payload bytes out. Addressed
+/// by SUBJECT (not execution_id+channel) so the stream-sink egress endpoint —
+/// which resolves its subject out of the sink's parked open descriptor — can
+/// share the exact replay/follow/reorder/EOF behavior of `tap_channel_data`.
+/// The caller is responsible for having validated/derived a safe subject.
+pub(crate) async fn tap_datastream_subject(
+    state: &AppState,
+    subject: String,
+    follow: bool,
+) -> Result<Response, ApiError> {
+    // Replay (bounded) vs follow (live tail with wide idle patience).
+    let idle = if follow { FOLLOW_IDLE } else { IDLE_TIMEOUT };
+
     let js = state.nats.jetstream().clone();
 
     // Ephemeral consumer (no durable name) filtered to this channel's subject,
@@ -379,9 +396,11 @@ pub async fn livekit_viewer_token(
     validate_subject_token("execution_id", &execution_id)?;
     validate_subject_token("channel", &channel)?;
 
-    let cfg = state.config.livekit.as_ref().ok_or_else(|| {
-        ApiError::service_unavailable("livekit not configured")
-    })?;
+    let cfg = state
+        .config
+        .livekit
+        .as_ref()
+        .ok_or_else(|| ApiError::service_unavailable("livekit not configured"))?;
 
     // Room-name contract: must match the executor's publisher
     // (`lk_{execution_id}__{channel}`).

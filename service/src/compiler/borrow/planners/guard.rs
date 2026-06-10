@@ -554,7 +554,13 @@ pub(crate) fn reachable_scope(
             // `is_parked_producer` reason about — not the deepest segment.
             let head = dotted.split('.').next().unwrap_or(&dotted);
             let is_ctrl = is_control_leaf(&format!("input.{head}"));
-            if !is_ctrl && is_parked_producer(graph, &prov.node_id) {
+            // Channel-edge payloads (`prov.channel.is_some()`) are genuinely
+            // token-resident on THIS node's input — the each/gather projection
+            // produced the consumer's input token (`channel_edge_contribution`)
+            // — so they stay visible as `input.<path>` even though their
+            // producer is a parked producer: the qualified `<slug>.<field>`
+            // form would NOT bind for them.
+            if !is_ctrl && prov.channel.is_none() && is_parked_producer(graph, &prov.node_id) {
                 continue; // borrowed data on the token → qualified in (2)
             }
             // Genuine control / identity keys (`_*`, `task_id`, `status`)

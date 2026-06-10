@@ -1,12 +1,12 @@
-//! Human presence controller (docs/33 §4/§7 — humans as a capacity).
+//! Human presence adapter (docs/33 §4/§7 — humans as a capacity).
 //!
-//! The human analogue of [`crate::runners_presence`]. A human `capacity`
-//! resource (`presence · offer · …`) is a capacity-LESS pool
+//! The human analogue of [`super::runners`]. A human `capacity` resource
+//! (`presence · consent · …`) is a capacity-LESS pool
 //! ([`crate::petri::presence_pool_net`]) whose admission is driven not by a
 //! runner daemon heartbeat but by a roster MEMBER's availability. A person has
-//! no data-plane daemon, so this controller is the generalization point: ONE
-//! parameterised presence loop instead of three code paths, with two SOURCES
-//! that the runner controller collapses into one:
+//! no data-plane daemon, so this adapter is the generalization point: the
+//! shared presence loop (in [`super::core`]) with two SOURCES that the runner
+//! adapter collapses into one:
 //!
 //! 1. **INTENT** — core-subscribe `human.*.availability`. A member flips their
 //!    durable availability on a specific human capacity. Subject is
@@ -29,7 +29,7 @@
 //! (durable) source has `ttl=∞`: it is admitted on intent alone and only an
 //! `available=false` toggle expires it — the TTL sweep never touches it.
 //!
-//! **RECONCILE** drives the pool net exactly like the runner controller: on the
+//! **RECONCILE** drives the pool net exactly like the runner adapter: on the
 //! absent→present edge it injects `C` `presence_acquire` units, on the
 //! present→absent edge it injects `C` bare `presence_expired` signals. The
 //! injected unit reuses the runner plumbing VERBATIM — the `runner_id` field
@@ -51,6 +51,7 @@ use uuid::Uuid;
 
 use futures::StreamExt;
 
+use super::core::{self, ExpiredSlots, PoolInjection, PoolSignal};
 use crate::compiler::well_known;
 use crate::models::roster::{AvailabilityConfig, LivenessSource};
 use crate::nats::MekhanNats;
@@ -72,20 +73,10 @@ const SWEEP_INTERVAL_SECS: u64 = 5;
 /// back to the default with a WARN so a typo can't silently disable reaping.
 /// Used only when a roster row omits an explicit `ttl_secs`.
 fn default_presence_ttl() -> Duration {
-    match std::env::var("MEKHAN__HUMAN__PRESENCE_TTL_SECS") {
-        Ok(raw) => match raw.parse::<u64>() {
-            Ok(n) if n > 0 => Duration::from_secs(n),
-            _ => {
-                tracing::warn!(
-                    raw = %raw,
-                    "MEKHAN__HUMAN__PRESENCE_TTL_SECS is not a positive integer; \
-                     using default {DEFAULT_PRESENCE_TTL_SECS}s"
-                );
-                Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS)
-            }
-        },
-        Err(_) => Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS),
-    }
+    core::env_ttl_secs(
+        "MEKHAN__HUMAN__PRESENCE_TTL_SECS",
+        DEFAULT_PRESENCE_TTL_SECS,
+    )
 }
 
 /// One tracked roster member's presence state in one human capacity.
@@ -142,7 +133,7 @@ type HumanPresenceMap = Arc<Mutex<HashMap<HumanKey, HumanPresenceEntry>>>;
 /// [`crate::AppState`] can hold a handle to the live map WITHOUT leaking the
 /// `pub(crate)` [`HumanPresenceEntry`]/[`HumanPresenceMap`] types (which would
 /// trip the `private_interfaces` lint that CI's `-D warnings` rejects). Mirrors
-/// [`crate::runners_presence::RunnerPresence`].
+/// [`super::runners::RunnerPresence`].
 ///
 /// The presence-controller tasks share the inner map via [`Self::map`]; a read
 /// API reads through [`Self::snapshot`].
@@ -171,12 +162,14 @@ impl HumanPresence {
         let now = Instant::now();
         let map = self.0.lock().await;
         map.iter()
-            .map(|((capacity_id, member_user_id), entry)| HumanPresenceSnapshot {
-                capacity_id: *capacity_id,
-                member_user_id: *member_user_id,
-                present: entry.present,
-                last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
-            })
+            .map(
+                |((capacity_id, member_user_id), entry)| HumanPresenceSnapshot {
+                    capacity_id: *capacity_id,
+                    member_user_id: *member_user_id,
+                    present: entry.present,
+                    last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
+                },
+            )
             .collect()
     }
 }
@@ -235,9 +228,8 @@ fn should_sweep(e: &HumanPresenceEntry, now: Instant) -> bool {
         && now.duration_since(e.last_seen) > e.ttl
 }
 
-/// Inject ONE slot's `presence_acquire` unit into the pool net's
-/// `presence_acquire` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_acquire`.
+/// Build the caller parts of ONE slot's `presence_acquire` injection (pure, so
+/// the envelope byte-shape is pinned in [`super::core`]'s tests).
 ///
 /// Reuses the runner plumbing VERBATIM (docs/33 §4): the `runner_id` field
 /// carries the MEMBER id so the engine pool net's generic `t_grant`/`t_reap_*`
@@ -246,8 +238,7 @@ fn should_sweep(e: &HumanPresenceEntry, now: Instant) -> bool {
 /// lease; the shared `runner_id` is the reap key (the `presence_expired` signals
 /// reap all of them by `runner_id`, NOT by `unit_id`, so a fresh per-episode
 /// `unit_id` is safe). `assignee` is an ADDITIVE field the P3 grant relays to the
-/// human inbox. `executor_namespace` is `human/<member>`. Wire shape is the
-/// engine's [`CrossNetTokenTransfer`] envelope.
+/// human inbox. `executor_namespace` is `human/<member>`.
 ///
 /// `epoch` is a per-admission stamp (wall-clock millis captured ONCE at the
 /// absent→present edge in [`reconcile`], shared across the C slots). It is folded
@@ -259,23 +250,17 @@ fn should_sweep(e: &HumanPresenceEntry, now: Instant) -> bool {
 /// off→on is common (mirrors the model-pool generation-keyed fix). The per-slot
 /// suffix keeps the C slots distinct within one episode (keying on the member
 /// alone would collapse all C-1 extra slots to one).
-async fn inject_acquire(
-    nats: &MekhanNats,
-    pool_net_id: &str,
+pub(crate) fn acquire_injection(
     member: Uuid,
     slot: u32,
     epoch: i64,
     caps: &serde_json::Value,
-) {
-    let subject = format!(
-        "petri.bridge.{pool_net_id}.{}",
-        well_known::POOL_PRESENCE_ACQUIRE_INBOX
-    );
+) -> PoolInjection<'static> {
     let unit_id = format!("{member}#{slot}@{epoch}");
-    let envelope = json!({
-        "source_net_id": "mekhan-human-presence-controller",
-        "source_place_name": "presence",
-        "token_color": {
+    PoolInjection {
+        source_net_id: "mekhan-human-presence-controller",
+        source_place_name: "presence",
+        token_color: json!({
             "unit_id": unit_id,
             // CRITICAL: the field is `runner_id` (= the member id) so the engine
             // pool net's generic reap/grant correlation matches — we reuse the
@@ -284,64 +269,63 @@ async fn inject_acquire(
             "executor_namespace": format!("human/{member}"),
             "assignee": member.to_string(),
             "caps": caps,
-        },
-        "signal_key": format!("human-presence-acquire-{unit_id}"),
-        "timestamp": Utc::now().to_rfc3339(),
-        "dedup_id": format!("presence-acquire:{unit_id}"),
-    });
-    publish_jetstream(nats, &subject, &envelope, "human presence acquire").await;
+        }),
+        signal_key: format!("human-presence-acquire-{unit_id}"),
+        dedup_id: format!("presence-acquire:{unit_id}"),
+    }
+}
+
+/// Inject ONE slot's `presence_acquire` unit into the pool net's
+/// `presence_acquire` bridge_in place via
+/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
+/// [`CrossNetTokenTransfer`] envelope; see [`acquire_injection`] for the
+/// identity + epoch-stamped dedup scheme.
+async fn inject_acquire(
+    nats: &MekhanNats,
+    pool_net_id: &str,
+    member: Uuid,
+    slot: u32,
+    epoch: i64,
+    caps: &serde_json::Value,
+) {
+    core::inject_bridge(
+        nats,
+        pool_net_id,
+        well_known::POOL_PRESENCE_ACQUIRE_INBOX,
+        acquire_injection(member, slot, epoch, caps),
+        "human presence acquire",
+    )
+    .await;
+}
+
+/// Build the caller parts of a BARE `presence_expired { runner_id }` signal
+/// (pure, so the envelope byte-shape is pinned in [`super::core`]'s tests).
+/// `now_ms` is the emission stamp folded into the signal key.
+pub(crate) fn expire_signal(member: Uuid, now_ms: i64) -> PoolSignal<'static> {
+    PoolSignal {
+        source: "human-presence",
+        signal_key: format!("human-presence-expire-{member}-{now_ms}"),
+        payload: json!({ "runner_id": member.to_string() }),
+    }
 }
 
 /// Inject a BARE `presence_expired { runner_id }` signal into the pool net's
 /// signal place via `petri.signal.<pool_net_id>.presence_expired`.
 ///
-/// Same shape as [`crate::runners_presence`]'s expire: `runner_id` carries the
+/// Same shape as [`super::runners`]'s expire: `runner_id` carries the
 /// MEMBER id (the reap key), and one signal is injected per applied slot — each
 /// is consumed once and reaps exactly one of the member's `C` slots
 /// (reap-ALL-by-reap-key). Wire shape is the engine's `ExternalSignal` envelope;
 /// NO reply routing (signals are injected routing-less).
 async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, member: Uuid) {
-    let subject = format!(
-        "petri.signal.{pool_net_id}.{}",
-        well_known::POOL_PRESENCE_EXPIRED_SIGNAL
-    );
-    let envelope = json!({
-        "source": "human-presence",
-        "signal_key": format!("human-presence-expire-{member}-{}", Utc::now().timestamp_millis()),
-        "payload": { "runner_id": member.to_string() },
-        "timestamp": Utc::now().to_rfc3339(),
-    });
-    publish_jetstream(nats, &subject, &envelope, "human presence expire").await;
-}
-
-/// Publish a JSON envelope to a JetStream subject and await the ack, logging at
-/// WARN on any failure (a missed injection is non-fatal — the next heartbeat
-/// re-acquires, and the sweep re-expires).
-async fn publish_jetstream(
-    nats: &MekhanNats,
-    subject: &str,
-    envelope: &serde_json::Value,
-    what: &str,
-) {
-    let bytes = match serde_json::to_vec(envelope) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(subject, "failed to serialize {what} envelope: {e}");
-            return;
-        }
-    };
-    match nats
-        .jetstream()
-        .publish(subject.to_string(), bytes.into())
-        .await
-    {
-        Ok(ack) => {
-            if let Err(e) = ack.await {
-                tracing::warn!(subject, "{what} publish ack failed: {e}");
-            }
-        }
-        Err(e) => tracing::warn!(subject, "{what} publish failed: {e}"),
-    }
+    core::inject_signal(
+        nats,
+        pool_net_id,
+        well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
+        expire_signal(member, Utc::now().timestamp_millis()),
+        "human presence expire",
+    )
+    .await;
 }
 
 /// Count how many pool units the engine net currently holds for `member` — the
@@ -460,10 +444,17 @@ async fn reconcile(
             // engine slots survived a mekhan restart counts as `existing == C` →
             // inject 0 (we just re-track them in-memory), the case that previously
             // double-admitted.
+            //
+            // The grow decision is the shared grow-eager delta ([`core::grow_slots`]);
+            // unlike the runner adapter (whose slot indices continue past the
+            // applied count), the human top-up restarts slot numbering at 0 each
+            // admission episode — the epoch stamp keeps the unit identities fresh.
             let existing = count_member_units(petri, &pool_net_id, member)
                 .await
                 .unwrap_or(concurrency);
-            let need = concurrency.saturating_sub(existing);
+            let need = core::grow_slots(false, existing, concurrency)
+                .map(|r| r.len() as u32)
+                .unwrap_or(0);
             for slot in 0..need {
                 inject_acquire(nats, &pool_net_id, member, slot, epoch, &caps).await;
             }
@@ -625,34 +616,36 @@ async fn load_available_enrollments_for_member(
     db: &PgPool,
     member: Uuid,
 ) -> Vec<AvailableEnrollment> {
-    let rows: Vec<(Uuid, Uuid, serde_json::Value, i32, serde_json::Value)> =
-        sqlx::query_as(
-            "SELECT workspace_id, capacity_id, caps, concurrency, availability \
+    let rows: Vec<(Uuid, Uuid, serde_json::Value, i32, serde_json::Value)> = sqlx::query_as(
+        "SELECT workspace_id, capacity_id, caps, concurrency, availability \
              FROM roster_members \
              WHERE member_user_id = $1 AND available = TRUE AND revoked_at IS NULL",
-        )
-        .bind(member)
-        .fetch_all(db)
-        .await
-        .unwrap_or_default();
+    )
+    .bind(member)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     rows.into_iter()
-        .map(|(workspace_id, capacity_id, caps, concurrency, availability)| {
-            let cfg: AvailabilityConfig = serde_json::from_value(availability).unwrap_or_default();
-            let ttl = if cfg.ttl_secs > 0 {
-                Duration::from_secs(cfg.ttl_secs)
-            } else {
-                default_presence_ttl()
-            };
-            AvailableEnrollment {
-                capacity_id,
-                workspace_id,
-                caps,
-                concurrency: concurrency.max(0) as u32,
-                ttl,
-                cfg,
-            }
-        })
+        .map(
+            |(workspace_id, capacity_id, caps, concurrency, availability)| {
+                let cfg: AvailabilityConfig =
+                    serde_json::from_value(availability).unwrap_or_default();
+                let ttl = if cfg.ttl_secs > 0 {
+                    Duration::from_secs(cfg.ttl_secs)
+                } else {
+                    default_presence_ttl()
+                };
+                AvailableEnrollment {
+                    capacity_id,
+                    workspace_id,
+                    caps,
+                    concurrency: concurrency.max(0) as u32,
+                    ttl,
+                    cfg,
+                }
+            },
+        )
         .collect()
 }
 
@@ -794,45 +787,45 @@ pub(crate) async fn start_human_presence_subscriber(
 /// `last_seen`, inject `C` bare expire signals for each, and flip them to absent.
 ///
 /// `None` (durable) entries never TTL-expire — only an `available=false` toggle
-/// (via [`handle_availability`] → [`reconcile`]) expires them.
+/// (via [`handle_availability`] → [`reconcile`]) expires them. The loop
+/// mechanics are the shared [`core::sweep_loop`]; this adapter supplies the
+/// [`should_sweep`] gate (per-entry TTL + durable-never-swept), the under-lock
+/// flip, and the per-member expire injection.
 pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: HumanPresenceMap) {
-    let mut tick = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     tracing::info!(
         sweep_secs = SWEEP_INTERVAL_SECS,
         "human presence sweep started"
     );
 
-    loop {
-        tick.tick().await;
-        let now = Instant::now();
-
-        // Collect the expired set under the lock, flipping them to absent in the
-        // same critical section so a concurrent heartbeat racing past here either
-        // re-bumps last_seen (no expiry) or is cleanly re-acquired afterwards. The
-        // per-entry `ttl` governs (not a global), and a `None` (durable) source is
-        // never swept — it only expires on an availability toggle.
-        let expired: Vec<(Uuid, String, u32)> = {
-            let mut map = presence.lock().await;
-            let mut out = Vec::new();
-            for (key, entry) in map.iter_mut() {
-                if should_sweep(entry, now) {
-                    entry.present = false;
-                    out.push((key.1, entry.pool_net_id.clone(), entry.concurrency));
+    core::sweep_loop(
+        presence,
+        Duration::from_secs(SWEEP_INTERVAL_SECS),
+        should_sweep,
+        |key: &HumanKey, entry: &mut HumanPresenceEntry| {
+            entry.present = false;
+            ExpiredSlots {
+                reap_key: key.1,
+                pool_net_id: entry.pool_net_id.clone(),
+                slots: entry.concurrency,
+            }
+        },
+        |expired: ExpiredSlots| {
+            let nats = nats.clone();
+            async move {
+                let member = expired.reap_key;
+                let pool_net_id = expired.pool_net_id;
+                let concurrency = expired.slots;
+                tracing::info!(
+                    %member, pool_net_id, concurrency,
+                    "human presence TTL miss; reaping member's slots"
+                );
+                for _ in 0..concurrency {
+                    inject_expire(&nats, &pool_net_id, member).await;
                 }
             }
-            out
-        };
-
-        for (member, pool_net_id, concurrency) in expired {
-            tracing::info!(
-                %member, pool_net_id, concurrency,
-                "human presence TTL miss; reaping member's slots"
-            );
-            for _ in 0..concurrency {
-                inject_expire(&nats, &pool_net_id, member).await;
-            }
-        }
-    }
+        },
+    )
+    .await;
 }
 
 /// Construct a fresh, empty human presence map. The subscriber + sweep tasks
@@ -955,7 +948,11 @@ mod tests {
         let ttl = Duration::from_secs(45);
 
         // Intent OFF → never admitted, regardless of source.
-        assert!(!should_admit(&entry(false, LivenessSource::None, now), now, ttl));
+        assert!(!should_admit(
+            &entry(false, LivenessSource::None, now),
+            now,
+            ttl
+        ));
         assert!(!should_admit(
             &entry(false, LivenessSource::Session, now),
             now,
@@ -964,7 +961,11 @@ mod tests {
 
         // Intent ON + None (durable) → admitted, even with a stale last_seen.
         let stale = now - Duration::from_secs(3600);
-        assert!(should_admit(&entry(true, LivenessSource::None, now), now, ttl));
+        assert!(should_admit(
+            &entry(true, LivenessSource::None, now),
+            now,
+            ttl
+        ));
         assert!(should_admit(
             &entry(true, LivenessSource::None, stale),
             now,

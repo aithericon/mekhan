@@ -33,6 +33,8 @@ import TimerOff from '@lucide/svelte/icons/timer-off';
 import Zap from '@lucide/svelte/icons/zap';
 import Workflow from '@lucide/svelte/icons/workflow';
 import Bot from '@lucide/svelte/icons/bot';
+import RadioTower from '@lucide/svelte/icons/radio-tower';
+import SatelliteDish from '@lucide/svelte/icons/satellite-dish';
 import Box from '@lucide/svelte/icons/box';
 
 export type NodePaletteMeta = {
@@ -62,7 +64,9 @@ const META: Record<string, NodePaletteMeta> = {
 	timeout: { icon: TimerOff, color: '#0e7490' },
 	trigger: { icon: Zap, color: '#fbbf24' },
 	sub_workflow: { icon: Workflow, color: '#14b8a6' },
-	agent: { icon: Bot, color: '#f97316' }
+	agent: { icon: Bot, color: '#f97316' },
+	stream_source: { icon: RadioTower, color: '#6366f1' },
+	stream_sink: { icon: SatelliteDish, color: '#6366f1' }
 };
 
 const FALLBACK: NodePaletteMeta = { icon: Box, color: '#64748b' };

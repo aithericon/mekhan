@@ -16,7 +16,8 @@
 		| 'delay'
 		| 'timeout'
 		| 'sub-workflow'
-		| 'agent';
+		| 'agent'
+		| 'stream';
 
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
@@ -41,6 +42,7 @@
 				'timeout':         'from-node-timeout/10         to-node-timeout/25         border-node-timeout/60',
 				'sub-workflow':    'from-node-sub-workflow/10    to-node-sub-workflow/25    border-node-sub-workflow/60',
 				'agent':           'from-node-agent/10           to-node-agent/25           border-node-agent/60',
+				'stream':          'from-node-stream/10          to-node-stream/25          border-node-stream/60',
 			},
 			selected: {
 				true: 'shadow-md',
@@ -63,6 +65,7 @@
 			{ kind: 'timeout',         selected: true, class: 'border-node-timeout' },
 			{ kind: 'sub-workflow',    selected: true, class: 'border-node-sub-workflow' },
 			{ kind: 'agent',           selected: true, class: 'border-node-agent' },
+			{ kind: 'stream',          selected: true, class: 'border-node-stream' },
 		],
 		defaultVariants: {
 			kind: 'start',
@@ -88,6 +91,7 @@
 		'timeout':         'bg-node-timeout',
 		'sub-workflow':    'bg-node-sub-workflow',
 		'agent':           'bg-node-agent',
+		'stream':          'bg-node-stream',
 	};
 
 	const HEADER_BORDER: Record<WorkflowNodeKind, string> = {
@@ -106,6 +110,7 @@
 		'timeout':         'border-node-timeout/30',
 		'sub-workflow':    'border-node-sub-workflow/30',
 		'agent':           'border-node-agent/30',
+		'stream':          'border-node-stream/30',
 	};
 
 	const HANDLE_BORDER: Record<WorkflowNodeKind, string> = {
@@ -124,6 +129,7 @@
 		'timeout':         '!border-node-timeout',
 		'sub-workflow':    '!border-node-sub-workflow',
 		'agent':           '!border-node-agent',
+		'stream':          '!border-node-stream',
 	};
 
 	export function workflowNodeIconBg(kind: WorkflowNodeKind): string {

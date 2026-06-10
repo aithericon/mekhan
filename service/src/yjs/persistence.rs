@@ -197,7 +197,7 @@ impl YjsPersistence {
     ///
     /// Y.Doc schema (must match the frontend's YjsGraphBinding):
     ///   Y.Map("nodes")    ← keyed by nodeId → Y.Map { type, label, description?, position, config (Y.Map), files (Y.Map) }
-    ///   Y.Array("edges")  ← [Any { id, source, target, sourceHandle?, label?, type }]
+    ///   Y.Array("edges")  ← [Any { id, source, target, sourceHandle?, targetHandle?, label?, join?, type }]
     ///   Y.Map("viewport") ← { x, y, zoom }
     pub async fn init_doc_from_graph(
         &self,

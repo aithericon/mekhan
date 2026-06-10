@@ -319,8 +319,8 @@ async fn causality_full_pipeline() {
         runner_nats_signer: Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
-        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
-        human_presence: mekhan_service::human_presence::HumanPresence::new(),
+        runner_presence: mekhan_service::presence::RunnerPresence::new(),
+        human_presence: mekhan_service::presence::HumanPresence::new(),
         fleet: mekhan_service::fleet::FleetLiveness::new(),
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),

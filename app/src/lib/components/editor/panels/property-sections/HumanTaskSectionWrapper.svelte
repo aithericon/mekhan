@@ -29,7 +29,7 @@
 </script>
 
 <div class="space-y-4">
-	<!-- Capacity / offer-dispatch binding (docs/33) — always configurable,
+	<!-- Capacity / consent-acceptance binding (docs/33) — always configurable,
 	     independent of where the task FORM is authored. -->
 	<OfferCapacitySection {data} {readonly} {onchange} />
 

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { deriveEdgeFeeds, edgeFeedLifecycle, type ExecutionLike } from './edge-feed-context';
+import {
+	deriveEdgeFeeds,
+	edgeFeedLifecycle,
+	streamSourceExecutionId,
+	type ExecutionLike
+} from './edge-feed-context';
 import type { WorkflowGraph, WorkflowNode } from '$lib/api/client';
 
 /**
@@ -25,6 +30,22 @@ function nodeWithChannel(
 		position: { x: 0, y: 0 },
 		data: {
 			type: 'automated_step',
+			channels: [channel]
+		}
+	} as unknown as WorkflowNode;
+}
+
+/** A stream_source node carrying one out data-binary channel. */
+function streamSourceNode(
+	id: string,
+	channel: { name: string; plane: string; element: unknown }
+): WorkflowNode {
+	return {
+		id,
+		type: 'stream_source',
+		position: { x: 0, y: 0 },
+		data: {
+			type: 'stream_source',
 			channels: [channel]
 		}
 	} as unknown as WorkflowNode;
@@ -62,6 +83,7 @@ describe('deriveEdgeFeeds', () => {
 			execs('mekhan-net-abc'),
 			fakeMarking({ p_src_frames: 1 }),
 			false,
+			null,
 			() => true // jsdom has no MediaSource; assert MSE support for the test.
 		);
 		const feed = map.get('e1');
@@ -158,7 +180,7 @@ describe('deriveEdgeFeeds', () => {
 		const rows: Map<string, ExecutionLike[]> = new Map([
 			['src', [{ execution_id: 'first' }, { execution_id: 'latest' }]]
 		]);
-		const map = deriveEdgeFeeds(g, nodesById(src), rows, fakeMarking(), false, () => true);
+		const map = deriveEdgeFeeds(g, nodesById(src), rows, fakeMarking(), false, null, () => true);
 		expect(map.get('e1')?.executionId).toBe('latest');
 	});
 
@@ -193,6 +215,65 @@ describe('deriveEdgeFeeds', () => {
 		expect(live.get('e1')?.terminal).toBe(false);
 		const done = deriveEdgeFeeds(g, nodesById(src), execs('x'), fakeMarking(), true);
 		expect(done.get('e1')?.terminal).toBe(true);
+	});
+});
+
+describe('deriveEdgeFeeds — stream_source producers', () => {
+	const srcChannel = {
+		name: 'frames',
+		plane: 'data',
+		element: { type: 'binary', content_type: JPEG_CT }
+	};
+
+	it('derives the execution id deterministically (st-<instance>-<node>)', () => {
+		const src = streamSourceNode('ingress', srcChannel);
+		const g = graph([
+			{ id: 'e1', source: 'ingress', target: 'sink', sourceHandle: 'frames', type: 'default' }
+		]);
+		// NO executions for 'ingress' — a stream source never gets a step row.
+		const map = deriveEdgeFeeds(g, nodesById(src), new Map(), fakeMarking(), false, 'inst-42');
+		const feed = map.get('e1');
+		expect(feed).toBeDefined();
+		expect(feed?.executionId).toBe('st-inst-42-ingress');
+		expect(feed?.executionId).toBe(streamSourceExecutionId('inst-42', 'ingress'));
+		expect(feed?.plan?.kind).toBe('mjpeg');
+	});
+
+	it('synthesizes producerStatus running while the instance is live', () => {
+		const src = streamSourceNode('ingress', srcChannel);
+		const g = graph([
+			{ id: 'e1', source: 'ingress', target: 'sink', sourceHandle: 'frames', type: 'default' }
+		]);
+		const live = deriveEdgeFeeds(g, nodesById(src), new Map(), fakeMarking(), false, 'inst-42');
+		expect(live.get('e1')?.producerStatus).toBe('running');
+		// → the widget classifies it LIVE without any step-execution row.
+		expect(edgeFeedLifecycle({ closed: false }, false, live.get('e1')!.producerStatus)).toBe(
+			'live'
+		);
+		const done = deriveEdgeFeeds(g, nodesById(src), new Map(), fakeMarking(), true, 'inst-42');
+		expect(done.get('e1')?.producerStatus).toBe('completed');
+	});
+
+	it('yields NO feed when the instance id is unavailable', () => {
+		const src = streamSourceNode('ingress', srcChannel);
+		const g = graph([
+			{ id: 'e1', source: 'ingress', target: 'sink', sourceHandle: 'frames', type: 'default' }
+		]);
+		const map = deriveEdgeFeeds(g, nodesById(src), new Map(), fakeMarking(), false, null);
+		expect(map.has('e1')).toBe(false);
+	});
+
+	it('still requires a data-plane binary channel (json source yields no feed)', () => {
+		const src = streamSourceNode('ingress', {
+			name: 'rows',
+			plane: 'data',
+			element: { type: 'json', schema: {} }
+		});
+		const g = graph([
+			{ id: 'e1', source: 'ingress', target: 'sink', sourceHandle: 'rows', type: 'default' }
+		]);
+		const map = deriveEdgeFeeds(g, nodesById(src), new Map(), fakeMarking(), false, 'inst-42');
+		expect(map.has('e1')).toBe(false);
 	});
 });
 

@@ -11,7 +11,9 @@ import type {
 	AutomatedStepNodeData,
 	EndNodeData,
 	FailureNodeData,
-	AgentNodeData
+	AgentNodeData,
+	StreamSourceNodeData,
+	StreamSinkNodeData
 } from '$lib/types/editor';
 
 /**
@@ -20,7 +22,7 @@ import type {
  * Y.Doc schema:
  *   Y.Map("meta")     ← { name, description, author_id }
  *   Y.Map("nodes")    ← keyed by nodeId → Y.Map { type, label, description, config (Y.Map), position, files (Y.Map → Y.Text), parentId?, width?, height? }
- *   Y.Array("edges")  ← [{ id, source, target, sourceHandle?, label?, type }]
+ *   Y.Array("edges")  ← [{ id, source, target, sourceHandle?, label?, type, join? }]
  *   Y.Map("viewport") ← { x, y, zoom }
  */
 export class YjsGraphBinding {
@@ -126,7 +128,11 @@ export class YjsGraphBinding {
 				sourceHandle: item.sourceHandle as string | undefined,
 				targetHandle: item.targetHandle as string | undefined,
 				label: item.label as string | undefined,
-				type: (item.type as WorkflowEdgeType) ?? 'sequence'
+				type: (item.type as WorkflowEdgeType) ?? 'sequence',
+				// Consumer-side channel join discipline (docs/25). Stored only when
+				// 'gather' — absent ⇒ the 'each' default — so only materialize the
+				// key when it's actually set (legacy edges keep their exact shape).
+				...(item.join === 'gather' ? { join: 'gather' as const } : {})
 			});
 		});
 
@@ -194,7 +200,7 @@ export class YjsGraphBinding {
 					// producer that emits the form blocks at runtime. Undefined ⇒ static
 					// `steps` authoring. (Not yet in the generated schema → cast.)
 					stepsRef: config?.stepsRef as string | undefined,
-					// Capacity binding (docs/33): the offer-dispatch pool this task is
+					// Capacity binding (docs/33): the consent-acceptance pool this task is
 					// offered to + its placement Requirements. Round-trips whole +
 					// conditionally so a collaborative edit doesn't drop the offer
 					// binding (mirrors `automated_step`'s deploymentModel/requirements).
@@ -452,6 +458,26 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
+			case 'stream_source': {
+				// `channels` (docs/25) is the node's ONLY config — the whole array
+				// round-trips as one value, mirroring automated_step. It MUST be
+				// read back here or the editor reconstruction drops the channels
+				// and the node loses its (only) handles.
+				const channels = config?.channels as StreamSourceNodeData['channels'] | undefined;
+				return {
+					...base,
+					type: 'stream_source',
+					...(channels && channels.length > 0 ? { channels } : {})
+				};
+			}
+			case 'stream_sink': {
+				const channels = config?.channels as StreamSinkNodeData['channels'] | undefined;
+				return {
+					...base,
+					type: 'stream_sink',
+					...(channels && channels.length > 0 ? { channels } : {})
+				};
+			}
 		}
 	}
 
@@ -663,6 +689,10 @@ export class YjsGraphBinding {
 			if (edge.sourceHandle) obj.sourceHandle = edge.sourceHandle;
 			if (edge.targetHandle) obj.targetHandle = edge.targetHandle;
 			if (edge.label) obj.label = edge.label;
+			// Join discipline: normalize-to-default — only the non-default
+			// 'gather' is written ('each'/null/undefined stay unset) so legacy
+			// graphs keep a stable byte shape.
+			if (edge.join === 'gather') obj.join = 'gather';
 			this.yEdges.push([obj]);
 		});
 	}
@@ -676,6 +706,29 @@ export class YjsGraphBinding {
 			if (index >= 0) {
 				this.yEdges.delete(index, 1);
 			}
+		});
+	}
+
+	/**
+	 * Set or clear an edge's consumer-side channel join discipline (docs/25).
+	 * `'gather'` writes the key; `null` or `'each'` DELETES it — 'each' is the
+	 * implicit default, so it round-trips as "unset" and legacy graphs stay
+	 * byte-stable. Y.Array entries are plain immutable objects, so an update is
+	 * the same delete+insert-at-index dance removeEdge/addEdge use, wrapped in
+	 * one transaction so coauthors never observe the edge missing.
+	 */
+	updateEdgeJoin(edgeId: string, join: 'gather' | 'each' | null): void {
+		this.doc.transact(() => {
+			let index = -1;
+			this.yEdges.forEach((edge, i) => {
+				if (edge.id === edgeId) index = i;
+			});
+			if (index < 0) return;
+			const obj: Record<string, unknown> = { ...this.yEdges.get(index) };
+			if (join === 'gather') obj.join = 'gather';
+			else delete obj.join;
+			this.yEdges.delete(index, 1);
+			this.yEdges.insert(index, [obj]);
 		});
 	}
 
@@ -1005,6 +1058,16 @@ export class YjsGraphBinding {
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
 				break;
+			case 'stream_source':
+			case 'stream_sink': {
+				// `channels` round-trips whole, conditionally — delete when empty so
+				// clearing the last channel removes the stale Yjs key (mirrors the
+				// automated_step channels clear path).
+				const chans = (data as StreamSourceNodeData | StreamSinkNodeData).channels;
+				if (chans && chans.length > 0) config.set('channels', chans);
+				else config.delete('channels');
+				break;
+			}
 		}
 	}
 

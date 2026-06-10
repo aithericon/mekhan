@@ -132,6 +132,8 @@ pub enum NodeKind {
     Delay,
     Timeout,
     Trigger,
+    StreamSource,
+    StreamSink,
 }
 
 impl NodeKind {
@@ -173,6 +175,8 @@ impl NodeKind {
             NodeKind::Delay => "delay",
             NodeKind::Timeout => "timeout",
             NodeKind::Trigger => "trigger",
+            NodeKind::StreamSource => "stream_source",
+            NodeKind::StreamSink => "stream_sink",
         }
     }
 }

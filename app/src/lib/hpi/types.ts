@@ -136,7 +136,7 @@ export type HumanTask = {
 	title: string;
 	instructions_mdsvex?: string;
 	steps: TaskStep[];
-	// `offered`/`claimed` are the offer-dispatch (human-capacity) states: an
+	// `offered`/`claimed` are the consent-acceptance (human-capacity) states: an
 	// `offered` task is parked for eligible members to claim; `claimed` is bound
 	// to one member but not yet completed (docs/33).
 	status: 'pending' | 'offered' | 'claimed' | 'completed' | 'cancelled' | 'failed';

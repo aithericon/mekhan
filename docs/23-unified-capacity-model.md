@@ -22,6 +22,14 @@
 > [17-lease-scope](17-lease-scope.md),
 > [21-lab-runner-fleet](21-lab-runner-fleet.md).
 
+> **Superseded in part by [35-allocation-and-traffic-planes](35-allocation-and-traffic-planes.md)
+> (2026-06-09).** The two-plane consolidation deletes the consume discipline and
+> the dispatch axis from the model: §3's exclusivity/dispatch rows, §5's
+> (hold | consume) fork, and §7's per-kind table are superseded by 35 §3–§7.
+> §9.1/§9.2 are resolved (quota is traffic-plane admission behind the dispatch
+> address); §9.5 is partially resolved (the Acceptance axis). §4 (eligibility
+> strategies), §6 (the keystone), and §10 (discipline) remain authoritative.
+
 ## 1. Goal — and the boundary we're crossing
 
 Classical orchestration keeps four worlds apart, each with its own tool: HPC batch (Slurm),
@@ -59,6 +67,8 @@ few, named, and orthogonal, and everything else degenerates to a shared contract
 
 ## 3. The orthogonal axes (the trait-space)
 
+*The exclusivity-discipline and dispatch-discipline rows below are superseded — both are derived away in the consolidated model (see 35 §3–§5).*
+
 | Axis | worker pool | instrument station | HPC allocation | LLM / HTTP endpoint | human operator pool |
 |------|-------------|--------------------|----------------|---------------------|---------------------|
 | **liveness** (how we know it's available) | competing-consumer (alive ⇔ subscribed) | presence heartbeat | lease alive (alloc running) | endpoint health probe | roster / on-shift |
@@ -83,6 +93,7 @@ omits:
   already does). LLMs and stateless HTTP APIs are **consumed** (admit-if-under-quota →
   debit → done; there is nothing to "hold" and "release until done" is meaningless). A single
   contract that assumes holding is wrong for half the table. See §5.
+  *Superseded: there is no fork — the engine only does hold; consume is traffic-plane admission behind the dispatch address (35 §3).*
 - **Capability trust** (who vouches for an advertised fact) is invisible today because the dev
   executor self-asserts everything and we believe it. In a regulated fleet, "operator holds a
   current calibration certificate" or "this node has the licensed solver" cannot be
@@ -152,6 +163,8 @@ What is **identical** across the whole table and must stay so:
 ```
 claim  →  eligibility  →  admit  →  (hold | consume)  →  complete  →  event
 ```
+
+*The `(hold | consume)` branch is superseded — the contract is hold-only; per-call quota/rate semantics moved behind the dispatch address (35 §3).*
 
 A unit of work is claimed against a capacity class; eligibility is decided by the strategy of
 §4; on admission the work runs; on completion the decision and outcome are appended to the
@@ -284,11 +297,11 @@ What is **missing or wrong** (the work this doc motivates):
 
 These are the parts that are *not* yet clear and should be resolved before or during build:
 
-1. **Non-integer capacity.** How does the admission net represent rate/quota (LLM) or elastic
+1. **RESOLVED (35 §3):** **Non-integer capacity.** How does the admission net represent rate/quota (LLM) or elastic
    (HPC) capacity? Options: keep the Petri net for integer-unit kinds and use a separate
    token-bucket admission for `consume` kinds (two admission mechanisms behind one contract),
    or generalise the unit. Leaning toward the former — don't force a rate limiter into a net.
-2. **Hold vs consume in the contract.** Is `(hold | consume)` a clean bimodal branch, or do we
+2. **RESOLVED (35 §3):** **Hold vs consume in the contract.** Is `(hold | consume)` a clean bimodal branch, or do we
    need a third (lease-with-renewal, e.g. a long LLM session)? The `LeaseScope` warm-reuse
    semantics only make sense for `hold`; what is its analogue (if any) for `consume`?
 3. **Strategy selection authority.** Who decides a pool lowers to a static partition vs a
@@ -299,7 +312,7 @@ These are the parts that are *not* yet clear and should be resolved before or du
 4. **Capability trust / attestation.** Self-asserted (worker backends) vs registry-validated
    (instrument caps, done) vs externally-attested (human certs, licensed software). What is the
    attestation interface, and what happens when an attestation expires mid-hold?
-5. **Bilateral eligibility.** Every capacity may have its own *acceptance predicate* over the
+5. **PARTIALLY RESOLVED (35 §4; policy acceptance still open):** **Bilateral eligibility.** Every capacity may have its own *acceptance predicate* over the
    work (a runner refusing a tenant, an instrument in maintenance, an operator declining).
    Match = both predicates hold. This was deferred for runners; in the unified model it is
    general. Where does the capacity-side predicate live and who evaluates it?

@@ -11,6 +11,7 @@
 	import { EDGE_LANE_WIDTH_PX } from '$lib/editor/edge-lane';
 	import { useEdgeFeeds } from '$lib/components/instances/edge-feed-context';
 	import EdgeMediaWidget from '$lib/components/instances/EdgeMediaWidget.svelte';
+	import { useEdgeJoin } from './edge-join-context';
 
 	let {
 		id,
@@ -71,6 +72,24 @@
 	const feedGetter = useEdgeFeeds();
 	const feed = $derived(feedGetter ? feedGetter(id) : null);
 
+	// Control-channel join chip (docs/25): a consumer edge tapping a CONTROL
+	// channel carries the per-edge join discipline. `channelPlane`/`join` are
+	// stashed on `data` by toFlowEdges; the setter context is provided only by
+	// editable canvases (WorkflowCanvas, not readonly) — when absent (instance
+	// view / readonly) the chip renders display-only.
+	const joinData = $derived(data as { channelPlane?: string; join?: string } | undefined);
+	const isControlChannel = $derived(joinData?.channelPlane === 'control');
+	const join = $derived(joinData?.join === 'gather' ? 'gather' : 'each');
+	const setEdgeJoin = useEdgeJoin();
+	const JOIN_TITLE =
+		'each — one downstream firing per emitted item\n' +
+		'gather — items collected into one array on close';
+
+	function toggleJoin(event: MouseEvent) {
+		event.stopPropagation();
+		setEdgeJoin?.(id, join === 'gather' ? null : 'gather');
+	}
+
 	function handleDelete(event: MouseEvent) {
 		event.stopPropagation();
 		deleteElements({ edges: [{ id }] });
@@ -127,7 +146,53 @@
 	</EdgeToolbar>
 {/if}
 
+<!-- Control-channel join chip. Rendered AFTER the delete toolbar (both portal
+     into the same `edge-labels` layer, so DOM order is paint order) and nudged
+     below the midpoint so the hover-delete × stays reachable. -->
+{#if isControlChannel}
+	<EdgeLabel x={pathResult[1]} y={pathResult[2] + 22}>
+		{#if setEdgeJoin}
+			<button class="edge-join-chip" onclick={toggleJoin} title={JOIN_TITLE}>
+				{join}
+			</button>
+		{:else}
+			<span class="edge-join-chip is-static" title={JOIN_TITLE}>{join}</span>
+		{/if}
+	</EdgeLabel>
+{/if}
+
 <style>
+	/* Join-discipline chip — control-channel purple (#a855f7), matching the
+	   channel handle + lane tint. Compact pill, same visual family as the
+	   node-face channel chips. */
+	.edge-join-chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 1px 7px;
+		border-radius: 9999px;
+		border: 1px solid #a855f7;
+		background: hsl(var(--background));
+		color: #a855f7;
+		font-size: 10px;
+		font-weight: 600;
+		line-height: 1.5;
+		cursor: pointer;
+	}
+
+	.edge-join-chip:hover {
+		background: #a855f7;
+		color: white;
+	}
+
+	.edge-join-chip.is-static {
+		cursor: default;
+	}
+
+	.edge-join-chip.is-static:hover {
+		background: hsl(var(--background));
+		color: #a855f7;
+	}
+
 	.edge-delete-zone {
 		width: 80px;
 		height: 80px;

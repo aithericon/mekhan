@@ -40,8 +40,8 @@ use uuid::Uuid;
 use mekhan_service::autoscaler::demand::DemandSource;
 use mekhan_service::autoscaler::placement::reconcile_placement;
 use mekhan_service::nats::MekhanNats;
+use mekhan_service::presence::RunnerPresence;
 use mekhan_service::runner_commands::{LoadTarget, ModelCommand};
-use mekhan_service::runners_presence::RunnerPresence;
 
 use common::model_runner_fixture::{
     read_replica_status, seed_model_policy, seed_model_runner, SeedModel, SeedPolicySpec,
@@ -73,7 +73,7 @@ impl DemandSource for ConstDemand {
 
 /// A demand source the test FLIPS between ticks, modelling the real
 /// `PrometheusDemandSource` whose per-model demand is a momentary value (in-flight
-/// + the one-shot starved-counter delta): a burst of starved requests reads `> 0`
+/// plus the one-shot starved-counter delta): a burst of starved requests reads `> 0`
 /// on ONE scrape, then `0` on the next once the delta is consumed. Lets a test
 /// reproduce "woken by a transient demand edge, then the very next tick reads 0"
 /// — the exact shape that used to flap a `scale_to_zero` model straight back to

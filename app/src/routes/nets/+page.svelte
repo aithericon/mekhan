@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PageShell, PageHeader, FilterPills } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Server from '@lucide/svelte/icons/server';
@@ -65,97 +66,86 @@
 	});
 </script>
 
-<div class="flex h-full flex-col">
-	<div class="flex items-center justify-between border-b border-border px-6 py-4">
-		<div class="flex items-center gap-3">
-			<Server class="size-5 text-muted-foreground" />
-			<h1 class="text-lg font-semibold">Engine Nets</h1>
-			<span class="text-sm text-muted-foreground">
-				{filteredNets.length} of {nets.length} nets
-			</span>
+<!-- Full-bleed engine-internals list: pinned toolbar band + edge-to-edge rows
+     scrolling below it (deliberately not a max-w card list), hence `bleed`. -->
+<PageShell width="bleed">
+	<div class="flex h-full flex-col">
+		<div class="shrink-0 border-b border-border bg-card px-6 py-4">
+			<PageHeader
+				title="Engine Nets"
+				icon={Server}
+				subtitle="{filteredNets.length} of {nets.length} nets"
+				class="mb-0"
+			>
+				{#snippet actions()}
+					<Button variant="outline" size="sm" onclick={load}>
+						<RefreshCw class="size-3.5" />
+						Refresh
+					</Button>
+				{/snippet}
+			</PageHeader>
 		</div>
-		<div class="flex items-center gap-2">
-			<div class="flex rounded-md border border-border text-sm">
-				<button
-					class="px-3 py-1.5 transition-colors {filter === 'active'
-						? 'bg-primary text-primary-foreground'
-						: 'hover:bg-accent'}"
-					onclick={() => (filter = 'active')}
-				>
-					Active
-				</button>
-				<button
-					class="border-x border-border px-3 py-1.5 transition-colors {filter === 'terminal'
-						? 'bg-primary text-primary-foreground'
-						: 'hover:bg-accent'}"
-					onclick={() => (filter = 'terminal')}
-				>
-					Terminal
-				</button>
-				<button
-					class="px-3 py-1.5 transition-colors {filter === 'all'
-						? 'bg-primary text-primary-foreground'
-						: 'hover:bg-accent'}"
-					onclick={() => (filter = 'all')}
-				>
-					All
-				</button>
-			</div>
-			<Button variant="outline" size="sm" onclick={load}>
-				<RefreshCw class="size-3.5" />
-				Refresh
-			</Button>
-		</div>
-	</div>
 
-	<div class="flex-1 overflow-y-auto">
-		{#if loading}
-			<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
-				Loading nets from engine...
+		<div class="flex-1 overflow-y-auto">
+			<div class="px-6 py-4">
+				<FilterPills
+					active={filter}
+					onSelect={(v) => (filter = v as typeof filter)}
+					options={[
+						{ value: 'active', label: 'Active' },
+						{ value: 'terminal', label: 'Terminal' },
+						{ value: 'all', label: 'All' }
+					]}
+				/>
 			</div>
-		{:else if error}
-			<div class="px-6 py-4 text-sm text-destructive">
-				{error}
-			</div>
-		{:else if filteredNets.length === 0}
-			<div class="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-				<Server class="size-8 opacity-30" />
-				<p>No {filter === 'all' ? '' : filter} nets found</p>
-			</div>
-		{:else}
-			<div class="divide-y divide-border">
-				{#each filteredNets as net (net.net_id)}
-					<div
-						class="flex items-center justify-between px-6 py-3 transition-colors hover:bg-accent/30"
-					>
-						<div class="flex items-center gap-3">
-							<div class="flex flex-col">
-								<span class="font-mono text-sm">{net.net_id}</span>
-								<span class="text-sm text-muted-foreground">
-									{net.in_memory ? 'in memory' : 'hibernated'}
-								</span>
+			{#if loading}
+				<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
+					Loading nets from engine...
+				</div>
+			{:else if error}
+				<div class="px-6 py-4 text-sm text-destructive">
+					{error}
+				</div>
+			{:else if filteredNets.length === 0}
+				<div class="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+					<Server class="size-8 opacity-30" />
+					<p>No {filter === 'all' ? '' : filter} nets found</p>
+				</div>
+			{:else}
+				<div class="divide-y divide-border">
+					{#each filteredNets as net (net.net_id)}
+						<div
+							class="flex items-center justify-between px-6 py-3 transition-colors hover:bg-accent/30"
+						>
+							<div class="flex items-center gap-3">
+								<div class="flex flex-col">
+									<span class="font-mono text-sm">{net.net_id}</span>
+									<span class="text-sm text-muted-foreground">
+										{net.in_memory ? 'in memory' : 'hibernated'}
+									</span>
+								</div>
+							</div>
+							<div class="flex items-center gap-2">
+								<Badge
+									class={statusColors[net.status] ?? 'bg-gray-100 text-gray-700'}
+								>
+									{net.status}
+								</Badge>
+								<Button variant="ghost" size="icon-sm" href="/nets/{net.net_id}">
+									<Eye class="size-3.5" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									onclick={() => deleteNet(net.net_id)}
+								>
+									<Trash2 class="size-3.5 text-muted-foreground hover:text-destructive" />
+								</Button>
 							</div>
 						</div>
-						<div class="flex items-center gap-2">
-							<Badge
-								class={statusColors[net.status] ?? 'bg-gray-100 text-gray-700'}
-							>
-								{net.status}
-							</Badge>
-							<Button variant="ghost" size="icon-sm" href="/nets/{net.net_id}">
-								<Eye class="size-3.5" />
-							</Button>
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								onclick={() => deleteNet(net.net_id)}
-							>
-								<Trash2 class="size-3.5 text-muted-foreground hover:text-destructive" />
-							</Button>
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
+					{/each}
+				</div>
+			{/if}
+		</div>
 	</div>
-</div>
+</PageShell>

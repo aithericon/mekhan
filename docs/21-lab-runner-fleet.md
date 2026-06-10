@@ -15,6 +15,8 @@
 > [16-multi-cluster-scheduling](16-multi-cluster-scheduling.md),
 > [17-lease-scope](17-lease-scope.md).
 
+**Plane vocabulary (2026-06-09).** Identity/enrollment/presence here is allocation plane; the runner.{id} job inbox is the traffic plane behind the grant's address ([35](35-allocation-and-traffic-planes.md) §2). The fleet-as-datacenter direction is the service-reconciler future of 35 §9.
+
 ## 1. Goal
 
 Let an operator stand up a lab PC attached to a physical instrument (XRD, cryostat,

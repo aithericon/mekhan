@@ -140,7 +140,14 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
                     source_handle: get_str("sourceHandle"),
                     target_handle: get_str("targetHandle"),
                     label: get_str("label"),
-                    join: None,
+                    // CONSUMER-side fold discipline (ChannelJoin, serde
+                    // snake_case: "each" / "gather"). Unknown/absent → None
+                    // (compiler treats None as Each).
+                    join: get_str("join").and_then(|s| match s.as_str() {
+                        "each" => Some(ChannelJoin::Each),
+                        "gather" => Some(ChannelJoin::Gather),
+                        _ => None,
+                    }),
                     edge_type: get_str("type").unwrap_or_else(|| "sequence".to_string()),
                 });
             }
@@ -363,6 +370,16 @@ pub fn graph_to_doc_with_files(
             }
             if let Some(ref label) = edge.label {
                 edge_map.insert("label".to_string(), Any::String(Arc::from(label.as_str())));
+            }
+            // `join` (ChannelJoin, serde snake_case) — written only when set
+            // so legacy docs (and edges with the implicit Each default) stay
+            // byte-stable.
+            if let Some(join) = edge.join {
+                let s = match join {
+                    ChannelJoin::Each => "each",
+                    ChannelJoin::Gather => "gather",
+                };
+                edge_map.insert("join".to_string(), Any::String(Arc::from(s)));
             }
             edges_arr.push_back(&mut txn, Any::from(edge_map));
         }
@@ -931,6 +948,52 @@ mod tests {
         assert_eq!(with_slug.slug.as_deref(), Some("review_step"));
         let no_slug = rt.nodes.iter().find(|n| n.id == "n_no_slug").unwrap();
         assert_eq!(no_slug.slug, None);
+    }
+
+    /// A consumer edge's `join` (ChannelJoin fold discipline, docs/25) MUST
+    /// survive graph→Y.Doc→graph: publish reads the graph back via
+    /// `doc_to_graph`, and a drop silently downgrades a `gather` counted
+    /// barrier to the per-item `Each` default — same silent-drop class as
+    /// `default_scheduler` / `lease.pool`.
+    #[test]
+    fn edge_join_survives_ydoc_roundtrip() {
+        fn edge(id: &str, join: Option<ChannelJoin>) -> WorkflowEdge {
+            WorkflowEdge {
+                id: id.to_string(),
+                source: "a".to_string(),
+                target: "b".to_string(),
+                source_handle: Some("out:frames".to_string()),
+                target_handle: Some("in:frames".to_string()),
+                label: None,
+                join,
+                edge_type: "sequence".to_string(),
+            }
+        }
+
+        let graph = WorkflowGraph {
+            nodes: vec![],
+            edges: vec![
+                edge("e_gather", Some(ChannelJoin::Gather)),
+                edge("e_plain", None),
+            ],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+
+        let gather = rt.edges.iter().find(|e| e.id == "e_gather").unwrap();
+        assert_eq!(
+            gather.join,
+            Some(ChannelJoin::Gather),
+            "join must survive the Y.Doc round-trip (else publish folds per-item)"
+        );
+
+        // None → stays None (opt-out: no stray key written/read back).
+        let plain = rt.edges.iter().find(|e| e.id == "e_plain").unwrap();
+        assert_eq!(plain.join, None);
     }
 
     /// Verifies inline files at template creation make it into the Y.Doc as

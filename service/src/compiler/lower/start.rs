@@ -263,7 +263,6 @@ let eid = dd.artifact_id;
                             catalogue: false,
                             process: false,
                             // file-metadata helper job: no streaming handle.
-                            stream_output: None,
                             // file-metadata helper job: no streaming channels.
                             control_in: None,
                         },

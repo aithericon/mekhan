@@ -221,7 +221,7 @@
 						<span class="flex shrink-0 items-center gap-2">
 							<span class="text-sm text-muted-foreground">{node.engines.length} engine(s)</span>
 							<a
-								href="/fleet?tab=runners&role=engines"
+								href="/fleet?tab=machines&role=engines"
 								class="inline-flex items-center gap-0.5 text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
 								title="Open the fleet roster filtered to model servers — full host record, role, and capabilities"
 							>

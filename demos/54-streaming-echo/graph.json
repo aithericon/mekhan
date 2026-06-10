@@ -1,0 +1,139 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 220 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Streaming Echo Endpoint",
+        "initial": {
+          "id": "in",
+          "label": "Echo Input",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "feed",
+      "type": "stream_source",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "type": "stream_source",
+        "label": "Feed (ingress)",
+        "description": "External entry point: an outside producer POSTs raw text/plain bytes to the mekhan ingress endpoint (/api/v1/instances/{id}/sources/feed/channels/feed/data); each request body is framed into binary envelopes on the 'feed' data channel. No control handles — the channel handle is the node's only wiring surface.",
+        "channels": [
+          {
+            "name": "feed",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "text/plain" },
+            "transport": "jetstream"
+          }
+        ]
+      }
+    },
+    {
+      "id": "shout",
+      "type": "automated_step",
+      "position": { "x": 360, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Shout",
+        "description": "Triggered by the ingress channel's open descriptor (like demo 14's consumer — the In channel aliases the step's input place, so the open token both starts the job and carries the transport pointer). Drains aithericon.stream('feed') chunk by chunk and writes each chunk uppercased onto the 'shouted' data Out channel.",
+        "channels": [
+          {
+            "name": "feed",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "text/plain" },
+            "transport": "jetstream"
+          },
+          {
+            "name": "shouted",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "text/plain" },
+            "transport": "jetstream"
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Shouted",
+          "fields": [
+            { "name": "chunks", "label": "Chunks Echoed", "kind": "number" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "out",
+      "type": "stream_sink",
+      "position": { "x": 760, "y": 0 },
+      "data": {
+        "type": "stream_sink",
+        "label": "Out (egress)",
+        "description": "Egress terminal: parks the 'shouted' channel's open descriptor write-once; the mekhan egress endpoint (/api/v1/instances/{id}/sinks/out/data, ?follow=1 to live-tail) resolves the transport subject from it and serves the sunk bytes. No control handles, no outbound edges.",
+        "channels": [
+          {
+            "name": "shouted",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "binary", "content_type": "text/plain" },
+            "transport": "jetstream"
+          }
+        ]
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 760, "y": 220 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "chunks", "expression": "shout.chunks" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_feed_shout",
+      "source": "feed",
+      "sourceHandle": "feed",
+      "target": "shout",
+      "targetHandle": "feed",
+      "type": "sequence"
+    },
+    {
+      "id": "e_shout_out",
+      "source": "shout",
+      "sourceHandle": "shouted",
+      "target": "out",
+      "targetHandle": "shouted",
+      "type": "sequence"
+    },
+    {
+      "id": "e_shout_end",
+      "source": "shout",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

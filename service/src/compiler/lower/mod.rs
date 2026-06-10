@@ -484,6 +484,8 @@ pub(crate) mod phase_update;
 pub(crate) mod progress_update;
 pub(crate) mod scope;
 pub(crate) mod start;
+pub(crate) mod stream_sink;
+pub(crate) mod stream_source;
 pub(crate) mod subworkflow;
 pub(crate) mod timeout;
 
@@ -569,7 +571,9 @@ pub(super) fn split_outputs_keep_item(
     .auto_input("tok", producer_out)
     .auto_output("data", &p_data)
     .auto_output("ctrl", &p_ctrl)
-    .logic(crate::compiler::token_shape::yield_logic_keeping_item(item_var));
+    .logic(crate::compiler::token_shape::yield_logic_keeping_item(
+        item_var,
+    ));
     (format!("p_{id}_data"), p_ctrl)
 }
 

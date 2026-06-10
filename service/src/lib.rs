@@ -14,7 +14,6 @@ pub mod demos;
 pub mod file_servers;
 pub mod fleet;
 pub mod handlers;
-pub mod human_presence;
 pub mod inventory;
 pub mod lifecycle;
 /// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic
@@ -32,14 +31,15 @@ pub mod nodes;
 pub mod observability;
 pub mod openapi;
 pub mod petri;
+pub mod presence;
 pub mod process;
 pub mod projections;
 pub mod query;
 pub mod runner_commands;
 pub mod runners_nats;
-pub mod runners_presence;
 pub mod s3;
 pub mod scope;
+pub mod streams;
 pub mod triggers;
 pub mod worker_groups;
 pub mod yjs;
@@ -138,22 +138,22 @@ pub struct AppState {
     /// in-memory `PresenceMap`. The same map the Phase-3 subscriber/sweep tasks
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
-    pub runner_presence: crate::runners_presence::RunnerPresence,
+    pub runner_presence: crate::presence::RunnerPresence,
     /// Humans-as-a-capacity (docs/33 §7) — shared handle to the human presence
     /// controller's in-memory map. The same map the subscriber/sweep tasks
     /// mutate; the human analogue of `runner_presence`. A roster MEMBER's
     /// availability (not a daemon heartbeat) drives admission into the
     /// `pool-<capacity_id>` net, reusing the runner pool plumbing verbatim.
-    pub human_presence: crate::human_presence::HumanPresence,
+    pub human_presence: crate::presence::HumanPresence,
     /// Unified fleet-liveness registry (docs/23 §2; docs/24 S1) — the shared
     /// telemetry plane over BOTH the anonymous worker pool and the advisory
     /// facet of enrolled runners. Workers heartbeat on `worker.*.presence`
     /// (subscriber + TTL sweep owned by `crate::fleet`); runners mirror their
-    /// self-reported backends in from `crate::runners_presence` on each
+    /// self-reported backends in from `crate::presence::runners` on each
     /// heartbeat. Publish reads through it (`serves_backend`) to WARN (never
     /// fail) on a step's backend served by zero live capacities. Purely
     /// advisory — a dropped capacity NEVER reaps an instance (the runner control
-    /// binding in `runners_presence` is a separate plane).
+    /// binding in `presence::runners` is a separate plane).
     pub fleet: crate::fleet::FleetLiveness,
     /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
     /// records of every node-bound asset into the JSON envelope the publish
@@ -288,7 +288,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::model_replicas::get_model_replica))
         // Operator load/unload action — publishes a ModelCommand to a runner's
         // model agent (vLLM admin / Ollama Metal runtime). Control plane only.
-        .routes(routes!(handlers::model_commands::publish_runner_model_command))
+        .routes(routes!(
+            handlers::model_commands::publish_runner_model_command
+        ))
         // Official model-catalog browse (the operator's model browser): scrapes
         // ollama.com / calls the HF JSON API. Metadata only, cached ~10 min.
         .routes(routes!(handlers::model_catalog::browse_model_catalog))
@@ -298,12 +300,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         // Inference telemetry — live router /metrics proxy (point-in-time gauges)
         // + historical per-model timeseries over the durable ledger (TimescaleDB).
-        .routes(routes!(
-            handlers::inference_telemetry::router_live_metrics
-        ))
-        .routes(routes!(
-            handlers::inference_telemetry::inference_timeseries
-        ))
+        .routes(routes!(handlers::inference_telemetry::router_live_metrics))
+        .routes(routes!(handlers::inference_telemetry::inference_timeseries))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -341,6 +339,15 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // room (`lk_{execution_id}__{channel}`) the executor publishes annotated
         // video frames to, so the browser can join and watch.
         .routes(routes!(handlers::executions::livekit_viewer_token))
+        // Streams — workflow-as-streaming-endpoint (docs/25 §9 Phase 3).
+        // Ingress: mekhan acts as the VIRTUAL PRODUCER for a stream_source
+        // node (deterministic execution id `st-{instance}-{node}`, publishes
+        // on the same EXECUTOR_DATASTREAM / EXECUTOR_EVENTS surfaces a real
+        // executor job would). Egress: tap a stream_sink's sunk bytes via the
+        // descriptor parked in the step_executions projection.
+        .routes(routes!(handlers::streams::push_stream_source_data))
+        .routes(routes!(handlers::streams::emit_stream_source_items))
+        .routes(routes!(handlers::streams::tap_stream_sink_data))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
         .routes(routes!(process::handlers::process_stats))

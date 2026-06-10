@@ -20,6 +20,12 @@ Working name: `aithericon-inference-router` (open question — see §10).
 >    capacity/fleet/runner subsystem (docs 21/23/24); doc 28 §2 gives the
 >    mapping. The router stays a *consumer* of that inventory, exactly as specced.
 
+> **Plane vocabulary (2026-06-09, [35](35-allocation-and-traffic-planes.md)).**
+> This is the platform's reference TRAFFIC-PLANE doc: the router is traffic to a
+> held model capacity, not a bypass of the capacity model. Admission (§5.6) is
+> traffic-plane admission behind the dispatch address; the metering ledger
+> (§5.7) is this plane's provenance record per 35 §8.
+
 ## 1. Summary
 
 A standalone Rust service that owns every inference request crossing the
@@ -235,6 +241,9 @@ Replica-side requirement: every vLLM replica MUST be configured with abort
 support enabled. Not optional — part of the replica contract.
 
 ### 5.6 Admission control
+
+*This is the traffic-plane half of admission; the allocation plane only holds
+(35 §3).*
 
 Two independent limits, both enforced before a request reaches a replica:
 

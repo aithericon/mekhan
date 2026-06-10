@@ -169,8 +169,8 @@ pub struct ModelAutoscalePolicy {
     /// empty zone places on any runner.
     pub residency_zone: String,
     /// One of `manual` | `scale_to_zero` | `keep_warm`. Plain String (matches the
-    /// `Capacity.liveness`/`dispatch` convention) — validated service-side, not by
-    /// a DB/schema enum.
+    /// `Capacity.liveness`/`acceptance` convention) — validated service-side, not
+    /// by a DB/schema enum.
     pub mode: String,
     /// Target number of registered runners to spread this model across. The
     /// placement controller loads the model onto up to this many in-zone runners.
@@ -575,11 +575,15 @@ pub struct ContainerImage {
 /// vocabulary on the wire:
 ///
 /// - `liveness ∈ { competing_consumer, seeded, presence, lease }`
-/// - `dispatch ∈ { pull, push }`
-/// - `exclusivity ∈ { hold, consume }`
+/// - `acceptance ∈ { auto, consent }` (the capacity-side half of bilateral
+///   eligibility, doc 35 §4; `policy` is documented-future, not a value)
 /// - `capacity_kind ∈ { fixed, presence_driven, elastic }` (+ `capacity_amount`
 ///   for `fixed`)
 /// - `eligibility ∈ { partition, predicate }`
+///
+/// The old `dispatch` (pull/push/offer) and `exclusivity` (hold/consume) axes
+/// are DELETED (doc 35 §2/§3): pull-vs-push derives from the backend, and
+/// quota/rate admission is a traffic-plane property behind the address.
 ///
 /// `datacenter` (above) is a sibling contended-capacity kind that dispatches
 /// through the same authority via locked lease axes — it stays a typed kind for
@@ -595,12 +599,10 @@ pub struct Capacity {
     /// `presence` / `lease`. Validated service-side against
     /// `models::capacity::Liveness`.
     pub liveness: String,
-    /// How work reaches it: `pull` (broker-balanced queue) or `push` (matched
-    /// grant to an inbox).
-    pub dispatch: String,
-    /// `hold` (claim → grant → release) or `consume` (quota debit; accepted but
-    /// not yet dispatchable this slice).
-    pub exclusivity: String,
+    /// The capacity-side half of bilateral eligibility: `auto` (acceptance is
+    /// always true) or `consent` (a live unit binds a parked offer at claim
+    /// time). Validated service-side against `models::capacity::Acceptance`.
+    pub acceptance: String,
     /// `fixed` (configured `capacity_amount`), `presence_driven` (emergent), or
     /// `elastic` (scheduler-granted).
     pub capacity_kind: String,

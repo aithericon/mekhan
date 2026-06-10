@@ -69,8 +69,7 @@ SELECT
     'aithericon/resources/' || s.workspace_id::text || '/' || s.id::text || '/v1',
     jsonb_build_object(
         'liveness',        'competing_consumer',
-        'dispatch',        'pull',
-        'exclusivity',     'hold',
+        'acceptance',      'auto',
         'capacity_kind',   'fixed',
         'capacity_amount', 1,
         'eligibility',     'partition'

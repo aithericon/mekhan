@@ -321,9 +321,13 @@
 	// no declared channels (the Channels section then degrades to static).
 	const drawerChannelRuntime = $derived.by<Record<string, ChannelRuntime> | null>(() => {
 		void markingTick;
-		// `channels` lives only on the `automated_step` arm of WorkflowNodeData.
+		// `channels` lives on the channel-carrying arms of WorkflowNodeData:
+		// automated_step plus the streaming endpoint nodes (stream_source/sink).
+		const d = drawerNode?.data;
 		const decl =
-			drawerNode?.data?.type === 'automated_step' ? (drawerNode.data.channels ?? []) : [];
+			d?.type === 'automated_step' || d?.type === 'stream_source' || d?.type === 'stream_sink'
+				? (d.channels ?? [])
+				: [];
 		if (decl.length === 0) return null;
 		const out: Record<string, ChannelRuntime> = {};
 		for (const ch of decl) out[ch.name] = channelRuntimeFor(marking, drawerNode!.id, ch.name);
@@ -342,8 +346,10 @@
 		void executions;
 		// `isTerminal` is stamped on each feed so the widget freezes its end-state
 		// (last frame held, tap + cap slot released) once the run finishes even if
-		// it never observed an explicit channel `close` token.
-		return deriveEdgeFeeds(graph, nodesById, executionsByNode, marking, isTerminal);
+		// it never observed an explicit channel `close` token. `instanceId` lets
+		// stream_source producers derive their deterministic execution id
+		// (`st-<instance>-<node>` — an ingress endpoint has no step execution).
+		return deriveEdgeFeeds(graph, nodesById, executionsByNode, marking, isTerminal, instanceId);
 	});
 	provideEdgeFeeds((edgeId: string) => edgeFeeds.get(edgeId) ?? null);
 

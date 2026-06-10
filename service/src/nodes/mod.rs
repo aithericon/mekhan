@@ -41,6 +41,8 @@ pub mod phase_update;
 pub mod progress_update;
 pub mod scope;
 pub mod start;
+pub mod stream_sink;
+pub mod stream_source;
 pub mod sub_workflow;
 pub mod timeout;
 pub mod trigger;
@@ -171,6 +173,8 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &progress_update::PROGRESS_UPDATE_DECL,
     &scope::SCOPE_DECL,
     &start::START_DECL,
+    &stream_sink::STREAM_SINK_DECL,
+    &stream_source::STREAM_SOURCE_DECL,
     &sub_workflow::SUB_WORKFLOW_DECL,
     &timeout::TIMEOUT_DECL,
     &trigger::TRIGGER_DECL,
@@ -204,6 +208,8 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Timeout { .. } => "timeout",
         WorkflowNodeData::Trigger { .. } => "trigger",
         WorkflowNodeData::SubWorkflow { .. } => "sub_workflow",
+        WorkflowNodeData::StreamSource { .. } => "stream_source",
+        WorkflowNodeData::StreamSink { .. } => "stream_sink",
     };
     NODES.iter().copied().find(|d| d.wire_name == tag)
 }
@@ -257,7 +263,9 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }
-        | WorkflowNodeData::SubWorkflow { .. } => vec![],
+        | WorkflowNodeData::SubWorkflow { .. }
+        | WorkflowNodeData::StreamSource { .. }
+        | WorkflowNodeData::StreamSink { .. } => vec![],
     };
     raw.into_iter().filter(|s| !s.trim().is_empty()).collect()
 }
@@ -842,6 +850,30 @@ mod tests {
                 requirements: None,
                 asset_bindings: Vec::new(),
             },
+            // Structural rule (validate hook): channel cardinality/direction/
+            // transport + edge constraints (WI-2).
+            WorkflowNodeData::StreamSource {
+                label: "ss".to_string(),
+                description: None,
+                channels: vec![crate::models::template::Channel {
+                    name: "events".to_string(),
+                    direction: crate::models::template::ChannelDirection::Out,
+                    plane: crate::models::template::ChannelPlane::Control,
+                    element: crate::models::template::ElementType::Any,
+                    transport: Default::default(),
+                }],
+            },
+            WorkflowNodeData::StreamSink {
+                label: "sk".to_string(),
+                description: None,
+                channels: vec![crate::models::template::Channel {
+                    name: "events".to_string(),
+                    direction: crate::models::template::ChannelDirection::In,
+                    plane: crate::models::template::ChannelPlane::Control,
+                    element: crate::models::template::ElementType::Any,
+                    transport: Default::default(),
+                }],
+            },
             // Rhai-bearing only (no structural validate hook — covered by
             // guard_rhai_sources / validate_guards):
             WorkflowNodeData::End {
@@ -898,6 +930,8 @@ mod tests {
             "progress_update",
             "scope",
             "start",
+            "stream_sink",
+            "stream_source",
             "sub_workflow",
             "timeout",
             "trigger",

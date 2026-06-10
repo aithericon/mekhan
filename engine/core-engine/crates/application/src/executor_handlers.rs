@@ -249,84 +249,15 @@ impl EffectHandler for ExecutorCancelHandler {
     }
 }
 
-/// Effect handler that feeds a data chunk into a running reducer job.
-///
-/// Reads `execution_id`, `value`, `sequence`, and `is_eof` from the input token
-/// and calls `client.feed_chunk()`.
-pub struct ExecutorStreamFeedHandler {
-    client: Arc<dyn ExecutorClient>,
-}
-
-impl ExecutorStreamFeedHandler {
-    pub fn new(client: Arc<dyn ExecutorClient>) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait::async_trait]
-impl EffectHandler for ExecutorStreamFeedHandler {
-    async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
-        // Find any input token — there's only one.
-        let data = input.inputs.values().next().ok_or_else(|| {
-            EffectError::Fatal("ExecutorStreamFeedHandler requires an input".into())
-        })?;
-
-        let execution_id = data
-            .get("execution_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                EffectError::Fatal("Missing execution_id in stream feed input".to_string())
-            })?;
-
-        // `is_eof` defaults to false.
-        let is_eof = data
-            .get("is_eof")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Value is required unless is_eof is true.
-        let value = data.get("value").cloned().unwrap_or(JsonValue::Null);
-        if !is_eof && value.is_null() {
-            return Err(EffectError::Fatal(
-                "Missing value in stream feed input".to_string(),
-            ));
-        }
-
-        // Sequence is required.
-        let sequence = data
-            .get("sequence")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| {
-                EffectError::Fatal("Missing sequence in stream feed input".to_string())
-            })?;
-
-        self.client
-            .feed_chunk(execution_id, value, sequence, is_eof)
-            .await
-            .map_err(|e| EffectError::ExecutionFailed(e.to_string()))?;
-
-        Ok(EffectOutput {
-            tokens: HashMap::new(), // No output token needed
-            result: serde_json::json!({ "fed": true }),
-        })
-    }
-
-    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {
-        // Stateless
-    }
-
-    fn name(&self) -> &str {
-        "executor_stream_feed"
-    }
-}
-
 /// Effect handler that deposits a dynamically-emitted control token into the
 /// statically-declared channel place it names.
 ///
 /// ## Where the token comes from
 ///
-/// A running executor job emits `signal` / `scatter` control tokens mid-execution
-/// (the docs/25 streaming-channels primitive). The worker publishes each emit as
+/// A running executor job emits `open` / `item` / `close` channel control tokens
+/// mid-execution (the docs/25 streaming-channels primitive; a consumer-side
+/// `join` barrier sizes itself on the episode's `close.count`). The worker
+/// publishes each emit as
 /// an executor event to NATS; the `ExecutorWatcher` routes it — via the job's
 /// `event_routes` (the `control_emit` event category) — to a generic per-node
 /// control inbox signal place. A transition draining that inbox carries the
@@ -625,20 +556,6 @@ mod tests {
                 Err(ExecutorError::CancellationFailed(
                     "mock failure".to_string(),
                 ))
-            } else {
-                Ok(())
-            }
-        }
-
-        async fn feed_chunk(
-            &self,
-            _execution_id: &str,
-            _value: serde_json::Value,
-            _sequence: u64,
-            _is_eof: bool,
-        ) -> Result<(), ExecutorError> {
-            if self.should_fail.load(Ordering::Relaxed) {
-                Err(ExecutorError::Fatal("mock failure".to_string()))
             } else {
                 Ok(())
             }

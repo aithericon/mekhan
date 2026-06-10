@@ -537,10 +537,10 @@ mod tests {
     #[test]
     fn derive_json_schema_mode() {
         // Note: schema property iteration order follows `serde_json::Map`'s
-        // (alphabetical) ordering since this workspace does not enable
-        // `serde_json/preserve_order`. Schema-property ports come out
-        // alphabetically (`ok`, `score`, `summary`), then the metadata
-        // tail in fixed order.
+        // ordering. This workspace builds with `serde_json/preserve_order`
+        // (enabled transitively by `zarrs`), so schema-property ports come
+        // out in declaration order (`summary`, `score`, `ok`), then the
+        // metadata tail in fixed order.
         let cfg = json!({
             "response_format": {
                 "type": "json_schema",
@@ -559,7 +559,7 @@ mod tests {
         let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
             names,
-            ["ok", "score", "summary", "usage", "finish_reason", "model"]
+            ["summary", "score", "ok", "usage", "finish_reason", "model"]
         );
         let summary = port.fields.iter().find(|f| f.name == "summary").unwrap();
         assert_eq!(summary.kind, FieldKind::Text);
