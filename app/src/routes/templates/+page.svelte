@@ -320,25 +320,26 @@
 	onMount(loadFirst);
 </script>
 
-<div class="flex h-full">
-	<TemplatesFiltersSidebar
-		folderId={folderFilter}
-		recursive={recursiveFilter}
-		tag={tagFilter}
-		onChange={applyFilters}
-	/>
-	<div class="min-w-0 flex-1 overflow-hidden">
-	<PageShell testid="templates-page">
-		{#snippet band()}
-			<PageHeader title="Templates" subtitle="Create and manage workflow templates">
-				{#snippet actions()}
-					<Button data-testid="btn-create-template" onclick={handleCreate}>
-						<Plus class="size-4" />
-						New Template
-					</Button>
-				{/snippet}
-			</PageHeader>
-		{/snippet}
+<PageShell testid="templates-page">
+	{#snippet band()}
+		<PageHeader title="Templates" subtitle="Create and manage workflow templates">
+			{#snippet actions()}
+				<Button data-testid="btn-create-template" onclick={handleCreate}>
+					<Plus class="size-4" />
+					New Template
+				</Button>
+			{/snippet}
+		</PageHeader>
+	{/snippet}
+
+	{#snippet sidebar()}
+		<TemplatesFiltersSidebar
+			folderId={folderFilter}
+			recursive={recursiveFilter}
+			tag={tagFilter}
+			onChange={applyFilters}
+		/>
+	{/snippet}
 
 		{#if error}
 			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -590,8 +591,6 @@
 			{/if}
 		{/if}
 	</PageShell>
-	</div>
-</div>
 
 <CreateInstanceDialog
 	bind:open={dialogOpen}

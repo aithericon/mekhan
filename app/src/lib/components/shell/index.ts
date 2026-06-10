@@ -5,4 +5,5 @@
 export { default as PageShell, type PageWidth } from './PageShell.svelte';
 export { default as PageHeader, type PageIcon } from './PageHeader.svelte';
 export { default as PageTabs, type PageTab } from './PageTabs.svelte';
+export { default as SideRail } from './SideRail.svelte';
 export { default as FilterPills, type FilterPill } from './FilterPills.svelte';

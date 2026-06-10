@@ -12,7 +12,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Tabs from '$lib/components/ui/tabs';
-	import { PageShell, PageHeader } from '$lib/components/shell';
+	import { PageShell, PageHeader, SideRail } from '$lib/components/shell';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 	import {
 		listFolders,
@@ -253,40 +253,23 @@
 	</button>
 {/snippet}
 
-<!-- Full-bleed browser shell: hand-rolled band (same anatomy/tokens as
-     PageShell's band variant) over a two-pane body — tree sidebar + detail
-     pane, each owning its own scroll. -->
-<PageShell width="bleed" testid="folders-index">
-	<div class="flex h-full flex-col">
-		<!-- Browser page: band content sits flush left (no 6xl centering) so the
-		     header lines up with the tree pane below it. -->
-		<div class="shrink-0 border-b border-border bg-card px-6 pt-5 pb-4">
-			<div class="[&>header]:mb-0">
-				<PageHeader title="Folders">
-					<p class="mt-1 text-sm text-muted-foreground">
-						Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
-						with a runnable contract for every published template in its subtree, plus a
-						dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
-							Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
-					</p>
-				</PageHeader>
-			</div>
-		</div>
+<!-- Sidebar-page anatomy via the shell (same as /templates): pinned band
+     flush left above the rail, SideRail tree, scrolling detail body. -->
+<PageShell width="full" testid="folders-index">
+	{#snippet band()}
+		<PageHeader title="Folders">
+			<p class="mt-1 text-sm text-muted-foreground">
+				Organize templates into a hierarchy. Each folder exposes its own OpenAPI bundle
+				with a runnable contract for every published template in its subtree, plus a
+				dedicated endpoint per Manual/Webhook trigger.{#if workspaces.active}
+					Workspace: <span class="font-medium">{workspaces.active.display_name}</span>.{/if}
+			</p>
+		</PageHeader>
+	{/snippet}
 
-		{#if !workspaceId}
-			<div class="m-6 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-				No active workspace. Pick one from the workspace switcher first.
-			</div>
-		{:else if loading}
-			<p class="m-6 text-sm text-muted-foreground">Loading…</p>
-		{:else}
-			<div class="flex min-h-0 flex-1">
-				<!-- Tree -->
-				<aside
-					class="flex w-72 shrink-0 flex-col border-r border-border bg-card/30"
-					data-testid="folders-tree-panel"
-				>
-					<div class="shrink-0 border-b border-border/60 p-2">
+	{#snippet sidebar()}
+		<SideRail testid="folders-tree-panel">
+			<div class="border-b border-border/60 p-2">
 						{#if createOpen}
 							<form onsubmit={handleCreate} class="space-y-2 p-1">
 								<Input
@@ -346,25 +329,32 @@
 								<Plus class="size-4" /> New folder
 							</Button>
 						{/if}
-					</div>
-					<div class="min-h-0 flex-1 overflow-y-auto p-3">
-						<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
-					</div>
-				</aside>
+			</div>
+			<div class="p-3">
+				<FolderTree {folders} {selectedId} onSelect={selectFolder} {actions} />
+			</div>
+		</SideRail>
+	{/snippet}
 
-				<!-- Detail -->
-				<section class="min-w-0 flex-1 overflow-y-auto" data-testid="folder-detail">
-					{#if error}
-						<div class="mx-6 mt-6 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-							{error}
-						</div>
-					{/if}
-					{#if !selected}
-						<div class="flex h-full items-center justify-center py-12 text-center text-sm text-muted-foreground">
-							Select a folder from the tree to see its API contract, or create one.
-						</div>
-					{:else}
-						<div class="space-y-4 px-6 py-6">
+	{#if !workspaceId}
+		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+			No active workspace. Pick one from the workspace switcher first.
+		</div>
+	{:else if loading}
+		<p class="text-sm text-muted-foreground">Loading…</p>
+	{:else}
+		<div data-testid="folder-detail">
+			{#if error}
+				<div class="mb-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+					{error}
+				</div>
+			{/if}
+			{#if !selected}
+				<div class="py-16 text-center text-sm text-muted-foreground">
+					Select a folder from the tree to see its API contract, or create one.
+				</div>
+			{:else}
+				<div class="space-y-4">
 							<div class="flex items-start justify-between gap-2">
 								<div class="min-w-0">
 									{#if renaming}
@@ -501,10 +491,8 @@
 									</Tabs.Content>
 								</Tabs.Root>
 							{/key}
-						</div>
-					{/if}
-				</section>
-			</div>
-		{/if}
-	</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 </PageShell>

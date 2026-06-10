@@ -6,6 +6,7 @@
 	import { listFolders, listWorkspaceTags, type Folder } from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
 	import FolderTree from '$lib/components/FolderTree.svelte';
+	import { SideRail } from '$lib/components/shell';
 	import ManageFoldersDialog from '$lib/components/templates/ManageFoldersDialog.svelte';
 
 	interface Props {
@@ -60,7 +61,7 @@
 	}
 </script>
 
-<aside class="w-60 shrink-0 border-r border-border bg-card/30" data-testid="templates-filters-sidebar">
+<SideRail testid="templates-filters-sidebar">
 	<div class="space-y-6 p-4">
 		<section>
 			<div class="mb-2 flex items-center justify-between gap-2">
@@ -124,6 +125,6 @@
 			<div class="text-sm text-muted-foreground">Loading filters…</div>
 		{/if}
 	</div>
-</aside>
+</SideRail>
 
 <ManageFoldersDialog bind:open={manageOpen} onChanged={refreshFilters} />
