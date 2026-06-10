@@ -258,6 +258,13 @@
 		}
 	}
 
+	function handleUpdateEdge(edgeId: string, patch: { join?: 'gather' | null }) {
+		// Sparse patch — only act on keys that are actually present.
+		if ('join' in patch) {
+			binding.updateEdgeJoin(edgeId, patch.join ?? null);
+		}
+	}
+
 	function handleNodeSelect(nodeId: string | null) {
 		selectedNodeId = nodeId;
 	}
@@ -385,6 +392,7 @@
 				onResizeNodes={handleResizeNodes}
 				onAddEdge={handleAddEdge}
 				onRemoveEdges={handleRemoveEdges}
+				onUpdateEdge={handleUpdateEdge}
 			/>
 
 			{#if selectedNodeData && nodePropertyPanelModule}

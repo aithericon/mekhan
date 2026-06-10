@@ -54,6 +54,29 @@ const TIMEOUT_COLOR = '#f59e0b';
 const DATA_CHANNEL_COLOR = '#f59e0b';
 const CONTROL_CHANNEL_COLOR = '#a855f7';
 
+/** Minimal declared-channel shape (docs/25) — name doubles as the handle id. */
+export type LaneChannel = { name: string; plane: string };
+
+/**
+ * Resolve the streaming Channel an edge leaves through: the handle id of a
+ * channel handle IS the channel name, so match `sourceHandle` back into the
+ * source node's declared `channels`. Single source of truth for "which channel
+ * does this edge tap" — used by the lane coloring below AND by the canvas'
+ * `toFlowEdges` (which stashes the plane on edge data for the join chip), so
+ * the two can't drift. Returns `undefined` for non-channel handles or when the
+ * node declares no channels (`channels` lives only on the automated-step
+ * variant of the node-data union).
+ */
+export function channelForSourceHandle(
+	source: LaneNode | undefined,
+	sourceHandle: string | null | undefined
+): LaneChannel | undefined {
+	if (!source || !sourceHandle) return undefined;
+	const channels = (source.data as { channels?: LaneChannel[] } | undefined)?.channels;
+	if (!Array.isArray(channels)) return undefined;
+	return channels.find((c) => c.name === sourceHandle);
+}
+
 /**
  * The base CSS color of the port an edge leaves from. Returns a `var(--node-*)`
  * reference for standard ports (so it tracks the theme), a hex literal for the
@@ -70,12 +93,8 @@ export function edgeLaneColor(
 	if (source.type === 'timeout' && sourceHandle === 'timeout') return TIMEOUT_COLOR;
 	// Streaming-channel handle: the handle id is the channel name. Match it back
 	// to the declared channel to recover its plane (mirrors `channelStyle`).
-	// `channels` lives only on the automated-step variant of the node-data union.
-	const channels = (source.data as { channels?: { name: string; plane: string }[] }).channels;
-	if (sourceHandle && Array.isArray(channels)) {
-		const ch = channels.find((c) => c.name === sourceHandle);
-		if (ch) return ch.plane === 'data' ? DATA_CHANNEL_COLOR : CONTROL_CHANNEL_COLOR;
-	}
+	const ch = channelForSourceHandle(source, sourceHandle);
+	if (ch) return ch.plane === 'data' ? DATA_CHANNEL_COLOR : CONTROL_CHANNEL_COLOR;
 	return `var(${NODE_COLOR_VAR[source.type ?? ''] ?? '--border'})`;
 }
 
