@@ -68,6 +68,71 @@ fn validate_net_id(net_id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Is this a mekhan-managed WORKFLOW INSTANCE net (`mekhan-<instance_id>`), as
+/// opposed to an INFRASTRUCTURE net (`pool-*`, `staging-*`, `materialize-*`,
+/// `model-replica-*`, …)? Every workflow instance deploys as `mekhan-{id}`
+/// (see `format!("mekhan-{instance_id}")` throughout the control plane), so the
+/// prefix is the reliable classifier. Bulk-kill targets only these by default
+/// — killing infra nets out from under the platform (a pool net = a runner's
+/// admission gate; a staging net = an in-flight publish) is the catastrophic
+/// case the default guards against.
+fn is_workflow_instance_net(net_id: &str) -> bool {
+    net_id.starts_with("mekhan-")
+}
+
+/// Normalize an engine `status` field (a bare `"running"` string, tolerant of
+/// an older enum-object shape) to a plain status string.
+fn status_str(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string().trim_matches('"').to_string(),
+    }
+}
+
+/// A net the engine still treats as live — its event log is authoritative
+/// state, so it must never be purged (and bulk-purge skips it).
+fn is_active_status(status: &str) -> bool {
+    status == "running" || status == "created"
+}
+
+/// Fetch + deserialize the engine's `/api/nets/metadata` population. Shared by
+/// the overview, the single + bulk purge guards, and the terminal sweep.
+async fn fetch_engine_metas(state: &AppState) -> Result<Vec<EngineNetMeta>, ApiError> {
+    let raw = state
+        .petri
+        .list_nets_metadata()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("engine metadata: {e}")))?;
+    serde_json::from_value(raw).map_err(|e| {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("engine metadata shape: {e}"),
+        )
+    })
+}
+
+/// Purge a single net's `petri.events.{id}.>` + `petri.signal.{id}.>` subjects
+/// from an open PETRI_GLOBAL handle; returns the message count removed. Caller
+/// owns the active-net guard (an active net's log must not be purged).
+async fn purge_net_subjects(
+    stream: &async_nats::jetstream::stream::Stream,
+    net_id: &str,
+) -> Result<u64, String> {
+    let mut purged: u64 = 0;
+    for subject in [
+        format!("petri.events.{net_id}.>"),
+        format!("petri.signal.{net_id}.>"),
+    ] {
+        let resp = stream
+            .purge()
+            .filter(&subject)
+            .await
+            .map_err(|e| format!("purge {subject}: {e}"))?;
+        purged += resp.purged;
+    }
+    Ok(purged)
+}
+
 /// One row of the admin net overview.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdminNetRow {
@@ -297,23 +362,10 @@ pub async fn purge_admin_net_events(
     // Active-net guard. The engine is authoritative for liveness; only its
     // metadata can say "safe to purge". Engine-unreachable → refuse (fail
     // closed): purging blind could destroy a running net's event log.
-    let raw = state
-        .petri
-        .list_nets_metadata()
-        .await
-        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("engine metadata: {e}")))?;
-    let metas: Vec<EngineNetMeta> = serde_json::from_value(raw).map_err(|e| {
-        ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("engine metadata shape: {e}"),
-        )
-    })?;
+    let metas = fetch_engine_metas(&state).await?;
     if let Some(meta) = metas.iter().find(|m| m.net_id == net_id) {
-        let status = match &meta.status {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string().trim_matches('"').to_string(),
-        };
-        if status == "running" || status == "created" {
+        let status = status_str(&meta.status);
+        if is_active_status(&status) {
             return Err(ApiError::conflict(format!(
                 "net {net_id} is {status} — terminate it before purging its events"
             )));
@@ -327,18 +379,9 @@ pub async fn purge_admin_net_events(
         .await
         .map_err(|e| ApiError::internal(format!("PETRI_GLOBAL: {e}")))?;
 
-    let mut purged: u64 = 0;
-    for subject in [
-        format!("petri.events.{net_id}.>"),
-        format!("petri.signal.{net_id}.>"),
-    ] {
-        let resp = stream
-            .purge()
-            .filter(&subject)
-            .await
-            .map_err(|e| ApiError::internal(format!("purge {subject}: {e}")))?;
-        purged += resp.purged;
-    }
+    let purged = purge_net_subjects(&stream, &net_id)
+        .await
+        .map_err(ApiError::internal)?;
 
     tracing::info!(
         net_id = %net_id,
@@ -348,5 +391,190 @@ pub async fn purge_admin_net_events(
     );
     Ok(Json(PurgeEventsResponse {
         purged_messages: purged,
+    }))
+}
+
+// ── Bulk operations ──────────────────────────────────────────────────────────
+
+/// Request body for `POST /api/v1/admin/nets/bulk-kill`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BulkKillRequest {
+    /// Explicit net ids to terminate. The client computes the set (typically
+    /// every active net in the current view) so the operation is auditable and
+    /// the server never guesses intent.
+    pub net_ids: Vec<String>,
+    /// Opt-in to also kill INFRASTRUCTURE nets (`pool-*`, `staging-*`, …). When
+    /// false (default), any non-`mekhan-` id in `net_ids` is SKIPPED, not
+    /// killed — the safe default that stops a "kill all" from cancelling the
+    /// pool/staging/materialize nets that keep the platform running.
+    #[serde(default)]
+    pub include_infrastructure: bool,
+}
+
+/// One net that a bulk op could not act on, with the reason.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BulkFailure {
+    pub net_id: String,
+    pub error: String,
+}
+
+/// Result of a bulk kill.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BulkKillResponse {
+    /// Nets successfully terminated (engine accepted the delete).
+    pub killed: Vec<String>,
+    /// Infrastructure nets skipped because `include_infrastructure` was false.
+    pub skipped_infrastructure: Vec<String>,
+    /// Nets the engine failed to terminate (per-net errors don't abort the run).
+    pub failed: Vec<BulkFailure>,
+}
+
+/// Result of a terminal-net purge sweep.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PurgeTerminalResponse {
+    /// How many terminal nets had their subjects purged.
+    pub nets_purged: u64,
+    /// Total messages removed from PETRI_GLOBAL across all purged nets.
+    pub total_messages: u64,
+    /// Nets the sweep failed to purge (per-net errors don't abort the run).
+    pub failed: Vec<BulkFailure>,
+}
+
+/// `POST /api/v1/admin/nets/bulk-kill` — kill many nets at once (admin).
+///
+/// Terminates each net in `net_ids` via the engine's terminate-with-cleanup,
+/// EXCEPT infrastructure (`non-mekhan-`) nets unless `include_infrastructure`
+/// is set — those are reported under `skipped_infrastructure`. Per-net failures
+/// are collected, not fatal, so one unreachable net doesn't abort the batch.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/nets/bulk-kill",
+    request_body = BulkKillRequest,
+    responses(
+        (status = 200, description = "Per-net kill outcome", body = BulkKillResponse),
+        (status = 400, description = "Invalid net id in the batch", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
+    ),
+    tag = "admin-nets",
+)]
+pub async fn bulk_kill_nets(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<BulkKillRequest>,
+) -> Result<Json<BulkKillResponse>, ApiError> {
+    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
+
+    // Validate every id up front so a malformed batch fails atomically (before
+    // we kill anything) rather than half-applying.
+    for net_id in &req.net_ids {
+        validate_net_id(net_id)?;
+    }
+
+    let mut killed = Vec::new();
+    let mut skipped_infrastructure = Vec::new();
+    let mut failed = Vec::new();
+
+    for net_id in req.net_ids {
+        if !is_workflow_instance_net(&net_id) && !req.include_infrastructure {
+            skipped_infrastructure.push(net_id);
+            continue;
+        }
+        match state.petri.delete_net(&net_id).await {
+            Ok(()) => killed.push(net_id),
+            Err(e) => failed.push(BulkFailure {
+                net_id,
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    tracing::info!(
+        killed = killed.len(),
+        skipped = skipped_infrastructure.len(),
+        failed = failed.len(),
+        include_infrastructure = req.include_infrastructure,
+        by = %user.subject,
+        "admin bulk kill-switch"
+    );
+    Ok(Json(BulkKillResponse {
+        killed,
+        skipped_infrastructure,
+        failed,
+    }))
+}
+
+/// `POST /api/v1/admin/nets/purge-terminal` — sweep every terminal net's
+/// events from PETRI_GLOBAL (admin).
+///
+/// Server-driven: snapshots the engine metadata, purges the event+signal
+/// subjects of every net whose status is NOT active (running/created), and
+/// reports the totals. Active nets are never touched — their log is
+/// authoritative state. The single-net `purge-events` endpoint remains for
+/// orphan event-streams whose net metadata is already gone (not enumerated
+/// here, since they have no metadata row).
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/nets/purge-terminal",
+    responses(
+        (status = 200, description = "Terminal nets swept", body = PurgeTerminalResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
+        (status = 502, description = "Engine unreachable", body = ErrorResponse),
+    ),
+    tag = "admin-nets",
+)]
+pub async fn purge_terminal_nets(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<PurgeTerminalResponse>, ApiError> {
+    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
+
+    let metas = fetch_engine_metas(&state).await?;
+    let stream = state
+        .nats
+        .jetstream()
+        .get_stream("PETRI_GLOBAL")
+        .await
+        .map_err(|e| ApiError::internal(format!("PETRI_GLOBAL: {e}")))?;
+
+    let mut nets_purged: u64 = 0;
+    let mut total_messages: u64 = 0;
+    let mut failed = Vec::new();
+
+    for meta in &metas {
+        if is_active_status(&status_str(&meta.status)) {
+            continue;
+        }
+        // Defensive: a metadata id should already be subject-safe, but the
+        // purge path interpolates it into a NATS filter — never skip the check.
+        if validate_net_id(&meta.net_id).is_err() {
+            continue;
+        }
+        match purge_net_subjects(&stream, &meta.net_id).await {
+            Ok(n) => {
+                nets_purged += 1;
+                total_messages += n;
+            }
+            Err(e) => failed.push(BulkFailure {
+                net_id: meta.net_id.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    tracing::info!(
+        nets_purged,
+        total_messages,
+        failed = failed.len(),
+        by = %user.subject,
+        "admin cleanup: terminal-net sweep"
+    );
+    Ok(Json(PurgeTerminalResponse {
+        nets_purged,
+        total_messages,
+        failed,
     }))
 }

@@ -151,6 +151,100 @@
         }
       }
     },
+    "/api/v1/admin/nets/bulk-kill": {
+      "post": {
+        "tags": [
+          "admin-nets"
+        ],
+        "summary": "`POST /api/v1/admin/nets/bulk-kill` — kill many nets at once (admin).",
+        "description": "Terminates each net in `net_ids` via the engine's terminate-with-cleanup,\nEXCEPT infrastructure (`non-mekhan-`) nets unless `include_infrastructure`\nis set — those are reported under `skipped_infrastructure`. Per-net failures\nare collected, not fatal, so one unreachable net doesn't abort the batch.",
+        "operationId": "bulk_kill_nets",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkKillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Per-net kill outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkKillResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid net id in the batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/nets/purge-terminal": {
+      "post": {
+        "tags": [
+          "admin-nets"
+        ],
+        "summary": "`POST /api/v1/admin/nets/purge-terminal` — sweep every terminal net's\nevents from PETRI_GLOBAL (admin).",
+        "description": "Server-driven: snapshots the engine metadata, purges the event+signal\nsubjects of every net whose status is NOT active (running/created), and\nreports the totals. Active nets are never touched — their log is\nauthoritative state. The single-net `purge-events` endpoint remains for\norphan event-streams whose net metadata is already gone (not enumerated\nhere, since they have no metadata row).",
+        "operationId": "purge_terminal_nets",
+        "responses": {
+          "200": {
+            "description": "Terminal nets swept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeTerminalResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/nets/{net_id}": {
       "delete": {
         "tags": [
@@ -13334,6 +13428,74 @@
           }
         }
       },
+      "BulkFailure": {
+        "type": "object",
+        "description": "One net that a bulk op could not act on, with the reason.",
+        "required": [
+          "net_id",
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "net_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BulkKillRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/admin/nets/bulk-kill`.",
+        "required": [
+          "net_ids"
+        ],
+        "properties": {
+          "include_infrastructure": {
+            "type": "boolean",
+            "description": "Opt-in to also kill INFRASTRUCTURE nets (`pool-*`, `staging-*`, …). When\nfalse (default), any non-`mekhan-` id in `net_ids` is SKIPPED, not\nkilled — the safe default that stops a \"kill all\" from cancelling the\npool/staging/materialize nets that keep the platform running."
+          },
+          "net_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Explicit net ids to terminate. The client computes the set (typically\nevery active net in the current view) so the operation is auditable and\nthe server never guesses intent."
+          }
+        }
+      },
+      "BulkKillResponse": {
+        "type": "object",
+        "description": "Result of a bulk kill.",
+        "required": [
+          "killed",
+          "skipped_infrastructure",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkFailure"
+            },
+            "description": "Nets the engine failed to terminate (per-net errors don't abort the run)."
+          },
+          "killed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Nets successfully terminated (engine accepted the delete)."
+          },
+          "skipped_infrastructure": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Infrastructure nets skipped because `include_infrastructure` was false."
+          }
+        }
+      },
       "CalloutSeverity": {
         "type": "string",
         "description": "Severity for callout blocks. Snake-case on the wire (`\"info\"`,\n`\"warning\"`, `\"error\"`, `\"success\"`) to keep the byte-for-byte shape that\nthe editor and human-task UI already produce/consume.",
@@ -23103,6 +23265,36 @@
             "type": "integer",
             "format": "int64",
             "description": "Total messages purged across `petri.events.{id}.>` and\n`petri.signal.{id}.>`.",
+            "minimum": 0
+          }
+        }
+      },
+      "PurgeTerminalResponse": {
+        "type": "object",
+        "description": "Result of a terminal-net purge sweep.",
+        "required": [
+          "nets_purged",
+          "total_messages",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkFailure"
+            },
+            "description": "Nets the sweep failed to purge (per-net errors don't abort the run)."
+          },
+          "nets_purged": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many terminal nets had their subjects purged.",
+            "minimum": 0
+          },
+          "total_messages": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total messages removed from PETRI_GLOBAL across all purged nets.",
             "minimum": 0
           }
         }
