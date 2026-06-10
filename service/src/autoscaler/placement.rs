@@ -52,7 +52,7 @@ use crate::models::model_replicas::{in_cooldown, status};
 use crate::models::runner::{ModelInterfaceKind, RunnerInterfaceCatalog};
 use crate::nats::MekhanNats;
 use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
-use crate::runners_presence::RunnerPresence;
+use crate::presence::RunnerPresence;
 
 use super::demand::DemandSource;
 

@@ -253,14 +253,14 @@ pub async fn my_enrollments(
     get,
     path = "/api/v1/human-presence",
     responses(
-        (status = 200, description = "Live human presence snapshot", body = [crate::human_presence::HumanPresenceSnapshot]),
+        (status = 200, description = "Live human presence snapshot", body = [crate::presence::HumanPresenceSnapshot]),
     ),
     tag = "roster",
 )]
 pub async fn human_presence(
     State(state): State<AppState>,
     user: AuthUser,
-) -> Result<Json<Vec<crate::human_presence::HumanPresenceSnapshot>>, ApiError> {
+) -> Result<Json<Vec<crate::presence::HumanPresenceSnapshot>>, ApiError> {
     let workspace_id = caller_workspace(&user);
     // Human capacities are `resources` rows; scope the snapshot to those in the
     // caller's workspace.

@@ -80,7 +80,7 @@ fn is_safe_group(group: &str) -> bool {
 /// `model_serving_group::resolve_model_serving_group_uuid`). The
 /// axes live in the latest version's `public_config`, so this joins `resources`
 /// → `resource_versions` at `latest_version` and matches them there —
-/// the same lookup `runners_presence::resolve_pool_net_id` uses, so the gate and
+/// the same lookup `presence::runners::resolve_pool_net_id` uses, so the gate and
 /// the runtime admission agree on what "the group exists" means.
 async fn runner_group_exists(
     db: &sqlx::PgPool,

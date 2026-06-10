@@ -55,7 +55,7 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 /// safe: a runner UUID belongs to one workspace, and each workspace's
 /// model-serving group shares the same `model_serving` alias.
 async fn model_serving_members(
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
 ) -> HashSet<Uuid> {
     runner_presence
         .pool_membership()
@@ -78,7 +78,7 @@ async fn model_serving_members(
 /// the loaded-set live half and the autoscaler's `observed_count` cannot drift.
 pub(crate) async fn serving_runner_counts(
     db: &sqlx::PgPool,
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> HashMap<String, u32> {
     // Live runners: the in-memory presence snapshot (the actual pool-capacity
@@ -157,7 +157,7 @@ fn fold_serving_inventory(
 /// catalog row → skipped.
 pub(crate) async fn serving_runner_inventory(
     db: &sqlx::PgPool,
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> HashMap<Uuid, Vec<crate::models::runner::ModelEntry>> {
     // Identity = membership in the `model_serving` runner group (∩ present), not
@@ -181,7 +181,7 @@ pub(crate) async fn serving_runner_inventory(
 /// load" set the `/fleet/engines` read excludes resident bases from.
 pub(crate) async fn serving_runner_pulled(
     db: &sqlx::PgPool,
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> HashMap<Uuid, Vec<String>> {
     // Identity = membership in the `model_serving` runner group (∩ present), not
@@ -212,7 +212,7 @@ pub(crate) async fn serving_runner_pulled(
 /// catalog row is dropped.
 pub(crate) async fn serving_runner_catalogs(
     db: &sqlx::PgPool,
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
     workspace_id: Uuid,
 ) -> Vec<(Uuid, RunnerInterfaceCatalog)> {
     // Identity = membership in the `model_serving` runner group (∩ present), not
@@ -246,7 +246,7 @@ pub(crate) async fn serving_runner_catalogs(
 /// in-cluster data-plane facts (base_urls + model ids) it already holds to route.
 pub(crate) async fn model_serving_runners(
     db: &sqlx::PgPool,
-    runner_presence: &crate::runners_presence::RunnerPresence,
+    runner_presence: &crate::presence::RunnerPresence,
 ) -> Vec<crate::models::runner::ModelServingRunner> {
     // Identity = membership in the `model_serving` runner group (∩ present), not
     // a `base_url` sniff. A runner that advertises an endpoint but never enrolled

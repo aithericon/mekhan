@@ -7,7 +7,7 @@
 //!   to `worker.*.presence` with `{ worker_id, backends }`; this module owns
 //!   their subscriber + TTL sweep (the machinery absorbed from
 //!   `worker_coverage`). `caps` = advertised `ExecutorJob` backend wire-names.
-//! - **Runners** — enrolled instruments. [`crate::runners_presence`] owns their
+//! - **Runners** — enrolled instruments. [`crate::presence::runners`] owns their
 //!   subscriber/sweep + the control-binding (pool-net inject/expire); it MIRRORS
 //!   the runner's advisory facet (its self-reported `backends`) into here via
 //!   [`FleetLiveness::upsert_runner`] / [`FleetLiveness::drop_runner`]. This
@@ -90,7 +90,7 @@ pub enum CapacityKind {
     /// TTL sweep own its lifecycle).
     Worker,
     /// Enrolled instrument runner (lifecycle owned by
-    /// [`crate::runners_presence`]; only its advisory facet is mirrored here).
+    /// [`crate::presence::runners`]; only its advisory facet is mirrored here).
     Runner,
 }
 
@@ -215,7 +215,7 @@ impl FleetLiveness {
     }
 
     /// Mirror a runner's advisory facet into the registry (called from
-    /// [`crate::runners_presence`] on every present heartbeat). `id` is the
+    /// [`crate::presence::runners`] on every present heartbeat). `id` is the
     /// runner UUID as a string; `backends` is its self-reported presence set;
     /// `concurrency` is its self-reported C (P3). Upserts under the `Runner` key,
     /// refreshing `last_seen`. This is telemetry only — it has NO bearing on the
@@ -233,7 +233,7 @@ impl FleetLiveness {
         );
     }
 
-    /// Drop a runner's advisory mirror (called from [`crate::runners_presence`]
+    /// Drop a runner's advisory mirror (called from [`crate::presence::runners`]
     /// when its OWN sweep marks the runner absent). The runner controller owns
     /// runner lifecycle, so this module's TTL sweep never reaps `Runner` entries
     /// — they leave only through this call. A no-op if the runner was never
@@ -329,7 +329,7 @@ async fn start_worker_sweep(liveness: LivenessMap) {
 /// SHARED handle also stored in [`crate::AppState`] so the publish-time warning —
 /// and the runner controller's mirror writes — observe the very map these tasks
 /// mutate. The RUNNER facet is fed separately by
-/// [`crate::runners_presence::spawn_presence_controller`].
+/// [`crate::presence::spawn_presence_controller`].
 pub fn spawn_worker_liveness(liveness: FleetLiveness, nats: MekhanNats) {
     tokio::spawn(start_worker_subscriber(nats, liveness.map().clone()));
     tokio::spawn(start_worker_sweep(liveness.map().clone()));

@@ -25,7 +25,7 @@ use mekhan_service::autoscaler::demand::DemandSource;
 use mekhan_service::autoscaler::placement::reconcile_placement;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::runner_commands::{LoadTarget, ModelCommand};
-use mekhan_service::runners_presence::RunnerPresence;
+use mekhan_service::presence::RunnerPresence;
 
 use common::model_runner_fixture::{
     read_replica_status, seed_model_policy, seed_model_runner, SeedModel, SeedPolicySpec,

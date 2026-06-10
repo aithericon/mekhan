@@ -14,7 +14,6 @@ pub mod demos;
 pub mod file_servers;
 pub mod fleet;
 pub mod handlers;
-pub mod human_presence;
 pub mod inventory;
 pub mod lifecycle;
 /// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic
@@ -32,12 +31,12 @@ pub mod nodes;
 pub mod observability;
 pub mod openapi;
 pub mod petri;
+pub mod presence;
 pub mod process;
 pub mod projections;
 pub mod query;
 pub mod runner_commands;
 pub mod runners_nats;
-pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
@@ -138,22 +137,22 @@ pub struct AppState {
     /// in-memory `PresenceMap`. The same map the Phase-3 subscriber/sweep tasks
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
-    pub runner_presence: crate::runners_presence::RunnerPresence,
+    pub runner_presence: crate::presence::RunnerPresence,
     /// Humans-as-a-capacity (docs/33 §7) — shared handle to the human presence
     /// controller's in-memory map. The same map the subscriber/sweep tasks
     /// mutate; the human analogue of `runner_presence`. A roster MEMBER's
     /// availability (not a daemon heartbeat) drives admission into the
     /// `pool-<capacity_id>` net, reusing the runner pool plumbing verbatim.
-    pub human_presence: crate::human_presence::HumanPresence,
+    pub human_presence: crate::presence::HumanPresence,
     /// Unified fleet-liveness registry (docs/23 §2; docs/24 S1) — the shared
     /// telemetry plane over BOTH the anonymous worker pool and the advisory
     /// facet of enrolled runners. Workers heartbeat on `worker.*.presence`
     /// (subscriber + TTL sweep owned by `crate::fleet`); runners mirror their
-    /// self-reported backends in from `crate::runners_presence` on each
+    /// self-reported backends in from `crate::presence::runners` on each
     /// heartbeat. Publish reads through it (`serves_backend`) to WARN (never
     /// fail) on a step's backend served by zero live capacities. Purely
     /// advisory — a dropped capacity NEVER reaps an instance (the runner control
-    /// binding in `runners_presence` is a separate plane).
+    /// binding in `presence::runners` is a separate plane).
     pub fleet: crate::fleet::FleetLiveness,
     /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
     /// records of every node-bound asset into the JSON envelope the publish

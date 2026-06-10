@@ -1,9 +1,9 @@
-//! Presence controller (Phase 3 — presence-lease pool capacity).
+//! Runner presence adapter (Phase 3 — presence-lease pool capacity).
 //!
 //! A `runner_group` resource is a capacity-LESS pool ([`crate::petri::presence_pool_net`]):
 //! its capacity is not a seeded count but is driven by runner **presence**. This
-//! module is mekhan's controller that turns the runner data-plane heartbeat into
-//! pool-net admission/reap:
+//! module is mekhan's adapter that turns the runner data-plane heartbeat into
+//! pool-net admission/reap (the shared substrate lives in [`super::core`]):
 //!
 //! 1. **SUBSCRIBE** to `runner.*.presence`. Each message is a liveness ping from
 //!    a runner's data plane (Phase 2 JWT already grants `runner.{id}.presence`).
@@ -51,6 +51,7 @@ use uuid::Uuid;
 
 use futures::StreamExt;
 
+use super::core::{self, ExpiredSlots, PoolInjection, PoolSignal};
 use crate::compiler::well_known;
 use crate::fleet::FleetLiveness;
 use crate::models::runner::{HostInfo, RunnerRow};
@@ -71,20 +72,10 @@ const SWEEP_INTERVAL_SECS: u64 = 5;
 /// [`DEFAULT_PRESENCE_TTL_SECS`]. A parse failure or non-positive value falls
 /// back to the default with a WARN so a typo can't silently disable reaping.
 fn presence_ttl() -> Duration {
-    match std::env::var("MEKHAN__RUNNERS__PRESENCE_TTL_SECS") {
-        Ok(raw) => match raw.parse::<u64>() {
-            Ok(n) if n > 0 => Duration::from_secs(n),
-            _ => {
-                tracing::warn!(
-                    raw = %raw,
-                    "MEKHAN__RUNNERS__PRESENCE_TTL_SECS is not a positive integer; \
-                     using default {DEFAULT_PRESENCE_TTL_SECS}s"
-                );
-                Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS)
-            }
-        },
-        Err(_) => Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS),
-    }
+    core::env_ttl_secs(
+        "MEKHAN__RUNNERS__PRESENCE_TTL_SECS",
+        DEFAULT_PRESENCE_TTL_SECS,
+    )
 }
 
 /// One tracked runner's presence state.
@@ -306,7 +297,7 @@ impl Default for RunnerPresence {
 /// version's `public_config`. The `acceptance` filter excludes `consent`
 /// (human-roster) pools — a heartbeating runner must never be admitted into a
 /// consent pool (humans enroll via `roster_members` and resolve their pool net
-/// by `capacity_id` directly in `human_presence`); mirrors
+/// by `capacity_id` directly in [`super::humans`]); mirrors
 /// `model_serving_group::resolve_model_serving_group_uuid`.
 /// The net id is then [`well_known::pool_net_id`] over that resource's id. Returns
 /// `None` (with a skip log at the call site) when the runner has no group alias,
@@ -355,19 +346,49 @@ async fn load_live_runner(db: &PgPool, runner_id: Uuid) -> Option<RunnerRow> {
     Some(row)
 }
 
-/// Inject ONE slot's `presence_acquire` token into the pool net's
-/// `presence_acquire` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_acquire`.
+/// Build the caller parts of ONE slot's `presence_acquire` injection (pure, so
+/// the envelope byte-shape is pinned in [`super::core`]'s tests).
 ///
-/// With C-unit concurrency (P3) the controller calls this once per slot
+/// With C-unit concurrency (P3) the controller injects once per slot
 /// (`slot = 0..C`): each token mints one distinct pool unit with
 /// `unit_id = "{runner_id}#{slot}"` (the granular per-slot identity that becomes
 /// an independently grantable lease) and the shared `runner_id` (the reap key —
-/// `t_reap_*` correlate on it). Wire shape is the engine's
+/// `t_reap_*` correlate on it). `token_color` carries the `{ unit_id, runner_id,
+/// executor_namespace, caps }` unit; `source_*` are informational, tagged so
+/// causality/tracing attributes the unit to the presence controller. `dedup_id`
+/// keys on the runner AND the slot (`presence-acquire:{runner_id}#{slot}`) so a
+/// redelivered acquire for a given slot is suppressed at the engine while the
+/// runner stays present — CRITICAL: keying on the runner alone would make the
+/// engine suppress all C-1 extra slots as duplicates and only ONE unit would
+/// ever mint.
+pub(crate) fn acquire_injection(
+    runner_id: Uuid,
+    slot: u32,
+    executor_namespace: &str,
+    caps: &serde_json::Value,
+) -> PoolInjection<'static> {
+    let unit_id = format!("{runner_id}#{slot}");
+    PoolInjection {
+        source_net_id: "mekhan-presence-controller",
+        source_place_name: "presence",
+        token_color: json!({
+            "unit_id": unit_id,
+            "runner_id": runner_id.to_string(),
+            "executor_namespace": executor_namespace,
+            "caps": caps,
+        }),
+        signal_key: format!("presence-acquire-{unit_id}"),
+        dedup_id: format!("presence-acquire:{unit_id}"),
+    }
+}
+
+/// Inject ONE slot's `presence_acquire` token into the pool net's
+/// `presence_acquire` bridge_in place via
+/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
 /// [`CrossNetTokenTransfer`] envelope (what the engine's global bridge listener
-/// deserializes): `token_color` carries the `{ unit_id, runner_id,
-/// executor_namespace, caps }` unit, and we set NO reply routing (acquire is
-/// one-way — the unit lives in the pool until granted/reaped).
+/// deserializes); we set NO reply routing (acquire is one-way — the unit lives
+/// in the pool until granted/reaped). See [`acquire_injection`] for the
+/// identity + dedup scheme.
 async fn inject_acquire(
     nats: &MekhanNats,
     pool_net_id: &str,
@@ -376,32 +397,25 @@ async fn inject_acquire(
     executor_namespace: &str,
     caps: &serde_json::Value,
 ) {
-    let subject = format!(
-        "petri.bridge.{pool_net_id}.{}",
-        well_known::POOL_PRESENCE_ACQUIRE_INBOX
-    );
-    let unit_id = format!("{runner_id}#{slot}");
-    // `CrossNetTokenTransfer` shape (engine `cross_net_bridge.rs`). source_* are
-    // informational; we tag them so causality/tracing attributes the unit to the
-    // presence controller. `dedup_id` keys on the runner AND the slot
-    // (`presence-acquire:{runner_id}#{slot}`) so a redelivered acquire for a
-    // given slot is suppressed at the engine while the runner stays present —
-    // CRITICAL: keying on the runner alone would make the engine suppress all
-    // C-1 extra slots as duplicates and only ONE unit would ever mint.
-    let envelope = json!({
-        "source_net_id": "mekhan-presence-controller",
-        "source_place_name": "presence",
-        "token_color": {
-            "unit_id": unit_id,
-            "runner_id": runner_id.to_string(),
-            "executor_namespace": executor_namespace,
-            "caps": caps,
-        },
-        "signal_key": format!("presence-acquire-{unit_id}"),
-        "timestamp": Utc::now().to_rfc3339(),
-        "dedup_id": format!("presence-acquire:{unit_id}"),
-    });
-    publish_jetstream(nats, &subject, &envelope, "presence acquire").await;
+    core::inject_bridge(
+        nats,
+        pool_net_id,
+        well_known::POOL_PRESENCE_ACQUIRE_INBOX,
+        acquire_injection(runner_id, slot, executor_namespace, caps),
+        "presence acquire",
+    )
+    .await;
+}
+
+/// Build the caller parts of a BARE `presence_expired { runner_id }` signal
+/// (pure, so the envelope byte-shape is pinned in [`super::core`]'s tests).
+/// `now_ms` is the emission stamp folded into the signal key.
+pub(crate) fn expire_signal(runner_id: Uuid, now_ms: i64) -> PoolSignal<'static> {
+    PoolSignal {
+        source: "presence",
+        signal_key: format!("presence-expire-{runner_id}-{now_ms}"),
+        payload: json!({ "runner_id": runner_id.to_string() }),
+    }
 }
 
 /// Inject a BARE `presence_expired { runner_id }` signal into the pool net's
@@ -412,88 +426,14 @@ async fn inject_acquire(
 /// reply routing — signals are injected routing-less; the "fail" routing for a
 /// held unit rides the HOLD, not this signal.
 async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, runner_id: Uuid) {
-    let subject = format!(
-        "petri.signal.{pool_net_id}.{}",
-        well_known::POOL_PRESENCE_EXPIRED_SIGNAL
-    );
-    let envelope = json!({
-        "source": "presence",
-        "signal_key": format!("presence-expire-{runner_id}-{}", Utc::now().timestamp_millis()),
-        "payload": { "runner_id": runner_id.to_string() },
-        "timestamp": Utc::now().to_rfc3339(),
-    });
-    publish_jetstream(nats, &subject, &envelope, "presence expire").await;
-}
-
-/// Inject a UNIT-INITIATED `presence_claim { grant_id, runner_id }` token into the
-/// pool net's `presence_claim` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_claim` (the `Acceptance::Consent` claim
-/// path, docs/33 + docs/35 §4).
-///
-/// A claim binds a parked offer to the claiming MEMBER (docs/34 §3): the offer
-/// net's `t_claim` correlates the unit on `runner_id` (= the member id), so the
-/// claim binds ANY free slot of that member rather than an exact `unit_id`.
-/// `t_claim` is first-claim-wins, so the offer token is consumed by the first
-/// claim and any subsequent claims for the same offer are implicitly rescinded.
-/// Wire shape mirrors [`inject_acquire`]'s [`CrossNetTokenTransfer`] envelope
-/// EXACTLY: `token_color` carries the `{ grant_id, runner_id }` claim, `source_*`
-/// tag the claim to the presence controller for causality/tracing, and `dedup_id`
-/// keys on the `grant_id` alone (`presence-claim:{grant_id}`) so a redelivered
-/// claim for the same offer is suppressed at the engine (a claim is per-offer, not
-/// per-unit-per-offer).
-// wired by the human claim handler in P3 (docs/34 §3)
-pub(crate) async fn inject_claim(
-    nats: &MekhanNats,
-    pool_net_id: &str,
-    grant_id: &str,
-    runner_id: &str,
-) {
-    let subject = format!(
-        "petri.bridge.{pool_net_id}.{}",
-        well_known::POOL_PRESENCE_CLAIM_INBOX
-    );
-    let envelope = json!({
-        "source_net_id": "mekhan-presence-controller",
-        "source_place_name": "presence_claim",
-        "token_color": {
-            "grant_id": grant_id,
-            "runner_id": runner_id,
-        },
-        "signal_key": format!("presence-claim-{grant_id}-{runner_id}"),
-        "timestamp": Utc::now().to_rfc3339(),
-        "dedup_id": format!("presence-claim:{grant_id}"),
-    });
-    publish_jetstream(nats, &subject, &envelope, "presence claim").await;
-}
-
-/// Publish a JSON envelope to a JetStream subject and await the ack, logging at
-/// WARN on any failure (a missed injection is non-fatal — the next heartbeat
-/// re-acquires, and the sweep re-expires).
-async fn publish_jetstream(
-    nats: &MekhanNats,
-    subject: &str,
-    envelope: &serde_json::Value,
-    what: &str,
-) {
-    let bytes = match serde_json::to_vec(envelope) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(subject, "failed to serialize {what} envelope: {e}");
-            return;
-        }
-    };
-    match nats
-        .jetstream()
-        .publish(subject.to_string(), bytes.into())
-        .await
-    {
-        Ok(ack) => {
-            if let Err(e) = ack.await {
-                tracing::warn!(subject, "{what} publish ack failed: {e}");
-            }
-        }
-        Err(e) => tracing::warn!(subject, "{what} publish failed: {e}"),
-    }
+    core::inject_signal(
+        nats,
+        pool_net_id,
+        well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
+        expire_signal(runner_id, Utc::now().timestamp_millis()),
+        "presence expire",
+    )
+    .await;
 }
 
 /// Handle one `runner.*.presence` message: resolve the runner + its pool, and
@@ -550,7 +490,7 @@ async fn handle_presence(
                 // GROW eagerly injects the new slots below. A pool-less
                 // (liveness-only) entry never injects.
                 let new_slots =
-                    grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
+                    core::grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
                 let grow = new_slots.map(|s| (entry.pool_net_id.clone(), s));
                 // Always record the new target C (grow OR shrink).
                 entry.concurrency = concurrency;
@@ -743,21 +683,6 @@ fn parse_presence(payload: &[u8]) -> (Vec<String>, u32, Option<HostInfo>) {
     }
 }
 
-/// The grow-eager / shrink-lazy slot delta for an already-present runner: given
-/// it is `pool_less` (a liveness-only entry with no pool to admit into), its
-/// `applied` slot count, and the new `wire` count, return the half-open range of
-/// NEW slot indices to inject — `Some(applied..wire)` only on a true GROW into a
-/// real pool, `None` on shrink/no-change/pool-less. Pure so the delta math is
-/// unit-testable without NATS/DB. SHRINK is intentionally `None`: a held surplus
-/// slot must finish its lease (it drains on release or at the next full expire),
-/// so we never proactively reap on shrink — the caller just lowers the target.
-fn grow_slots(pool_less: bool, applied: u32, wire: u32) -> Option<std::ops::Range<u32>> {
-    if pool_less || wire <= applied {
-        return None;
-    }
-    Some(applied..wire)
-}
-
 /// Conservative upper bound on a runner's self-reported concurrency. `concurrency`
 /// is advisory wire-truth (like `backends`) from the UNTRUSTED presence payload;
 /// without a cap a runner reporting an absurd C would mint that many pool units.
@@ -811,71 +736,76 @@ pub(crate) async fn start_presence_subscriber(
 /// presence map for `present` entries whose `last_seen` is older than the TTL,
 /// inject a BARE expire signal for each, and flip them to absent.
 ///
-/// Mirrors the session-sweep spawn pattern in `lifecycle.rs` /
-/// `main.rs` (an interval-driven background loop).
+/// The loop mechanics are the shared [`core::sweep_loop`]; this adapter
+/// supplies the global-TTL freshness gate, the under-lock flip (snapshotting +
+/// zeroing the applied C), and the per-runner reap (fleet-mirror drop +
+/// liveness-only short-circuit + expire injection).
 pub(crate) async fn start_presence_sweep(
     nats: MekhanNats,
     presence: PresenceMap,
     fleet: FleetLiveness,
 ) {
     let ttl = presence_ttl();
-    let mut tick = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     tracing::info!(
         ttl_secs = ttl.as_secs(),
         sweep_secs = SWEEP_INTERVAL_SECS,
         "presence sweep started"
     );
 
-    loop {
-        tick.tick().await;
-        let now = Instant::now();
+    core::sweep_loop(
+        presence,
+        Duration::from_secs(SWEEP_INTERVAL_SECS),
+        move |entry: &PresenceEntry, now| {
+            entry.present && now.duration_since(entry.last_seen) > ttl
+        },
+        |rid: &Uuid, entry: &mut PresenceEntry| {
+            entry.present = false;
+            // Snapshot applied C BEFORE we zero it so the reap injects exactly as
+            // many expire signals as there are live slots.
+            let applied_c = entry.concurrency;
+            entry.concurrency = 0;
+            ExpiredSlots {
+                reap_key: *rid,
+                pool_net_id: entry.pool_net_id.clone(),
+                slots: applied_c,
+            }
+        },
+        |expired: ExpiredSlots| {
+            let nats = nats.clone();
+            let fleet = fleet.clone();
+            async move {
+                let runner_id = expired.reap_key;
+                let pool_net_id = expired.pool_net_id;
+                let applied_c = expired.slots;
 
-        // Collect the expired set under the lock, flipping them to absent in the
-        // same critical section so a concurrent heartbeat racing past here either
-        // re-bumps last_seen (no expiry) or is cleanly re-acquired afterwards.
-        let expired: Vec<(Uuid, String, u32)> = {
-            let mut map = presence.lock().await;
-            let mut out = Vec::new();
-            for (rid, entry) in map.iter_mut() {
-                if entry.present && now.duration_since(entry.last_seen) > ttl {
-                    entry.present = false;
-                    // Snapshot applied C BEFORE we zero it so the reap injects
-                    // exactly as many expire signals as there are live slots.
-                    let applied_c = entry.concurrency;
-                    entry.concurrency = 0;
-                    out.push((*rid, entry.pool_net_id.clone(), applied_c));
+                // Telemetry plane: a TTL-missed runner is offline, so drop its
+                // advisory mirror from the shared fleet-liveness registry (docs/24
+                // S1). This runs for BOTH pool-backed and liveness-only entries — it
+                // is pure telemetry and never touches the pool-net control binding.
+                fleet.drop_runner(&runner_id.to_string()).await;
+
+                if pool_net_id.is_empty() {
+                    // Liveness-only entry (runner not admitted to any pool): nothing to
+                    // expire on the engine — flipping `present = false` above is enough
+                    // for the fleet view to show it offline.
+                    tracing::debug!(%runner_id, "presence TTL miss; runner offline (no pool to expire)");
+                    return;
+                }
+                // Inject one bare `{ runner_id }` expire signal PER applied slot:
+                // each signal is consumed once and reaps exactly one of the runner's
+                // C slots (reap-ALL-by-runner_id). `applied_c == 0` (shouldn't happen
+                // for a pool-backed entry, but be defensive) means nothing to reap.
+                tracing::info!(
+                    %runner_id, pool_net_id, applied_c,
+                    "presence TTL miss; reaping runner's slots"
+                );
+                for _ in 0..applied_c {
+                    inject_expire(&nats, &pool_net_id, runner_id).await;
                 }
             }
-            out
-        };
-
-        for (runner_id, pool_net_id, applied_c) in expired {
-            // Telemetry plane: a TTL-missed runner is offline, so drop its
-            // advisory mirror from the shared fleet-liveness registry (docs/24
-            // S1). This runs for BOTH pool-backed and liveness-only entries — it
-            // is pure telemetry and never touches the pool-net control binding.
-            fleet.drop_runner(&runner_id.to_string()).await;
-
-            if pool_net_id.is_empty() {
-                // Liveness-only entry (runner not admitted to any pool): nothing to
-                // expire on the engine — flipping `present = false` above is enough
-                // for the fleet view to show it offline.
-                tracing::debug!(%runner_id, "presence TTL miss; runner offline (no pool to expire)");
-                continue;
-            }
-            // Inject one bare `{ runner_id }` expire signal PER applied slot:
-            // each signal is consumed once and reaps exactly one of the runner's
-            // C slots (reap-ALL-by-runner_id). `applied_c == 0` (shouldn't happen
-            // for a pool-backed entry, but be defensive) means nothing to reap.
-            tracing::info!(
-                %runner_id, pool_net_id, applied_c,
-                "presence TTL miss; reaping runner's slots"
-            );
-            for _ in 0..applied_c {
-                inject_expire(&nats, &pool_net_id, runner_id).await;
-            }
-        }
-    }
+        },
+    )
+    .await;
 }
 
 /// Construct a fresh, empty presence map. The subscriber + sweep tasks share it.
@@ -1052,19 +982,15 @@ mod tests {
         );
         // ... all sharing the one runner_id prefix.
         assert!(unit_ids.iter().all(|u| u.starts_with(&format!("{rid}#"))));
-    }
 
-    #[test]
-    fn grow_eager_shrink_lazy_delta() {
-        // GROW into a real pool → inject the NEW slots only.
-        assert_eq!(grow_slots(false, 2, 5), Some(2..5));
-        assert_eq!(grow_slots(false, 0, 3), Some(0..3));
-        // No change / SHRINK → inject nothing (shrink is lazy; the surplus drains
-        // naturally).
-        assert_eq!(grow_slots(false, 3, 3), None);
-        assert_eq!(grow_slots(false, 5, 2), None);
-        // A pool-less (liveness-only) entry never injects, even on a "grow".
-        assert_eq!(grow_slots(true, 1, 4), None);
+        // The real builder agrees with the mirrored formatting (identity + dedup
+        // come from `acquire_injection`, the single source of truth).
+        let inj = acquire_injection(rid, 0, "runner-jobs/x", &serde_json::json!({}));
+        assert_eq!(inj.dedup_id, dedup_ids[0]);
+        assert_eq!(
+            inj.token_color["unit_id"].as_str(),
+            Some(unit_ids[0].as_str())
+        );
     }
 
     #[tokio::test]

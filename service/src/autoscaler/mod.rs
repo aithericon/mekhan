@@ -1,7 +1,7 @@
 //! Model-pool autoscaler — the placement control loop.
 //!
 //! A mekhan background loop (cloning the presence-sweep spawn shape,
-//! `runners_presence::start_presence_sweep`) that, each tick, decides WHICH
+//! `presence::runners::start_presence_sweep`) that, each tick, decides WHICH
 //! models are loaded and HOW they are spread across the ALREADY-REGISTERED LLM
 //! runners. It does NOT provision compute: there is no Nomad node-pool scaler and
 //! no per-model Nomad job — autoscaling is pure placement onto enrolled runners
@@ -28,7 +28,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::nats::MekhanNats;
-use crate::runners_presence::RunnerPresence;
+use crate::presence::RunnerPresence;
 
 use self::demand::DemandSource;
 

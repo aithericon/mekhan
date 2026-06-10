@@ -121,7 +121,7 @@
 	/** Runner ids that are real dispatch targets — i.e. in a BACKED group (their
 	 *  group has a presence `capacity` resource, so their unit is admitted into a
 	 *  pool with C slots). A runner NOT in this set is "pool-less": it heartbeats
-	 *  and advertises backends, but `runners_presence` admits it to no pool
+	 *  and advertises backends, but `presence::runners` admits it to no pool
 	 *  (`concurrency = 0`), so it dispatches NOTHING. A model server is the common
 	 *  case — it's intentionally ungrouped because inference goes over HTTP, not
 	 *  presence dispatch. Surfacing this stops the roster implying a pool-less node
