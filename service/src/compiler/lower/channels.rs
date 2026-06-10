@@ -374,21 +374,28 @@ pub(crate) fn lower_channels(
                     format!("{label} - Channel '{}' Gathered", ch.name),
                 );
 
-                // t_{id}_{seg}_close — consume the `close` token, emit the gather
-                // coordinator `#{ count: <n>, __map_id }`. The correlate id is the
-                // emit's `__map_id`. `count == 0` (empty episode) yields `count: 0`
-                // and the barrier fires once with `[]` (the engine's count-gated
-                // gather fires when `len >= 0`). The barrier sizes itself entirely
-                // on `close.count` — there is no producer-side fan-out cap.
+                // t_{id}_{seg}_close — consume the `close` token. A non-empty
+                // episode emits the gather coordinator `#{ count: <n>, __map_id }`
+                // and the barrier collects exactly that many items. An EMPTY
+                // episode (`close.count == 0`) emits the gathered empty collection
+                // DIRECTLY and no coordinator at all: a k == 0 barrier is
+                // trivially satisfied while consuming nothing, so it refires
+                // forever (2026-06-10 prod incident — a zero-item transcription
+                // episode flooded PETRI_GLOBAL at ~35 events/s; the engine now
+                // HOLDS on k == 0, see petri-application `binding.rs`). The close
+                // transition consumes its token, so the empty path fires exactly
+                // once. The barrier sizes itself entirely on `close.count` —
+                // there is no producer-side fan-out cap.
                 ctx.transition(
                     format!("t_{id}_{seg}_close"),
                     format!("{label} - Channel '{}' Close", ch.name),
                 )
                 .auto_input("close", &p_raw)
                 .auto_output("count", &p_count)
+                .auto_output("gathered", &p_gathered)
                 .guard_rhai(r#"close.kind == "close""#)
                 .logic_rhai(
-                    r#"#{ count: #{ count: close.count, "__map_id": close.__map_id } }"#
+                    r#"if close.count == 0 { #{ gathered: #{ output: [] } } } else { #{ count: #{ count: close.count, "__map_id": close.__map_id } } }"#
                         .to_string(),
                 )
                 .done();

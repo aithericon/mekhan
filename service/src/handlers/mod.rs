@@ -1,3 +1,4 @@
+pub mod admin_nets;
 pub mod assets;
 pub mod auth_tokens;
 pub mod backends;

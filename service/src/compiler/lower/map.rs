@@ -142,20 +142,34 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         // map-body yield reconstructs the bare `<itemVar>` from it (see
         // `yield_logic_keeping_item`). Same nested-map limitation as
         // `__map_idx`/`__map_id` (namespace-on-token, v1).
+        //
+        // EMPTY array (`__arr.len() == 0`): emit the gathered empty collection
+        // DIRECTLY on `p_gathered` — no coordinator, no items. A k == 0
+        // barrier is trivially satisfied while consuming nothing, so it
+        // refires forever (2026-06-10 prod incident); the engine now HOLDS on
+        // k == 0 (petri-application `binding.rs`), making the producer-side
+        // bypass the only way a zero-width map completes. The scatter
+        // consumes its input token, so the empty path fires exactly once and
+        // the map yields `[]` downstream like any other gathered result.
         ctx.transition(format!("t_{id}_scatter"), format!("{label} - Scatter"))
             .auto_input("input", &p_input)
             .auto_output("count", &p_count)
             .auto_output_batch("items", &p_items)
+            .auto_output("gathered", &p_gathered)
             .logic_rhai(format!(
                 "let __src = {items_ref}; \
                  let __arr = if type_of(__src) == \"array\" {{ __src }} else {{ [] }}; \
-                 let __items = []; \
-                 let __i = 0; \
-                 while __i < __arr.len() {{ \
-                     __items.push(#{{ {item_var_key}: __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
-                     __i += 1; \
-                 }} \
-                 #{{ count: #{{ expected: __arr.len(), \"__map_id\": \"{id_lit}\" }}, items: __items }}"
+                 if __arr.len() == 0 {{ \
+                     #{{ gathered: #{{ output: [] }} }} \
+                 }} else {{ \
+                     let __items = []; \
+                     let __i = 0; \
+                     while __i < __arr.len() {{ \
+                         __items.push(#{{ {item_var_key}: __arr[__i], \"__map_item\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
+                         __i += 1; \
+                     }} \
+                     #{{ count: #{{ expected: __arr.len(), \"__map_id\": \"{id_lit}\" }}, items: __items }} \
+                 }}"
             ))
             .done();
 
