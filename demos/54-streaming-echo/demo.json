@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000540",
+  "folder": "streaming",
+  "name": "54 · Streaming Echo (endpoint)",
+  "description": "Workflow-as-streaming-endpoint (docs/25 §9 Phase 3). A StreamSource 'feed' declares one data Out channel an EXTERNAL producer feeds through the mekhan ingress endpoint (`POST /api/v1/instances/{id}/sources/feed/channels/feed/data`) — there is no in-net producer job at all. The 'shout' AutomatedStep is triggered by the channel's open descriptor (like demo 14's consumer), drains `aithericon.stream('feed')` and re-emits each chunk uppercased on its 'shouted' data Out channel. A StreamSink 'out' terminates 'shouted' at the egress endpoint (`GET /api/v1/instances/{id}/sinks/out/data`, `?follow=1` to live-tail). Control flow: Source/Sink have no control handles (v1); 'shout' is channel-triggered, so Start has no outgoing edge at all (its seed token parks — the launch is degenerate, the StreamSource is the real entry point and a reachability root). The instance stays Running while bytes stream and completes when 'shout' finishes after the external feed closes — its completion token is the only End input. Try it live: start an instance, `curl --data-binary 'hello stream' .../sources/feed/channels/feed/data`, then `curl .../sinks/out/data` → 'HELLO STREAM'."
+}

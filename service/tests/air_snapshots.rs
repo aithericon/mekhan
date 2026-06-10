@@ -115,6 +115,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // resource/asset), so bare `compile_to_air` resolves it; RUNNING it is
     // live-only (seeds a temp NAS, POSTs to the inventory API).
     "50-legacy-crawl-register",
+    // 54-streaming-echo: workflow-as-streaming-endpoint (docs/25 §9 Phase 3).
+    // StreamSource (ingress-fed data channel) → channel-triggered AutomatedStep
+    // (uppercase echo) → StreamSink (egress-parked descriptor). Pins the
+    // StreamSource control-inbox/channel synthesis + StreamSink descriptor
+    // capture lowering together in one graph. Compiles offline; RUNNING it is
+    // live-only (an external client must POST bytes to the ingress endpoint
+    // and tap the egress endpoint).
+    "54-streaming-echo",
 ];
 
 fn repo_root() -> PathBuf {
@@ -376,6 +384,11 @@ fn snapshot_48_live_camera_detection() {
 #[test]
 fn snapshot_50_legacy_crawl_register() {
     run("50-legacy-crawl-register");
+}
+
+#[test]
+fn snapshot_54_streaming_echo() {
+    run("54-streaming-echo");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

@@ -352,10 +352,14 @@ with open_output("thumbnails") as data:
 > - **Edge `join` picker UI + resolver/variable-picker integration per §7**
 >   (in progress on this branch).
 > - **Descriptor single-use credential (§6)** — designed, not wired.
-> - **Phase 3** — Agent / SubWorkflow channels; workflow-as-streaming-endpoint
->   is being built on this branch as dedicated **StreamSource / StreamSink
->   NODES** rather than a Start/End extension (Start is a launch-time seed,
->   End is terminal — neither can carry a live channel).
+> - **Phase 3** — Agent / SubWorkflow channels still open.
+>   Workflow-as-streaming-endpoint is **BUILT** as dedicated **StreamSource /
+>   StreamSink NODES** rather than a Start/End extension (Start is a
+>   launch-time seed, End is terminal — neither can carry a live channel):
+>   ingress `POST /api/v1/instances/{id}/sources/{node}/channels/{ch}/data`
+>   (raw bytes → binary envelopes; `/emit` for control-plane episodes), egress
+>   `GET /api/v1/instances/{id}/sinks/{node}/data` (`?follow=1` live-tail).
+>   See `demos/54-streaming-echo/`.
 > - **Replay / range read API** over durable transports.
 > - `feed_chunks` vestigial field cleanup (deferred — ~690 snapshot churn);
 >   gather consumer key hardcoded as `"output"` (rename = recorded non-goal).
@@ -389,8 +393,15 @@ with open_output("thumbnails") as data:
 - SubWorkflow channels (expose a child's channels on the parent face).
 - **Start / End streaming** — a workflow *as* a streaming endpoint (live feed in
   at Start, stream out at End). Highest-value P3 item for real-world use.
-  *Being built as dedicated StreamSource / StreamSink nodes instead of
-  extending Start/End (see status note).*
+  ✅ **Built** as dedicated **StreamSource / StreamSink nodes** instead of
+  extending Start/End: a StreamSource's Out channels are fed by the mekhan
+  ingress endpoints (`POST …/sources/{node}/channels/{ch}/data` for data-plane
+  bytes, `…/emit` for control-plane episodes — both stamp the same
+  `control_emit` routing onto `p_{id}_control_in` a real executor job would);
+  a StreamSink parks the sunk channel's open descriptor and the egress
+  endpoint (`GET …/sinks/{node}/data`, `?follow=1`) serves the bytes off it.
+  Demo: `demos/54-streaming-echo/` (external bytes in → uppercase echo step →
+  external bytes out).
 
 ## 10. Open sub-branches (deferred detail, not blockers)
 
