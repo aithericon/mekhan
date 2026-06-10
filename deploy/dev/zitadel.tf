@@ -19,7 +19,14 @@
 # Mekhan's own org-level project. Distinct from the cluster's "Aithericon"
 # project (which is for admin surfaces — Vault, Nomad, Grafana). Keeps blast
 # radius scoped: deleting this layer's state never affects cluster-admin apps.
+#
+# `org_id` MUST be set on every Zitadel resource here. Without it the
+# provider sees the live `org_id` returned by Zitadel as drift against an
+# implicit "null" in the config, and flags every resource for replacement
+# on every plan — which rotates client_ids on every CI run and invalidates
+# all existing CLI tokens + browser sessions. See variables.tf for sourcing.
 resource "zitadel_project" "mekhan" {
+  org_id                   = var.zitadel_org_id
   name                     = "Mekhan"
   project_role_assertion   = true
   project_role_check       = false
@@ -30,6 +37,7 @@ resource "zitadel_project" "mekhan" {
 # Public SPA client. The redirect URI is the BFF callback path the service
 # already exposes at service/src/auth/bff/handlers.rs (GET /api/auth/callback).
 resource "zitadel_application_oidc" "spa" {
+  org_id     = var.zitadel_org_id
   project_id = zitadel_project.mekhan.id
 
   name = "Mekhan SPA"
@@ -73,6 +81,7 @@ resource "zitadel_application_oidc" "spa" {
 # Confidential API app — credentials Mekhan uses to authenticate to Zitadel's
 # introspection endpoint. BASIC auth = client_id + client_secret as HTTP Basic.
 resource "zitadel_application_api" "introspect" {
+  org_id           = var.zitadel_org_id
   project_id       = zitadel_project.mekhan.id
   name             = "Mekhan SPA-introspect"
   auth_method_type = "API_AUTH_METHOD_TYPE_BASIC"
@@ -83,6 +92,7 @@ resource "zitadel_application_api" "introspect" {
 # "delete-and-remint on every run" pattern is unnecessary in TF because the
 # PAT secret is captured in tfstate at create-time.
 resource "zitadel_machine_user" "token_broker" {
+  org_id      = var.zitadel_org_id
   user_name   = "mekhan-token-broker"
   name        = "Mekhan Token Broker"
   description = "Brokers per-user automation PATs for the embedded /api/auth/tokens feature"
@@ -91,6 +101,7 @@ resource "zitadel_machine_user" "token_broker" {
 # ORG_OWNER is the minimum role that lets the broker create/delete machine
 # users and their PATs in this org. Without it, /api/auth/tokens 502s.
 resource "zitadel_org_member" "token_broker" {
+  org_id  = var.zitadel_org_id
   user_id = zitadel_machine_user.token_broker.id
   roles   = ["ORG_OWNER"]
 }

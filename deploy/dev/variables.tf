@@ -170,6 +170,13 @@ variable "zitadel_issuer_url" {
   default     = "https://id.aithericon.eu"
 }
 
+variable "zitadel_org_id" {
+  description = <<-EOT
+    Numeric ID of the Zitadel organization
+  EOT
+  type        = string
+}
+
 variable "rust_log" {
   description = "RUST_LOG filter passed to the service"
   type        = string
