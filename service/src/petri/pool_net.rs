@@ -77,6 +77,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::compiler::well_known;
+use crate::models::capacity::Acceptance;
 
 /// What drives a pool net's capacity — the one axis [`build_pool_net`] branches
 /// on. Everything else (net id, the `pool`/`in_use`/`done` places, the
@@ -103,17 +104,20 @@ pub enum CapacitySource {
     /// GUARDED by `satisfies(claim.requirements, unit.caps)`; grant/hold/release
     /// carry `{ ..., runner_id, executor_namespace, caps }`.
     ///
-    /// `offer` selects the dispatch discipline (docs/33):
-    /// - `offer: false` — the historical **grant** discipline: an auto-firing
-    ///   `t_grant` binds a claim to a free unit as soon as both exist (mekhan
-    ///   pushes the grant to the claimant).
-    /// - `offer: true` — the **offer** discipline: NO auto-`t_grant`. A claim is
-    ///   match-once PARKED as an offer (`t_post_offer` → `offers`) and binds only
-    ///   when a UNIT itself publishes a claim on the `presence_claim` inbox
-    ///   (`t_claim`). First claim wins; consuming the offer token IS the implicit
-    ///   rescind of all other would-be claimants. Reuses the SAME
+    /// `acceptance` selects the admission discipline (docs/33 topology; the
+    /// axis is now named **acceptance** — docs/35 §4):
+    /// - [`Acceptance::Auto`] — the historical **grant** discipline: an
+    ///   auto-firing `t_grant` binds a claim to a free unit as soon as both
+    ///   exist (mekhan pushes the grant to the claimant).
+    /// - [`Acceptance::Consent`] — the consent discipline (the old "offer
+    ///   mode"; the frozen net artifacts — the `offers` place, `t_post_offer`,
+    ///   `t_claim` — keep their names): NO auto-`t_grant`. A claim is
+    ///   match-once PARKED as an offer (`t_post_offer` → `offers`) and binds
+    ///   only when a UNIT itself publishes a claim on the `presence_claim`
+    ///   inbox (`t_claim`). First claim wins; consuming the offer token IS the
+    ///   implicit rescind of all other would-be claimants. Reuses the SAME
     ///   `satisfies(requirements, caps)` matcher verbatim.
-    Presence { offer: bool },
+    Presence { acceptance: Acceptance },
 }
 
 impl CapacitySource {
@@ -281,7 +285,7 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
         // PRESENCE (runner_group): capacity-less; presence-driven admission,
         // GUARDED grant, presence_expired → reap_free/reap_held(+fail).
         // --------------------------------------------------------------------
-        CapacitySource::Presence { offer } => {
+        CapacitySource::Presence { acceptance } => {
             // NEW presence-admit inbox — mekhan's presence controller deposits a
             // `{ unit_id, runner_id, executor_namespace, caps }` here when a
             // runner checks in (cross-net subject
@@ -340,11 +344,11 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                     );
             });
 
-            if !offer {
+            if acceptance == Acceptance::Auto {
                 // ===========================================================
-                // GRANT discipline (offer == false) — UNCHANGED historical
-                // topology. An auto-firing t_grant binds a claim to a free unit
-                // as soon as both exist (mekhan pushes the grant).
+                // AUTO acceptance (Acceptance::Auto) — the UNCHANGED historical
+                // grant topology. An auto-firing t_grant binds a claim to a
+                // free unit as soon as both exist (mekhan pushes the grant).
                 // ===========================================================
                 //
                 // t_grant — admission. Fires only when a claim AND a free unit
@@ -392,8 +396,11 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
                 });
             } else {
                 // ===========================================================
-                // OFFER discipline (offer == true) — match-once PARK + bind on
-                // a UNIT-INITIATED claim (docs/33). NO auto-firing t_grant.
+                // CONSENT acceptance (Acceptance::Consent) — match-once PARK +
+                // bind on a UNIT-INITIATED claim (docs/33 topology; the axis is
+                // now named acceptance=consent per docs/35 §4 — the `offers`
+                // place and `t_post_offer`/`t_claim` names are frozen net
+                // artifacts). NO auto-firing t_grant.
                 // ===========================================================
 
                 // Parked-offer pool. Each token is a routed ClaimRequest
@@ -1365,7 +1372,9 @@ mod tests {
         // ---- Presence ----
         let presence = serde_json::to_value(build_pool_net(
             Uuid::nil(),
-            CapacitySource::Presence { offer: false },
+            CapacitySource::Presence {
+                acceptance: Acceptance::Auto,
+            },
         ))
         .expect("presence pool serializes");
 
@@ -1427,7 +1436,9 @@ mod tests {
     fn presence_reap_correlates_on_runner_id_via_consuming_signal() {
         let presence = serde_json::to_value(build_pool_net(
             Uuid::nil(),
-            CapacitySource::Presence { offer: false },
+            CapacitySource::Presence {
+                acceptance: Acceptance::Auto,
+            },
         ))
         .expect("presence pool serializes");
 

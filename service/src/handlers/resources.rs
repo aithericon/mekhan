@@ -1157,21 +1157,13 @@ async fn ensure_pool_net_for_resource(
             // The `acceptance` axis selects the admission discipline (doc 35 §4):
             // `Consent` parks a match-once offer that binds on a unit-initiated claim
             // (first-claim-wins, rest implicitly rescinded); `Auto` binds eagerly via
-            // the direct-assign net. (The ensure-fn names still say "offer" — the
-            // pool-net acceptance rename is a later phase.)
-            if axes.acceptance == crate::models::capacity::Acceptance::Consent {
-                crate::petri::presence_pool_net::ensure_presence_offer_pool_net_deployed(
-                    &state.petri,
-                    resource_id,
-                )
-                .await;
-            } else {
-                crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
-                    &state.petri,
-                    resource_id,
-                )
-                .await;
-            }
+            // the direct-assign net.
+            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                &state.petri,
+                resource_id,
+                axes.acceptance,
+            )
+            .await;
         }
         CapacityBackend::Scheduler => {
             // The `datacenter` kind. `scheduler_flavor` (public field) is the

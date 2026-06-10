@@ -57,11 +57,20 @@
 //! (R2's wiring), so the `in_use` hold carries the `"fail"` routing and NOTHING
 //! else. `t_reap_held` resolves the `"fail"` channel from THAT hold to fail the
 //! holding instance; `t_release`/`t_reap_free` recycle/drop CLEAN units.
+//!
+//! ## Acceptance axis (docs/35 §4)
+//!
+//! The admission discipline formerly called "offer mode" (docs/33) is now the
+//! `acceptance = consent` value of the capacity axes
+//! ([`crate::models::capacity::Acceptance`]); the deployed-net artifacts it
+//! emits — the `offers` place, `t_post_offer`, `t_claim` — keep their frozen
+//! names.
 
 use aithericon_sdk::scenario::ScenarioDefinition;
 use uuid::Uuid;
 
 use crate::compiler::well_known;
+use crate::models::capacity::Acceptance;
 use crate::petri::pool_net::{build_pool_net, CapacitySource};
 
 /// Build the AIR `ScenarioDefinition` for a `presence_pool` resource's backing
@@ -74,79 +83,27 @@ use crate::petri::pool_net::{build_pool_net, CapacitySource};
 /// `satisfies`-guarded `t_grant`, `t_reap_free`/`t_reap_held`,
 /// `reset_reply_routing_on("unit")`) lives in [`build_pool_net`]'s presence
 /// branch — see [`CapacitySource::Presence`] for the load-bearing details.
-pub fn build_presence_pool_net(resource_id: Uuid) -> ScenarioDefinition {
-    build_pool_net(resource_id, CapacitySource::Presence { offer: false })
-}
-
-/// Build the AIR `ScenarioDefinition` for an **offer-mode** presence pool —
-/// thin wrapper over [`build_pool_net`] with
-/// `CapacitySource::Presence { offer: true }` (docs/33).
 ///
-/// Same net id and cross-net claim contract as the grant-mode presence pool, but
-/// the admission discipline differs: there is NO auto-firing `t_grant`. A claim
-/// is match-once PARKED as an offer (`t_post_offer` → the `offers` place) and
-/// binds only when a UNIT itself publishes a claim on the
-/// [`well_known::POOL_PRESENCE_CLAIM_INBOX`] bridge (`t_claim`). First claim wins;
-/// consuming the offer token is the implicit rescind of all other would-be
-/// claimants. The SAME `satisfies(requirements, caps)` matcher gates the bind.
-/// See `CapacitySource::Presence`'s `offer` arm for the load-bearing details.
-pub fn build_presence_offer_pool_net(resource_id: Uuid) -> ScenarioDefinition {
-    build_pool_net(resource_id, CapacitySource::Presence { offer: true })
-}
-
-/// Idempotently ensure an **offer-mode** presence pool's backing net is deployed
-/// and running on the engine. Mirrors [`ensure_presence_pool_net_deployed`]
-/// exactly (probe-then-deploy via [`crate::petri::instance::deploy_instance`];
-/// engine-down failures logged + SWALLOWED; same [`well_known::pool_net_id`] net
-/// id) — only the built topology differs ([`build_presence_offer_pool_net`]).
-pub async fn ensure_presence_offer_pool_net_deployed(
-    petri: &crate::petri::client::PetriClient,
-    resource_id: Uuid,
-) {
-    let net_id = well_known::pool_net_id(resource_id);
-
-    if matches!(
-        petri.try_get_run_mode(&net_id).await,
-        Some(petri_api_types::RunMode::Running)
-    ) {
-        tracing::debug!(
-            net_id,
-            "presence-offer pool net already deployed + running; no-op"
-        );
-        return;
-    }
-
-    let air = match serde_json::to_value(build_presence_offer_pool_net(resource_id)) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(net_id, %e, "failed to serialize presence-offer pool net AIR");
-            return;
-        }
-    };
-
-    if let Err(e) = crate::petri::instance::deploy_instance(
-        petri,
-        &net_id,
-        &air,
-        petri_api_types::DispatchOptions::default(),
-        None,
-    )
-    .await
-    {
-        tracing::warn!(
-            net_id,
-            %e,
-            "failed to deploy presence-offer pool net to the engine — resource CRUD still \
-             succeeded; the net will be (re)deployed on the next resource version \
-             or at template publish when the alias is referenced"
-        );
-        return;
-    }
-    tracing::info!(net_id, "deployed + activated presence-offer pool net");
+/// `acceptance` selects the admission discipline (docs/35 §4; the docs/33
+/// topology is unchanged — only its classification moved):
+/// - [`Acceptance::Auto`] — the historical grant discipline: an auto-firing
+///   `t_grant` binds a claim to a free unit as soon as both exist.
+/// - [`Acceptance::Consent`] — NO auto-firing `t_grant`. A claim is match-once
+///   PARKED as an offer (`t_post_offer` → the `offers` place — frozen artifact
+///   names) and binds only when a UNIT itself publishes a claim on the
+///   [`well_known::POOL_PRESENCE_CLAIM_INBOX`] bridge (`t_claim`). First claim
+///   wins; consuming the offer token is the implicit rescind of all other
+///   would-be claimants. The SAME `satisfies(requirements, caps)` matcher
+///   gates the bind. See `CapacitySource::Presence`'s `acceptance` docs for
+///   the load-bearing details.
+pub fn build_presence_pool_net(resource_id: Uuid, acceptance: Acceptance) -> ScenarioDefinition {
+    build_pool_net(resource_id, CapacitySource::Presence { acceptance })
 }
 
 /// Idempotently ensure a `presence_pool` resource's backing net is deployed +
-/// running on the engine. Mirrors
+/// running on the engine (both acceptance disciplines — the `acceptance` axis
+/// only selects which admission topology [`build_presence_pool_net`] emits).
+/// Mirrors
 /// [`crate::petri::pool_net::ensure_token_pool_net_deployed`]: probe the engine
 /// for the net's current run mode first
 /// ([`crate::petri::client::PetriClient::try_get_run_mode`], which returns `None`
@@ -165,6 +122,7 @@ pub async fn ensure_presence_offer_pool_net_deployed(
 pub async fn ensure_presence_pool_net_deployed(
     petri: &crate::petri::client::PetriClient,
     resource_id: Uuid,
+    acceptance: Acceptance,
 ) {
     let net_id = well_known::pool_net_id(resource_id);
 
@@ -179,7 +137,7 @@ pub async fn ensure_presence_pool_net_deployed(
         return;
     }
 
-    let air = match serde_json::to_value(build_presence_pool_net(resource_id)) {
+    let air = match serde_json::to_value(build_presence_pool_net(resource_id, acceptance)) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(net_id, %e, "failed to serialize presence-pool net AIR");
@@ -213,12 +171,12 @@ mod tests {
     use super::*;
 
     fn air(resource_id: Uuid) -> serde_json::Value {
-        serde_json::to_value(build_presence_pool_net(resource_id))
+        serde_json::to_value(build_presence_pool_net(resource_id, Acceptance::Auto))
             .expect("presence pool net serializes to AIR")
     }
 
     fn offer_air(resource_id: Uuid) -> serde_json::Value {
-        serde_json::to_value(build_presence_offer_pool_net(resource_id))
+        serde_json::to_value(build_presence_pool_net(resource_id, Acceptance::Consent))
             .expect("presence offer pool net serializes to AIR")
     }
 
@@ -713,7 +671,7 @@ mod tests {
         }
     }
 
-    /// The grant-mode wrapper builds `offer: false` — no offer topology leaks
+    /// The auto-acceptance build (`Acceptance::Auto`) — no offer topology leaks
     /// into the historical presence pool.
     #[test]
     fn grant_mode_wrapper_has_no_offer_topology() {

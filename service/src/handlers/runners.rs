@@ -73,9 +73,13 @@ fn is_safe_group(group: &str) -> bool {
 ///
 /// This is the runner analogue of `workers::worker_group_exists`, which gates on
 /// the WORKER (`competing_consumer` + `auto`) point: a runner group is the presence- /
-/// presence-admission path, so it gates on `liveness = 'presence'` instead. The
-/// axis lives in the latest version's `public_config`, so this joins `resources`
-/// → `resource_versions` at `latest_version` and matches the presence liveness —
+/// presence-admission path, so it gates on `liveness = 'presence'` instead — AND
+/// on `acceptance = 'auto'`, which excludes `consent` (human-roster) pools: a
+/// runner must never enroll into a consent pool (humans enroll via
+/// `roster_members`, not runner registration tokens; mirrors
+/// `model_serving_group::resolve_model_serving_group_uuid`). The
+/// axes live in the latest version's `public_config`, so this joins `resources`
+/// → `resource_versions` at `latest_version` and matches them there —
 /// the same lookup `runners_presence::resolve_pool_net_id` uses, so the gate and
 /// the runtime admission agree on what "the group exists" means.
 async fn runner_group_exists(
@@ -89,7 +93,8 @@ async fn runner_group_exists(
            ON rv.resource_id = r.id AND rv.version = r.latest_version \
          WHERE r.workspace_id = $1 AND r.path = $2 \
            AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
-           AND rv.public_config ->> 'liveness' = 'presence'",
+           AND rv.public_config ->> 'liveness' = 'presence' \
+           AND rv.public_config ->> 'acceptance' = 'auto'",
     )
     .bind(workspace_id)
     .bind(alias)

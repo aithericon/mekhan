@@ -302,7 +302,12 @@ impl Default for RunnerPresence {
 /// `runner.group` is an alias string (the `resources.path` column). It maps to a
 /// presence-backed `capacity` resource in the runner's workspace: a `resources`
 /// row with `resource_type = 'capacity'`, `path = <alias>`, and `liveness =
-/// 'presence'` (the `instrument` preset) in its latest version's `public_config`.
+/// 'presence'` + `acceptance = 'auto'` (the `instrument` preset) in its latest
+/// version's `public_config`. The `acceptance` filter excludes `consent`
+/// (human-roster) pools — a heartbeating runner must never be admitted into a
+/// consent pool (humans enroll via `roster_members` and resolve their pool net
+/// by `capacity_id` directly in `human_presence`); mirrors
+/// `model_serving_group::resolve_model_serving_group_uuid`.
 /// The net id is then [`well_known::pool_net_id`] over that resource's id. Returns
 /// `None` (with a skip log at the call site) when the runner has no group alias,
 /// or the alias resolves to no presence-backed capacity in its workspace. This is
@@ -317,7 +322,8 @@ async fn resolve_pool_net_id(db: &PgPool, runner: &RunnerRow) -> Option<String> 
            ON rv.resource_id = r.id AND rv.version = r.latest_version \
          WHERE r.workspace_id = $1 AND r.path = $2 \
            AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
-           AND rv.public_config ->> 'liveness' = 'presence'",
+           AND rv.public_config ->> 'liveness' = 'presence' \
+           AND rv.public_config ->> 'acceptance' = 'auto'",
     )
     .bind(runner.workspace_id)
     .bind(alias)
