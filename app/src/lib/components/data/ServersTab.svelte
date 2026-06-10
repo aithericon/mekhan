@@ -15,6 +15,8 @@
 		type CreateEndpointRequest
 	} from '$lib/api/fileServers';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { listCapacities } from '$lib/api/capacities';
+	import { listRunners } from '$lib/api/runners';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -139,6 +141,30 @@
 		}
 	}
 
+	// ---- Capacity-group picker (local_mount dispatch target) ----------------
+	// A `local_mount` endpoint dispatches serve requests to `fileserve.<group>`
+	// where <group> is a capacity pool's resource UUID or a single runner's id —
+	// the same partition its co-located daemon consumes jobs on. Offer those by
+	// name instead of asking for a raw UUID.
+	let groupOptions = $state<{ value: string; label: string }[]>([]);
+	let groupOptionsLoaded = false;
+	async function loadGroupOptions() {
+		if (groupOptionsLoaded) return;
+		groupOptionsLoaded = true;
+		const [caps, runners] = await Promise.all([
+			listCapacities().catch(() => []),
+			listRunners({ perPage: 100 }).catch(() => null)
+		]);
+		groupOptions = [
+			...caps.map((c) => ({ value: c.id, label: `${c.display_name} — pool` })),
+			...(runners?.items ?? []).map((r) => ({ value: r.id, label: `${r.name} — runner` }))
+		];
+	}
+	function groupLabelFor(v: string, emptyLabel: string): string {
+		if (!v) return emptyLabel;
+		return groupOptions.find((o) => o.value === v)?.label ?? `${v.slice(0, 8)}… (unlisted id)`;
+	}
+
 	// ---- Server create / adopt / edit dialog --------------------------------
 	let serverFormOpen = $state(false);
 	let serverFormMode = $state<'create' | 'adopt' | 'edit'>('create');
@@ -162,6 +188,7 @@
 		fGroupId = '';
 		serverFormError = null;
 		loadResourcesForMethod(fMethod);
+		loadGroupOptions();
 		serverFormOpen = true;
 	}
 	function openAdopt(u: UnregisteredServer) {
@@ -174,6 +201,7 @@
 		fGroupId = '';
 		serverFormError = null;
 		loadResourcesForMethod(fMethod);
+		loadGroupOptions();
 		serverFormOpen = true;
 	}
 	function openEditServer(s: FileServerView) {
@@ -261,6 +289,7 @@
 		epPriority = '0';
 		epFormError = null;
 		loadResourcesForMethod(epMethod);
+		loadGroupOptions();
 		epFormOpen = true;
 	}
 	function openEditEndpoint(s: FileServerView, ep: FileServerEndpoint) {
@@ -274,6 +303,7 @@
 		epPriority = String(ep.priority ?? 0);
 		epFormError = null;
 		loadResourcesForMethod(ep.access_method);
+		loadGroupOptions();
 		epFormOpen = true;
 	}
 
@@ -612,13 +642,32 @@
 							</div>
 						{/if}
 						{#if fMethod === 'local_mount'}
+							{@const fGroupEmpty =
+								serverFormMode === 'adopt' ? 'Auto-detect from registration' : 'None'}
 							<div>
 								<!-- svelte-ignore a11y_label_has_associated_control -->
 								<label class="mb-1 block text-sm font-medium text-foreground"
-									>Capacity group <span class="font-normal text-muted-foreground">(optional)</span
-									></label
+									>Serving pool / runner
+									<span class="font-normal text-muted-foreground">(optional)</span></label
 								>
-								<Input bind:value={fGroupId} placeholder="group UUID" class="text-sm" />
+								<Select.Root
+									type="single"
+									value={fGroupId || '__none__'}
+									onValueChange={(v) => (fGroupId = !v || v === '__none__' ? '' : v)}
+								>
+									<Select.Trigger class="text-sm" data-testid="group-select"
+										>{groupLabelFor(fGroupId, fGroupEmpty)}</Select.Trigger
+									>
+									<Select.Content>
+										<Select.Item value="__none__" label={fGroupEmpty} />
+										{#each groupOptions as o}<Select.Item value={o.value} label={o.label} />{/each}
+									</Select.Content>
+								</Select.Root>
+								<p class="mt-1 text-xs text-muted-foreground">
+									Whose co-located workers serve this mount{serverFormMode === 'adopt'
+										? ' — files registered by a runner carry this automatically'
+										: ''}.
+								</p>
 							</div>
 						{/if}
 						<div>
@@ -707,9 +756,26 @@
 				<div>
 					<!-- svelte-ignore a11y_label_has_associated_control -->
 					<label class="mb-1 block text-sm font-medium text-foreground"
-						>Capacity group <span class="font-normal text-muted-foreground">(optional)</span></label
+						>Serving pool / runner
+						<span class="font-normal text-muted-foreground">(optional)</span></label
 					>
-					<Input bind:value={epGroupId} placeholder="group UUID" class="text-sm" />
+					<Select.Root
+						type="single"
+						value={epGroupId || '__none__'}
+						onValueChange={(v) => (epGroupId = !v || v === '__none__' ? '' : v)}
+					>
+						<Select.Trigger class="text-sm" data-testid="group-select"
+							>{groupLabelFor(epGroupId, 'None')}</Select.Trigger
+						>
+						<Select.Content>
+							<Select.Item value="__none__" label="None" />
+							{#each groupOptions as o}<Select.Item value={o.value} label={o.label} />{/each}
+						</Select.Content>
+					</Select.Root>
+					<p class="mt-1 text-xs text-muted-foreground">
+						Whose co-located workers serve this mount. Required for a local mount to be
+						servable.
+					</p>
 				</div>
 			{/if}
 			<div>

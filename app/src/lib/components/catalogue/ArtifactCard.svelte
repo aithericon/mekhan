@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { catalogueDownloadUrl, dataEntryContentUrl, type CatalogueEntry } from '$lib/api/client';
-	import type { DataCopy } from '$lib/api/data';
+	import { copiesForHash, type DataCopy } from '$lib/api/data';
 	import { Badge } from '$lib/components/ui/badge';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -34,7 +34,7 @@
 		entry,
 		expanded = false,
 		highlighted = false,
-		copies = [],
+		copies = undefined,
 		onToggle,
 		onSchemaClick,
 		onNetClick,
@@ -43,7 +43,12 @@
 		entry: CatalogueEntry;
 		expanded?: boolean;
 		highlighted?: boolean;
-		/** Physical copies of this entry's content (unified Data browser). */
+		/**
+		 * Physical copies of this entry's content (unified Data browser).
+		 * Omit (undefined) to let the card fetch them itself by content hash —
+		 * call-sites outside the Data browser (process artifacts, lineage,
+		 * provenance) get the same Download affordance without plumbing copies.
+		 */
 		copies?: DataCopy[];
 		onToggle?: () => void;
 		onSchemaClick?: (digest: string) => void;
@@ -186,11 +191,22 @@
 	);
 	const Icon = $derived(fileIcon());
 
+	// Self-fetched copies for call-sites that didn't pass the `copies` prop.
+	let fetchedCopies = $state<DataCopy[] | null>(null);
+	$effect(() => {
+		if (copies !== undefined || !entry.content_hash) return;
+		const hash = entry.content_hash;
+		copiesForHash(hash).then((c) => {
+			if (entry.content_hash === hash) fetchedCopies = c;
+		});
+	});
+	const allCopies = $derived(copies ?? fetchedCopies ?? []);
+
 	// The canonical (or first) physical copy — surfaced in the collapsed row.
-	const primaryCopy = $derived(copies.find((c) => c.is_canonical) ?? copies[0] ?? null);
+	const primaryCopy = $derived(allCopies.find((c) => c.is_canonical) ?? allCopies[0] ?? null);
 
 	const hasDetails = $derived(
-		copies.length > 0 ||
+		allCopies.length > 0 ||
 		!!contentHash || !!entry.entry_id || !!executionId || !!entry.source_net ||
 		!!entry.signal_key || !!entry.process_step || !!schema ||
 		columns.length > 0 || !!details || numRows != null || dims.length > 0 ||
@@ -256,8 +272,8 @@
 						<Server class="size-3 shrink-0" />
 						<span class="truncate">{primaryCopy.server_display_name ?? primaryCopy.file_server_id}</span>
 					</button>
-					{#if copies.length > 1}
-						<span class="text-foreground/70">+{copies.length - 1}</span>
+					{#if allCopies.length > 1}
+						<span class="text-foreground/70">+{allCopies.length - 1}</span>
 					{/if}
 				{/if}
 
@@ -343,7 +359,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>Download</Tooltip.Content>
 				</Tooltip.Root>
-			{:else if entry.content_hash && copies.some((c) => c.servable)}
+			{:else if entry.content_hash && allCopies.some((c) => c.servable)}
 				<!-- By-reference entry: no platform-store copy, but at least one
 				     physical copy sits behind a servable endpoint — route it. -->
 				<Tooltip.Root>
@@ -358,7 +374,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>Download from file server</Tooltip.Content>
 				</Tooltip.Root>
-			{:else if entry.content_hash && copies.length > 0}
+			{:else if entry.content_hash && allCopies.length > 0}
 				<!-- Copies exist but no endpoint can deliver them: explain instead of
 				     offering a dead click that would 409. -->
 				<Tooltip.Root>
@@ -394,11 +410,11 @@
 	{#if expanded && hasDetails}
 		<div class="space-y-4 border-t border-border bg-muted/20 px-4 py-3.5">
 			<!-- Location: where the bytes physically live -->
-			{#if copies.length > 0 || entry.storage_path}
+			{#if allCopies.length > 0 || entry.storage_path}
 				<section>
 					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Location</h4>
 					<div class="space-y-1.5">
-						{#each copies as c}
+						{#each allCopies as c}
 							<div class="flex items-center gap-2 text-sm">
 								{#if c.is_canonical}
 									<Tooltip.Root>
