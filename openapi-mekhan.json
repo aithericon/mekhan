@@ -2007,6 +2007,287 @@
         }
       }
     },
+    "/api/v1/catalogue/data-types": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/v1/catalogue/data-types — list registered data types, newest first.",
+        "operationId": "list_data_types",
+        "responses": {
+          "200": {
+            "description": "Registered data types, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogueDataType"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "POST /api/v1/catalogue/data-types — promote a schema digest to a named\ndata type. The server derives the canonical columns from an exemplar entry.",
+        "operationId": "promote_data_type",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataTypePromote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueDataType"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No catalogue entry carries the digest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate name, or digest already owned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Exemplar unparseable or fingerprint drift",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalogue/data-types/{id}": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/v1/catalogue/data-types/{id}.",
+        "operationId": "get_data_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Data type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The data type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueDataType"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "DELETE /api/v1/catalogue/data-types/{id} — digest rows cascade.",
+        "operationId": "delete_data_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Data type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "PATCH /api/v1/catalogue/data-types/{id} — rename/redescribe and/or\nattach/detach schema digests.",
+        "operationId": "update_data_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Data type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataTypeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogueDataType"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Type not found, or an attach digest has no exemplar",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate name, or digest already owned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Attach exemplar unparseable or fingerprint drift",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
       "get": {
         "tags": [
@@ -16170,6 +16451,77 @@
           }
         }
       },
+      "CatalogueDataType": {
+        "type": "object",
+        "description": "A registered data type: a named set of schema digests with the canonical\ncolumn projection derived from an exemplar entry at promote time.",
+        "required": [
+          "id",
+          "name",
+          "columns",
+          "digests",
+          "entry_count",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataTypeColumn"
+            },
+            "description": "Canonical display columns (derived from the promote-time exemplar)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Author (`subject_as_uuid()`), resolvable via `user_profiles`."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "digests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Schema digests owned by this type (hex16; a digest belongs to ≤1 type)."
+          },
+          "entry_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live count of catalogue entries carrying any owned digest."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`)."
+          }
+        }
+      },
       "CatalogueEntry": {
         "type": "object",
         "description": "A single catalogue entry (maps 1:1 to the `catalogue_entries` table).",
@@ -18198,6 +18550,88 @@
             "type": "number",
             "format": "double",
             "description": "Mean completeness across scored columns (0.0–1.0)."
+          }
+        }
+      },
+      "DataTypeColumn": {
+        "type": "object",
+        "description": "One column of a registered data type's canonical schema.",
+        "required": [
+          "name",
+          "data_type",
+          "nullable"
+        ],
+        "properties": {
+          "data_type": {
+            "type": "string",
+            "description": "Humanized display type (e.g. `int64`, `timestamp<UTC>`), NOT the\nfingerprint-canonical serde form."
+          },
+          "name": {
+            "type": "string"
+          },
+          "nullable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DataTypePromote": {
+        "type": "object",
+        "description": "Promote payload: name a schema digest.",
+        "required": [
+          "digest",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "digest": {
+            "type": "string",
+            "description": "Schema-fingerprint digest (hex16) — must be carried by at least one\ncatalogue entry (the exemplar)."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DataTypeUpdate": {
+        "type": "object",
+        "description": "Patch payload — every field optional; only provided fields are applied.",
+        "properties": {
+          "attach_digests": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Digests to attach. Each must resolve + verify against a live exemplar\n(columns are NOT required to match — attaching schema variants under\none name is the point). An already-owned digest is a conflict."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detach_digests": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Digests to detach (unconditional; unknown digests are no-ops)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -26239,9 +26673,17 @@
           "name",
           "value_type",
           "sortable",
-          "description"
+          "description",
+          "applies_to"
         ],
         "properties": {
+          "applies_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Probed file formats (snake_case `meta.format` values) this field is\nmeaningful for; empty = universal. Discovery metadata only — the\nserver accepts the filter regardless."
+          },
           "description": {
             "type": "string"
           },

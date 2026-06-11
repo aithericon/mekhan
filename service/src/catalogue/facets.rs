@@ -43,6 +43,10 @@ pub enum CatalogueDimension {
     SourceNet,
     /// Producing process step.
     ProcessStep,
+    /// Schema-fingerprint digest (`file_metadata->'schema_fingerprint'->>'digest'`,
+    /// the `meta.schema` virtual field). Registered data-type names are joined
+    /// client-side against `GET /catalogue/data-types`.
+    Schema,
     /// Tabular column NAMES (lateral unnest of `column_names`; an entry's
     /// column list has unique names, so count = entries having that column).
     Column,
@@ -58,6 +62,7 @@ impl CatalogueDimension {
         Self::MimeType,
         Self::SourceNet,
         Self::ProcessStep,
+        Self::Schema,
         Self::Column,
         Self::Classification,
     ];
@@ -69,13 +74,14 @@ impl CatalogueDimension {
             "mime_type" => Ok(Self::MimeType),
             "source_net" => Ok(Self::SourceNet),
             "process_step" => Ok(Self::ProcessStep),
+            "schema" => Ok(Self::Schema),
             "column" => Ok(Self::Column),
             "classification" => Ok(Self::Classification),
             other => Err(QueryError::InvalidValue {
                 field: "group_by".to_string(),
                 reason: format!(
                     "unknown dimension {other:?} (allowed: format, category, mime_type, \
-                     source_net, process_step, column, classification)"
+                     source_net, process_step, schema, column, classification)"
                 ),
             }),
         }
@@ -88,6 +94,7 @@ impl CatalogueDimension {
             Self::MimeType => "mime_type",
             Self::SourceNet => "source_net",
             Self::ProcessStep => "process_step",
+            Self::Schema => "schema",
             Self::Column => "column",
             Self::Classification => "classification",
         }
@@ -103,6 +110,11 @@ impl CatalogueDimension {
             Self::MimeType => Some("coalesce(mime_type, 'unknown')"),
             Self::SourceNet => Some("coalesce(source_net, 'none')"),
             Self::ProcessStep => Some("coalesce(process_step, 'none')"),
+            // Rides idx_cat_fmeta_schema; 'none' placeholder per the
+            // SourceNet/ProcessStep convention.
+            Self::Schema => {
+                Some("coalesce(file_metadata->'schema_fingerprint'->>'digest', 'none')")
+            }
             Self::Column | Self::Classification => None,
         }
     }
@@ -252,6 +264,10 @@ mod tests {
         assert_eq!(
             CatalogueDimension::ProcessStep.key_expr(),
             Some("coalesce(process_step, 'none')")
+        );
+        assert_eq!(
+            CatalogueDimension::Schema.key_expr(),
+            Some("coalesce(file_metadata->'schema_fingerprint'->>'digest', 'none')")
         );
         // Unnesting dimensions have no plain key_expr — they go lateral.
         assert_eq!(CatalogueDimension::Column.key_expr(), None);

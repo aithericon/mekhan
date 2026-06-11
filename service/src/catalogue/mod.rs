@@ -1,3 +1,4 @@
+pub mod data_types;
 pub mod facets;
 pub mod handlers;
 pub mod metadata_view;

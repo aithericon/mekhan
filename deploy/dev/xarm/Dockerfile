@@ -171,6 +171,95 @@ RUN f=/ros2_ws/install/xarm_moveit_config/share/xarm_moveit_config/rviz/planner.
     && sed -i '/Planned Path:/,/Planning Request:/ s/Show Robot Visual: true/Show Robot Visual: false/' "$f" \
     && sed -i '/Planned Path:/,/Planning Request:/ s/Robot Alpha: 0.5/Robot Alpha: 0/' "$f"
 
+# ── Isaac Sim hardware mode (HW_BACKEND=isaac, see deploy/sim/isaac/): the SAME
+#    MoveIt/planner/motion-bridge/rosbridge stack, but ros2_control's hardware
+#    plugin swapped from the fake mock to topic_based_ros2_control/TopicBasedSystem
+#    bridging /isaac_joint_commands + /isaac_joint_states — NVIDIA's canonical
+#    MoveIt↔Isaac seam. Everything above the hardware interface (and therefore
+#    the executor ROS backend + every demo) is untouched; the arm just executes
+#    in Isaac physics instead of the mock. Three pieces, all in thin layers
+#    AFTER the heavy colcon builds:
+#      1. the topic_based hardware plugin (FROM SOURCE — PickNik's
+#         topic_based_ros2_control has no Jazzy apt release; it's a small,
+#         fast-building single package),
+#      2. xacro patch — the arm macro only declares <param>s for the real-arm
+#         plugin and the gripper system declares none at all, but
+#         TopicBasedSystem REQUIRES its two topic params, so both get a
+#         conditional block (arm + gripper share the one topic pair; each
+#         system claims only its own joints, matched by name),
+#      3. isaac launch wrappers sed-cloned from the fake ones —
+#         _robot_moveit_fake.launch.py HARDCODES ros2_control_plugin, so a
+#         plugin-string-swapped clone is the minimal seam. Cloned from the
+#         already-patched install copies, so add_gripper:=true is inherited.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros2-control-test-assets \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/PickNikRobotics/topic_based_ros2_control.git \
+        /ros2_ws/src/topic_based_ros2_control \
+    && . /opt/ros/jazzy/setup.sh \
+    && . /ros2_ws/install/setup.sh \
+    && cd /ros2_ws \
+    && colcon build --packages-select topic_based_ros2_control --cmake-args -DBUILD_TESTING=OFF
+
+RUN python3 - <<'PY'
+import pathlib
+
+block = """        <xacro:if value="${ros2_control_plugin == 'topic_based_ros2_control/TopicBasedSystem'}">
+          <param name="joint_commands_topic">/isaac_joint_commands</param>
+          <param name="joint_states_topic">/isaac_joint_states</param>
+        </xacro:if>
+"""
+for p in [
+    "/ros2_ws/install/xarm_description/share/xarm_description/urdf/xarm6/xarm6.ros2_control.xacro",
+    "/ros2_ws/src/xarm_ros2/xarm_description/urdf/xarm6/xarm6.ros2_control.xacro",
+]:
+    f = pathlib.Path(p)
+    s = f.read_text()
+    if "TopicBasedSystem" in s:
+        continue  # idempotent
+    s = s.replace("        <!-- fake -->", block + "        <!-- fake -->", 1)
+    assert "TopicBasedSystem" in s, p
+    # The system name embeds the plugin string VERBATIM — with topic_based the
+    # hardware component creates an internal rclcpp node from that name, and
+    # the '/' in 'topic_based_ros2_control/TopicBasedSystem' is an invalid
+    # node name (RCLInvalidROSArgsError -> hardware init fails). The UF/fake
+    # plugins create no node, so the slash was only ever harmless by luck.
+    s = s.replace(
+        '<ros2_control name="${prefix}${ros2_control_plugin}" type="system">',
+        '<ros2_control name="${prefix}${ros2_control_plugin.replace(\'/\', \'_\')}" type="system">',
+        1,
+    )
+    assert "replace('/', '_')" in s, p
+    f.write_text(s)
+
+for p in [
+    "/ros2_ws/install/xarm_description/share/xarm_description/urdf/gripper/xarm_gripper.ros2_control.xacro",
+    "/ros2_ws/src/xarm_ros2/xarm_description/urdf/gripper/xarm_gripper.ros2_control.xacro",
+]:
+    f = pathlib.Path(p)
+    s = f.read_text()
+    if "TopicBasedSystem" in s:
+        continue
+    s = s.replace("</plugin>", "</plugin>\n" + block.rstrip("\n"), 1)
+    assert "TopicBasedSystem" in s, p
+    f.write_text(s)
+print("xacro TopicBasedSystem params patched")
+PY
+
+RUN set -e; \
+    for d in /ros2_ws/install/xarm_moveit_config/share/xarm_moveit_config/launch \
+             /ros2_ws/src/xarm_ros2/xarm_moveit_config/launch; do \
+      sed "s|uf_robot_hardware/UFRobotFakeSystemHardware|topic_based_ros2_control/TopicBasedSystem|" \
+          "$d/_robot_moveit_fake.launch.py" > "$d/_robot_moveit_isaac.launch.py"; \
+      grep -q TopicBasedSystem "$d/_robot_moveit_isaac.launch.py"; \
+    done; \
+    for d in /ros2_ws/install/xarm_planner/share/xarm_planner/launch \
+             /ros2_ws/src/xarm_ros2/xarm_planner/launch; do \
+      sed "s|_robot_moveit_fake.launch.py|_robot_moveit_isaac.launch.py|" \
+          "$d/xarm6_planner_fake.launch.py" > "$d/xarm6_planner_isaac.launch.py"; \
+      grep -q _robot_moveit_isaac "$d/xarm6_planner_isaac.launch.py"; \
+    done
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

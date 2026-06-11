@@ -13,9 +13,13 @@
 		type SavedQuery
 	} from '$lib/api/data';
 	import { ApiError } from '$lib/api/client';
-	import { parseQuery, compileQuery } from './query-language';
+	import { parseQuery, compileQuery, activeFormats } from './query-language';
 	import type { EntriesQueryState } from './entries-query.svelte';
+	import type { DataTypesState } from './data-types.svelte';
 	import FacetGroup from './FacetGroup.svelte';
+	import SchemaFacetGroup from './SchemaFacetGroup.svelte';
+	import DataTypesSection from './DataTypesSection.svelte';
+	import FieldReference from './FieldReference.svelte';
 	import { SideRail } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -27,7 +31,8 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import X from '@lucide/svelte/icons/x';
 
-	let { entries }: { entries: EntriesQueryState } = $props();
+	let { entries, datatypes }: { entries: EntriesQueryState; datatypes: DataTypesState } =
+		$props();
 
 	// Heavier dimensions (column / classification → LATERAL jsonb unnests)
 	// start collapsed; FacetGroup only fetches expanded groups.
@@ -65,7 +70,10 @@
 		saving = true;
 		try {
 			const q = entries.applied;
-			const compiled = compileQuery(parseQuery(q).terms);
+			// Snapshot caveat: a `datatype:` term saved before the registry loads
+			// stores fail-closed params; the stored `q` text recompiles correctly
+			// on replay.
+			const compiled = compileQuery(parseQuery(q).terms, undefined, datatypes.resolveDigests);
 			await createSavedQuery({ name, q, params: compiled });
 			toast.success(`Saved query “${name}”`);
 			saveName = '';
@@ -98,8 +106,11 @@
 			.then((r) => (registry = r))
 			.catch(() => {});
 	});
-	let fieldsOpen = $state(false);
 	let helpOpen = $state(false);
+
+	// Formats asserted by the APPLIED query (not the draft — facets already
+	// scope to applied; don't reshuffle the reference per keystroke).
+	const appliedFormats = $derived(activeFormats(parseQuery(entries.applied).terms));
 
 	function insertField(term: string) {
 		entries.insertDraft(term);
@@ -118,6 +129,8 @@
 		['size_bytes>10m', 'comparisons > >= < <= · byte suffixes k/m/g/t'],
 		['created_at>-7d', 'relative dates m/h/d/w/y · or ISO dates'],
 		['format:csv', 'file_metadata format'],
+		['meta.delimiter:";"', 'format detail fields use flat meta.* names'],
+		['datatype:name', 'entries of a registered data type'],
 		['col:email · dim:time', 'has column · has dimension'],
 		['pii:EMAIL', 'has a column classified as…'],
 		['attr:KEY=VALUE', 'custom attribute'],
@@ -142,10 +155,19 @@
 						defaultExpanded={d.defaultExpanded}
 						query={entries.applied}
 						onAdd={(term) => entries.addTerm(term)}
+						resolveDatatype={datatypes.resolveDigests}
 					/>
 				{/each}
+				<SchemaFacetGroup
+					query={entries.applied}
+					{datatypes}
+					onAdd={(term) => entries.addTerm(term)}
+				/>
 			</div>
 		</section>
+
+		<!-- Data types (registered schema digests) -->
+		<DataTypesSection {datatypes} onAdd={(term) => entries.addTerm(term)} />
 
 		<!-- Saved queries -->
 		<section data-testid="rail-saved">
@@ -211,58 +233,8 @@
 			</div>
 		</section>
 
-		<!-- Field reference -->
-		<section data-testid="rail-fields">
-			<button
-				type="button"
-				class="flex w-full items-center gap-2 text-sm font-medium text-foreground"
-				onclick={() => (fieldsOpen = !fieldsOpen)}
-			>
-				{#if fieldsOpen}
-					<ChevronDown class="size-4 text-muted-foreground" />
-				{:else}
-					<ChevronRight class="size-4 text-muted-foreground" />
-				{/if}
-				Fields
-			</button>
-			{#if fieldsOpen}
-				<div class="mt-2 max-h-72 overflow-y-auto">
-					{#if !registry}
-						<p class="px-1 py-1 text-xs text-muted-foreground">Loading field registry…</p>
-					{:else}
-						{#each [{ label: 'Fields', items: registry.native }, { label: 'Metadata (meta.*)', items: registry.meta }] as group (group.label)}
-							<p class="px-1 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-								{group.label}
-							</p>
-							{#each group.items as f (f.name)}
-								<button
-									type="button"
-									class="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-accent"
-									title={f.description}
-									onclick={() => insertField(`${f.name}:`)}
-								>
-									<span class="truncate font-mono text-foreground">{f.name}</span>
-									<span class="ml-auto shrink-0 text-xs text-muted-foreground">{f.value_type}</span>
-								</button>
-							{/each}
-						{/each}
-						<p class="px-1 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							Metadata containment
-						</p>
-						{#each registry.containment as c (c.term)}
-							<button
-								type="button"
-								class="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-accent"
-								title={c.description}
-								onclick={() => insertField(`${c.term}:`)}
-							>
-								<span class="truncate font-mono text-foreground">{c.term}:</span>
-							</button>
-						{/each}
-					{/if}
-				</div>
-			{/if}
-		</section>
+		<!-- Field reference (narrows to the applied query's formats) -->
+		<FieldReference {registry} activeFormats={appliedFormats} onInsert={insertField} />
 
 		<!-- Syntax cheat-sheet -->
 		<section data-testid="rail-help">

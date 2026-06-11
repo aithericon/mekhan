@@ -26,7 +26,11 @@ import {
 	listSavedQueries,
 	createSavedQuery,
 	updateSavedQuery,
-	deleteSavedQuery
+	deleteSavedQuery,
+	listDataTypes,
+	createDataType,
+	updateDataType,
+	deleteDataType
 } from './data';
 
 describe('listDataEntries query building', () => {
@@ -151,5 +155,52 @@ describe('saved queries CRUD', () => {
 		expect(path).toBe('/api/v1/catalogue/saved-queries/sq-2');
 		expect(init?.method).toBe('DELETE');
 		expect(rawJson).not.toHaveBeenCalled();
+	});
+});
+
+describe('data types CRUD', () => {
+	beforeEach(() => {
+		rawJson.mockClear();
+		authFetch.mockClear();
+	});
+
+	it('lists from /catalogue/data-types', async () => {
+		await listDataTypes();
+		expect(rawJson.mock.calls[0][0]).toBe('/catalogue/data-types');
+	});
+
+	it('promotes with POST + JSON body', async () => {
+		await createDataType({ digest: 'a1b2c3d4e5f60718', name: 'sensor readings' });
+		const [path, init] = rawJson.mock.calls[0];
+		expect(path).toBe('/catalogue/data-types');
+		expect(init?.method).toBe('POST');
+		expect(JSON.parse(init?.body as string)).toEqual({
+			digest: 'a1b2c3d4e5f60718',
+			name: 'sensor readings'
+		});
+	});
+
+	it('updates with PATCH to /catalogue/data-types/{id}', async () => {
+		await updateDataType('dt-1', { name: 'renamed', attach_digests: ['ffff000011112222'] });
+		const [path, init] = rawJson.mock.calls[0];
+		expect(path).toBe('/catalogue/data-types/dt-1');
+		expect(init?.method).toBe('PATCH');
+		expect(JSON.parse(init?.body as string)).toEqual({
+			name: 'renamed',
+			attach_digests: ['ffff000011112222']
+		});
+	});
+
+	it('deletes with DELETE (204, no JSON parse)', async () => {
+		await deleteDataType('dt-2');
+		const [path, init] = authFetch.mock.calls[0];
+		expect(path).toBe('/api/v1/catalogue/data-types/dt-2');
+		expect(init?.method).toBe('DELETE');
+		expect(rawJson).not.toHaveBeenCalled();
+	});
+
+	it('delete surfaces a non-2xx as ApiError', async () => {
+		authFetch.mockResolvedValueOnce(new Response('not found', { status: 404 }));
+		await expect(deleteDataType('dt-missing')).rejects.toMatchObject({ status: 404 });
 	});
 });

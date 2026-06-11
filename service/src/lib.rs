@@ -411,6 +411,17 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             catalogue::saved_queries::update_saved_query,
             catalogue::saved_queries::delete_saved_query
         ))
+        // `data-types` is another literal child — keep it before the
+        // `/{execution_id}/{id}` wildcard below.
+        .routes(routes!(
+            catalogue::data_types::list_data_types,
+            catalogue::data_types::promote_data_type
+        ))
+        .routes(routes!(
+            catalogue::data_types::get_data_type,
+            catalogue::data_types::update_data_type,
+            catalogue::data_types::delete_data_type
+        ))
         .routes(routes!(catalogue::handlers::download_artifact))
         .routes(routes!(catalogue::handlers::get_entry))
         // Inventory (docs/32) — by-reference physical-copy registry. `register`

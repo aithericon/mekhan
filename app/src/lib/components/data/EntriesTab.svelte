@@ -9,8 +9,9 @@
 	import { getCatalogueStats, type CatalogueStats } from '$lib/api/client';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { formatBytes } from './format';
-	import { parseQuery, compileQuery } from './query-language';
+	import { parseQuery, compileQuery, quoteIfNeeded } from './query-language';
 	import type { EntriesQueryState } from './entries-query.svelte';
+	import type { DataTypesState } from './data-types.svelte';
 	import QueryBar from './QueryBar.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -27,10 +28,13 @@
 
 	let {
 		entries,
+		datatypes,
 		onViewServer
 	}: {
 		/** Shared query state — the page owns it; the rail holds the other half. */
 		entries: EntriesQueryState;
+		/** Registered data types — `datatype:` terms compile through its resolver. */
+		datatypes: DataTypesState;
 		onViewServer: (key?: string) => void;
 	} = $props();
 
@@ -97,7 +101,7 @@
 		error = null;
 		try {
 			// Parse errors are excluded from `terms` — fetch with the valid ones.
-			const compiled = compileQuery(parseQuery(q).terms);
+			const compiled = compileQuery(parseQuery(q).terms, undefined, datatypes.resolveDigests);
 			const [listResult, statsResult] = await Promise.all([
 				listDataEntries({
 					search: compiled.search,
@@ -122,6 +126,10 @@
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	$effect(() => {
 		const q = entries.applied, sort = sortField, pg = entries.page;
+		// `datatype:` terms resolve through the registry, which may land AFTER
+		// the first load — read `datatypes.list` synchronously here so this
+		// effect re-runs (and recompiles past the fail-closed params) when it does.
+		if (parseQuery(q).terms.some((t) => t.kind === 'datatype')) void datatypes.list;
 		clearTimeout(debounce);
 		debounce = setTimeout(() => load(q, sort, pg), 300);
 		return () => clearTimeout(debounce);
@@ -131,7 +139,7 @@
 <!-- Query bar, then one toolbar row: catalogue totals left, sort right.
      Facets / saved queries / field reference live in the rail (EntriesRail). -->
 <div class="mb-4 space-y-3">
-	<QueryBar {entries} {knownFields} />
+	<QueryBar {entries} {knownFields} datatypeNames={datatypes.loading ? null : datatypes.names} />
 
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
 		{#if stats}
@@ -186,7 +194,10 @@
 				expanded={inspectId === key}
 				highlighted={inspectId === key}
 				onToggle={() => toggleInspect(key)}
-				onSchemaClick={(digest) => entries.addTerm(`meta.schema:${digest}`)}
+				onSchemaClick={(digest) => {
+					const dt = datatypes.byDigest.get(digest);
+					entries.addTerm(dt ? `datatype:${quoteIfNeeded(dt.name)}` : `meta.schema:${digest}`);
+				}}
 				onNetClick={(net) => entries.addTerm(`source_net:${net}`)}
 				onViewServer={(key) => onViewServer(key)}
 			/>

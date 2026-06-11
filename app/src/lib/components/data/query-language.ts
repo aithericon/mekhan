@@ -18,7 +18,11 @@
  *       `field:null` → is_null;          `field:*` → is_not_null
  *  3. containment sugar (one merged file_metadata object):
  *       format:VALUE | col:NAME | dim:NAME | pii:CLASS | attr:KEY=VALUE
- *  4. compile-time value coercions:
+ *  4. datatype sugar (at most one per query):
+ *       datatype:NAME → registered data type; compiled to a meta.schema
+ *       filter via a caller-supplied DatatypeResolver (fail-closed when the
+ *       name does not resolve)
+ *  5. compile-time value coercions:
  *       byte suffixes (10k/5m/2g/1t[b|ib], decimals ok) for *_bytes fields
  *       relative dates (-7d/-24h/-90m/-3w/-2y) for *_at fields
  */
@@ -44,7 +48,14 @@ export type QueryTerm =
 			key?: string;
 			value: string;
 			raw: string;
-	  };
+	  }
+	| { kind: 'datatype'; name: string; raw: string };
+
+/**
+ * Maps a registered data-type name to its schema-fingerprint digests.
+ * `undefined` = unknown name (or registry not loaded) — compile fails closed.
+ */
+export type DatatypeResolver = (name: string) => string[] | undefined;
 
 export interface ParseError {
 	raw: string;
@@ -144,6 +155,14 @@ function classifyToken(raw: string): Classified {
 	const m = FILTER_RE.exec(raw);
 	if (m) {
 		const [, field, opText, rest] = m;
+		// `datatype:` is sugar only with the `:` op; other ops fall through to a
+		// plain filter (validateTerms flags the unknown field).
+		if (opText === ':' && field === 'datatype') {
+			const u = unquote(rest);
+			if (u.error) return { error: u.error };
+			if (u.value === '') return { error: 'missing value' };
+			return { term: { kind: 'datatype', name: u.value, raw } };
+		}
 		if (opText === ':' && (CONTAIN_TERMS as readonly string[]).includes(field)) {
 			return classifyContain(field as ContainName, rest, raw);
 		}
@@ -272,6 +291,9 @@ export function parseQuery(input: string): { terms: QueryTerm[]; errors: ParseEr
 	// Running merge of containment fragments so a scalar conflict (e.g. a
 	// second `format:` term) is flagged on the LATER term at parse time.
 	let containAcc: unknown;
+	// Two datatype terms AND-ed match nothing (and the compiled meta.schema
+	// params would clobber each other), so the LATER one is flagged too.
+	let hasDatatype = false;
 	for (const tok of tokenize(input)) {
 		const c = classifyToken(tok.raw);
 		if ('error' in c) {
@@ -287,6 +309,13 @@ export function parseQuery(input: string): { terms: QueryTerm[]; errors: ParseEr
 			}
 			containAcc = merged.value;
 		}
+		if (term.kind === 'datatype') {
+			if (hasDatatype) {
+				errors.push({ raw: tok.raw, index: tok.index, message: 'duplicate datatype term' });
+				continue;
+			}
+			hasDatatype = true;
+		}
 		terms.push(term);
 	}
 	return { terms, errors };
@@ -299,6 +328,11 @@ export function formatQuery(terms: QueryTerm[]): string {
 
 function quoteText(v: string): string {
 	return `"${v}"`;
+}
+
+/** Quote a sugar value so it survives re-tokenization (spaces / quotes / empty). */
+export function quoteIfNeeded(v: string): string {
+	return v === '' || /[\s"]/.test(v) ? quoteText(v) : v;
 }
 
 function formatFilterValue(v: string, op: QueryOp): string {
@@ -317,8 +351,11 @@ function formatTerm(t: QueryTerm): string {
 		}
 		return quoteText(t.text);
 	}
+	if (t.kind === 'datatype') {
+		return `datatype:${quoteIfNeeded(t.name)}`;
+	}
 	if (t.kind === 'contain') {
-		const v = t.value === '' || /[\s"]/.test(t.value) ? quoteText(t.value) : t.value;
+		const v = quoteIfNeeded(t.value);
 		return t.term === 'attr' ? `attr:${t.key}=${v}` : `${t.term}:${v}`;
 	}
 	switch (t.op) {
@@ -366,15 +403,33 @@ function coerceValue(field: string, value: string, now: Date): string {
 /**
  * Compile terms into the catalogue's HTTP query params. Pure: relative dates
  * are computed from the `now` parameter (production callers pass the current
- * date; tests pass a fixed one).
+ * date; tests pass a fixed one), and `datatype:` terms resolve through the
+ * caller-supplied `resolveDatatype`.
  */
-export function compileQuery(terms: QueryTerm[], now: Date = new Date()): CompiledQuery {
+export function compileQuery(
+	terms: QueryTerm[],
+	now: Date = new Date(),
+	resolveDatatype?: DatatypeResolver
+): CompiledQuery {
 	const searchParts: string[] = [];
 	const filters: CompiledQuery['filters'] = [];
 	let meta: unknown;
 	for (const t of terms) {
 		if (t.kind === 'search') {
 			searchParts.push(t.text);
+		} else if (t.kind === 'datatype') {
+			const digests = resolveDatatype?.(t.name);
+			if (digests && digests.length > 0) {
+				filters.push({
+					field: 'meta.schema',
+					op: digests.length === 1 ? 'eq' : 'in',
+					value: digests.join(',')
+				});
+			} else {
+				// FAIL CLOSED: an unresolved data type must match nothing, never
+				// silently widen to everything (validateTerms carries the warning).
+				filters.push({ field: 'meta.schema', op: 'eq', value: '' });
+			}
 		} else if (t.kind === 'filter') {
 			let value = t.value;
 			if (t.op === 'in' || t.op === 'not_in') {
@@ -401,28 +456,46 @@ export function compileQuery(terms: QueryTerm[], now: Date = new Date()): Compil
 }
 
 /**
- * Semantic validation of filter fields against the server field registry.
- * A field is known if it matches exactly, or if the registry contains a
- * `prefix.*` wildcard covering it (e.g. `meta.*` covers `meta.num_rows`).
- * `index` is the term's position in the `terms` array.
+ * Formats asserted by the terms, for scoping format-specific UI: `format:`
+ * containment (lowercased, matching compile) plus `meta.format` eq / in
+ * filters. Negative / null ops assert nothing. Deduped, order-preserving.
  */
-export function validateTerms(terms: QueryTerm[], knownFields: Set<string>): ParseError[] {
-	const errors: ParseError[] = [];
-	terms.forEach((t, i) => {
-		if (t.kind !== 'filter') return;
-		if (isKnownField(t.field, knownFields)) return;
-		errors.push({ raw: t.raw, index: i, message: `unknown field "${t.field}"` });
-	});
-	return errors;
+export function activeFormats(terms: QueryTerm[]): string[] {
+	const out: string[] = [];
+	const push = (v: string) => {
+		if (v !== '' && !out.includes(v)) out.push(v);
+	};
+	for (const t of terms) {
+		if (t.kind === 'contain' && t.term === 'format') {
+			push(t.value.toLowerCase());
+		} else if (t.kind === 'filter' && t.field === 'meta.format') {
+			if (t.op === 'eq') push(t.value);
+			else if (t.op === 'in') t.value.split(',').forEach(push);
+		}
+	}
+	return out;
 }
 
-function isKnownField(field: string, known: Set<string>): boolean {
-	if (known.has(field)) return true;
-	const parts = field.split('.');
-	for (let i = parts.length - 1; i >= 1; i--) {
-		if (known.has(`${parts.slice(0, i).join('.')}.*`)) return true;
-	}
-	return false;
+/**
+ * Semantic validation against the server field registry (exact names only)
+ * and, when `datatypeNames` is provided, the registered data-type names
+ * (`null`/`undefined` registry = skip datatype validation, e.g. not loaded
+ * yet). `index` is the term's position in the `terms` array.
+ */
+export function validateTerms(
+	terms: QueryTerm[],
+	knownFields: Set<string>,
+	datatypeNames?: Set<string> | null
+): ParseError[] {
+	const errors: ParseError[] = [];
+	terms.forEach((t, i) => {
+		if (t.kind === 'filter' && !knownFields.has(t.field)) {
+			errors.push({ raw: t.raw, index: i, message: `unknown field "${t.field}"` });
+		} else if (t.kind === 'datatype' && datatypeNames != null && !datatypeNames.has(t.name)) {
+			errors.push({ raw: t.raw, index: i, message: `unknown data type "${t.name}"` });
+		}
+	});
+	return errors;
 }
 
 /** Remove every term whose raw text matches `raw`. */

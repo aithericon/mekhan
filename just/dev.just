@@ -1495,6 +1495,120 @@ xarm-down:
     just dev::_kill xarm-runner || true
     echo "  ✓ xArm layer down (rest of stack untouched)"
 
+# ── Isaac-backed xArm runner (remote GPU rosbridge) ──────────────────────────
+#
+# Enrolls the SAME kind of xarm_fleet runner as `xarm-up`, but with the ROS
+# backend pointed at a REMOTE rosbridge: the Isaac Sim xArm stack on a GPU
+# host (deploy/sim/isaac/ — sync-to-host.sh + compose up there first). No
+# local container; MoveIt/motion_bridge/rosbridge all live next to the sim.
+# Run INSTEAD of xarm-up: both enroll into xarm_fleet, and two live runners
+# would both receive grants.
+
+# Enroll an xarm_fleet runner pointed at a REMOTE Isaac Sim rosbridge (deploy/sim/isaac)
+isaac-runner-up bridge_url="ws://131.246.221.73:9090":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+
+    # Same executor binary as the other ROS runners (`ros` is in the features).
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    if [ ! -x "$bin" ]; then
+      echo "▶ building executor (features: {{executor_features}})…"
+      (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
+    fi
+
+    echo "▶ waiting for mekhan + ros capability seed…"
+    ready=""
+    for _ in $(seq 1 60); do
+      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+           | jq -e '.items[]? | select(.name=="ros")' >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    [ -n "$ready" ] || { echo "✗ mekhan/ros seed not ready (is 'just dev' up?)" >&2; exit 1; }
+
+    if [ -s "{{pid_dir}}/isaac-runner.pid" ] && kill -0 "$(cat {{pid_dir}}/isaac-runner.pid)" 2>/dev/null; then
+      echo "  stopping previous isaac runner (pid $(cat {{pid_dir}}/isaac-runner.pid))"
+      just dev::_kill isaac-runner || true
+    fi
+
+    runner_base="$PWD/{{work_dir}}/isaac-fleet"
+    mkdir -p "$runner_base"
+    # Same shape as the xarm-up executor.toml (concurrency 4 + wide ack window
+    # for demo 52's long-lived scene monitor) — only ws_url differs.
+    cat > "$runner_base/executor.toml" <<EOF
+    name        = "dev-isaac-runner"
+    nats_url    = "{{nats_url}}"
+    base_dir    = "$runner_base"
+    concurrency = 4
+    ack_wait_secs = 600
+    mekhan_url  = "{{service_url}}"
+
+    [storage]
+    backend  = "s3"
+    endpoint = "{{s3_endpoint}}"
+    bucket   = "mekhan-artifacts"
+    region   = "us-east-1"
+
+    [storage.credentials]
+    access_key = "rustfsadmin"
+    secret_key = "rustfsadmin"
+
+    [logs]
+    enabled = true
+    sinks   = [{ type = "file" }, { type = "nats", min_level = "info" }]
+
+    [python]
+    enabled    = true
+    prefer_uv  = true
+
+    [ros]
+    ws_url = "{{bridge_url}}"
+    EOF
+
+    identity="$runner_base/runner/identity.json"
+    reuse=""
+    if [ -f "$identity" ]; then
+      rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+        echo "▶ reusing enrolled isaac runner $rid (row still live)"
+        reuse=1
+      fi
+    fi
+
+    if [ -z "$reuse" ]; then
+      rm -rf "$runner_base/runner"
+      echo "▶ minting registration token (pool=xarm_fleet)…"
+      rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
+          -H 'content-type: application/json' -d '{"group":"xarm_fleet"}' | jq -r '.token')
+      [ -n "$rt" ] && [ "$rt" != "null" ] || { echo "✗ failed to mint registration token" >&2; exit 1; }
+      name="dev-isaac-$(date +%s)"
+      # NOTE: no `sim:isaac` cap — the ros capability type only declares the
+      # optional `sim` field on DBs seeded after it landed (the seeder is
+      # insert-only, it never updates an existing type), and enroll-time
+      # validation rejects undeclared fields. Demo claims only match on
+      # robot_model anyway.
+      echo "▶ enrolling runner '$name' (caps: ros.robot_model=xarm6, ros.ros_distro=jazzy)…"
+      ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
+          --token "$rt" --name "$name" --pool xarm_fleet \
+          --capabilities '{"ros":{"robot_model":"xarm6","ros_distro":"jazzy"}}' )
+    fi
+
+    echo "▶ starting isaac runner daemon…"
+    pid=$(just/scripts/spawn-daemon.sh isaac-runner "{{pid_dir}}/isaac-runner.pid" "{{log_dir}}/isaac-runner.log" \
+      -- env RUST_LOG="info,aithericon_executor=debug" \
+        VAULT_ADDR="{{vault_addr}}" \
+        bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
+    echo "  ✓ isaac runner (pid $pid)  log: {{log_dir}}/isaac-runner.log"
+    echo "  xArm 6 (Isaac Sim): {{bridge_url}}"
+
+isaac-runner-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_kill isaac-runner || true
+    echo "  ✓ isaac runner down (remote Isaac stack untouched)"
+
 # ── Engine (engine/core-engine) ──────────────────────────────────────────────
 
 # scheduler="nomad" additionally wires the engine to a Nomad scheduler

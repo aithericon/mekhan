@@ -2,6 +2,7 @@
   "name": "ros",
   "fields": [
     { "name": "robot_model", "kind": "text", "required": true },
-    { "name": "ros_distro", "kind": "select", "required": true, "options": ["humble", "iron", "jazzy", "kilted", "rolling"] }
+    { "name": "ros_distro", "kind": "select", "required": true, "options": ["humble", "iron", "jazzy", "kilted", "rolling"] },
+    { "name": "sim", "kind": "text", "required": false }
   ]
 }

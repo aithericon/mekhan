@@ -71,3 +71,76 @@ test('field reference inserts a stub into the draft without applying', async ({ 
 	// Insert is draft-only — nothing executed, so no ?q= yet.
 	await expect(page).not.toHaveURL(/[?&]q=/);
 });
+
+test('field reference narrows to the formats in the applied query', async ({ page }) => {
+	const fields = page.getByTestId('rail-fields');
+
+	// No format asserted → per-format groups render as collapsed chevron
+	// toggles; a format's fields only appear once its toggle is opened.
+	// (The registry is static server metadata, so this works unseeded.)
+	await page.goto('/data');
+	await fields.getByRole('button', { name: 'Fields' }).click();
+	await expect(fields.getByTestId('rail-fields-format-csv')).toBeVisible();
+	await expect(fields.getByTestId('rail-fields-format-parquet')).toBeVisible();
+	await expect(fields.getByRole('button', { name: /^meta\.delimiter\b/ })).not.toBeVisible();
+	await fields.getByTestId('rail-fields-format-csv').click();
+	await expect(fields.getByRole('button', { name: /^meta\.delimiter\b/ })).toBeVisible();
+
+	// format:csv applied → the csv group is expanded inline, other format
+	// toggles are gone, replaced by the muted scoped-to hint.
+	await page.goto('/data?q=' + encodeURIComponent('format:csv'));
+	await fields.getByRole('button', { name: 'Fields' }).click();
+	await expect(fields.getByRole('button', { name: /^meta\.delimiter\b/ })).toBeVisible();
+	await expect(fields.getByTestId('rail-fields-format-csv')).not.toBeVisible();
+	await expect(fields.getByTestId('rail-fields-format-parquet')).not.toBeVisible();
+	await expect(fields).toContainText('scoped to format: csv');
+});
+
+test('schemas facet group is collapsed by default and fetches lazily', async ({ page }) => {
+	// Lazy contract: a collapsed group never fetches — count group_by=schema
+	// facet requests around the expand.
+	let schemaFacetRequests = 0;
+	page.on('request', (req) => {
+		if (req.url().includes('/catalogue/facets') && req.url().includes('group_by=schema')) {
+			schemaFacetRequests++;
+		}
+	});
+
+	await page.goto('/data');
+	const group = page.getByTestId('facet-group-schema');
+	await expect(group).toBeVisible();
+	// Collapsed: no rows container rendered, no fetch fired.
+	await expect(page.getByTestId('facet-group-schema-rows')).not.toBeVisible();
+	expect(schemaFacetRequests).toBe(0);
+
+	await page.getByTestId('facet-group-schema-toggle').click();
+	const rows = page.getByTestId('facet-group-schema-rows');
+	await expect(rows).toBeVisible();
+	// Expanding fired the (single) facet fetch; works unseeded — the rows
+	// container then shows buckets or the empty-scope message.
+	await expect.poll(() => schemaFacetRequests).toBeGreaterThan(0);
+});
+
+test('datatype term renders a chip and round-trips ?q=', async ({ page }) => {
+	await page.goto('/data');
+
+	const input = page.getByTestId('query-bar-input');
+	await input.fill('datatype:unknown');
+	await input.press('Enter');
+
+	await expect(page).toHaveURL(/q=datatype%3Aunknown/);
+	await expect(page.getByTestId('query-bar-chips')).toContainText('datatype:unknown');
+
+	// Deep-link round-trip: the same ?q= hydrates the bar + chip again.
+	await page.goto('/data?q=' + encodeURIComponent('datatype:unknown'));
+	await expect(input).toHaveValue('datatype:unknown');
+	await expect(page.getByTestId('query-bar-chips')).toContainText('datatype:unknown');
+});
+
+test('data-types rail section renders (empty state ok)', async ({ page }) => {
+	await page.goto('/data');
+
+	const section = page.getByTestId('rail-datatypes');
+	await expect(section).toBeVisible();
+	await expect(section).toContainText('Data types');
+});

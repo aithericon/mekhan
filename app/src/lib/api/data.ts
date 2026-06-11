@@ -20,6 +20,10 @@ export type QueryFieldsResponse = components['schemas']['QueryFieldsResponse'];
 export type SavedQuery = components['schemas']['SavedQuery'];
 export type SavedQueryCreate = components['schemas']['SavedQueryCreate'];
 export type SavedQueryUpdate = components['schemas']['SavedQueryUpdate'];
+export type CatalogueDataType = components['schemas']['CatalogueDataType'];
+export type DataTypeColumn = components['schemas']['DataTypeColumn'];
+export type DataTypePromote = components['schemas']['DataTypePromote'];
+export type DataTypeUpdate = components['schemas']['DataTypeUpdate'];
 
 /** One catalogue filter triple — compiled to `filter[FIELD][OP]=VALUE`. */
 export type FilterTriple = { field: string; op: string; value: string };
@@ -113,6 +117,32 @@ export async function updateSavedQuery(id: string, body: SavedQueryUpdate): Prom
 export async function deleteSavedQuery(id: string): Promise<void> {
 	// 204 No Content — can't go through rawJson (it parses a JSON body).
 	const res = await authFetch(`/api/v1/catalogue/saved-queries/${id}`, { method: 'DELETE' });
+	if (!res.ok) {
+		throw new ApiError(res.status, await res.text());
+	}
+}
+
+// ── Registered data types (schema promotion) ───────────────────────────────
+
+export async function listDataTypes(): Promise<CatalogueDataType[]> {
+	return rawJson('/catalogue/data-types');
+}
+
+/** Promote a schema digest to a named data type (server derives the columns). */
+export async function createDataType(body: DataTypePromote): Promise<CatalogueDataType> {
+	return rawJson('/catalogue/data-types', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updateDataType(id: string, body: DataTypeUpdate): Promise<CatalogueDataType> {
+	return rawJson(`/catalogue/data-types/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteDataType(id: string): Promise<void> {
+	// 204 No Content — can't go through rawJson (it parses a JSON body).
+	const res = await authFetch(`/api/v1/catalogue/data-types/${id}`, { method: 'DELETE' });
 	if (!res.ok) {
 		throw new ApiError(res.status, await res.text());
 	}
