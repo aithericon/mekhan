@@ -3,9 +3,11 @@
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import Database from '@lucide/svelte/icons/database';
 	import EntriesTab from '$lib/components/data/EntriesTab.svelte';
+	import EntriesRail from '$lib/components/data/EntriesRail.svelte';
 	import CopiesTab from '$lib/components/data/CopiesTab.svelte';
 	import ServersTab from '$lib/components/data/ServersTab.svelte';
 	import AnalyticsTab from '$lib/components/data/AnalyticsTab.svelte';
+	import { EntriesQueryState } from '$lib/components/data/entries-query.svelte';
 
 	const TABS = ['entries', 'copies', 'servers', 'analytics'];
 
@@ -18,7 +20,15 @@
 		return t && TABS.includes(t) ? t : 'entries';
 	}
 
+	function initialQ(): string {
+		if (typeof window === 'undefined') return '';
+		return new URLSearchParams(window.location.search).get('q') ?? '';
+	}
+
 	let tab = $state(initialTab());
+	// One query-state instance per page mount, shared between the Entries tab
+	// body and the rail in the sidebar snippet (which captures it lexically).
+	const entries = new EntriesQueryState(initialQ());
 	// Server key to highlight when jumping to the Servers tab from a copy link.
 	let focusServer = $state<string | null>(null);
 
@@ -41,7 +51,10 @@
      `tabs` snippet while the panels stay in the scrolling body (bits-ui
      context spans both). -->
 <Tabs.Root value={tab} onValueChange={onTab} class="h-full gap-0">
-	<PageShell width="wide" testid="data-page">
+	<!-- The sidebar snippet is ALWAYS present (the rail inside it is per-tab):
+	     toggling PageShell's sidebar branch on tab switch would remount every
+	     panel and make the band jump between centered and flush-left. -->
+	<PageShell width={tab === 'entries' ? 'full' : 'wide'} testid="data-page">
 		{#snippet band()}
 			<PageHeader
 				title="Data"
@@ -65,9 +78,14 @@
 				</Tabs.Trigger>
 			</Tabs.List>
 		{/snippet}
+		{#snippet sidebar()}
+			{#if tab === 'entries'}
+				<EntriesRail {entries} />
+			{/if}
+		{/snippet}
 
 		<Tabs.Content value="entries">
-			<EntriesTab onViewServer={viewServer} />
+			<EntriesTab {entries} onViewServer={viewServer} />
 		</Tabs.Content>
 		<Tabs.Content value="copies">
 			<CopiesTab onViewServer={viewServer} />

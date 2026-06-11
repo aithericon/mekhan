@@ -9,16 +9,14 @@
 	import { getCatalogueStats, type CatalogueStats } from '$lib/api/client';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { formatBytes } from './format';
-	import { parseQuery, compileQuery, formatQuery, addTerm } from './query-language';
+	import { parseQuery, compileQuery } from './query-language';
+	import type { EntriesQueryState } from './entries-query.svelte';
 	import QueryBar from './QueryBar.svelte';
-	import FacetStrip from './FacetStrip.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { Separator } from '$lib/components/ui/separator';
 	import * as Select from '$lib/components/ui/select';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import HardDrive from '@lucide/svelte/icons/hard-drive';
-	import BarChart3 from '@lucide/svelte/icons/bar-chart-3';
 	import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -27,22 +25,23 @@
 	import Server from '@lucide/svelte/icons/server';
 	import Database from '@lucide/svelte/icons/database';
 
-	let { onViewServer }: { onViewServer: (key?: string) => void } = $props();
+	let {
+		entries,
+		onViewServer
+	}: {
+		/** Shared query state — the page owns it; the rail holds the other half. */
+		entries: EntriesQueryState;
+		onViewServer: (key?: string) => void;
+	} = $props();
 
 	let resp = $state<DataEntriesResponse | null>(null);
 	let stats = $state<CatalogueStats | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let page = $state(0);
-
-	// ── ONE source of truth for the filter state: the query text (?q=) ───────
-	let queryText = $state(
-		browser ? (new URLSearchParams(window.location.search).get('q') ?? '') : ''
-	);
 	let sortField = $state('-created_at');
 
 	// Known filter fields for the QueryBar's unknown-field validation — the
-	// server registry (native + meta names), fetched once.
+	// server registry (native + meta names), fetched once (module-cached).
 	let knownFields = $state<Set<string> | null>(null);
 	$effect(() => {
 		getCatalogueQueryFields()
@@ -51,40 +50,6 @@
 			})
 			.catch(() => {});
 	});
-
-	function syncUrl(text: string) {
-		if (!browser) return;
-		const url = new URL(window.location.href);
-		if (text.trim()) url.searchParams.set('q', text);
-		else url.searchParams.delete('q');
-		history.replaceState(null, '', url.toString());
-	}
-
-	/** Apply new query text: reset paging + sync ?q= (same pattern as ?inspect). */
-	function applyQuery(text: string) {
-		queryText = text;
-		page = 0;
-		syncUrl(text);
-	}
-
-	function addAndApply(term: string) {
-		applyQuery(addTerm(queryText, term));
-	}
-
-	// ── Category pills write/remove a `category:x` term on the query text ────
-	const activeCategory = $derived.by(() => {
-		const { terms } = parseQuery(queryText);
-		const t = terms.find((t) => t.kind === 'filter' && t.field === 'category' && t.op === 'eq');
-		return t && t.kind === 'filter' ? t.value : 'all';
-	});
-
-	function setCategory(cat: string) {
-		const p = parseQuery(queryText);
-		const kept = p.terms.filter((t) => !(t.kind === 'filter' && t.field === 'category'));
-		let text = [formatQuery(kept), ...p.errors.map((e) => e.raw)].filter(Boolean).join(' ');
-		if (cat !== 'all') text = addTerm(text, `category:${cat}`);
-		applyQuery(text);
-	}
 
 	// Inspected artifact — driven by ?inspect= query param (parity w/ old page).
 	let inspectId = $state<string | null>(
@@ -102,11 +67,6 @@
 		{ value: '-meta.num_rows', label: 'Most rows' },
 		{ value: '-meta.completeness', label: 'Most complete' }
 	];
-
-	const fallbackCategories = ['model', 'dataset', 'plot', 'log', 'checkpoint', 'config', 'metric', 'file', 'other'];
-	const categories = $derived(
-		stats && stats.by_category.length > 0 ? stats.by_category.map((c) => c.category) : fallbackCategories
-	);
 
 	const statusColors: Record<string, string> = {
 		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
@@ -161,62 +121,35 @@
 
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	$effect(() => {
-		const q = queryText, sort = sortField, pg = page;
+		const q = entries.applied, sort = sortField, pg = entries.page;
 		clearTimeout(debounce);
 		debounce = setTimeout(() => load(q, sort, pg), 300);
 		return () => clearTimeout(debounce);
 	});
 </script>
 
-<!-- Stats cards (absorbed from the catalogue page) -->
-{#if stats}
-	<div class="mb-6 grid grid-cols-3 gap-3">
-		<div class="rounded-lg border border-border bg-card px-4 py-3">
-			<div class="flex items-center gap-2 text-muted-foreground">
-				<FileBox class="size-4" />
-				<span class="text-sm font-medium uppercase tracking-wide">Total artifacts</span>
-			</div>
-			<p class="mt-1 text-2xl font-semibold tabular-nums text-foreground">{stats.total_entries.toLocaleString()}</p>
-		</div>
-		<div class="rounded-lg border border-border bg-card px-4 py-3">
-			<div class="flex items-center gap-2 text-muted-foreground">
-				<HardDrive class="size-4" />
-				<span class="text-sm font-medium uppercase tracking-wide">Total size</span>
-			</div>
-			<p class="mt-1 text-2xl font-semibold text-foreground">{formatBytes(stats.total_size_bytes)}</p>
-		</div>
-		<div class="rounded-lg border border-border bg-card px-4 py-3">
-			<div class="flex items-center gap-2 text-muted-foreground">
-				<BarChart3 class="size-4" />
-				<span class="text-sm font-medium uppercase tracking-wide">Categories</span>
-			</div>
-			<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
-				{#each stats.by_category as cat}
-					<button class="text-sm text-muted-foreground hover:text-foreground" onclick={() => setCategory(cat.category)}>
-						{cat.category}: <span class="font-semibold text-foreground">{cat.count}</span>
-					</button>
-				{/each}
-			</div>
-		</div>
-	</div>
-{/if}
-
-<Separator class="mb-4" />
-
-<!-- Filters: category pills + sort, then the query bar, then the facet strip -->
+<!-- Query bar, then one toolbar row: catalogue totals left, sort right.
+     Facets / saved queries / field reference live in the rail (EntriesRail). -->
 <div class="mb-4 space-y-3">
-	<div class="flex flex-wrap items-center gap-2">
-		<div class="flex flex-wrap gap-1">
-			<Button variant={activeCategory === 'all' ? 'default' : 'ghost'} size="sm" onclick={() => setCategory('all')}>All</Button>
-			{#each categories as cat}
-				<Button variant={activeCategory === cat ? 'default' : 'ghost'} size="sm" onclick={() => setCategory(cat)}>
-					{cat.charAt(0).toUpperCase() + cat.slice(1)}
-				</Button>
-			{/each}
-		</div>
+	<QueryBar {entries} {knownFields} />
+
+	<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+		{#if stats}
+			<div class="flex items-center gap-x-4 text-sm text-muted-foreground" data-testid="entries-stat-line">
+				<span class="inline-flex items-center gap-1.5">
+					<FileBox class="size-3.5" />
+					<span class="font-medium tabular-nums text-foreground">{stats.total_entries.toLocaleString()}</span>
+					artifacts
+				</span>
+				<span class="inline-flex items-center gap-1.5">
+					<HardDrive class="size-3.5" />
+					<span class="font-medium text-foreground">{formatBytes(stats.total_size_bytes)}</span>
+				</span>
+			</div>
+		{/if}
 
 		<div class="ml-auto">
-			<Select.Root type="single" value={sortField} onValueChange={(v) => { if (v) { sortField = v; page = 0; } }}>
+			<Select.Root type="single" value={sortField} onValueChange={(v) => { if (v) { sortField = v; entries.page = 0; } }}>
 				<Select.Trigger class="h-8 w-44 text-sm">
 					<div class="flex items-center gap-1.5">
 						<ArrowUpDown class="size-3.5 text-muted-foreground" />
@@ -229,10 +162,6 @@
 			</Select.Root>
 		</div>
 	</div>
-
-	<QueryBar value={queryText} onApply={applyQuery} {knownFields} />
-
-	<FacetStrip query={queryText} onAdd={addAndApply} />
 </div>
 
 {#if error}
@@ -257,8 +186,8 @@
 				expanded={inspectId === key}
 				highlighted={inspectId === key}
 				onToggle={() => toggleInspect(key)}
-				onSchemaClick={(digest) => addAndApply(`meta.schema:${digest}`)}
-				onNetClick={(net) => addAndApply(`source_net:${net}`)}
+				onSchemaClick={(digest) => entries.addTerm(`meta.schema:${digest}`)}
+				onNetClick={(net) => entries.addTerm(`source_net:${net}`)}
 				onViewServer={(key) => onViewServer(key)}
 			/>
 		{/each}
@@ -269,9 +198,9 @@
 		<div class="mt-4 flex items-center justify-between">
 			<p class="text-sm text-muted-foreground">Showing {resp.items.length} of {resp.total.toLocaleString()} entries</p>
 			<div class="flex items-center gap-1">
-				<Button variant="ghost" size="icon-sm" disabled={!resp.has_previous} onclick={() => (page = page - 1)}><ChevronLeft class="size-4" /></Button>
+				<Button variant="ghost" size="icon-sm" disabled={!resp.has_previous} onclick={() => (entries.page = entries.page - 1)}><ChevronLeft class="size-4" /></Button>
 				<span class="px-2 text-sm tabular-nums text-muted-foreground">{resp.page + 1} / {resp.total_pages}</span>
-				<Button variant="ghost" size="icon-sm" disabled={!resp.has_next} onclick={() => (page = page + 1)}><ChevronRight class="size-4" /></Button>
+				<Button variant="ghost" size="icon-sm" disabled={!resp.has_next} onclick={() => (entries.page = entries.page + 1)}><ChevronRight class="size-4" /></Button>
 			</div>
 		</div>
 	{:else if resp.total > 0}
