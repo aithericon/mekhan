@@ -35,7 +35,14 @@ services:
       ACCEPT_EULA: "Y"
       PRIVACY_CONSENT: "Y"
       OMNI_KIT_ACCEPT_EULA: "YES"
+      PYTHONUNBUFFERED: "1"
       ROS_DOMAIN_ID: "42"
+      # The bridge's INTERNAL ROS 2 Jazzy libs only load with these three set
+      # before Kit starts (the extension logs the exact recipe on failure —
+      # without them: "librmw_implementation.so … libament_index_cpp.so not
+      # found" and the bridge never starts).
+      ROS_DISTRO: jazzy
+      LD_LIBRARY_PATH: /isaac-sim/exts/isaacsim.ros2.bridge/jazzy/lib
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       FASTRTPS_DEFAULT_PROFILES_FILE: /profiles/fastdds-udp-only.xml
       XARM_URDF: /assets/xarm6_isaac.urdf

@@ -179,7 +179,9 @@ RUN f=/ros2_ws/install/xarm_moveit_config/share/xarm_moveit_config/rviz/planner.
 #    the executor ROS backend + every demo) is untouched; the arm just executes
 #    in Isaac physics instead of the mock. Three pieces, all in thin layers
 #    AFTER the heavy colcon builds:
-#      1. the topic_based hardware plugin package,
+#      1. the topic_based hardware plugin (FROM SOURCE — PickNik's
+#         topic_based_ros2_control has no Jazzy apt release; it's a small,
+#         fast-building single package),
 #      2. xacro patch — the arm macro only declares <param>s for the real-arm
 #         plugin and the gripper system declares none at all, but
 #         TopicBasedSystem REQUIRES its two topic params, so both get a
@@ -190,8 +192,14 @@ RUN f=/ros2_ws/install/xarm_moveit_config/share/xarm_moveit_config/rviz/planner.
 #         plugin-string-swapped clone is the minimal seam. Cloned from the
 #         already-patched install copies, so add_gripper:=true is inherited.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-jazzy-topic-based-ros2-control \
-    && rm -rf /var/lib/apt/lists/*
+        ros-jazzy-ros2-control-test-assets \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/PickNikRobotics/topic_based_ros2_control.git \
+        /ros2_ws/src/topic_based_ros2_control \
+    && . /opt/ros/jazzy/setup.sh \
+    && . /ros2_ws/install/setup.sh \
+    && cd /ros2_ws \
+    && colcon build --packages-select topic_based_ros2_control --cmake-args -DBUILD_TESTING=OFF
 
 RUN python3 - <<'PY'
 import pathlib
@@ -211,6 +219,17 @@ for p in [
         continue  # idempotent
     s = s.replace("        <!-- fake -->", block + "        <!-- fake -->", 1)
     assert "TopicBasedSystem" in s, p
+    # The system name embeds the plugin string VERBATIM — with topic_based the
+    # hardware component creates an internal rclcpp node from that name, and
+    # the '/' in 'topic_based_ros2_control/TopicBasedSystem' is an invalid
+    # node name (RCLInvalidROSArgsError -> hardware init fails). The UF/fake
+    # plugins create no node, so the slash was only ever harmless by luck.
+    s = s.replace(
+        '<ros2_control name="${prefix}${ros2_control_plugin}" type="system">',
+        '<ros2_control name="${prefix}${ros2_control_plugin.replace(\'/\', \'_\')}" type="system">',
+        1,
+    )
+    assert "replace('/', '_')" in s, p
     f.write_text(s)
 
 for p in [

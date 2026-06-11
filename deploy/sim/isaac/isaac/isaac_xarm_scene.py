@@ -81,6 +81,27 @@ def import_xarm(urdf_path: str) -> str:
 
 robot_prim = import_xarm(URDF_PATH)
 
+
+def find_articulation_root(base_path: str) -> str:
+    """The og articulation/joint-state nodes need the prim carrying
+    UsdPhysics.ArticulationRootAPI — the importer applies it to a DESCENDANT
+    (base link / root joint), not the robot's top-level prim; targeting the
+    top level yields 'Failed to find articulation' spam from the tensors
+    plugin."""
+    import omni.usd
+    from pxr import Usd, UsdPhysics
+
+    stage = omni.usd.get_context().get_stage()
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(base_path)):
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            return prim.GetPath().pathString
+    print(f"[isaac_xarm_scene] WARN: no ArticulationRootAPI under {base_path}, using it as-is")
+    return base_path
+
+
+art_root = find_articulation_root(robot_prim)
+print(f"[isaac_xarm_scene] articulation root: {art_root}")
+
 world = World(stage_units_in_meters=1.0, physics_dt=1.0 / SIM_HZ, rendering_dt=1.0 / SIM_HZ)
 world.scene.add_default_ground_plane()
 
@@ -116,8 +137,8 @@ og.Controller.edit(
             ("Context.inputs:domain_id", int(os.environ.get("ROS_DOMAIN_ID", "42"))),
             ("SubscribeJointState.inputs:topicName", "/isaac_joint_commands"),
             ("PublishJointState.inputs:topicName", "/isaac_joint_states"),
-            ("ArticulationController.inputs:targetPrim", [robot_prim]),
-            ("PublishJointState.inputs:targetPrim", [robot_prim]),
+            ("ArticulationController.inputs:targetPrim", [art_root]),
+            ("PublishJointState.inputs:targetPrim", [art_root]),
         ],
     },
 )
