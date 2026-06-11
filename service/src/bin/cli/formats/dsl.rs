@@ -719,6 +719,7 @@ flow:
             label: "Order Input".to_string(),
             fields: vec![
                 PortField {
+                    default: None,
                     schema: None,
                     name: "order_id".to_string(),
                     label: "Order ID".to_string(),
@@ -729,6 +730,7 @@ flow:
                     accept: None,
                 },
                 PortField {
+                    default: None,
                     schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),

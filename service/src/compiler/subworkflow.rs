@@ -241,6 +241,7 @@ pub fn derive_child_io(child_graph: &WorkflowGraph) -> (Port, Port) {
                 continue;
             }
             fields.push(PortField {
+                default: None,
                 schema: None,
                 name: name.to_string(),
                 label: name.to_string(),
@@ -298,6 +299,7 @@ pub fn derive_output_port_typed(graph: &WorkflowGraph) -> Port {
             }
             match terminal_field(name) {
                 Some(declared) => fields.push(PortField {
+                    default: None,
                     schema: declared.schema.clone(),
                     name: name.to_string(),
                     label: name.to_string(),
@@ -308,6 +310,7 @@ pub fn derive_output_port_typed(graph: &WorkflowGraph) -> Port {
                     accept: None,
                 }),
                 None => fields.push(PortField {
+                    default: None,
                     schema: None,
                     name: name.to_string(),
                     label: name.to_string(),
@@ -457,6 +460,7 @@ mod tests {
 
     fn field(name: &str, kind: FieldKind) -> PortField {
         PortField {
+            default: None,
             schema: None,
             name: name.to_string(),
             label: name.to_string(),

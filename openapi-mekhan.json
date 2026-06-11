@@ -23156,6 +23156,9 @@
             ],
             "description": "For `File` kind: accepted formats as an HTML input `accept` list\n(comma-separated MIME types and/or extensions, e.g.\n`\"image/png,image/jpeg,.pdf\"`). The instance-launch upload widget\nuses this to filter the picker, reject mismatched files, and show\nthe expected formats. Ignored for non-file kinds."
           },
+          "default": {
+            "description": "Pre-fill value for launch surfaces: the instance Run form (and any\nother token-composing UI) seeds the field's input with this instead of\nthe bare kind default, so a template with sensible defaults runs\nfirst-try from an untouched form. Display-side only — token\nvalidation never falls back to it (a submitted token must still carry\nthe field), so an API caller omitting a required field is rejected\nregardless of any declared default."
+          },
           "description": {
             "type": [
               "string",

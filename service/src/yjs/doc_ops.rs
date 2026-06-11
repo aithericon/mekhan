@@ -721,6 +721,7 @@ mod tests {
             label: "Out".to_string(),
             fields: vec![
                 PortField {
+                    default: None,
                     schema: None,
                     name: "vendor".to_string(),
                     label: "Vendor".to_string(),
@@ -731,6 +732,7 @@ mod tests {
                     accept: None,
                 },
                 PortField {
+                    default: None,
                     schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),

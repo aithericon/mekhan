@@ -200,6 +200,7 @@ pub fn globals_from_resources(
                 desc.public_fields
                     .iter()
                     .map(|f| PortField {
+                        default: None,
                         name: (*f).to_string(),
                         label: (*f).to_string(),
                         kind: crate::models::template::FieldKind::Json,

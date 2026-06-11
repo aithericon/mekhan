@@ -1167,6 +1167,7 @@ fn tool_input_schema_reflects_declared_input_port() {
     if let WorkflowNodeData::AutomatedStep { input, .. } = &mut tool.data {
         input.fields = vec![
             PortField {
+                default: None,
                 schema: None,
                 name: "order_id".to_string(),
                 label: "Order ID".to_string(),
@@ -1177,6 +1178,7 @@ fn tool_input_schema_reflects_declared_input_port() {
                 accept: None,
             },
             PortField {
+                default: None,
                 schema: None,
                 name: "include_history".to_string(),
                 label: "Include history".to_string(),
@@ -1361,6 +1363,7 @@ fn subworkflow_tool(id: &str, label: &str, child_template_id: uuid::Uuid) -> Wor
                 id: "out".to_string(),
                 label: "Out".to_string(),
                 fields: vec![PortField {
+                    default: None,
                     schema: None,
                     name: "status".to_string(),
                     label: "Status".to_string(),
@@ -1457,6 +1460,7 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
         label: "Initial".to_string(),
         fields: vec![
             PortField {
+                default: None,
                 schema: None,
                 name: "order_id".to_string(),
                 label: "Order ID".to_string(),
@@ -1467,6 +1471,7 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
                 accept: None,
             },
             PortField {
+                default: None,
                 schema: None,
                 name: "include_history".to_string(),
                 label: "Include history".to_string(),

@@ -381,6 +381,7 @@ fn derive_output_port(config: &Value) -> Port {
                 (Some("object"), Some(props)) => {
                     for (name, prop) in props.iter() {
                         fields.push(PortField {
+                            default: None,
                             schema: None,
                             name: name.clone(),
                             label: prop
@@ -423,6 +424,7 @@ fn derive_output_port(config: &Value) -> Port {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     fields.push(PortField {
+                        default: None,
                         schema: None,
                         name: "response".into(),
                         label,
@@ -450,6 +452,7 @@ fn derive_output_port(config: &Value) -> Port {
 
     // Metadata fields — always present in the runtime envelope.
     fields.push(PortField {
+        default: None,
         schema: None,
         name: "usage".into(),
         label: "Token usage".into(),
@@ -460,6 +463,7 @@ fn derive_output_port(config: &Value) -> Port {
         accept: None,
     });
     fields.push(PortField {
+        default: None,
         schema: None,
         name: "finish_reason".into(),
         label: "Finish reason".into(),
@@ -470,6 +474,7 @@ fn derive_output_port(config: &Value) -> Port {
         accept: None,
     });
     fields.push(PortField {
+        default: None,
         schema: None,
         name: "model".into(),
         label: "Model".into(),
@@ -489,6 +494,7 @@ fn derive_output_port(config: &Value) -> Port {
 
 fn text_response_field() -> PortField {
     PortField {
+        default: None,
         schema: None,
         name: "response".into(),
         label: "Response".into(),

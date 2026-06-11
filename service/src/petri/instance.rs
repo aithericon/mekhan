@@ -35,8 +35,8 @@ pub enum ParameterizeError {
     TokenNotObject(String),
 
     /// A required field declared on the Start's `initial` port is absent from
-    /// the supplied token.
-    #[error("token for start block '{block}': field '{field}' is required but missing")]
+    /// the supplied token (or null / an empty string).
+    #[error("token for start block '{block}': field '{field}' is required but missing or empty")]
     MissingRequiredField { block: String, field: String },
 
     /// A field is present but its JSON kind doesn't match the declared
@@ -405,6 +405,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                default: None,
                 schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),
@@ -433,6 +434,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                default: None,
                 schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),
@@ -474,6 +476,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                default: None,
                 schema: None,
                 name: "amount".to_string(),
                 label: "Amount".to_string(),
@@ -509,6 +512,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                default: None,
                 schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),

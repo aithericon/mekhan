@@ -32,6 +32,7 @@ mod port_contract_tests {
 
     fn field(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            default: None,
             schema: None,
             name: name.to_string(),
             label: name.to_string(),
@@ -1332,6 +1333,7 @@ mod schema_override_drilldown_tests {
 
     fn schema_field(name: &str, schema: serde_json::Value) -> PortField {
         PortField {
+            default: None,
             schema: Some(schema),
             name: name.to_string(),
             label: name.to_string(),
@@ -1475,6 +1477,7 @@ mod schema_override_drilldown_tests {
     /// `.schema` are not in tension — `.schema` always wins.
     fn object_kind_schema_field(name: &str, schema: serde_json::Value) -> PortField {
         PortField {
+            default: None,
             schema: Some(schema),
             name: name.to_string(),
             label: name.to_string(),
@@ -1533,6 +1536,7 @@ mod schema_override_drilldown_tests {
             label: "in".into(),
             fields: vec![
                 PortField {
+                    default: None,
                     schema: None,
                     name: "blob".into(),
                     label: "blob".into(),
@@ -1543,6 +1547,7 @@ mod schema_override_drilldown_tests {
                     accept: None,
                 },
                 PortField {
+                    default: None,
                     schema: None,
                     name: "list".into(),
                     label: "list".into(),

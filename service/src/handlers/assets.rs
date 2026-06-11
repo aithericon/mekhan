@@ -1573,6 +1573,7 @@ mod tests {
 
     fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            default: None,
             name: name.to_string(),
             label: name.to_string(),
             kind,

@@ -47,6 +47,7 @@ fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
         id: "in".to_string(),
         label: "Input".to_string(),
         fields: vec![PortField {
+            default: None,
             name: "steps".to_string(),
             label: "Form steps".to_string(),
             kind: FieldKind::Json,

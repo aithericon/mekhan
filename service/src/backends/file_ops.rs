@@ -191,6 +191,7 @@ fn derive_output_port(config: &Value) -> Port {
 
 fn pf(name: &str, label: &str, kind: FieldKind) -> PortField {
     PortField {
+        default: None,
         schema: None,
         name: name.into(),
         label: label.into(),

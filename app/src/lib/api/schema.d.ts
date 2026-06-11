@@ -9099,6 +9099,16 @@ export interface components {
              *     the expected formats. Ignored for non-file kinds.
              */
             accept?: string | null;
+            /**
+             * @description Pre-fill value for launch surfaces: the instance Run form (and any
+             *     other token-composing UI) seeds the field's input with this instead of
+             *     the bare kind default, so a template with sensible defaults runs
+             *     first-try from an untouched form. Display-side only — token
+             *     validation never falls back to it (a submitted token must still carry
+             *     the field), so an API caller omitting a required field is rejected
+             *     regardless of any declared default.
+             */
+            default?: unknown;
             description?: string | null;
             kind: components["schemas"]["FieldKind"];
             label: string;

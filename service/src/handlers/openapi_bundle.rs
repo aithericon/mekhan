@@ -832,6 +832,7 @@ mod tests {
         required: bool,
     ) -> crate::models::template::PortField {
         crate::models::template::PortField {
+            default: None,
             name: name.into(),
             label: name.into(),
             kind,

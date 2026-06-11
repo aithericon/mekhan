@@ -177,6 +177,50 @@
 				/>
 			</div>
 
+			{#if field.kind === 'text' || field.kind === 'textarea' || field.kind === 'select' || field.kind === 'timestamp' || field.kind === 'number' || field.kind === 'bool'}
+				<div class="space-y-1.5">
+					<Label class="text-sm text-muted-foreground">Default value</Label>
+					<!--
+						Pre-fills the instance Run form (and other launch surfaces).
+						Display-side seed only — submitted tokens must still carry the
+						field; validation never falls back to this. Container kinds
+						(json/object/array) and file/signature have no authorable
+						default here.
+					-->
+					{#if field.kind === 'bool'}
+						<Checkbox
+							checked={field.default === true}
+							disabled={readonly}
+							onCheckedChange={(v) =>
+								onchange({ ...field, default: v === true ? true : undefined })}
+						/>
+					{:else if field.kind === 'number'}
+						<Input
+							type="number"
+							value={field.default == null ? '' : String(field.default)}
+							placeholder="No default"
+							disabled={readonly}
+							oninput={(e) => {
+								const raw = (e.currentTarget as HTMLInputElement).value;
+								onchange({ ...field, default: raw === '' ? undefined : Number(raw) });
+							}}
+						/>
+					{:else}
+						<Input
+							type="text"
+							value={typeof field.default === 'string' ? field.default : ''}
+							placeholder="No default"
+							disabled={readonly}
+							oninput={(e) =>
+								onchange({
+									...field,
+									default: (e.currentTarget as HTMLInputElement).value || undefined
+								})}
+						/>
+					{/if}
+				</div>
+			{/if}
+
 			{#if field.kind === 'select'}
 				<div class="space-y-1.5">
 					<Label class="text-sm text-muted-foreground">Options</Label>

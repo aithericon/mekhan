@@ -100,8 +100,10 @@
 				const pre = initialValues?.[node.id];
 				for (const f of initial.fields ?? []) {
 					// Pre-fill from a prior run's start parameters when provided
-					// (Rerun); otherwise fall back to the field-kind default.
-					fieldSeed[f.name] = pre && f.name in pre ? pre[f.name] : defaultForKind(f);
+					// (Rerun); otherwise the field's DECLARED default; otherwise
+					// fall back to the field-kind default.
+					fieldSeed[f.name] =
+						pre && f.name in pre ? pre[f.name] : (f.default ?? defaultForKind(f));
 				}
 				seed[node.id] = fieldSeed;
 			}
@@ -133,6 +135,21 @@
 			[startId]: { ...(values[startId] ?? {}), [fieldName]: v }
 		};
 	}
+
+	// Required fields still empty (missing, null, or whitespace-only string).
+	// Blocks submit client-side — the server rejects these tokens anyway, but
+	// catching it here keeps the field-level context instead of a toast.
+	const missingRequired = $derived(
+		starts.flatMap((s) =>
+			(s.initial.fields ?? [])
+				.filter((f) => f.required)
+				.filter((f) => {
+					const v = values[s.id]?.[f.name];
+					return v == null || (typeof v === 'string' && v.trim() === '');
+				})
+				.map((f) => f.label)
+		)
+	);
 
 	// Per-field upload state, keyed by `${startId}:${fieldName}`.
 	let uploadError = $state<Record<string, string>>({});
@@ -263,7 +280,10 @@
 							{:else}
 								<div class="space-y-3">
 									{#each start.initial.fields ?? [] as field (field.name)}
-										<FormField label={field.label} description={field.description ?? undefined}>
+										<FormField
+											label={field.required ? `${field.label} *` : field.label}
+											description={field.description ?? undefined}
+										>
 											{#if field.kind === 'textarea' || field.kind === 'json'}
 												<Textarea
 													value={String(values[start.id]?.[field.name] ?? '')}
@@ -401,8 +421,16 @@
 				Start as draft
 			</label>
 			<div class="flex items-center gap-2">
+				{#if missingRequired.length > 0}
+					<span class="text-xs text-muted-foreground">
+						Required: {missingRequired.join(', ')}
+					</span>
+				{/if}
 				<Button variant="outline" onclick={close}>Cancel</Button>
-				<Button onclick={submit} disabled={submitting || loadingTemplate}>
+				<Button
+					onclick={submit}
+					disabled={submitting || loadingTemplate || missingRequired.length > 0}
+				>
 					{submitting ? 'Creating…' : asDraft ? 'Create draft' : 'Create instance'}
 				</Button>
 			</div>

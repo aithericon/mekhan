@@ -489,6 +489,7 @@ fn resource_public_fields(
                 .map(field_kind_of)
                 .unwrap_or(FieldKind::Json);
             PortField {
+                default: None,
                 name: (*name).to_string(),
                 label: (*name).to_string(),
                 kind,

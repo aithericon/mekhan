@@ -280,6 +280,7 @@ async fn seed_template_with_human_task(db: &sqlx::PgPool) -> (Uuid, String, Stri
                 id: "initial".to_string(),
                 label: "Input".to_string(),
                 fields: vec![PortField {
+                    default: None,
                     schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),

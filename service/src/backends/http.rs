@@ -214,6 +214,7 @@ fn derive_output_port(config: &Value) -> Port {
             }
             let description = selector.as_str().map(|s| format!("Mapped from `{s}`"));
             fields.push(PortField {
+                default: None,
                 schema: None,
                 name: name.clone(),
                 label: name.clone(),

@@ -3580,6 +3580,7 @@ mod tests {
                     id: "in".to_string(),
                     label: "Initial".to_string(),
                     fields: vec![PortField {
+                        default: None,
                         schema: None,
                         name: field.to_string(),
                         label: field.to_string(),
@@ -4479,6 +4480,7 @@ mod tests {
                     id: "out".to_string(),
                     label: "Out".to_string(),
                     fields: vec![PortField {
+                        default: None,
                         schema: None,
                         name: "greeting".to_string(),
                         label: "Greeting".to_string(),

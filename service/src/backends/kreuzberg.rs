@@ -204,6 +204,7 @@ fn single_fields() -> Vec<PortField> {
 fn batch_fields() -> Vec<PortField> {
     vec![
         PortField {
+            default: None,
             schema: None,
             name: "results".into(),
             label: "Per-file results".into(),
@@ -214,6 +215,7 @@ fn batch_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "total_files".into(),
             label: "Total files".into(),
@@ -224,6 +226,7 @@ fn batch_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "successful".into(),
             label: "Successful".into(),
@@ -234,6 +237,7 @@ fn batch_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "failed".into(),
             label: "Failed".into(),
@@ -244,6 +248,7 @@ fn batch_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "errors".into(),
             label: "Errors".into(),

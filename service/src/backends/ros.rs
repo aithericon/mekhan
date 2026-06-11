@@ -238,6 +238,7 @@ fn derive_output_port(config: &Value) -> Port {
             id: "out".into(),
             label: "Output".into(),
             fields: vec![PortField {
+                default: None,
                 name: "frames_streamed".into(),
                 label: "Frames streamed".into(),
                 kind: FieldKind::Number,
@@ -280,6 +281,7 @@ fn derive_output_port(config: &Value) -> Port {
     // result fields so downstream nodes can reference how many were received.
     if operation == RosOperation::SendActionGoal {
         port.fields.push(PortField {
+            default: None,
             name: "feedback_count".into(),
             label: "Feedback count".into(),
             kind: FieldKind::Number,
@@ -297,6 +299,7 @@ fn derive_output_port(config: &Value) -> Port {
 /// A bare `{ published: Bool }` output port for `PublishTopic`.
 fn published_field() -> PortField {
     PortField {
+        default: None,
         name: "published".into(),
         label: "Published".into(),
         kind: FieldKind::Bool,

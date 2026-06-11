@@ -1018,6 +1018,7 @@ pub(crate) fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
             if let TaskBlockConfig::Input { field } = block {
                 if seen.insert(field.name.clone()) {
                     fields.push(PortField {
+                        default: None,
                         schema: None,
                         name: field.name.clone(),
                         label: field.label.clone(),
@@ -2086,6 +2087,15 @@ pub struct PortField {
     pub kind: FieldKind,
     #[serde(default)]
     pub required: bool,
+    /// Pre-fill value for launch surfaces: the instance Run form (and any
+    /// other token-composing UI) seeds the field's input with this instead of
+    /// the bare kind default, so a template with sensible defaults runs
+    /// first-try from an untouched form. Display-side only — token
+    /// validation never falls back to it (a submitted token must still carry
+    /// the field), so an API caller omitting a required field is rejected
+    /// regardless of any declared default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
     /// Choice list for `kind = Select`. Same `{value, label}` shape as
     /// [`TaskFieldConfig::options`]; the deserializer accepts either bare
     /// strings or `{value, label}` objects and normalizes to the rich
@@ -2229,6 +2239,15 @@ impl Port {
                     });
                 }
                 Some(v) if v.is_null() => {} // optional null — fine
+                // An empty/whitespace string can't satisfy a REQUIRED field —
+                // it sails through the presence check but breaks downstream
+                // consumers exactly like a missing value (e.g. an untouched
+                // Run-form text input interpolated into a backend config).
+                Some(v) if field.required && v.as_str().is_some_and(|s| s.trim().is_empty()) => {
+                    return Err(PortValidationError::MissingRequiredField {
+                        field: field.name.clone(),
+                    });
+                }
                 Some(v) if !field.kind.accepts(v) => {
                     return Err(PortValidationError::FieldKindMismatch {
                         field: field.name.clone(),
@@ -2251,8 +2270,8 @@ pub enum PortValidationError {
     /// Token isn't a JSON object — every port is field-keyed.
     #[error("token must be a JSON object")]
     NotObject,
-    /// A required field is absent (or explicitly null).
-    #[error("field '{field}' is required but missing")]
+    /// A required field is absent, explicitly null, or an empty string.
+    #[error("field '{field}' is required but missing or empty")]
     MissingRequiredField { field: String },
     /// A field is present but its JSON kind doesn't match the declared
     /// `FieldKind` (e.g. a string supplied for a `Number` field).
@@ -2306,6 +2325,7 @@ pub fn default_output_port(backend: ExecutionBackendType) -> Port {
 pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
     vec![
         PortField {
+            default: None,
             schema: None,
             name: "turn".to_string(),
             label: "Final turn count".to_string(),
@@ -2316,6 +2336,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "history_ref".to_string(),
             label: "Conversation transcript blob".to_string(),
@@ -2330,6 +2351,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "final_response".to_string(),
             label: "Full LLM turn result".to_string(),
@@ -2342,6 +2364,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            default: None,
             schema: None,
             name: "input".to_string(),
             label: "Original input".to_string(),
@@ -3548,6 +3571,7 @@ mod tests {
 
     fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            default: None,
             schema: None,
             name: name.to_string(),
             label: name.to_string(),
@@ -3820,6 +3844,35 @@ mod tests {
             port.validate_token(&serde_json::json!([1, 2])),
             Err(PortValidationError::NotObject)
         ));
+    }
+
+    /// An empty (or whitespace-only) string can't satisfy a REQUIRED field —
+    /// it passes the presence check but is exactly as useless downstream as a
+    /// missing value (the demo-55 empty-Run-form incident: `""` interpolated
+    /// into a backend config and failed four retries deep in the executor).
+    /// Optional fields still accept empty strings.
+    #[test]
+    fn validate_token_rejects_empty_string_for_required_field() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![
+                pf("server", FieldKind::Text, true),
+                pf("note", FieldKind::Text, false),
+            ],
+        };
+        for empty in ["", "   "] {
+            match port.validate_token(&serde_json::json!({ "server": empty })) {
+                Err(PortValidationError::MissingRequiredField { field }) => {
+                    assert_eq!(field, "server")
+                }
+                other => panic!("expected MissingRequiredField for {empty:?}, got {other:?}"),
+            }
+        }
+        // Optional empty string is fine; required non-empty is fine.
+        assert!(port
+            .validate_token(&serde_json::json!({ "server": "nas", "note": "" }))
+            .is_ok());
     }
 
     #[test]
@@ -4131,6 +4184,7 @@ mod schema_tests {
 
     fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            default: None,
             schema: None,
             name: name.to_string(),
             label: name.to_string(),

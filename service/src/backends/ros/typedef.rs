@@ -215,6 +215,7 @@ pub fn typedefs_to_port(
             };
 
             fields.push(PortField {
+                default: None,
                 name: name.clone(),
                 label: name.clone(),
                 kind,
