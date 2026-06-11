@@ -30,12 +30,18 @@ fluxbox >/tmp/fluxbox.log 2>&1 &
 x11vnc -display :1 -forever -shared -nopw -rfbport 5900 -bg -quiet >/tmp/x11vnc.log 2>&1 || true
 websockify --web=/usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 
-# Fake xArm 6 planner stack: move_group + the xarm_planner services
-# (xarm_joint_plan / xarm_exec_plan) + fake ros2_control + joint_state_broadcaster
+# xArm 6 planner stack: move_group + the xarm_planner services
+# (xarm_joint_plan / xarm_exec_plan) + ros2_control + joint_state_broadcaster
 # (/joint_states) + RViz (the MoveIt MotionPlanning display, on DISPLAY=:1).
 # Background so rosbridge can hold the foreground as PID 1's child (the container
 # lifecycle tracks the bridge).
-ros2 launch xarm_planner xarm6_planner_fake.launch.py show_rviz:=true no_gui_ctrl:=true \
+# HW_BACKEND picks the ros2_control hardware seam (launch wrappers baked in the
+# image): fake (default) = UFRobotFakeSystemHardware mock, self-contained;
+# isaac = topic_based_ros2_control bridging /isaac_joint_commands +
+# /isaac_joint_states to an Isaac Sim container on the same DDS domain
+# (deploy/sim/isaac/) — same stack, physics execution.
+HW_BACKEND="${HW_BACKEND:-fake}"
+ros2 launch xarm_planner "xarm6_planner_${HW_BACKEND}.launch.py" show_rviz:=true no_gui_ctrl:=true \
     >/tmp/xarm.log 2>&1 &
 
 # Path C motion-bridge (re-exposes move_group planning as /plan_to_pose). The

@@ -1,0 +1,89 @@
+# Isaac Sim–backed xArm6 stack for a remote GPU host (hydra-2 class: NVIDIA RTX,
+# nvidia-container-toolkit, x86_64 Linux). Two services:
+#
+#   isaac  — NVIDIA Isaac Sim 5.1 headless, GPU-pinned. Loads the xArm6 URDF as a
+#            physics articulation and bridges it to ROS 2 via the canonical
+#            topic pair: subscribes /isaac_joint_commands, publishes
+#            /isaac_joint_states (sensor_msgs/JointState, DDS domain 42).
+#   xarm   — the SAME aithericon-xarm:jazzy image `just dev xarm-up` uses
+#            (MoveIt + motion_bridge + rosbridge :9090), launched with
+#            HW_BACKEND=isaac: ros2_control's hardware plugin becomes
+#            topic_based_ros2_control/TopicBasedSystem wired to those topics,
+#            so MoveIt executes trajectories in Isaac physics instead of the
+#            fake mock. Everything above the hardware interface — and therefore
+#            the executor ROS backend and all demos — is unchanged.
+#
+# Both run on the HOST network + host IPC: DDS discovery between two containers
+# is flaky on bridge networks, and Fast DDS additionally tries shared-memory
+# transport between same-host participants whose segments don't cross container
+# /dev/shm boundaries — the fastdds-udp-only.xml profile (mounted into both)
+# forces plain UDPv4. rosbridge therefore lands directly on host :9090 and the
+# noVNC RViz viewer on :6080.
+#
+# Runbook: see README.md (prepare-assets.sh must run once before first `up`).
+
+services:
+  isaac:
+    image: nvcr.io/nvidia/isaac-sim:5.1.0
+    container_name: aithericon-isaac
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    entrypoint: ["/isaac-sim/python.sh"]
+    command: ["/scripts/isaac_xarm_scene.py"]
+    environment:
+      ACCEPT_EULA: "Y"
+      PRIVACY_CONSENT: "Y"
+      OMNI_KIT_ACCEPT_EULA: "YES"
+      ROS_DOMAIN_ID: "42"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTRTPS_DEFAULT_PROFILES_FILE: /profiles/fastdds-udp-only.xml
+      XARM_URDF: /assets/xarm6_isaac.urdf
+    # Pin Isaac to ONE GPU (device 0 = an RTX 3080 on hydra-2; the Titan X
+    # Pascal at index 1 has no RT cores and must not be picked up).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    volumes:
+      - ./isaac:/scripts:ro
+      - ./assets:/assets:ro
+      - ./fastdds-udp-only.xml:/profiles/fastdds-udp-only.xml:ro
+      # Standard Isaac Sim cache set — first boot compiles shaders for ~minutes;
+      # these volumes make every later boot fast.
+      - isaac-cache-kit:/isaac-sim/kit/cache
+      - isaac-cache-ov:/root/.cache/ov
+      - isaac-cache-pip:/root/.cache/pip
+      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
+      - isaac-cache-computecache:/root/.nv/ComputeCache
+      - isaac-logs:/root/.nvidia-omniverse/logs
+      - isaac-data:/root/.local/share/ov/data
+
+  xarm:
+    image: aithericon-xarm:jazzy
+    build: ../../dev/xarm
+    container_name: aithericon-isaac-xarm
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    environment:
+      HW_BACKEND: isaac
+      ROS_DOMAIN_ID: "42"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      FASTRTPS_DEFAULT_PROFILES_FILE: /profiles/fastdds-udp-only.xml
+    volumes:
+      - ./fastdds-udp-only.xml:/profiles/fastdds-udp-only.xml:ro
+    depends_on:
+      - isaac
+
+volumes:
+  isaac-cache-kit:
+  isaac-cache-ov:
+  isaac-cache-pip:
+  isaac-cache-glcache:
+  isaac-cache-computecache:
+  isaac-logs:
+  isaac-data:
