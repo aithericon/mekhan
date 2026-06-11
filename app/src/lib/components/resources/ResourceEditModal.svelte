@@ -24,9 +24,8 @@
 		updateResource,
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
-	import ScopeSelector from '$lib/components/assets/ScopeSelector.svelte';
+	import PlacementFields from '$lib/components/iam/PlacementFields.svelte';
 	import type { ScopeContext } from '$lib/api/assets';
-	import Lock from '@lucide/svelte/icons/lock';
 
 	type Props = {
 		open: boolean;
@@ -439,33 +438,7 @@
 					</FormField>
 
 					{#if mode === 'create'}
-						<FormField
-							label="Location"
-							description="Workspace = visible to everyone. A folder scopes it to that folder's subtree and inherits the folder's access."
-						>
-							<ScopeSelector value={scope} onChange={(s) => (scope = s)} />
-						</FormField>
-
-						<label
-							class="flex items-start gap-2.5 rounded-md border border-border/60 p-3 text-sm"
-							data-testid="resource-modal-restricted"
-						>
-							<input
-								type="checkbox"
-								checked={restricted}
-								onchange={(e) => (restricted = (e.currentTarget as HTMLInputElement).checked)}
-								class="mt-0.5 size-4"
-							/>
-							<span>
-								<span class="flex items-center gap-1.5 font-medium text-foreground">
-									<Lock class="size-3.5" /> Private
-								</span>
-								<span class="text-muted-foreground">
-									Not shared workspace-wide. Only you and people explicitly granted
-									access (plus workspace admins) can see it.
-								</span>
-							</span>
-						</label>
+						<PlacementFields bind:scope bind:restricted testidPrefix="resource-modal" />
 					{/if}
 
 					{#if descriptor && isDynamic}

@@ -26,7 +26,6 @@
 		listAssets,
 		deleteAssetType,
 		deleteAsset,
-		createAsset,
 		type AssetTypeSummary,
 		type AssetSummary,
 		type ScopeContext
@@ -37,24 +36,23 @@
 	import ScopeSelector from './ScopeSelector.svelte';
 	import AssetTypeBuilder from './AssetTypeBuilder.svelte';
 	import AssetEditor from './AssetEditor.svelte';
+	import AssetCreateSheet from './AssetCreateSheet.svelte';
 	import CsvImport from './CsvImport.svelte';
 
 	type Props = {
-		/** When set (folders-browser Assets tab), pin the scope to this folder and
-		 *  hide the scope selector. */
-		pinnedFolderId?: string;
+		/** Controlled scope. When set (folders-browser Assets tab, or the /assets
+		 *  page's folder-tree rail), the list is pinned to this scope and the
+		 *  built-in ScopeSelector is hidden — the parent drives placement. When
+		 *  omitted, the component owns a workspace-default scope and shows its own
+		 *  selector (standalone fallback). */
+		scope?: ScopeContext;
 	};
-	let { pinnedFolderId }: Props = $props();
+	let { scope: scopeProp }: Props = $props();
 
-	// Pinned to a folder inside the folders browser, else the user-driven scope
-	// selector. The folders page re-keys on folder change so this prop is stable
-	// per mount; an $effect.pre pins it once without a reactive-capture warning.
-	let scope = $state<ScopeContext>({ kind: 'workspace' });
-	$effect.pre(() => {
-		if (pinnedFolderId && !(scope.kind === 'folder' && scope.id === pinnedFolderId)) {
-			scope = { kind: 'folder', id: pinnedFolderId };
-		}
-	});
+	// Uncontrolled fallback when no `scope` prop is supplied. The active scope is
+	// the prop when present, else this internal state (driven by the selector).
+	let scopeState = $state<ScopeContext>({ kind: 'workspace' });
+	const scope = $derived<ScopeContext>(scopeProp ?? scopeState);
 	let types = $state<AssetTypeSummary[]>([]);
 	let assets = $state<AssetSummary[]>([]);
 	let typeFilter = $state<string>('');
@@ -66,6 +64,7 @@
 	let editingTypeId = $state<string | null>(null);
 	let editorOpen = $state(false);
 	let editingAsset = $state<AssetSummary | null>(null);
+	let createOpen = $state(false);
 	let csvOpen = $state(false);
 	let csvAsset = $state<AssetSummary | null>(null);
 	let shareOpen = $state(false);
@@ -164,37 +163,14 @@
 		}
 	}
 
-	// New asset: prompt for a ref_key, mint against the current type filter (or
-	// the first available type), open the records editor.
-	async function newAsset() {
-		const targetType = typeFilter || types[0]?.id;
-		if (!targetType) {
-			error = 'Define an asset type first.';
-			return;
-		}
-		const refKey = prompt('Asset ref-key (lowercase identifier, e.g. steel):')?.trim();
-		if (!refKey) return;
-		if (!/^[a-z][a-z0-9_]*$/.test(refKey)) {
-			error = 'Ref-key must be a lowercase identifier (^[a-z][a-z0-9_]*$).';
-			return;
-		}
-		const restricted = confirm(
-			'Make this asset private?\n\nOK = private (only you + people you grant + workspace admins).\nCancel = shared workspace-wide (default).'
-		);
-		try {
-			const created = await createAsset({
-				type_id: targetType,
-				ref_key: refKey,
-				display_name: refKey,
-				scope_kind: scope.kind,
-				scope_id: scope.kind === 'workspace' ? null : scope.id,
-				restricted
-			});
-			await load();
-			openEditAsset(created);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to create asset';
-		}
+	// New asset: open the create sheet (type / ref-key / placement / privacy).
+	// On create, refresh the list and flow straight into the records editor.
+	function openCreate() {
+		createOpen = true;
+	}
+	function onAssetCreated(created: AssetSummary) {
+		load();
+		openEditAsset(created);
 	}
 
 	function onTypeSaved() {
@@ -217,8 +193,8 @@
 
 <div class="space-y-6" data-testid="assets-list">
 	<div class="flex flex-wrap items-center gap-3">
-		{#if !pinnedFolderId}
-			<ScopeSelector value={scope} onChange={(s) => (scope = s)} />
+		{#if !scopeProp}
+			<ScopeSelector value={scope} onChange={(s) => (scopeState = s)} />
 		{/if}
 		<div class="flex items-center gap-2">
 			<span class="text-sm font-medium text-muted-foreground">Type</span>
@@ -303,7 +279,7 @@
 				<Database class="size-4 text-muted-foreground" />
 				<h2 class="text-base font-semibold">Assets</h2>
 			</div>
-			<Button variant="default" size="sm" class="gap-1.5" onclick={newAsset} data-testid="asset-create" disabled={types.length === 0}>
+			<Button variant="default" size="sm" class="gap-1.5" onclick={openCreate} data-testid="asset-create" disabled={types.length === 0}>
 				<Plus class="size-4" />
 				New asset
 			</Button>
@@ -406,6 +382,13 @@
 </div>
 
 <AssetTypeBuilder bind:open={typeBuilderOpen} typeId={editingTypeId} {scope} onsaved={onTypeSaved} />
+<AssetCreateSheet
+	bind:open={createOpen}
+	{types}
+	prefillTypeId={typeFilter || undefined}
+	defaultScope={scope}
+	oncreated={onAssetCreated}
+/>
 <AssetEditor bind:open={editorOpen} asset={editingAsset} onsaved={onAssetSaved} />
 <CsvImport bind:open={csvOpen} asset={csvAsset} onsaved={onAssetSaved} />
 

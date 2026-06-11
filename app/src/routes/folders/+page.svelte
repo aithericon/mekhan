@@ -534,7 +534,7 @@
 										<ResourceList workspace_id={selected.workspace_id} folderId={selected.id} />
 									</Tabs.Content>
 									<Tabs.Content value="assets" class="pt-4">
-										<AssetList pinnedFolderId={selected.id} />
+										<AssetList scope={{ kind: 'folder', id: selected.id }} />
 									</Tabs.Content>
 									<Tabs.Content value="settings" class="pt-4">
 										<FolderSettingsPanel folder={selected} onUpdated={handleUpdated} />
