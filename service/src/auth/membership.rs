@@ -37,6 +37,18 @@ impl Role {
             _ => None,
         }
     }
+
+    /// Lowercase wire label (`owner|admin|editor|viewer`) — the inverse of
+    /// [`Role::from_db`]. Used for the `my_effective_role` DTO annotation the
+    /// SPA gates edit affordances on.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Admin => "admin",
+            Role::Editor => "editor",
+            Role::Viewer => "viewer",
+        }
+    }
 }
 
 /// Reasons a permission check can fail. Distinct from `AuthError` because

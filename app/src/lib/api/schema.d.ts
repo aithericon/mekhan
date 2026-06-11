@@ -7311,6 +7311,14 @@ export interface components {
             /** Format: uuid */
             id: string;
             /**
+             * @description The caller's effective object role on THIS folder (`owner|admin|editor|
+             *     viewer`), resolved by the Phase-3 ACL resolver in `list_folders`. NOT a
+             *     database column — `#[sqlx(default)]` lets the explicit-column row map
+             *     satisfy `FromRow`; the handler fills it in per row. Lets the SPA gate
+             *     edit/Share affordances without a per-row call.
+             */
+            my_effective_role?: string | null;
+            /**
              * Format: uuid
              * @description Parent folder, or `None` for a root-level folder.
              */
@@ -12336,6 +12344,14 @@ export interface components {
              *     list views. `test_run` is spawned by the template-test runner.
              */
             mode: string;
+            /**
+             * @description The caller's effective object role on THIS instance (`owner|admin|
+             *     editor|viewer`), resolved by the Phase-3 ACL resolver in `get_instance`.
+             *     NOT a database column — `#[sqlx(default)]` lets the `SELECT *` row map
+             *     satisfy `FromRow`; the handler fills it in after the access check. Lets
+             *     the SPA gate edit affordances (Cancel ≥ editor) without a second call.
+             */
+            my_effective_role?: string | null;
             net_id: string;
             /**
              * Format: uuid

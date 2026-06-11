@@ -290,11 +290,10 @@ async fn gate_instance(
     user: &AuthUser,
     id: Uuid,
     need: Role,
-) -> Result<(), ApiError> {
+) -> Result<Role, ApiError> {
     require_object_role(&state.db, user, ObjectRef::instance(id), need)
         .await
-        .map_err(map_to_api_error)?;
-    Ok(())
+        .map_err(map_to_api_error)
 }
 
 /// GET /api/v1/instances/:id
@@ -314,14 +313,15 @@ pub async fn get_instance(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowInstance>, ApiError> {
-    let instance =
+    let mut instance =
         sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
-    gate_instance(&state, &user, id, Role::Viewer).await?;
+    let role = gate_instance(&state, &user, id, Role::Viewer).await?;
+    instance.my_effective_role = Some(role_label(role));
     Ok(Json(instance))
 }
 

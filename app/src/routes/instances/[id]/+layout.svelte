@@ -24,7 +24,11 @@
 	} from '$lib/components/instances/instance-context';
 	import SaveAsTestDialog from '$lib/components/instances/SaveAsTestDialog.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import { roleAtLeast } from '$lib/api/iam';
 	import FileText from '@lucide/svelte/icons/file-text';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 	import ListChecks from '@lucide/svelte/icons/list-checks';
 	import Workflow from '@lucide/svelte/icons/workflow';
@@ -34,6 +38,7 @@
 	import CornerLeftUp from '@lucide/svelte/icons/corner-left-up';
 
 	let saveAsTestOpen = $state(false);
+	let shareOpen = $state(false);
 
 	// ── Rerun ────────────────────────────────────────────────────────────────
 	// Re-launch this instance's template, pre-filling the launch sheet with the
@@ -340,18 +345,35 @@
 							<span class="font-mono truncate">{instance.net_id}</span>
 						</div>
 						<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
-							<span>created {formatDate(instance.created_at)}</span>
 							<span>started {formatDate(instance.started_at ?? null)}</span>
 							<span>completed {formatDate(instance.completed_at ?? null)}</span>
 							{#if instance.current_step}
 								<span class="text-foreground">step: {instance.current_step}</span>
 							{/if}
 						</div>
+						<AuthorshipChips
+							class="mt-1"
+							createdBy={instance.created_by}
+							createdAt={instance.created_at}
+							updatedBy={instance.updated_by}
+							updatedAt={instance.updated_at}
+						/>
 						{#snippet actions()}
 							<Button variant="ghost" size="sm" href="/templates/{instance.template_id}">
 								<FileText class="size-3.5" />
 								Template v{instance.template_version}
 							</Button>
+							{#if roleAtLeast(instance.my_effective_role, 'admin')}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => (shareOpen = true)}
+									data-testid="btn-share-instance"
+								>
+									<Share2 class="mr-1 size-3.5" />
+									Share
+								</Button>
+							{/if}
 							{#if instance.mode !== 'test_run'}
 								<Button
 									variant="outline"
@@ -365,7 +387,7 @@
 									{rerunLoading ? 'Loading…' : 'Rerun'}
 								</Button>
 							{/if}
-							{#if instance.status === 'running' || instance.status === 'created'}
+							{#if (instance.status === 'running' || instance.status === 'created') && roleAtLeast(instance.my_effective_role, 'editor')}
 								<Button
 									variant="outline"
 									size="sm"
@@ -374,7 +396,7 @@
 								>
 									Cancel
 								</Button>
-							{:else if instance.mode !== 'test_run'}
+							{:else if instance.status !== 'running' && instance.status !== 'created' && instance.mode !== 'test_run'}
 								<Button
 									variant="outline"
 									size="sm"
@@ -430,5 +452,13 @@
 			rerunOpen = false;
 			void goto(`/instances/${id}`);
 		}}
+	/>
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="instance"
+		objectId={ctx.instance.id}
+		objectName={processName ?? 'this run'}
+		myEffectiveRole={ctx.instance.my_effective_role}
+		onChanged={() => reload({ silent: true })}
 	/>
 {/if}

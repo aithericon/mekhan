@@ -19546,6 +19546,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on THIS folder (`owner|admin|editor|\nviewer`), resolved by the Phase-3 ACL resolver in `list_folders`. NOT a\ndatabase column — `#[sqlx(default)]` lets the explicit-column row map\nsatisfy `FromRow`; the handler fills it in per row. Lets the SPA gate\nedit/Share affordances without a per-row call."
+          },
           "parent_id": {
             "type": [
               "string",
@@ -30160,6 +30167,13 @@
           "mode": {
             "type": "string",
             "description": "Categorizes the instance. `live` (default) is a production run.\n`draft` is a user-initiated experimental run hidden from default\nlist views. `test_run` is spawned by the template-test runner."
+          },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on THIS instance (`owner|admin|\neditor|viewer`), resolved by the Phase-3 ACL resolver in `get_instance`.\nNOT a database column — `#[sqlx(default)]` lets the `SELECT *` row map\nsatisfy `FromRow`; the handler fills it in after the access check. Lets\nthe SPA gate edit affordances (Cancel ≥ editor) without a second call."
           },
           "net_id": {
             "type": "string"

@@ -8,6 +8,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import Settings from '@lucide/svelte/icons/settings';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import Lock from '@lucide/svelte/icons/lock';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
@@ -42,6 +43,9 @@
 		ontests?: () => void;
 		/** Open the template settings panel (tags + visibility). */
 		onsettings?: () => void;
+		/** Open the object-grant Share dialog (object-Admin only; the page
+		 *  passes this conditionally on `my_effective_role`). */
+		onshare?: () => void;
 		/** Commit a new template name (parent does the API call + state). */
 		onrename?: (name: string) => void;
 	};
@@ -63,6 +67,7 @@
 		onrun,
 		ontests,
 		onsettings,
+		onshare,
 		onrename
 	}: Props = $props();
 
@@ -209,6 +214,13 @@
 			>
 				<Settings class="size-3.5" />
 				Settings
+			</Button>
+		{/if}
+
+		{#if onshare}
+			<Button variant="ghost" size="sm" data-testid="btn-share-template" onclick={onshare}>
+				<Share2 class="size-3.5" />
+				Share
 			</Button>
 		{/if}
 

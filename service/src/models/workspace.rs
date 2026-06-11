@@ -86,6 +86,14 @@ pub struct Folder {
     /// Last mutator (`subject_as_uuid()`). Backfilled to `created_by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_by: Option<Uuid>,
+    /// The caller's effective object role on THIS folder (`owner|admin|editor|
+    /// viewer`), resolved by the Phase-3 ACL resolver in `list_folders`. NOT a
+    /// database column — `#[sqlx(default)]` lets the explicit-column row map
+    /// satisfy `FromRow`; the handler fills it in per row. Lets the SPA gate
+    /// edit/Share affordances without a per-row call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub my_effective_role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
