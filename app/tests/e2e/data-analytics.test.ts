@@ -31,8 +31,8 @@ test('switching to the Entries tab still shows the entries content', async ({ pa
 
 	await page.getByTestId('data-tab-entries').click();
 	await expect(page.getByTestId('data-tab-entries')).toHaveAttribute('data-state', 'active');
-	// EntriesTab's search box is its stable landmark.
-	await expect(page.getByTestId('data-search')).toBeVisible();
+	// EntriesTab's query bar is its stable landmark.
+	await expect(page.getByTestId('query-bar-input')).toBeVisible();
 	// ?tab= sync keeps the URL shareable.
 	await expect(page).toHaveURL(/tab=entries/);
 });

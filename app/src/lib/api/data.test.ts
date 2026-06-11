@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Capture the path passed to rawJson so we can assert the query-string assembly
 // (the only logic in these thin wrappers worth testing in isolation).
-const rawJson = vi.fn(async (_path: string) => ({}) as unknown);
+const rawJson = vi.fn(async (_path: string, _init?: RequestInit) => ({}) as unknown);
 vi.mock('./client', () => ({
-	rawJson: (p: string) => rawJson(p),
+	rawJson: (p: string, init?: RequestInit) => rawJson(p, init),
 	ApiError: class ApiError extends Error {
 		constructor(public status: number, msg: string) {
 			super(msg);
@@ -12,7 +12,22 @@ vi.mock('./client', () => ({
 	}
 }));
 
-import { listDataEntries } from './data';
+const authFetch = vi.fn(
+	async (_path: string, _init?: RequestInit) => new Response(null, { status: 204 })
+);
+vi.mock('$lib/auth/fetch', () => ({
+	authFetch: (p: string, init?: RequestInit) => authFetch(p, init)
+}));
+
+import {
+	listDataEntries,
+	getCatalogueFacets,
+	getCatalogueQueryFields,
+	listSavedQueries,
+	createSavedQuery,
+	updateSavedQuery,
+	deleteSavedQuery
+} from './data';
 
 describe('listDataEntries query building', () => {
 	beforeEach(() => rawJson.mockClear());
@@ -38,5 +53,103 @@ describe('listDataEntries query building', () => {
 		await listDataEntries({ search: 'x' });
 		const path = rawJson.mock.calls[0][0];
 		expect(path).not.toContain('filter[category]');
+	});
+
+	it('compiles generic filter triples to filter[FIELD][OP]=VALUE alongside legacy params', async () => {
+		await listDataEntries({
+			category: 'dataset',
+			filters: [
+				{ field: 'meta.num_rows', op: 'gte', value: '1000' },
+				{ field: 'size_bytes', op: 'lt', value: '1048576' }
+			],
+			file_metadata: '{"format":"csv"}'
+		});
+		const path = rawJson.mock.calls[0][0];
+		const qs = new URLSearchParams(path.split('?')[1]);
+		expect(qs.get('filter[category][eq]')).toBe('dataset');
+		expect(qs.get('filter[meta.num_rows][gte]')).toBe('1000');
+		expect(qs.get('filter[size_bytes][lt]')).toBe('1048576');
+		expect(qs.get('file_metadata')).toBe('{"format":"csv"}');
+	});
+});
+
+describe('getCatalogueFacets query building', () => {
+	beforeEach(() => rawJson.mockClear());
+
+	it('sets group_by/limit and compiles filter triples + search + file_metadata', async () => {
+		await getCatalogueFacets({
+			group_by: 'format',
+			limit: 50,
+			search: 'genome',
+			filters: [{ field: 'source_net', op: 'eq', value: 'net-1' }],
+			file_metadata: '{"column_names":["email"]}'
+		});
+		const path = rawJson.mock.calls[0][0];
+		expect(path.startsWith('/catalogue/facets?')).toBe(true);
+		const qs = new URLSearchParams(path.split('?')[1]);
+		expect(qs.get('group_by')).toBe('format');
+		expect(qs.get('limit')).toBe('50');
+		expect(qs.get('search')).toBe('genome');
+		expect(qs.get('filter[source_net][eq]')).toBe('net-1');
+		expect(qs.get('file_metadata')).toBe('{"column_names":["email"]}');
+	});
+
+	it('omits the optional params when absent', async () => {
+		await getCatalogueFacets({ group_by: 'category' });
+		const path = rawJson.mock.calls[0][0];
+		const qs = new URLSearchParams(path.split('?')[1]);
+		expect(qs.get('group_by')).toBe('category');
+		expect(qs.has('limit')).toBe(false);
+		expect(qs.has('search')).toBe(false);
+		expect(qs.has('file_metadata')).toBe(false);
+	});
+});
+
+describe('getCatalogueQueryFields', () => {
+	it('hits /catalogue/query-fields and caches the promise module-level', async () => {
+		rawJson.mockClear();
+		await getCatalogueQueryFields();
+		await getCatalogueQueryFields();
+		const calls = rawJson.mock.calls.filter((c) => c[0] === '/catalogue/query-fields');
+		expect(calls.length).toBe(1);
+	});
+});
+
+describe('saved queries CRUD', () => {
+	beforeEach(() => {
+		rawJson.mockClear();
+		authFetch.mockClear();
+	});
+
+	it('lists from /catalogue/saved-queries', async () => {
+		await listSavedQueries();
+		expect(rawJson.mock.calls[0][0]).toBe('/catalogue/saved-queries');
+	});
+
+	it('creates with POST + JSON body', async () => {
+		await createSavedQuery({ name: 'csv heavies', q: 'filter[meta.format][eq]=csv' });
+		const [path, init] = rawJson.mock.calls[0];
+		expect(path).toBe('/catalogue/saved-queries');
+		expect(init?.method).toBe('POST');
+		expect(JSON.parse(init?.body as string)).toEqual({
+			name: 'csv heavies',
+			q: 'filter[meta.format][eq]=csv'
+		});
+	});
+
+	it('updates with PATCH to /catalogue/saved-queries/{id}', async () => {
+		await updateSavedQuery('sq-1', { name: 'renamed' });
+		const [path, init] = rawJson.mock.calls[0];
+		expect(path).toBe('/catalogue/saved-queries/sq-1');
+		expect(init?.method).toBe('PATCH');
+		expect(JSON.parse(init?.body as string)).toEqual({ name: 'renamed' });
+	});
+
+	it('deletes with DELETE (204, no JSON parse)', async () => {
+		await deleteSavedQuery('sq-2');
+		const [path, init] = authFetch.mock.calls[0];
+		expect(path).toBe('/api/v1/catalogue/saved-queries/sq-2');
+		expect(init?.method).toBe('DELETE');
+		expect(rawJson).not.toHaveBeenCalled();
 	});
 });

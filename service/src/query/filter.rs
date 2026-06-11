@@ -146,6 +146,18 @@ mod tests {
         assert_eq!(camel_to_snake_case("processId"), "process_id");
     }
 
+    /// Virtual field names contain dots (`meta.num_rows`) — normalization must
+    /// pass them through unchanged (only uppercase chars trigger underscores).
+    #[test]
+    fn camel_to_snake_passes_dots_through() {
+        assert_eq!(camel_to_snake_case("meta.num_rows"), "meta.num_rows");
+        assert_eq!(camel_to_snake_case("meta.numRows"), "meta.num_rows");
+        assert_eq!(
+            camel_to_snake_case("meta.duration_secs"),
+            "meta.duration_secs"
+        );
+    }
+
     #[test]
     fn filter_builder() {
         let f = Filter::single("category", FilterOperator::Eq, "model").and(

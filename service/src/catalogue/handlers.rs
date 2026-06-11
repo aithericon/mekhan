@@ -1,11 +1,15 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::IntoResponse,
     Json,
 };
+use serde::Deserialize;
+use utoipa::IntoParams;
 
+use crate::catalogue::facets::{self, CatalogueDimension, FacetsResponse};
 use crate::catalogue::model::{CatalogueEntry, CatalogueStats, LineageResponse, NetStats};
+use crate::catalogue::queries::QueryFieldsResponse;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
@@ -181,6 +185,73 @@ pub async fn distinct_jsonb_values(
             ApiError::bad_request(e.to_string())
         })?;
     Ok(Json(values))
+}
+
+/// Shaping params of the facet aggregation. The SCOPE (filter DSL incl. the
+/// virtual `meta.*` fields, `search`, and the `metadata`/`file_metadata`
+/// containment params) rides separately through the shared bracket-notation
+/// extractor — the FULL `GET /api/v1/catalogue` query surface applies.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct FacetsQuery {
+    /// Dimension to group by:
+    /// `format|category|mime_type|source_net|process_step|column|classification`.
+    pub group_by: String,
+    /// Max buckets returned (default 30, clamped 1..=200). Totals always
+    /// cover the whole scope.
+    pub limit: Option<i64>,
+}
+
+/// GET /api/v1/catalogue/facets
+///
+/// Group-by buckets (count + bytes) over the scoped catalogue. The `column`
+/// and `classification` dimensions unnest the probe metadata (`column_names` /
+/// per-column `classifications`); counts there are ENTRIES having the key.
+#[utoipa::path(
+    get,
+    path = "/api/v1/catalogue/facets",
+    params(FacetsQuery),
+    responses(
+        (status = 200, description = "Facet buckets + scope totals", body = FacetsResponse),
+        (status = 400, description = "Unknown group_by or invalid query DSL", body = ErrorResponse),
+    ),
+    tag = "catalogue",
+)]
+pub async fn facets(
+    State(state): State<AppState>,
+    Query(q): Query<FacetsQuery>,
+    params: QueryParams,
+) -> Result<Json<FacetsResponse>, ApiError> {
+    let dimension = CatalogueDimension::parse(&q.group_by).map_err(|e| {
+        tracing::warn!("catalogue facets: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
+    let limit = facets::clamp_limit(q.limit);
+
+    let response = facets::facets(&state.db, &params, dimension, limit)
+        .await
+        .map_err(|e| {
+            tracing::warn!("catalogue facets: {e}");
+            ApiError::bad_request(e.to_string())
+        })?;
+    Ok(Json(response))
+}
+
+/// GET /api/v1/catalogue/query-fields
+///
+/// The query-surface registry: filterable native + virtual `meta.*` fields
+/// (with type + sortability), `file_metadata` containment idioms, and the
+/// valid facet dimensions. Served FROM the same registry that compiles
+/// WHERE/ORDER BY, so the frontend field picker cannot drift.
+#[utoipa::path(
+    get,
+    path = "/api/v1/catalogue/query-fields",
+    responses(
+        (status = 200, description = "Filter/sort/containment/facet registry", body = QueryFieldsResponse),
+    ),
+    tag = "catalogue",
+)]
+pub async fn query_fields() -> Json<QueryFieldsResponse> {
+    Json(crate::catalogue::queries::query_fields_response())
 }
 
 /// GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.
