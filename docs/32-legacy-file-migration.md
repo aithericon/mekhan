@@ -277,6 +277,17 @@ set-based**:
   `inventory::queries::fold_index_batch`), which is what makes the 4M campaign a few hundred
   statements instead of ~8M round-trips. Duplicate paths within one batch collapse to the last
   occurrence.
+- **Probing crawl** (`CrawlConfig.probe: "hash" | "full"`, default off): per-entry content
+  capture during the walk — `hash` reads each file once for its SHA-256 (bare hex, the
+  catalogue/reconcile join shape); `full` adds the fmeta metadata blob (format, mime, tabular
+  stats; unsupported formats degrade to checksum-only). Local backends probe the file in place
+  (zero copy — the co-located-runner hot path); non-local download to a run-dir temp file.
+  `FoldItem` carries `hash` + `metadata`; the fold consumer's catalogue coupling then fills
+  content-addressed entries with `file_metadata`/`mime_type` in the same pass (enrich-only on
+  conflict — the register/projector path stays authoritative). Probe failures are counted in
+  the `probe_errors` output and emitted hashless, never fatal. With `full`, keep `batch_size`
+  modest (≤ ~500) so metadata blobs stay under the NATS max payload. Demo 55 exposes this as a
+  `probe` start parameter (off/hash/full, default full).
 - **Chunking**: `CrawlConfig.max_batches` caps one invocation; new `exhausted` output (lister
   EOF, not a cap/cancel stop) is the campaign's exit condition. Resume is capability-aware:
   native `start_after` on S3; client-side skip-until-cursor elsewhere (the `fs` lister silently

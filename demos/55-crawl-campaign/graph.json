@@ -21,6 +21,19 @@
               "kind": "text",
               "required": true,
               "default": "campaign-nas"
+            },
+            {
+              "name": "probe",
+              "label": "Probe (content capture)",
+              "kind": "select",
+              "required": true,
+              "default": "full",
+              "description": "What the crawl captures per file beyond stat metadata: 'off' = paths/sizes only (fastest), 'hash' = SHA-256 content identity (fills the catalogue), 'full' = hash + fmeta metadata (format, mime, tabular stats). The real-world campaign default.",
+              "options": [
+                { "value": "off", "label": "Off (metadata-only walk)" },
+                { "value": "hash", "label": "Hash (SHA-256 identity)" },
+                { "value": "full", "label": "Full (hash + fmeta metadata)" }
+              ]
             }
           ]
         }
@@ -95,6 +108,11 @@
             "var": "total",
             "init": "0",
             "mergeExpr": "campaign.total + crawl.count"
+          },
+          {
+            "var": "probe_errs",
+            "init": "0",
+            "mergeExpr": "campaign.probe_errs + crawl.probe_errors"
           }
         ]
       }
@@ -111,7 +129,7 @@
       "data": {
         "type": "automated_step",
         "label": "Crawl one chunk → fold sink",
-        "description": "The file-ops `crawl` op in SINK MODE (docs/32 batch-fold): walks /tmp/mekhan-campaign-demo resuming after `{{ campaign.cursor }}` (a Loop-accumulator borrow interpolated into the config — empty string on iteration 0 means from-the-start), stops after `max_batches: 2` filled batches of `batch_size: 10`, and PUBLISHES each batch durably to the `INVENTORY_FOLD` JetStream stream instead of emitting channel items (note: no channels declared on this node). The publish-ack lands BEFORE the cursor advances, and mekhan's fold consumer upserts rows idempotently on (file_server_id, path) — so a retried or re-run chunk never duplicates. `sink.file_server_id` is itself a borrow (`{{ start.file_server }}`). Outputs are slim scalars; `exhausted` is the loop's exit signal and `last_path` the next iteration's cursor.",
+        "description": "The file-ops `crawl` op in SINK MODE (docs/32 batch-fold): walks /tmp/mekhan-campaign-demo resuming after `{{ campaign.cursor }}` (a Loop-accumulator borrow interpolated into the config — empty string on iteration 0 means from-the-start), stops after `max_batches: 2` filled batches of `batch_size: 10`, and PUBLISHES each batch durably to the `INVENTORY_FOLD` JetStream stream instead of emitting channel items (note: no channels declared on this node). The publish-ack lands BEFORE the cursor advances, and mekhan's fold consumer upserts rows idempotently on (file_server_id, path) — so a retried or re-run chunk never duplicates. `sink.file_server_id` is itself a borrow (`{{ start.file_server }}`), as is `probe` (`{{ start.probe }}`): with probing on, every file is read once during the walk — SHA-256 content identity (and, on 'full', the fmeta metadata blob) rides each fold item, so the catalogue fills in the same pass (hash → content-addressed entry, blob → file_metadata/mime). Probe failures never kill a chunk; they're counted per chunk in `probe_errors` and totalled by the campaign. Outputs are slim scalars; `exhausted` is the loop's exit signal and `last_path` the next iteration's cursor.",
         "channels": [],
         "executionSpec": {
           "backendType": "file_ops",
@@ -126,6 +144,7 @@
             "max_batches": 2,
             "stat": true,
             "resume_from": "{{ campaign.cursor }}",
+            "probe": "{{ start.probe }}",
             "sink": {
               "mode": "index",
               "file_server_id": "{{ start.file_server }}"
@@ -170,6 +189,11 @@
               "name": "endpoint_root",
               "label": "Endpoint root (canonical)",
               "kind": "text"
+            },
+            {
+              "name": "probe_errors",
+              "label": "Probe errors (this chunk)",
+              "kind": "number"
             }
           ]
         }
@@ -197,6 +221,10 @@
           {
             "targetField": "files_seeded",
             "expression": "seed.files_created"
+          },
+          {
+            "targetField": "probe_errors",
+            "expression": "campaign.probe_errs"
           }
         ]
       }

@@ -322,6 +322,7 @@ async fn backfill_forward_invariant_native_columns_and_provenance() {
             uid: Some(501),
             gid: Some(20),
             mode: Some(0o100644),
+            metadata: None,
         }],
         &reconcile::ObservationContext::default(),
     )

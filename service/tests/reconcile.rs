@@ -16,9 +16,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use mekhan_service::inventory::reconcile::{
-    self, ObservedItem, OrphanDbRow,
-};
+use mekhan_service::inventory::reconcile::{self, ObservedItem, OrphanDbRow};
 use mekhan_service::query::pagination::PageQuery;
 
 /// Resolve the live DB URL, or `None` (→ skip) if the gate env is unset.
@@ -190,6 +188,7 @@ async fn reconcile_classifies_every_class() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
             ObservedItem {
                 path: "/data/mismatch.bin".into(),
@@ -199,6 +198,7 @@ async fn reconcile_classifies_every_class() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
             ObservedItem {
                 path: "/data/orphan_disk.bin".into(), // no legacy row
@@ -208,6 +208,7 @@ async fn reconcile_classifies_every_class() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
             ObservedItem {
                 path: "/data/dup.bin".into(),
@@ -217,6 +218,7 @@ async fn reconcile_classifies_every_class() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
         ],
         &reconcile::ObservationContext::default(),
@@ -241,6 +243,7 @@ async fn reconcile_classifies_every_class() {
             uid: None,
             gid: None,
             mode: None,
+            metadata: None,
         }],
         &reconcile::ObservationContext::default(),
     )
@@ -253,14 +256,22 @@ async fn reconcile_classifies_every_class() {
         .await
         .expect("verified row exists");
     assert_eq!(status, "verified");
-    assert_eq!(ch.as_deref(), Some(hash_verified.as_str()), "verified hash inherited");
+    assert_eq!(
+        ch.as_deref(),
+        Some(hash_verified.as_str()),
+        "verified hash inherited"
+    );
 
     // --- mismatch: status + hash + provenance sizes -----------------------
     let (status, ch) = inv_row(&pool, &server, "/data/mismatch.bin")
         .await
         .expect("mismatch row exists");
     assert_eq!(status, "mismatch");
-    assert_eq!(ch.as_deref(), Some(hash_mismatch.as_str()), "mismatch hash set");
+    assert_eq!(
+        ch.as_deref(),
+        Some(hash_mismatch.as_str()),
+        "mismatch hash set"
+    );
     let prov: serde_json::Value = sqlx::query_scalar(
         "SELECT provenance FROM file_inventory WHERE file_server_id = $1 AND path = $2",
     )
@@ -269,8 +280,16 @@ async fn reconcile_classifies_every_class() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(prov["observed_size"], serde_json::json!(999), "provenance observed_size");
-    assert_eq!(prov["legacy_size"], serde_json::json!(200), "provenance legacy_size");
+    assert_eq!(
+        prov["observed_size"],
+        serde_json::json!(999),
+        "provenance observed_size"
+    );
+    assert_eq!(
+        prov["legacy_size"],
+        serde_json::json!(200),
+        "provenance legacy_size"
+    );
 
     // --- orphan_disk: status + NULL hash ----------------------------------
     let (status, ch) = inv_row(&pool, &server, "/data/orphan_disk.bin")
@@ -282,18 +301,24 @@ async fn reconcile_classifies_every_class() {
     // --- orphan_db: in the view, NOT an inventory row ---------------------
     // No file_inventory row for the never-crawled legacy path.
     assert!(
-        inv_row(&pool, &server, "/data/orphan_db.bin").await.is_none(),
+        inv_row(&pool, &server, "/data/orphan_db.bin")
+            .await
+            .is_none(),
         "orphan_db path must NOT have an inventory row (dump doesn't write inventory)"
     );
     // It appears in the reconcile_orphan_db view.
     let orphans = collect_all_orphans(&pool, &server).await;
     assert!(
-        orphans.iter().any(|o| o.path.as_deref() == Some("/data/orphan_db.bin")),
+        orphans
+            .iter()
+            .any(|o| o.path.as_deref() == Some("/data/orphan_db.bin")),
         "orphan_db path appears in reconcile_orphan_db view"
     );
     // And the verified/mismatch/dup paths (observed) do NOT appear as orphan_db.
     assert!(
-        !orphans.iter().any(|o| o.path.as_deref() == Some("/data/verified.bin")),
+        !orphans
+            .iter()
+            .any(|o| o.path.as_deref() == Some("/data/verified.bin")),
         "observed path must not be reported as orphan_db"
     );
 
@@ -311,8 +336,13 @@ async fn reconcile_classifies_every_class() {
     assert_eq!(dup_group.locations.len(), 2, "two locations listed");
 
     // mark_canonical → exactly one is_canonical=true for the dup hash.
-    let touched = reconcile::mark_canonical(&pool).await.expect("mark_canonical");
-    assert!(touched >= 1, "mark_canonical touched at least the dup winner");
+    let touched = reconcile::mark_canonical(&pool)
+        .await
+        .expect("mark_canonical");
+    assert!(
+        touched >= 1,
+        "mark_canonical touched at least the dup winner"
+    );
 
     let canon_count: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM file_inventory \
@@ -322,7 +352,10 @@ async fn reconcile_classifies_every_class() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(canon_count, 1, "exactly one canonical copy for the dup hash");
+    assert_eq!(
+        canon_count, 1,
+        "exactly one canonical copy for the dup hash"
+    );
 
     // Deterministic pick: lowest (file_server_id, path) — `server` < `server_b`.
     let canon_server: String = sqlx::query_scalar(
@@ -333,10 +366,15 @@ async fn reconcile_classifies_every_class() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(canon_server, server, "canonical is the lowest-ordered server");
+    assert_eq!(
+        canon_server, server,
+        "canonical is the lowest-ordered server"
+    );
 
     // Idempotent: a second mark_canonical changes nothing.
-    let again = reconcile::mark_canonical(&pool).await.expect("mark_canonical again");
+    let again = reconcile::mark_canonical(&pool)
+        .await
+        .expect("mark_canonical again");
     assert_eq!(again, 0, "mark_canonical is idempotent");
 
     // --- reconcile_summary includes orphan_db + duplicate_groups ----------
@@ -344,11 +382,17 @@ async fn reconcile_classifies_every_class() {
         .await
         .expect("reconcile_summary");
     assert!(
-        summary.by_status.iter().any(|s| s.status == "verified" && s.n >= 3),
+        summary
+            .by_status
+            .iter()
+            .any(|s| s.status == "verified" && s.n >= 3),
         "summary by_status has our verified rows"
     );
     assert!(summary.orphan_db >= 1, "summary includes orphan_db count");
-    assert!(summary.duplicate_groups >= 1, "summary includes duplicate group count");
+    assert!(
+        summary.duplicate_groups >= 1,
+        "summary includes duplicate group count"
+    );
 
     // --- cleanup -----------------------------------------------------------
     cleanup(&pool, &cleanup_servers, &cleanup_hashes).await;
@@ -357,7 +401,12 @@ async fn reconcile_classifies_every_class() {
     let leftover: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM file_inventory WHERE file_server_id = ANY($1)",
     )
-    .bind(cleanup_servers.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    .bind(
+        cleanup_servers
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    )
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -446,6 +495,13 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
                 uid: Some(1000),
                 gid: None,
                 mode: Some(0o100644),
+                // A probing crawl's fmeta blob — must enrich the coupled
+                // catalogue entry (file_metadata + mime_type).
+                metadata: Some(serde_json::json!({
+                    "format": {"Unknown": "bin"},
+                    "mime_type": "application/octet-stream",
+                    "checksum": {"algorithm": "Sha256", "digest": hash_observed},
+                })),
             },
             ObservedItem {
                 path: "/data/dup_path.bin".into(),
@@ -455,6 +511,7 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
             ObservedItem {
                 path: "/data/dup_path.bin".into(),
@@ -464,6 +521,7 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
                 uid: None,
                 gid: None,
                 mode: None,
+                metadata: None,
             },
         ],
         &reconcile::ObservationContext {
@@ -483,23 +541,40 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
         .await
         .expect("probed row exists");
     assert_eq!(status, "verified");
-    assert_eq!(ch.as_deref(), Some(hash_observed.as_str()), "observed hash wins");
+    assert_eq!(
+        ch.as_deref(),
+        Some(hash_observed.as_str()),
+        "observed hash wins"
+    );
 
     // Catalogue half coupled in the same tx: name from the path's final
-    // segment, category legacy, legacy owner stamped into user_metadata.
-    let cat: (String, Option<String>, serde_json::Value) = sqlx::query_as(
-        "SELECT category, name, user_metadata FROM catalogue_entries WHERE content_hash = $1",
-    )
-    .bind(&hash_observed)
-    .fetch_one(&pool)
-    .await
-    .expect("catalogue row coupled");
+    // segment, category legacy, legacy owner stamped into user_metadata,
+    // fmeta blob + mime enriched from the item's metadata.
+    let cat: (String, Option<String>, serde_json::Value, Option<String>, serde_json::Value) =
+        sqlx::query_as(
+            "SELECT category, name, user_metadata, mime_type, file_metadata \
+             FROM catalogue_entries WHERE content_hash = $1",
+        )
+        .bind(&hash_observed)
+        .fetch_one(&pool)
+        .await
+        .expect("catalogue row coupled");
     assert_eq!(cat.0, "legacy");
     assert_eq!(cat.1.as_deref(), Some("probed.bin"));
     assert_eq!(
         cat.2["legacy_owner_id"],
         serde_json::json!("legacy-user-42"),
         "legacy owner stamped"
+    );
+    assert_eq!(
+        cat.3.as_deref(),
+        Some("application/octet-stream"),
+        "mime from fmeta blob"
+    );
+    assert_eq!(
+        cat.4["checksum"]["digest"],
+        serde_json::json!(hash_observed),
+        "fmeta blob stored on the catalogue entry"
     );
 
     // Dup path: LAST occurrence wins (size 2), and the ctx + uid landed in
@@ -514,7 +589,11 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     .await
     .expect("dup row exists once");
     assert_eq!(size, Some(2), "last occurrence wins");
-    assert_eq!(prov["endpoint_root"], serde_json::json!("/data"), "ctx stamped");
+    assert_eq!(
+        prov["endpoint_root"],
+        serde_json::json!("/data"),
+        "ctx stamped"
+    );
     assert_eq!(prov["serve_group"], serde_json::json!("test-group"));
 
     let probed_prov: serde_json::Value = sqlx::query_scalar(
@@ -525,7 +604,11 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(probed_prov["mode"], serde_json::json!(0o100644), "mode in provenance");
+    assert_eq!(
+        probed_prov["mode"],
+        serde_json::json!(0o100644),
+        "mode in provenance"
+    );
     let probed_uid: Option<i32> = sqlx::query_scalar(
         "SELECT uid FROM file_inventory WHERE file_server_id = $1 AND path = $2",
     )

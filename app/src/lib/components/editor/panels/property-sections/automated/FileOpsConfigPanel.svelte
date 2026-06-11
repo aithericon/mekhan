@@ -258,6 +258,28 @@
 			cursor between campaign iterations. Empty on the first iteration means from-the-start.
 		</p>
 	</FormField>
+	<FormField label="Probe (per-file content capture)" for="fo-crawl-probe">
+		<Input
+			id="fo-crawl-probe"
+			type="text"
+			value={(config.probe as string) ?? ''}
+			placeholder={'off | hash | full — or {{ start.probe }}'}
+			disabled={readonly}
+			oninput={(e) => {
+				const v = (e.currentTarget as HTMLInputElement).value;
+				onchange({ ...config, probe: v === '' ? undefined : v });
+			}}
+			class="font-mono"
+			data-testid="crawl-probe"
+		/>
+		<p class="text-xs text-muted-foreground">
+			<code>hash</code> reads each file once for its SHA-256 (fills the catalogue);
+			<code>full</code> adds fmeta metadata (format, mime, tabular stats). Empty/<code>off</code> =
+			metadata-only walk. Accepts a <code>{'{{ slug.field }}'}</code> borrow. Probe failures are
+			counted in <code>probe_errors</code>, never fatal. With <code>full</code>, keep batch size
+			modest (≤ ~500).
+		</p>
+	</FormField>
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
 		<span class="text-sm font-medium text-muted-foreground">Batch sink</span>
 		<Select.Root

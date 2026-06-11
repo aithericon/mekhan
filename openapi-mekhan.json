@@ -15214,6 +15214,13 @@
             "type": "string",
             "description": "Prefix (relative to the storage root) to walk recursively."
           },
+          "probe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opt-in per-entry content probing during the walk:\n* `\"hash\"` — read each file once and emit its SHA-256 (bare lowercase\n  hex — the catalogue `content_hash` / reconcile join shape);\n* `\"full\"` — hash PLUS `fmeta` metadata extraction (format, mime,\n  tabular stats); unsupported formats degrade to checksum-only.\n\nAbsent / empty string = metadata-only walk (the default — integrity\nhashing then remains the separate `probe` op's job). A file that fails\nto probe is emitted hashless and counted in the `probe_errors` output\ninstead of failing the walk. With `\"full\"`, keep `batch_size` modest\n(≤ ~500): each item carries its metadata blob inside one sink publish."
+          },
           "resume_from": {
             "type": [
               "string",
@@ -21068,6 +21075,9 @@
               "null"
             ],
             "description": "Observed content hash (bare lowercase hex). When present it wins over\nthe inherited legacy hash and triggers catalogue coupling."
+          },
+          "metadata": {
+            "description": "Full `fmeta` metadata blob from a probing crawl (`probe: \"full\"`).\nEnriches the coupled catalogue entry (`file_metadata`/`mime_type`);\nonly meaningful together with `hash`."
           },
           "mode": {
             "type": [

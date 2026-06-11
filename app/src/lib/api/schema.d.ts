@@ -5765,6 +5765,20 @@ export interface components {
             /** @description Prefix (relative to the storage root) to walk recursively. */
             prefix: string;
             /**
+             * @description Opt-in per-entry content probing during the walk:
+             *     * `"hash"` — read each file once and emit its SHA-256 (bare lowercase
+             *       hex — the catalogue `content_hash` / reconcile join shape);
+             *     * `"full"` — hash PLUS `fmeta` metadata extraction (format, mime,
+             *       tabular stats); unsupported formats degrade to checksum-only.
+             *
+             *     Absent / empty string = metadata-only walk (the default — integrity
+             *     hashing then remains the separate `probe` op's job). A file that fails
+             *     to probe is emitted hashless and counted in the `probe_errors` output
+             *     instead of failing the walk. With `"full"`, keep `batch_size` modest
+             *     (≤ ~500): each item carries its metadata blob inside one sink publish.
+             */
+            probe?: string | null;
+            /**
              * @description Optional resume cursor: the walk resumes *after* this path. Native
              *     `start_after` on backends that support it (S3); elsewhere a
              *     client-side skip-until-cursor (readdir-cheap, assumes stable
@@ -8361,6 +8375,12 @@ export interface components {
              *     the inherited legacy hash and triggers catalogue coupling.
              */
             hash?: string | null;
+            /**
+             * @description Full `fmeta` metadata blob from a probing crawl (`probe: "full"`).
+             *     Enriches the coupled catalogue entry (`file_metadata`/`mime_type`);
+             *     only meaningful together with `hash`.
+             */
+            metadata?: unknown;
             /**
              * Format: int32
              * @description File mode bits (`st_mode`) — provenance-only, never a column.

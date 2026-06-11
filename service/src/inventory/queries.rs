@@ -235,33 +235,52 @@ pub async fn upsert_inventory_copy(
 
 /// Set-based sibling of [`upsert_catalogue_by_hash`] for the fold/reconcile
 /// batch paths (caller owns the tx): one statement couples the catalogue half
-/// for EVERY hash-carrying item of a batch. `hashes` rides positionally with
-/// `paths`/`sizes`; `None` rows (hashless observations) are filtered in SQL.
-/// `category = 'legacy'`, name = the path's final segment (empty → NULL) —
-/// exactly what the per-item callers passed. Intra-batch duplicate hashes are
-/// safe (`ON CONFLICT DO NOTHING` skips same-statement conflicts; first
-/// occurrence wins, like the loop did). Returns rows newly inserted.
+/// for EVERY hash-carrying item of a batch. `hashes`/`metadatas` ride
+/// positionally with `paths`/`sizes`; `None` hash rows (hashless
+/// observations) are filtered in SQL. `category = 'legacy'`, name = the
+/// path's final segment (empty → NULL), `mime_type`/`file_metadata` from the
+/// probing crawl's fmeta blob when present.
+///
+/// Conflict posture is ENRICH, never clobber: an existing entry keeps its
+/// name/size/mime and any non-empty `file_metadata` (the register/projector
+/// path stays authoritative); only gaps are filled. Intra-batch duplicate
+/// hashes are collapsed to the first occurrence (`DISTINCT ON` — required
+/// because `DO UPDATE`, unlike the old `DO NOTHING`, errors on touching one
+/// row twice in a statement). Returns rows inserted-or-updated.
 pub async fn upsert_catalogue_by_hash_unnest(
     tx: &mut Transaction<'_, Postgres>,
     hashes: &[Option<String>],
     paths: &[String],
     sizes: &[i64],
+    metadatas: &[Option<serde_json::Value>],
 ) -> Result<u64, sqlx::Error> {
     let r = sqlx::query(
         r#"
         INSERT INTO catalogue_entries
-            (content_hash, category, name, size_bytes, mime_type)
-        SELECT t.hash, 'legacy',
+            (content_hash, category, name, size_bytes, mime_type, file_metadata)
+        SELECT DISTINCT ON (t.hash)
+               t.hash, 'legacy',
                NULLIF(regexp_replace(t.path, '^.*/', ''), ''),
-               t.size, NULL
-        FROM UNNEST($1::text[], $2::text[], $3::bigint[]) AS t(hash, path, size)
+               t.size,
+               t.metadata->>'mime_type',
+               COALESCE(t.metadata, '{}'::jsonb)
+        FROM UNNEST($1::text[], $2::text[], $3::bigint[], $4::jsonb[])
+             WITH ORDINALITY AS t(hash, path, size, metadata, ord)
         WHERE t.hash IS NOT NULL
-        ON CONFLICT (content_hash) DO NOTHING
+        ORDER BY t.hash, t.ord
+        ON CONFLICT (content_hash) DO UPDATE SET
+            name          = COALESCE(catalogue_entries.name, EXCLUDED.name),
+            size_bytes    = COALESCE(catalogue_entries.size_bytes, EXCLUDED.size_bytes),
+            mime_type     = COALESCE(catalogue_entries.mime_type, EXCLUDED.mime_type),
+            file_metadata = CASE WHEN catalogue_entries.file_metadata = '{}'::jsonb
+                                 THEN EXCLUDED.file_metadata
+                                 ELSE catalogue_entries.file_metadata END
         "#,
     )
     .bind(hashes)
     .bind(paths)
     .bind(sizes)
+    .bind(metadatas)
     .execute(&mut **tx)
     .await?;
     Ok(r.rows_affected())
@@ -278,6 +297,8 @@ pub struct FoldIndexItem {
     pub uid: Option<i32>,
     pub gid: Option<i32>,
     pub provenance: serde_json::Value,
+    /// fmeta blob from a probing crawl — catalogue enrichment only.
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Set-based index fold (caller owns the tx) — the batch sibling of the
@@ -305,6 +326,7 @@ pub async fn fold_index_batch(
     let mut uids: Vec<Option<i32>> = Vec::with_capacity(n);
     let mut gids: Vec<Option<i32>> = Vec::with_capacity(n);
     let mut provenances: Vec<serde_json::Value> = Vec::with_capacity(n);
+    let mut metadatas: Vec<Option<serde_json::Value>> = Vec::with_capacity(n);
     for item in items {
         paths.push(item.path.clone());
         sizes.push(item.size);
@@ -313,10 +335,11 @@ pub async fn fold_index_batch(
         uids.push(item.uid);
         gids.push(item.gid);
         provenances.push(item.provenance.clone());
+        metadatas.push(item.metadata.clone());
     }
 
     if hashes.iter().any(Option::is_some) {
-        upsert_catalogue_by_hash_unnest(tx, &hashes, &paths, &sizes).await?;
+        upsert_catalogue_by_hash_unnest(tx, &hashes, &paths, &sizes, &metadatas).await?;
     }
 
     let r = sqlx::query(

@@ -149,6 +149,7 @@ pub async fn dispatch(
                 event_stream,
                 batch_sink,
                 execution_id,
+                run_dir,
                 cancel,
             )
             .await
@@ -239,6 +240,13 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
                 }
                 if sink.file_server_id.trim().is_empty() {
                     return Err("crawl: sink.file_server_id must not be empty".into());
+                }
+            }
+            if let Some(probe) = c.probe.as_deref() {
+                if !matches!(probe.trim(), "" | "off" | "none" | "hash" | "full") {
+                    return Err(format!(
+                        "crawl: probe must be 'hash', 'full', or 'off'/empty, got '{probe}'"
+                    ));
                 }
             }
             validate_storage(&c.storage, "crawl.storage")?;

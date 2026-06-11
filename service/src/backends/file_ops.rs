@@ -274,6 +274,7 @@ fn crawl_fields() -> Vec<PortField> {
         pf("cancelled", "Cancelled", FieldKind::Bool),
         pf("exhausted", "Exhausted (walk reached EOF)", FieldKind::Bool),
         pf("endpoint_root", "Endpoint root (canonical)", FieldKind::Text),
+        pf("probe_errors", "Probe errors (probing crawl)", FieldKind::Number),
     ]
 }
 
@@ -339,7 +340,8 @@ mod tests {
                 "batches",
                 "cancelled",
                 "exhausted",
-                "endpoint_root"
+                "endpoint_root",
+                "probe_errors"
             ]
         );
     }

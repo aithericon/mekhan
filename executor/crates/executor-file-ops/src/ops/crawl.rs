@@ -22,16 +22,21 @@
 //!   (`start_after`), and **chunkable** via `max_batches`, so a 4M-file walk
 //!   runs as a cursor-loop campaign.
 //!
-//! It performs **no `read`** — metadata only. Integrity-hashing remains the
-//! `probe` op's job, run later against only the orphans/mismatches.
+//! By default it performs **no `read`** — metadata only, with
+//! integrity-hashing left to the `probe` op run later against only the
+//! orphans/mismatches. `config.probe` opts into per-entry content probing
+//! during the walk itself (`"hash"` = SHA-256 only, `"full"` = SHA-256 +
+//! `fmeta` metadata) for corpora that want content identity captured on the
+//! first pass; probe failures are counted (`probe_errors`), never fatal.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::StreamExt;
 use opendal::Operator;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use aithericon_executor_backend::traits::{BatchSink, EventStream};
@@ -54,6 +59,108 @@ struct Observed {
     uid: Option<u32>,
     gid: Option<u32>,
     mode: Option<u32>,
+    /// SHA-256 (bare lowercase hex), when `config.probe` is on and the file
+    /// probed cleanly.
+    hash: Option<String>,
+    /// Full `fmeta` blob, when `config.probe == "full"`.
+    metadata: Option<serde_json::Value>,
+}
+
+/// Per-entry content probing level, parsed once from `config.probe`.
+#[derive(Clone, Copy, PartialEq)]
+enum ProbeMode {
+    Off,
+    Hash,
+    Full,
+}
+
+impl ProbeMode {
+    /// `""`/`"off"`/`"none"` all mean Off so a select-field or interpolated
+    /// start parameter can express the disabled state.
+    fn parse(s: Option<&str>) -> Result<Self, String> {
+        match s.map(str::trim) {
+            None | Some("" | "off" | "none") => Ok(ProbeMode::Off),
+            Some("hash") => Ok(ProbeMode::Hash),
+            Some("full") => Ok(ProbeMode::Full),
+            Some(other) => Err(format!(
+                "crawl: probe must be 'hash', 'full', or 'off'/empty, got '{other}'"
+            )),
+        }
+    }
+}
+
+/// Probe one crawled entry for content identity (and, in `Full` mode, fmeta
+/// metadata). On a LOCAL backend the file is probed in place at
+/// `<endpoint>/<storage path>` (zero copy — the co-located-runner hot path);
+/// otherwise it is downloaded to a temp file under `run_dir` first, mirroring
+/// the standalone `probe` op. Returns `(hash, metadata)`; the error string is
+/// caller-counted, never fatal to the walk.
+async fn probe_entry(
+    mode: ProbeMode,
+    lstat_root: Option<&Path>,
+    operator: &Operator,
+    storage_path: &str,
+    run_dir: &Path,
+) -> Result<(Option<String>, Option<serde_json::Value>), String> {
+    let (local_path, tmp): (PathBuf, Option<PathBuf>) = match lstat_root {
+        Some(root) => (root.join(storage_path), None),
+        None => {
+            let data = operator
+                .read(storage_path)
+                .await
+                .map_err(|e| format!("read: {e}"))?;
+            // Preserve the extension for fmeta format detection.
+            let ext = Path::new(storage_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("bin");
+            let tmp_path = run_dir.join(format!("_crawl_probe_tmp.{ext}"));
+            if let Some(parent) = tmp_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("tmp dir: {e}"))?;
+            }
+            tokio::fs::write(&tmp_path, data.to_vec())
+                .await
+                .map_err(|e| format!("tmp write: {e}"))?;
+            (tmp_path.clone(), Some(tmp_path))
+        }
+    };
+
+    let result = match mode {
+        ProbeMode::Off => Ok((None, None)),
+        ProbeMode::Hash => {
+            let p = local_path.clone();
+            tokio::task::spawn_blocking(move || {
+                aithericon_file_metadata::compute_checksum(
+                    &p,
+                    aithericon_file_metadata::ChecksumAlgorithm::Sha256,
+                )
+            })
+            .await
+            .map_err(|e| format!("checksum task: {e}"))?
+            .map_err(|e| format!("checksum: {e}"))
+            .map(|info| (Some(info.digest), None))
+        }
+        ProbeMode::Full => {
+            // SHA-256 always; unsupported formats degrade to checksum-only
+            // inside extract_metadata_async (the fmeta-side fallback).
+            aithericon_file_metadata::extract_metadata_async(&local_path)
+                .await
+                .map_err(|e| format!("fmeta: {e}"))
+                .and_then(|meta| {
+                    let hash = meta.checksum.as_ref().map(|c| c.digest.clone());
+                    let blob =
+                        serde_json::to_value(&meta).map_err(|e| format!("serialize: {e}"))?;
+                    Ok((hash, Some(blob)))
+                })
+        }
+    };
+
+    if let Some(tmp) = tmp {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    result
 }
 
 /// Where filled batches go — resolved once from config + injected sink.
@@ -95,6 +202,8 @@ impl Emitter {
                                 "uid": o.uid,
                                 "gid": o.gid,
                                 "mode": o.mode,
+                                "hash": o.hash,
+                                "metadata": o.metadata,
                                 "endpoint_root": endpoint_root,
                             })
                         })
@@ -131,10 +240,11 @@ impl Emitter {
                             path: o.path,
                             size: o.size,
                             mtime: o.mtime,
-                            hash: None,
+                            hash: o.hash,
                             uid: o.uid,
                             gid: o.gid,
                             mode: o.mode,
+                            metadata: o.metadata,
                         })
                         .collect(),
                 };
@@ -175,6 +285,8 @@ impl Emitter {
 ///   `path`s are anchored to. Recorded so the registered
 ///   `file_inventory.path` stays canonical and an `adopt` can stamp it onto
 ///   the file-server endpoint root.
+/// - `probe_errors` — number of entries whose `config.probe` read/hash failed
+///   (emitted hashless instead of failing the walk); `0` when probing is off.
 ///
 /// Events-mode batch items carry `endpoint_root` per item; sink-mode batches
 /// carry it once on the [`FoldBatch`] envelope.
@@ -187,9 +299,11 @@ pub async fn execute(
     event_stream: Option<Arc<dyn EventStream>>,
     batch_sink: Option<Arc<dyn BatchSink>>,
     execution_id: &str,
+    run_dir: &Path,
     cancel: &CancellationToken,
 ) -> FileOpsResult {
     let full_prefix = resolve_path(prefix, &config.prefix);
+    let probe_mode = ProbeMode::parse(config.probe.as_deref()).map_err(FileOpsError::Config)?;
 
     // Resolve the emitter once. Sink mode requires a host-injected sink —
     // failing here (not silently degrading to events) keeps the "batches are
@@ -263,6 +377,7 @@ pub async fn execute(
     let mut last_path: Option<String> = None;
     let mut cancelled = false;
     let mut stopped_by_max = false;
+    let mut probe_errors: u64 = 0;
 
     while let Some(entry) = lister.next().await {
         let entry = entry?;
@@ -310,6 +425,22 @@ pub async fn execute(
             (entry.metadata().content_length(), None, None, None, None)
         };
 
+        // Opt-in content probing — failures are counted, not fatal: a 4M-file
+        // corpus WILL contain unreadable/vanishing entries, and losing the
+        // whole chunk to one of them would stall the campaign.
+        let (hash, metadata) = if probe_mode == ProbeMode::Off {
+            (None, None)
+        } else {
+            match probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir).await {
+                Ok(hm) => hm,
+                Err(e) => {
+                    warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
+                    probe_errors += 1;
+                    (None, None)
+                }
+            }
+        };
+
         batch.push(Observed {
             path: user_path.clone(),
             size,
@@ -317,6 +448,8 @@ pub async fn execute(
             uid,
             gid,
             mode,
+            hash,
+            metadata,
         });
         total += 1;
         last_path = Some(user_path);
@@ -405,6 +538,7 @@ pub async fn execute(
         ("cancelled".into(), serde_json::json!(cancelled)),
         ("exhausted".into(), serde_json::json!(exhausted)),
         ("endpoint_root".into(), serde_json::json!(endpoint_root)),
+        ("probe_errors".into(), serde_json::json!(probe_errors)),
     ]))
 }
 
@@ -469,9 +603,11 @@ mod tests {
             stat: true,
             max_batches: None,
             sink: None,
+            probe: None,
         };
 
         let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
         let result = execute(
             &config,
             &operator,
@@ -480,11 +616,13 @@ mod tests {
             Some(stream.clone()),
             None,
             "exec-test",
+            run_dir.path(),
             &CancellationToken::new(),
         )
         .await
         .unwrap();
         assert_eq!(result["count"], serde_json::json!(2));
+        assert_eq!(result["probe_errors"], serde_json::json!(0));
 
         let root_meta = std::fs::metadata(dir.path()).unwrap();
         let (my_uid, my_gid) = (root_meta.uid(), root_meta.gid());
@@ -505,6 +643,178 @@ mod tests {
                 chrono::DateTime::parse_from_rfc3339(mtime).is_ok(),
                 "mtime must parse as RFC 3339: {mtime}"
             );
+            // Probing off (default) — no content identity captured.
+            assert!(e["hash"].is_null(), "hash absent when probe off: {e}");
+            assert!(e["metadata"].is_null(), "metadata absent when probe off: {e}");
         }
+    }
+
+    fn local_storage(dir: &std::path::Path) -> StorageConfig {
+        StorageConfig {
+            backend: StorageBackend::Local,
+            endpoint: dir.to_str().unwrap().to_string(),
+            bucket: String::new(),
+            region: None,
+            prefix: String::new(),
+            credentials: Default::default(),
+            retry: Default::default(),
+            resource_alias: None,
+        }
+    }
+
+    fn crawl_config(storage: StorageConfig, probe: &str) -> CrawlConfig {
+        CrawlConfig {
+            prefix: "nas/".into(),
+            storage,
+            batch_size: 10,
+            resume_from: None,
+            stat: true,
+            max_batches: None,
+            sink: None,
+            probe: Some(probe.to_string()),
+        }
+    }
+
+    async fn run_probed(dir: &tempfile::TempDir, probe: &str) -> (Value, Vec<Value>) {
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, probe);
+        let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let items = stream.items.lock().unwrap();
+        let entries: Vec<Value> = items
+            .iter()
+            .flat_map(|p| p["items"].as_array().expect("items array"))
+            .cloned()
+            .collect();
+        (serde_json::to_value(&result).unwrap(), entries)
+    }
+
+    /// `probe: "hash"` — every item carries the file's SHA-256 (bare lowercase
+    /// hex) and NO metadata blob; the digest matches an independent compute.
+    #[tokio::test]
+    async fn crawl_probe_hash_emits_sha256() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), "hello crawl").unwrap();
+
+        let (result, entries) = run_probed(&dir, "hash").await;
+        assert_eq!(result["probe_errors"], serde_json::json!(0));
+        assert_eq!(entries.len(), 1);
+        let hash = entries[0]["hash"].as_str().expect("hash string");
+        let expected = aithericon_file_metadata::compute_checksum(
+            &dir.path().join("nas/a.txt"),
+            aithericon_file_metadata::ChecksumAlgorithm::Sha256,
+        )
+        .unwrap()
+        .digest;
+        assert_eq!(hash, expected, "bare-hex sha256 digest");
+        assert!(entries[0]["metadata"].is_null(), "hash mode emits no blob");
+    }
+
+    /// `probe: "full"` — items carry the fmeta blob (with its own checksum
+    /// matching the item hash); an unmodeled format (.bin) degrades to
+    /// checksum-only rather than erroring.
+    #[tokio::test]
+    async fn crawl_probe_full_emits_metadata_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/t.csv"), "a,b\n1,2\n").unwrap();
+        std::fs::write(dir.path().join("nas/x.bin"), [0u8, 1, 2, 3]).unwrap();
+
+        let (result, entries) = run_probed(&dir, "full").await;
+        assert_eq!(result["probe_errors"], serde_json::json!(0));
+        assert_eq!(entries.len(), 2);
+        for e in &entries {
+            let hash = e["hash"].as_str().expect("hash present in full mode");
+            let blob = &e["metadata"];
+            assert!(blob.is_object(), "metadata blob present: {e}");
+            assert_eq!(
+                blob["checksum"]["digest"].as_str().unwrap(),
+                hash,
+                "blob checksum matches item hash"
+            );
+        }
+        // The CSV got real format detection; the .bin fell back checksum-only.
+        let csv = entries
+            .iter()
+            .find(|e| e["path"].as_str().unwrap().ends_with(".csv"))
+            .unwrap();
+        assert_eq!(csv["metadata"]["num_rows"], serde_json::json!(1));
+    }
+
+    /// An unreadable file is counted in `probe_errors` and emitted hashless —
+    /// the walk itself never fails on probe errors.
+    #[tokio::test]
+    async fn crawl_probe_error_is_counted_not_fatal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/ok.txt"), "fine").unwrap();
+        let locked = dir.path().join("nas/locked.txt");
+        std::fs::write(&locked, "secret").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let (result, entries) = run_probed(&dir, "hash").await;
+        // Root runs (CI containers) can read 0o000 files — accept either a
+        // counted error or a successful probe, but the walk must include BOTH
+        // files and never fail.
+        assert_eq!(result["count"], serde_json::json!(2));
+        assert_eq!(entries.len(), 2);
+        let errs = result["probe_errors"].as_u64().unwrap();
+        let locked_entry = entries
+            .iter()
+            .find(|e| e["path"].as_str().unwrap().ends_with("locked.txt"))
+            .unwrap();
+        if errs == 1 {
+            assert!(locked_entry["hash"].is_null(), "failed probe emits hashless");
+        } else {
+            assert_eq!(errs, 0, "either counted or readable, never fatal");
+        }
+
+        // Restore perms so TempDir cleanup works everywhere.
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+    }
+
+    /// Unknown probe values are a config error (caught at execute too, not
+    /// just decl-time validate).
+    #[tokio::test]
+    async fn crawl_probe_rejects_unknown_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "checksum");
+        let run_dir = tempfile::tempdir().unwrap();
+        let err = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            None,
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("probe must be"), "{err}");
     }
 }

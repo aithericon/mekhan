@@ -74,6 +74,13 @@ pub struct FoldItem {
     /// File mode bits (`st_mode`), when the crawler could lstat locally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<u32>,
+    /// Full `fmeta` metadata blob (format, mime, checksum, tabular stats…) —
+    /// present only when the crawl probed the file (`probe: "full"`). The fold
+    /// consumer enriches the coupled catalogue entry with it; the shape is the
+    /// same serialized `FileMetadata` the register/log_artifact path stores,
+    /// so the catalog UI renders both identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// One crawl batch on its way to the inventory fold consumer.
@@ -132,6 +139,7 @@ mod tests {
                 uid: Some(501),
                 gid: Some(20),
                 mode: Some(0o100644),
+                metadata: None,
             }],
         };
         assert_eq!(batch.msg_id(), "exec-1-ep-1-3");
@@ -152,6 +160,7 @@ mod tests {
             uid: None,
             gid: None,
             mode: None,
+            metadata: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(!json.contains("mtime"));
@@ -159,6 +168,7 @@ mod tests {
         assert!(!json.contains("uid"));
         assert!(!json.contains("gid"));
         assert!(!json.contains("mode"));
+        assert!(!json.contains("metadata"));
     }
 
     /// Wire backward compat: a pre-ownership publisher's item JSON (no

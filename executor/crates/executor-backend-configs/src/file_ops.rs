@@ -192,6 +192,19 @@ pub struct CrawlConfig {
     /// (default), batches ride the `crawl` EventStream channel as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sink: Option<CrawlSinkConfig>,
+    /// Opt-in per-entry content probing during the walk:
+    /// * `"hash"` — read each file once and emit its SHA-256 (bare lowercase
+    ///   hex — the catalogue `content_hash` / reconcile join shape);
+    /// * `"full"` — hash PLUS `fmeta` metadata extraction (format, mime,
+    ///   tabular stats); unsupported formats degrade to checksum-only.
+    ///
+    /// Absent / empty string = metadata-only walk (the default — integrity
+    /// hashing then remains the separate `probe` op's job). A file that fails
+    /// to probe is emitted hashless and counted in the `probe_errors` output
+    /// instead of failing the walk. With `"full"`, keep `batch_size` modest
+    /// (≤ ~500): each item carries its metadata blob inside one sink publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<String>,
 }
 
 /// Where (and how) sink-mode crawl batches are folded.
@@ -312,6 +325,7 @@ mod tests {
                 // configs remain byte-identical to pre-sink ones).
                 let back = serde_json::to_value(FileOpsConfig::Crawl(CrawlConfig {
                     sink: None,
+                    probe: None,
                     max_batches: None,
                     prefix: "Data/".into(),
                     storage: serde_json::from_value(local_storage_json()).unwrap(),

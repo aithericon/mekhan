@@ -1,11 +1,12 @@
 {
-  "name": "Seed 63 files, then run the cursor-loop campaign: each iteration crawls one bounded chunk (batch_size 10 × max_batches 2 = 20 files) resuming from the previous cursor, publishing every batch durably to the INVENTORY_FOLD stream (sink mode — no engine channel tokens); mekhan's fold consumer upserts file_inventory idempotently. The loop runs until a chunk comes back EMPTY (exit skips the accumulator merge, so the empty chunk loses nothing): 20+20+20+3+0 → 5 body runs, final parked iteration counter 4, total 63.",
+  "name": "PROBING campaign (probe=full — the real-world default): seed 63 files, run the cursor-loop campaign with per-file content capture ON. Each iteration crawls one bounded chunk (batch_size 10 × max_batches 2 = 20 files) resuming from the previous cursor; every file is read once during the walk — SHA-256 + fmeta metadata ride each fold item, so the catalogue fills content-addressed in the same pass. Loop runs until an empty chunk: 20+20+20+3+0 → 5 body runs, iteration counter 4, total 63, zero probe errors.",
   "enabled": true,
   "start_tokens": [
     {
       "start_block_id": "start",
       "token": {
-        "file_server": "campaign-nas"
+        "file_server": "campaign-nas",
+        "probe": "full"
       }
     }
   ],
@@ -25,6 +26,11 @@
       "path": "result.value.iterations",
       "op": "eq",
       "value": 4
+    },
+    {
+      "path": "result.value.probe_errors",
+      "op": "eq",
+      "value": 0
     }
   ]
 }

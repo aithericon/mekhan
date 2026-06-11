@@ -103,6 +103,7 @@ async fn process_batch(
                     uid: i.uid.map(|v| v as i32),
                     gid: i.gid.map(|v| v as i32),
                     mode: i.mode,
+                    metadata: i.metadata.clone(),
                 })
                 .collect();
             let counts = reconcile::reconcile_batch(db, &batch.file_server_id, &items, &ctx).await?;
@@ -153,6 +154,7 @@ async fn process_batch(
                         uid: item.uid.map(|v| v as i32),
                         gid: item.gid.map(|v| v as i32),
                         provenance,
+                        metadata: item.metadata.clone(),
                     }
                 })
                 .collect();

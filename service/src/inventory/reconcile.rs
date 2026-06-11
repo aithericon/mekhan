@@ -47,6 +47,11 @@ pub struct ObservedItem {
     /// File mode bits (`st_mode`) — provenance-only, never a column.
     #[serde(default)]
     pub mode: Option<u32>,
+    /// Full `fmeta` metadata blob from a probing crawl (`probe: "full"`).
+    /// Enriches the coupled catalogue entry (`file_metadata`/`mime_type`);
+    /// only meaningful together with `hash`.
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Where a batch of observations came from — persisted into every upserted
@@ -143,6 +148,7 @@ pub async fn reconcile_batch(
     let mut uids: Vec<Option<i32>> = Vec::with_capacity(n);
     let mut gids: Vec<Option<i32>> = Vec::with_capacity(n);
     let mut provenances: Vec<serde_json::Value> = Vec::with_capacity(n);
+    let mut metadatas: Vec<Option<serde_json::Value>> = Vec::with_capacity(n);
 
     for item in items {
         let mut provenance =
@@ -167,6 +173,7 @@ pub async fn reconcile_batch(
         uids.push(item.uid);
         gids.push(item.gid);
         provenances.push(provenance);
+        metadatas.push(item.metadata.clone());
     }
 
     let mut tx = pool.begin().await?;
@@ -175,7 +182,10 @@ pub async fn reconcile_batch(
     // ("register fills both, never half"); plain crawl never carries a hash,
     // so the hot path skips both coupling statements.
     if hashes.iter().any(Option::is_some) {
-        super::queries::upsert_catalogue_by_hash_unnest(&mut tx, &hashes, &paths, &sizes).await?;
+        super::queries::upsert_catalogue_by_hash_unnest(
+            &mut tx, &hashes, &paths, &sizes, &metadatas,
+        )
+        .await?;
 
         // Legacy owner → user_metadata stamp on the coupled catalogue row
         // (the decided posture: NO native owner backfill from legacy data;

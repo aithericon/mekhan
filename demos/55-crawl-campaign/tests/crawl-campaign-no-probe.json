@@ -1,0 +1,36 @@
+{
+  "name": "Metadata-only campaign (probe=off): the original stat-only walk — paths/sizes/ownership land in the inventory, NO content hashing or fmeta capture (integrity hashing stays the separate probe op's job). Same chunking accounting: 63 files over 5 body runs, 4 iterations, zero probe errors by construction.",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "file_server": "campaign-nas-noprobe",
+        "probe": "off"
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.files_seeded",
+      "op": "eq",
+      "value": 63
+    },
+    {
+      "path": "result.value.files_crawled",
+      "op": "eq",
+      "value": 63
+    },
+    {
+      "path": "result.value.iterations",
+      "op": "eq",
+      "value": 4
+    },
+    {
+      "path": "result.value.probe_errors",
+      "op": "eq",
+      "value": 0
+    }
+  ]
+}

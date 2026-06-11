@@ -29,6 +29,7 @@
                 "null"
               ]
             },
+            "probe_errs": {},
             "total": {}
           },
           "type": "object"
@@ -150,6 +151,12 @@
                 "prefix": {
                   "type": [
                     "string",
+                    "null"
+                  ]
+                },
+                "probe_errors": {
+                  "type": [
+                    "number",
                     "null"
                   ]
                 }
@@ -274,6 +281,12 @@
           ]
         },
         "file_server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "probe": {
           "type": [
             "string",
             "null"
@@ -2731,7 +2744,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"crawl\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_campaign_cursor = __pluck(d_campaign, [\"cursor\"]); job_inputs.push(#{ \"name\": \"__borrow_campaign__cursor\", \"source\": #{ \"type\": \"inline\", \"value\": __c_campaign_cursor } }); let __c_start_file_server = __pluck(d_start, [\"file_server\"]); job_inputs.push(#{ \"name\": \"__borrow_start__file_server\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_file_server } });  d.spec = #{ \"backend\": \"file_ops\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/crawl/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-file_ops-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"crawl\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_campaign_cursor = __pluck(d_campaign, [\"cursor\"]); job_inputs.push(#{ \"name\": \"__borrow_campaign__cursor\", \"source\": #{ \"type\": \"inline\", \"value\": __c_campaign_cursor } }); let __c_start_probe = __pluck(d_start, [\"probe\"]); job_inputs.push(#{ \"name\": \"__borrow_start__probe\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_probe } }); let __c_start_file_server = __pluck(d_start, [\"file_server\"]); job_inputs.push(#{ \"name\": \"__borrow_start__file_server\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_file_server } });  d.spec = #{ \"backend\": \"file_ops\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/crawl/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-file_ops-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
       "name": "Crawl one chunk → fold sink - Prepare",
@@ -5102,7 +5115,7 @@
         }
       ],
       "logic": {
-        "source": "#{ body: input, data: #{ iteration: d_campaign.iteration + 1, cursor: (if d_crawl.detail.outputs.last_path == () { d_campaign.cursor } else { d_crawl.detail.outputs.last_path }), total: (d_campaign.total + d_crawl.detail.outputs.count) } }",
+        "source": "#{ body: input, data: #{ iteration: d_campaign.iteration + 1, cursor: (if d_crawl.detail.outputs.last_path == () { d_campaign.cursor } else { d_crawl.detail.outputs.last_path }), total: (d_campaign.total + d_crawl.detail.outputs.count), probe_errs: (d_campaign.probe_errs + d_crawl.detail.outputs.probe_errors) } }",
         "type": "rhai"
       },
       "name": "Crawl campaign - Continue",
@@ -5164,7 +5177,7 @@
         }
       ],
       "logic": {
-        "source": "#{ body: input, data: #{ iteration: 0, cursor: (\"\"), total: (0) } }",
+        "source": "#{ body: input, data: #{ iteration: 0, cursor: (\"\"), total: (0), probe_errs: (0) } }",
         "type": "rhai"
       },
       "name": "Crawl campaign - Enter Loop",
@@ -5637,7 +5650,7 @@
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_campaign.total); let __rv1 = (d_campaign.iteration); let __rv2 = (d_seed.detail.outputs.files_created); let __rv = #{ \"files_crawled\": __rv0, \"iterations\": __rv1, \"files_seeded\": __rv2 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_campaign.total); let __rv1 = (d_campaign.iteration); let __rv2 = (d_seed.detail.outputs.files_created); let __rv3 = (d_campaign.probe_errs); let __rv = #{ \"files_crawled\": __rv0, \"iterations\": __rv1, \"files_seeded\": __rv2, \"probe_errors\": __rv3 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Done - Result",
