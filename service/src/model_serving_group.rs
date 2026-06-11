@@ -95,6 +95,9 @@ pub async fn ensure_model_serving_group(
         // expands it into the typed axis strings before persisting.
         config: serde_json::json!({ "preset": "instrument" }),
         workspace_id: Some(workspace_id),
+        scope_kind: None,
+        scope_id: None,
+        restricted: None,
     };
 
     match crate::handlers::resources::create_resource_internal(

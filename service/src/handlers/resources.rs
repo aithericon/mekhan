@@ -36,7 +36,10 @@ use uuid::Uuid;
 
 use aithericon_resources::registry::{all, lookup, schema_json_cached};
 
-use crate::auth::AuthUser;
+use crate::auth::{
+    apply_grant, effective_object_roles, map_to_api_error, require_object_role, require_role,
+    AuthUser, ObjectKind, ObjectRef, Role,
+};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::resource::{
     CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, ResourceAuditEntry,
@@ -594,6 +597,29 @@ fn rows_to_summaries(
         .collect()
 }
 
+/// Stamp each summary with the caller's effective object role and DROP rows the
+/// caller can't reach (a `restricted` resource with no grant is absent from the
+/// role map). For non-restricted resources the workspace floor keeps every row,
+/// so this only filters when privacy is in play. NOTE: `total` is computed
+/// pre-filter, so it can overcount when restricted rows are hidden — acceptable
+/// for v1 (restricted is opt-in and rare).
+async fn annotate_resource_roles(
+    state: &AppState,
+    user: &AuthUser,
+    workspace_id: Uuid,
+    mut items: Vec<ResourceSummary>,
+) -> Result<Vec<ResourceSummary>, ApiError> {
+    let ids: Vec<Uuid> = items.iter().map(|i| i.id).collect();
+    let roles = effective_object_roles(&state.db, user, ObjectKind::Resource, workspace_id, &ids)
+        .await
+        .map_err(map_to_api_error)?;
+    items.retain(|i| roles.contains_key(&i.id));
+    for i in &mut items {
+        i.my_effective_role = roles.get(&i.id).map(|r| r.as_label().to_string());
+    }
+    Ok(items)
+}
+
 /// `GET /api/v1/resources` — paginated list, optionally filtered by type.
 #[utoipa::path(
     get,
@@ -665,8 +691,10 @@ pub async fn list_resources(
 
     let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await?;
     let capacity_public = fetch_capacity_public_config(&state.db, &rows).await?;
+    let items = rows_to_summaries(rows, &dyn_keys, &capacity_public);
+    let items = annotate_resource_roles(&state, &user, workspace_id, items).await?;
     Ok(Json(PaginatedResponse {
-        items: rows_to_summaries(rows, &dyn_keys, &capacity_public),
+        items,
         total,
         page: params.page,
         per_page: params.per_page,
@@ -798,8 +826,11 @@ async fn list_resources_scoped(
 
     let dyn_keys = fetch_dynamic_keys(&state.db, &page_rows).await?;
     let capacity_public = fetch_capacity_public_config(&state.db, &page_rows).await?;
+    let items = rows_to_summaries(page_rows, &dyn_keys, &capacity_public);
+    let items =
+        annotate_resource_roles(state, user, caller_workspace(user), items).await?;
     Ok(Json(PaginatedResponse {
-        items: rows_to_summaries(page_rows, &dyn_keys, &capacity_public),
+        items,
         total,
         page: params.page,
         per_page: params.per_page,
@@ -858,7 +889,43 @@ pub async fn create_resource(
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
     let principal_id = user.subject_as_uuid();
     let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
-    let summary = create_resource_internal(&state, &req, workspace_id, principal_id).await?;
+
+    // Placement gate: you must be Editor on the scope you create into — the
+    // workspace (workspace-scoped) or the owning folder/template.
+    let scope_kind = req
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace");
+    match scope_kind {
+        "workspace" => require_role(&state.db, &user, workspace_id, Role::Editor)
+            .await
+            .map_err(map_to_api_error)?,
+        "folder" => {
+            let fid = req.scope_id.ok_or_else(|| {
+                ApiError::bad_request("scope_id is required for scope_kind 'folder'")
+            })?;
+            require_object_role(&state.db, &user, ObjectRef::folder(fid), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?
+        }
+        "template" => {
+            let tid = req.scope_id.ok_or_else(|| {
+                ApiError::bad_request("scope_id is required for scope_kind 'template'")
+            })?;
+            require_object_role(&state.db, &user, ObjectRef::template(tid), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?
+        }
+        // create_resource_internal rejects unknown kinds with a 400.
+        _ => Role::Editor,
+    };
+
+    let mut summary = create_resource_internal(&state, &req, workspace_id, principal_id).await?;
+    // The creator owns it (apply_grant in the core flow); stamp it so the
+    // frontend can gate immediately without a re-fetch.
+    summary.my_effective_role = Some(Role::Owner.as_label().to_string());
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -906,17 +973,37 @@ pub(crate) async fn create_resource_internal(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| req.path.clone());
 
-    // Lay down `resources` first — its UNIQUE(workspace_id, path) constraint
-    // is the canonical conflict gate.
-    // docs/20 §2: every resource carries a polymorphic owner. v1 create is
-    // always workspace-scoped (scope_id = workspace_id); the project/template
-    // scopes are authored later. The transitional `workspace_id` column is kept
-    // in lockstep so legacy reads + the old unique constraint still work.
+    // docs/20 §2: every resource carries a polymorphic owner. Placement defaults
+    // to `workspace` (scope_id = workspace_id); `folder`/`template` make it
+    // non-workspace-wide and become the object-ACL inheritance parent. The
+    // transitional `workspace_id` column is kept in lockstep so legacy reads +
+    // the old unique constraint still work.
+    let scope_kind = req
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace");
+    let scope_id = match scope_kind {
+        "workspace" => workspace_id,
+        "folder" | "template" => req.scope_id.ok_or_else(|| {
+            ApiError::bad_request(format!("scope_id is required for scope_kind '{scope_kind}'"))
+        })?,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "unknown scope_kind '{other}' — expected workspace | folder | template"
+            )))
+        }
+    };
+    let restricted = req.restricted.unwrap_or(false);
+
+    // Lay down `resources` first — its UNIQUE(scope_kind, scope_id, path)
+    // constraint is the canonical conflict gate.
     let insert_resource = sqlx::query(
         "INSERT INTO resources \
             (id, workspace_id, path, resource_type, display_name, latest_version, created_by, \
-             updated_by, scope_kind, scope_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 'workspace', $2)",
+             updated_by, scope_kind, scope_id, restricted) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10)",
     )
     .bind(resource_id)
     .bind(workspace_id)
@@ -925,6 +1012,9 @@ pub(crate) async fn create_resource_internal(
     .bind(&display_name)
     .bind(version)
     .bind(principal_id)
+    .bind(scope_kind)
+    .bind(scope_id)
+    .bind(restricted)
     .execute(&state.db)
     .await;
     if let Err(e) = insert_resource {
@@ -961,7 +1051,7 @@ pub(crate) async fn create_resource_internal(
     )
     .await?;
 
-    // Grant the creator `read` so the resolver works out of the box.
+    // Grant the creator `read` so the legacy resolver works out of the box.
     let _ = sqlx::query(
         "INSERT INTO resource_acl \
             (resource_id, principal_id, principal_kind, permission, granted_by) \
@@ -972,6 +1062,20 @@ pub(crate) async fn create_resource_internal(
     .bind(principal_id)
     .bind(principal_id)
     .execute(&state.db)
+    .await;
+
+    // Object-ACL: the creator owns the resource. Essential for a `restricted`
+    // resource (no ws floor → without this grant the creator couldn't even read
+    // back what they just made); harmless otherwise.
+    let _ = apply_grant(
+        &state.db,
+        workspace_id,
+        ObjectKind::Resource,
+        resource_id,
+        principal_id,
+        Role::Owner,
+        principal_id,
+    )
     .await;
 
     write_audit(
@@ -1012,6 +1116,9 @@ pub(crate) async fn create_resource_internal(
         // picker's discriminator); the single-row create/update/rotate returns
         // are not the picker's source, so they omit it.
         public_config: None,
+        // Stamped by the HTTP create handler (the creator owns it).
+        my_effective_role: None,
+        restricted,
     };
     Ok(summary)
 }
@@ -1233,6 +1340,7 @@ fn extract_kv_keys(public: &JsonMap<String, Value>) -> Option<Vec<String>> {
 )]
 pub async fn get_resource(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ResourceDetail>, ApiError> {
     let row = sqlx::query_as::<_, ResourceRow>(
@@ -1242,6 +1350,12 @@ pub async fn get_resource(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    // Object-ACL read gate (folder cascade + override; ws floor unless
+    // restricted; ws Owner/Admin bypass). 403 for a member without access.
+    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Viewer)
+        .await
+        .map_err(map_to_api_error)?;
 
     let version = sqlx::query_as::<_, ResourceVersionRow>(
         "SELECT * FROM resource_versions WHERE resource_id = $1 AND version = $2",
@@ -1269,6 +1383,8 @@ pub async fn get_resource(
             .iter()
             .map(|s| (*s).to_string())
             .collect(),
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     };
     Ok(Json(detail))
 }
@@ -1302,6 +1418,10 @@ pub async fn update_resource(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     if req.display_name.is_none() && req.config.is_none() {
         return Err(ApiError::bad_request(
@@ -1418,6 +1538,8 @@ pub async fn update_resource(
         updated_by: Some(principal_id),
         dynamic_keys,
         public_config: None,
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     }))
 }
 
@@ -1447,6 +1569,10 @@ pub async fn delete_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
+    require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
+
     sqlx::query(
         "UPDATE resources SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 \
          WHERE id = $2",
@@ -1455,6 +1581,13 @@ pub async fn delete_resource(
     .bind(row.id)
     .execute(&state.db)
     .await?;
+
+    // Object grants are polymorphic with no FK — drop them in the delete path
+    // (mirrors folders/templates/instances cleanup).
+    sqlx::query("DELETE FROM object_grants WHERE object_type = 'resource'::object_kind AND object_id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
 
     write_audit(
         &state.db,
@@ -1496,6 +1629,10 @@ pub async fn rotate_resource(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     let descriptor = descriptor_or_400(&row.resource_type)?;
     let mut config = req.config;
@@ -1555,6 +1692,8 @@ pub async fn rotate_resource(
         updated_by: Some(principal_id),
         dynamic_keys,
         public_config: None,
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     }))
 }
 

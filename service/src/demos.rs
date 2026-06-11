@@ -1331,6 +1331,7 @@ async fn seed_demo_assets(state: &crate::AppState, root: &Path) {
             display_path: None,
             scope_kind: None,
             scope_id: None,
+            restricted: None,
         };
         let asset = match crate::handlers::assets::create_asset_internal(
             state,

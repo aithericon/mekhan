@@ -44,6 +44,12 @@ pub struct ResourceRow {
     /// the ref-key (`path`).
     #[serde(default)]
     pub display_path: Option<String>,
+    /// Privacy opt-out: `true` removes the workspace-role floor so access comes
+    /// solely from grants + inheritance (see `auth/grants.rs`). `#[sqlx(default)]`
+    /// so explicit-column SELECTs that don't list it still map.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub restricted: bool,
 }
 
 /// One row from the `resource_versions` table. Immutable once written;
@@ -97,6 +103,14 @@ pub struct ResourceSummary {
     /// cheap and never carries per-version data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_config: Option<serde_json::Value>,
+    /// The caller's effective object role on this resource (folder cascade +
+    /// override + grants, ws floor unless `restricted`). Drives the editor's
+    /// edit/share gating. NOT a DB column — stamped by the handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
+    /// Privacy opt-out (no workspace-role floor — access via grants only).
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 impl From<ResourceRow> for ResourceSummary {
@@ -113,6 +127,8 @@ impl From<ResourceRow> for ResourceSummary {
             updated_by: r.updated_by,
             dynamic_keys: None,
             public_config: None,
+            my_effective_role: None,
+            restricted: r.restricted,
         }
     }
 }
@@ -140,6 +156,13 @@ pub struct ResourceDetail {
     /// Names of fields the type marks as secret. The frontend renders these
     /// as redacted inputs; the real values live in Vault only.
     pub redacted_secret_fields: Vec<String>,
+    /// The caller's effective object role on this resource — drives edit/share
+    /// gating. NOT a DB column — stamped by the handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
+    /// Privacy opt-out (no workspace-role floor — access via grants only).
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 /// One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
@@ -191,6 +214,17 @@ pub struct CreateResourceRequest {
     /// will be set by the auth layer.
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
+    /// Placement scope (docs/20 §2): `workspace` (default), `folder`, or
+    /// `template`. Folder/template placement makes the resource non-
+    /// workspace-wide and is the inheritance parent for the object ACL.
+    #[serde(default)]
+    pub scope_kind: Option<String>,
+    /// Owner id for a `folder`/`template` scope. Ignored for `workspace`.
+    #[serde(default)]
+    pub scope_id: Option<Uuid>,
+    /// Create the resource `restricted` (private — no workspace-role floor).
+    #[serde(default)]
+    pub restricted: Option<bool>,
 }
 
 /// Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or

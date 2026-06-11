@@ -94,6 +94,9 @@ pub async fn ensure_default_worker_group(
         // create path expands it into the typed axis strings before persisting.
         config: serde_json::json!({ "preset": "worker" }),
         workspace_id: Some(workspace_id),
+        scope_kind: None,
+        scope_id: None,
+        restricted: None,
     };
 
     match crate::handlers::resources::create_resource_internal(

@@ -125,6 +125,11 @@ pub struct AssetRow {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
     pub updated_by: Option<Uuid>,
+    /// Privacy opt-out (no workspace-role floor — access via grants only).
+    /// `#[sqlx(default)]` so explicit-column SELECTs that omit it still map.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub restricted: bool,
 }
 
 /// One row from the `asset_records` table. A schema-validated JSONB row,
@@ -266,6 +271,13 @@ pub struct AssetSummary {
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_by: Option<Uuid>,
+    /// The caller's effective object role on this asset — drives edit/share
+    /// gating. NOT a DB column — stamped by the handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
+    /// Privacy opt-out (no workspace-role floor — access via grants only).
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 impl From<AssetRow> for AssetSummary {
@@ -283,6 +295,8 @@ impl From<AssetRow> for AssetSummary {
             updated_at: r.updated_at,
             created_by: r.created_by,
             updated_by: r.updated_by,
+            my_effective_role: None,
+            restricted: r.restricted,
         }
     }
 }
@@ -311,6 +325,13 @@ pub struct AssetDetail {
     pub records: Vec<serde_json::Value>,
     /// Total record count for the current version (for pagination).
     pub record_count: i64,
+    /// The caller's effective object role on this asset — drives edit/share
+    /// gating. NOT a DB column — stamped by the handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
+    /// Privacy opt-out (no workspace-role floor — access via grants only).
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 /// Request body for `POST /api/v1/assets`.
@@ -326,6 +347,9 @@ pub struct CreateAssetRequest {
     pub scope_kind: Option<ScopeKind>,
     #[serde(default)]
     pub scope_id: Option<Uuid>,
+    /// Create the asset `restricted` (private — no workspace-role floor).
+    #[serde(default)]
+    pub restricted: Option<bool>,
 }
 
 /// Request body for `PUT /api/v1/assets/{id}/records`. Replaces (or appends to)

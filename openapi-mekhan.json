@@ -1099,6 +1099,206 @@
         }
       }
     },
+    "/api/v1/assets/{id}/grants": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "operationId": "list_asset_grants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective access list (direct + inherited + workspace)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GrantView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets/{id}/grants/{user_id}": {
+      "put": {
+        "tags": [
+          "assets"
+        ],
+        "operationId": "put_asset_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required / escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grantee not a workspace member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "assets"
+        ],
+        "operationId": "delete_asset_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Grant removed"
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/assets/{id}/import-csv": {
       "post": {
         "tags": [
@@ -8645,6 +8845,206 @@
         }
       }
     },
+    "/api/v1/resources/{id}/grants": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "operationId": "list_resource_grants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective access list (direct + inherited + workspace)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GrantView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{id}/grants/{user_id}": {
+      "put": {
+        "tags": [
+          "resources"
+        ],
+        "operationId": "put_resource_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required / escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grantee not a workspace member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "resources"
+        ],
+        "operationId": "delete_resource_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Grant removed"
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/resources/{id}/rotate": {
       "post": {
         "tags": [
@@ -14180,6 +14580,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on this asset — drives edit/share\ngating. NOT a DB column — stamped by the handler."
+          },
           "record_count": {
             "type": "integer",
             "format": "int64",
@@ -14192,6 +14599,10 @@
           },
           "ref_key": {
             "type": "string"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
           },
           "scope_id": {
             "type": "string",
@@ -14302,8 +14713,19 @@
             "type": "string",
             "format": "uuid"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on this asset — drives edit/share\ngating. NOT a DB column — stamped by the handler."
+          },
           "ref_key": {
             "type": "string"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
           },
           "scope_id": {
             "type": "string",
@@ -16780,6 +17202,13 @@
             "type": "string",
             "description": "Flat identifier, `^[a-z][a-z0-9_]*$`."
           },
+          "restricted": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Create the asset `restricted` (private — no workspace-role floor)."
+          },
           "scope_id": {
             "type": [
               "string",
@@ -17206,6 +17635,28 @@
           "resource_type": {
             "type": "string",
             "description": "Wire identifier from `ResourceTypeDescriptor.name`."
+          },
+          "restricted": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Create the resource `restricted` (private — no workspace-role floor)."
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owner id for a `folder`/`template` scope. Ignored for `workspace`."
+          },
+          "scope_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Placement scope (docs/20 §2): `workspace` (default), `folder`, or\n`template`. Folder/template placement makes the resource non-\nworkspace-wide and is the inheritance parent for the object ACL."
           },
           "workspace_id": {
             "type": [
@@ -23056,8 +23507,19 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "my_effective_role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The caller's effective object role on this asset — drives edit/share\ngating. NOT a DB column — stamped by the handler."
+                },
                 "ref_key": {
                   "type": "string"
+                },
+                "restricted": {
+                  "type": "boolean",
+                  "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
                 },
                 "scope_id": {
                   "type": "string",
@@ -23761,6 +24223,13 @@
                   "type": "integer",
                   "format": "int32"
                 },
+                "my_effective_role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The caller's effective object role on this resource (folder cascade +\noverride + grants, ws floor unless `restricted`). Drives the editor's\nedit/share gating. NOT a DB column — stamped by the handler."
+                },
                 "path": {
                   "type": "string"
                 },
@@ -23769,6 +24238,10 @@
                 },
                 "resource_type": {
                   "type": "string"
+                },
+                "restricted": {
+                  "type": "boolean",
+                  "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
                 },
                 "updated_at": {
                   "type": "string",
@@ -26144,6 +26617,13 @@
             "type": "integer",
             "format": "int32"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on this resource — drives edit/share\ngating. NOT a DB column — stamped by the handler."
+          },
           "path": {
             "type": "string"
           },
@@ -26159,6 +26639,10 @@
           },
           "resource_type": {
             "type": "string"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
           },
           "updated_at": {
             "type": "string",
@@ -26248,6 +26732,13 @@
             "type": "integer",
             "format": "int32"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on this resource (folder cascade +\noverride + grants, ws floor unless `restricted`). Drives the editor's\nedit/share gating. NOT a DB column — stamped by the handler."
+          },
           "path": {
             "type": "string"
           },
@@ -26256,6 +26747,10 @@
           },
           "resource_type": {
             "type": "string"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
           },
           "updated_at": {
             "type": "string",

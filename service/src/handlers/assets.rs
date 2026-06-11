@@ -33,7 +33,10 @@ use regex::Regex;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{
+    apply_grant, effective_object_roles, map_to_api_error, require_object_role, AuthUser,
+    ObjectKind, ObjectRef, Role,
+};
 use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
     AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
@@ -673,6 +676,18 @@ pub async fn list_assets(
         .collect();
     summaries.sort_by(|a, b| a.ref_key.cmp(&b.ref_key));
 
+    // Object-ACL: stamp the caller's effective role and DROP assets they can't
+    // reach (a restricted asset with no grant is absent from the role map).
+    let workspace_id = visible.workspace.unwrap_or(scope_id);
+    let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
+    let roles = effective_object_roles(&state.db, &user, ObjectKind::Asset, workspace_id, &ids)
+        .await
+        .map_err(map_to_api_error)?;
+    summaries.retain(|s| roles.contains_key(&s.id));
+    for s in &mut summaries {
+        s.my_effective_role = roles.get(&s.id).map(|r| r.as_label().to_string());
+    }
+
     Ok(Json(paginate(summaries, params.page, params.per_page)))
 }
 
@@ -700,9 +715,26 @@ pub async fn create_asset(
 ) -> Result<(StatusCode, Json<AssetSummary>), ApiError> {
     let (scope_kind, scope_id) =
         resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
-    require_editor(&state, &user, scope_kind, scope_id).await?;
+    // Placement gate: Editor on the scope you create into. Workspace scope uses
+    // the membership gate; folder/template scopes use the object ACL (so a
+    // restricted folder's grants govern who can add assets to it).
+    match scope_kind {
+        ScopeKind::Workspace => require_editor(&state, &user, scope_kind, scope_id).await?,
+        ScopeKind::Folder => {
+            require_object_role(&state.db, &user, ObjectRef::folder(scope_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        ScopeKind::Template => {
+            require_object_role(&state.db, &user, ObjectRef::template(scope_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+    }
     let principal = user.subject_as_uuid();
-    let summary = create_asset_internal(&state, &req, scope_kind, scope_id, principal).await?;
+    let mut summary = create_asset_internal(&state, &req, scope_kind, scope_id, principal).await?;
+    // Creator owns it (apply_grant in the core flow); stamp for immediate gating.
+    summary.my_effective_role = Some(Role::Owner.as_label().to_string());
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -742,11 +774,12 @@ pub(crate) async fn create_asset_internal(
         .unwrap_or_else(|| req.ref_key.clone());
     let id = Uuid::new_v4();
 
+    let restricted = req.restricted.unwrap_or(false);
     let res = sqlx::query(
         "INSERT INTO assets \
             (id, scope_kind, scope_id, type_id, ref_key, display_name, display_path, \
-             version, created_by, updated_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)",
+             version, created_by, updated_by, restricted) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8, $9)",
     )
     .bind(id)
     .bind(scope_kind.as_db())
@@ -756,6 +789,7 @@ pub(crate) async fn create_asset_internal(
     .bind(&display_name)
     .bind(&req.display_path)
     .bind(principal)
+    .bind(restricted)
     .execute(&state.db)
     .await;
     if let Err(e) = res {
@@ -770,6 +804,35 @@ pub(crate) async fn create_asset_internal(
         return Err(ApiError::internal(e.to_string()));
     }
 
+    // Object-ACL: the creator owns the asset. Essential for a `restricted` asset
+    // (no ws floor → without this the creator couldn't read back what they made).
+    // workspace_id for the grant row is resolved from the scope.
+    let grant_ws: Uuid = match scope_kind {
+        ScopeKind::Workspace => scope_id,
+        ScopeKind::Folder => {
+            sqlx::query_scalar("SELECT workspace_id FROM folders WHERE id = $1")
+                .bind(scope_id)
+                .fetch_one(&state.db)
+                .await?
+        }
+        ScopeKind::Template => {
+            sqlx::query_scalar("SELECT workspace_id FROM workflow_templates WHERE id = $1")
+                .bind(scope_id)
+                .fetch_one(&state.db)
+                .await?
+        }
+    };
+    let _ = apply_grant(
+        &state.db,
+        grant_ws,
+        ObjectKind::Asset,
+        id,
+        principal,
+        Role::Owner,
+        principal,
+    )
+    .await;
+
     Ok(AssetSummary {
         id,
         scope_kind: scope_kind.as_db().to_string(),
@@ -783,6 +846,8 @@ pub(crate) async fn create_asset_internal(
         updated_at: chrono::Utc::now(),
         created_by: Some(principal),
         updated_by: Some(principal),
+        my_effective_role: None,
+        restricted,
     })
 }
 
@@ -813,10 +878,14 @@ pub(crate) async fn replace_records_internal(
 )]
 pub async fn get_asset(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Query(params): Query<GetAssetQuery>,
 ) -> Result<Json<AssetDetail>, ApiError> {
     let row = fetch_asset(&state.db, id).await?;
+    let role = require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Viewer)
+        .await
+        .map_err(map_to_api_error)?;
     let offset = (params.page - 1).max(0) * params.per_page;
 
     let records: Vec<(Value,)> = sqlx::query_as(
@@ -854,6 +923,8 @@ pub async fn get_asset(
         updated_by: row.updated_by,
         records: records.into_iter().map(|(v,)| v).collect(),
         record_count,
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     }))
 }
 
@@ -879,9 +950,9 @@ pub async fn put_asset_records(
     Json(req): Json<ReplaceRecordsRequest>,
 ) -> Result<Json<AssetSummary>, ApiError> {
     let row = fetch_asset(&state.db, id).await?;
-    let scope_kind = ScopeKind::from_db(&row.scope_kind)
-        .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
-    require_editor(&state, &user, scope_kind, row.scope_id).await?;
+    let role = require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     let principal = user.subject_as_uuid();
     let new_version =
@@ -900,6 +971,8 @@ pub async fn put_asset_records(
         updated_at: chrono::Utc::now(),
         created_by: row.created_by,
         updated_by: Some(principal),
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     }))
 }
 
@@ -931,9 +1004,9 @@ pub async fn import_asset_csv(
     mut multipart: Multipart,
 ) -> Result<Json<AssetSummary>, ApiError> {
     let row = fetch_asset(&state.db, id).await?;
-    let scope_kind = ScopeKind::from_db(&row.scope_kind)
-        .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
-    require_editor(&state, &user, scope_kind, row.scope_id).await?;
+    let role = require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     // Pull the CSV bytes out of the multipart body.
     let field = multipart
@@ -966,6 +1039,8 @@ pub async fn import_asset_csv(
         updated_at: chrono::Utc::now(),
         created_by: row.created_by,
         updated_by: Some(principal),
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
     }))
 }
 
@@ -998,9 +1073,9 @@ pub async fn upload_asset_file(
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<AssetFileUploadResponse>), ApiError> {
     let row = fetch_asset(&state.db, id).await?;
-    let scope_kind = ScopeKind::from_db(&row.scope_kind)
-        .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
-    require_editor(&state, &user, scope_kind, row.scope_id).await?;
+    require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     if !IDENT_REGEX.is_match(&q.field) {
         return Err(ApiError::bad_request(format!(
@@ -1067,10 +1142,10 @@ pub async fn delete_asset(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let row = fetch_asset(&state.db, id).await?;
-    let scope_kind = ScopeKind::from_db(&row.scope_kind)
-        .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
-    require_editor(&state, &user, scope_kind, row.scope_id).await?;
+    let _row = fetch_asset(&state.db, id).await?;
+    require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
 
     sqlx::query(
         "UPDATE assets SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 WHERE id = $2",
@@ -1079,6 +1154,13 @@ pub async fn delete_asset(
     .bind(id)
     .execute(&state.db)
     .await?;
+
+    // Object grants are polymorphic with no FK — drop them on delete.
+    sqlx::query("DELETE FROM object_grants WHERE object_type = 'asset'::object_kind AND object_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1116,12 +1198,15 @@ struct UsageRow {
 )]
 pub async fn asset_usage(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Query(params): Query<AssetUsageQuery>,
 ) -> Result<Json<PaginatedResponse<AssetUsageItem>>, ApiError> {
     // 404 if the asset doesn't exist.
     let _ = fetch_asset(&state.db, id).await?;
+    require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Viewer)
+        .await
+        .map_err(map_to_api_error)?;
 
     // Match any alias entry whose `asset_id` equals this asset. `id` is a `Uuid`
     // so interpolating it into the jsonpath literal is injection-safe.
