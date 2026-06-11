@@ -24,6 +24,9 @@
 		updateResource,
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
+	import ScopeSelector from '$lib/components/assets/ScopeSelector.svelte';
+	import type { ScopeContext } from '$lib/api/assets';
+	import Lock from '@lucide/svelte/icons/lock';
 
 	type Props = {
 		open: boolean;
@@ -37,6 +40,9 @@
 		 *  e.g. the Control Plane opens this prefilled to `capacity`. Ignored on
 		 *  edit (the existing resource's type wins). */
 		prefillType?: string;
+		/** When creating from a folder's Resources tab, default the placement to
+		 *  that folder so the new resource lands where the user is browsing. */
+		defaultFolderId?: string;
 		onsaved: () => void;
 	};
 
@@ -46,6 +52,7 @@
 		types: typesProp = [],
 		workspace_id,
 		prefillType,
+		defaultFolderId,
 		onsaved
 	}: Props = $props();
 
@@ -61,6 +68,11 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let mode = $state<'create' | 'edit'>('create');
+
+	// Placement + privacy (create only). Folder/template scope makes the resource
+	// non-workspace-wide; `restricted` drops the workspace-role floor (private).
+	let scope = $state<ScopeContext>({ kind: 'workspace' });
+	let restricted = $state(false);
 
 	// Resolve descriptor from the (lazily-loaded) types list.
 	const descriptor = $derived<ResourceTypeInfo | null>(
@@ -150,6 +162,8 @@
 				displayName = '';
 				fieldValues = {};
 				kvPairs = [];
+				scope = defaultFolderId ? { kind: 'folder', id: defaultFolderId } : { kind: 'workspace' };
+				restricted = false;
 			}
 		})();
 	});
@@ -297,7 +311,10 @@
 					resource_type: selectedType,
 					display_name: displayName || null,
 					config: buildConfig(true),
-					workspace_id: workspace_id ?? null
+					workspace_id: workspace_id ?? null,
+					scope_kind: scope.kind,
+					scope_id: scope.kind === 'workspace' ? null : scope.id,
+					restricted
 				});
 			} else if (resource_id) {
 				// Edit: name-only updates don't carry config; if any non-empty
@@ -420,6 +437,36 @@
 							class="text-sm"
 						/>
 					</FormField>
+
+					{#if mode === 'create'}
+						<FormField
+							label="Location"
+							description="Workspace = visible to everyone. A folder scopes it to that folder's subtree and inherits the folder's access."
+						>
+							<ScopeSelector value={scope} onChange={(s) => (scope = s)} />
+						</FormField>
+
+						<label
+							class="flex items-start gap-2.5 rounded-md border border-border/60 p-3 text-sm"
+							data-testid="resource-modal-restricted"
+						>
+							<input
+								type="checkbox"
+								checked={restricted}
+								onchange={(e) => (restricted = (e.currentTarget as HTMLInputElement).checked)}
+								class="mt-0.5 size-4"
+							/>
+							<span>
+								<span class="flex items-center gap-1.5 font-medium text-foreground">
+									<Lock class="size-3.5" /> Private
+								</span>
+								<span class="text-muted-foreground">
+									Not shared workspace-wide. Only you and people explicitly granted
+									access (plus workspace admins) can see it.
+								</span>
+							</span>
+						</label>
+					{/if}
 
 					{#if descriptor && isDynamic}
 						<div class="space-y-3 rounded-md border border-border/60 p-3">

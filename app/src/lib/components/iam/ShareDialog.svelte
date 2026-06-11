@@ -135,7 +135,13 @@
 	}
 
 	const kindLabel = $derived(
-		objectType === 'folder' ? 'folder' : objectType === 'template' ? 'template' : 'run'
+		{
+			folder: 'folder',
+			template: 'template',
+			instance: 'run',
+			resource: 'resource',
+			asset: 'asset'
+		}[objectType] ?? 'object'
 	);
 </script>
 

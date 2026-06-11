@@ -10,6 +10,8 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+	import Share2 from '@lucide/svelte/icons/share-2';
+	import Lock from '@lucide/svelte/icons/lock';
 	import {
 		deleteResource,
 		listResources,
@@ -17,13 +19,19 @@
 		type ResourceSummary,
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
+	import { roleAtLeast } from '$lib/api/iam';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import ResourceEditModal from './ResourceEditModal.svelte';
 
 	type Props = {
 		workspace_id?: string;
+		/** When set, scope the list + default new-resource placement to this
+		 *  folder (the folders-browser Resources tab). */
+		folderId?: string;
 	};
 
-	let { workspace_id }: Props = $props();
+	let { workspace_id, folderId }: Props = $props();
 
 	// Resource types the Control Plane (/fleet) now owns — hidden here so the
 	// two surfaces don't both list them. Client-side filter only; the shared
@@ -45,6 +53,15 @@
 	let editorOpen = $state(false);
 	let editingId = $state<string | null>(null);
 
+	// Object-grant Share dialog (object-Admins only; the per-row button is gated
+	// on the row's my_effective_role).
+	let shareOpen = $state(false);
+	let shareResource = $state<ResourceSummary | null>(null);
+	function openShare(r: ResourceSummary) {
+		shareResource = r;
+		shareOpen = true;
+	}
+
 	async function load() {
 		loading = true;
 		error = null;
@@ -53,6 +70,7 @@
 				listResources({
 					resource_type: typeFilter || undefined,
 					workspace_id,
+					scope: folderId ? `folder:${folderId}` : undefined,
 					perPage: 200
 				}),
 				types.length === 0 ? listResourceTypes() : Promise.resolve(types)
@@ -70,6 +88,7 @@
 	$effect(() => {
 		void typeFilter;
 		void workspace_id;
+		void folderId;
 		load();
 	});
 
@@ -107,8 +126,6 @@
 		smtp: '✉️',
 		google_oauth: '🔑'
 	};
-
-	const formatDate = (s: string) => new Date(s).toLocaleString();
 </script>
 
 <div class="space-y-4" data-testid="resources-list">
@@ -170,6 +187,8 @@
 	{:else}
 		<div class="space-y-2">
 			{#each visibleResources as r (r.id)}
+				{@const canEdit = roleAtLeast(r.my_effective_role, 'editor')}
+				{@const canShare = roleAtLeast(r.my_effective_role, 'admin')}
 				<div
 					class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/40"
 					data-testid="resource-item-{r.id}"
@@ -185,33 +204,61 @@
 								<span class="font-mono text-sm font-medium text-foreground">{r.path}</span>
 								<Badge variant="secondary">{r.resource_type}</Badge>
 								<Badge variant="outline">v{r.latest_version}</Badge>
+								{#if r.restricted}
+									<Badge
+										class="gap-1 bg-amber-100 text-amber-800"
+										variant="secondary"
+										title="Private — access by grant only, not shared workspace-wide"
+									>
+										<Lock class="size-3" /> Private
+									</Badge>
+								{/if}
 							</div>
 							<p class="mt-1 truncate text-sm text-muted-foreground">{r.display_name}</p>
-							<p class="mt-1 text-sm text-muted-foreground">
-								Updated {formatDate(r.updated_at)}
-							</p>
+							<AuthorshipChips
+								class="mt-1"
+								createdBy={r.created_by}
+								createdAt={r.created_at}
+								updatedBy={r.updated_by}
+								updatedAt={r.updated_at}
+							/>
 						</div>
 					</button>
 					<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-						<Button
-							variant="ghost"
-							size="sm"
-							class="gap-1 text-sm text-muted-foreground"
-							onclick={() => openEdit(r.id)}
-							title="Edit / rotate"
-						>
-							<RotateCcw class="size-3.5" />
-							Edit
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-							onclick={() => handleDelete(r.id, r.path)}
-							title="Soft-delete"
-						>
-							<Trash2 class="size-3.5" />
-						</Button>
+						{#if canShare}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="gap-1 text-sm text-muted-foreground"
+								onclick={() => openShare(r)}
+								title="Share / manage access"
+								data-testid="resource-share-{r.id}"
+							>
+								<Share2 class="size-3.5" />
+								Share
+							</Button>
+						{/if}
+						{#if canEdit}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="gap-1 text-sm text-muted-foreground"
+								onclick={() => openEdit(r.id)}
+								title="Edit / rotate"
+							>
+								<RotateCcw class="size-3.5" />
+								Edit
+							</Button>
+							<Button
+								variant="ghost"
+								size="sm"
+								class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+								onclick={() => handleDelete(r.id, r.path)}
+								title="Soft-delete"
+							>
+								<Trash2 class="size-3.5" />
+							</Button>
+						{/if}
 					</div>
 				</div>
 			{/each}
@@ -224,5 +271,17 @@
 	resource_id={editingId}
 	{types}
 	{workspace_id}
+	defaultFolderId={folderId}
 	onsaved={onSaved}
 />
+
+{#if shareResource}
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="resource"
+		objectId={shareResource.id}
+		objectName={shareResource.path}
+		myEffectiveRole={shareResource.my_effective_role}
+		onChanged={load}
+	/>
+{/if}

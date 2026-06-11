@@ -19,6 +19,8 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import Folder from '@lucide/svelte/icons/folder';
+	import Share2 from '@lucide/svelte/icons/share-2';
+	import Lock from '@lucide/svelte/icons/lock';
 	import {
 		listAssetTypes,
 		listAssets,
@@ -29,12 +31,30 @@
 		type AssetSummary,
 		type ScopeContext
 	} from '$lib/api/assets';
+	import { roleAtLeast } from '$lib/api/iam';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import ScopeSelector from './ScopeSelector.svelte';
 	import AssetTypeBuilder from './AssetTypeBuilder.svelte';
 	import AssetEditor from './AssetEditor.svelte';
 	import CsvImport from './CsvImport.svelte';
 
+	type Props = {
+		/** When set (folders-browser Assets tab), pin the scope to this folder and
+		 *  hide the scope selector. */
+		pinnedFolderId?: string;
+	};
+	let { pinnedFolderId }: Props = $props();
+
+	// Pinned to a folder inside the folders browser, else the user-driven scope
+	// selector. The folders page re-keys on folder change so this prop is stable
+	// per mount; an $effect.pre pins it once without a reactive-capture warning.
 	let scope = $state<ScopeContext>({ kind: 'workspace' });
+	$effect.pre(() => {
+		if (pinnedFolderId && !(scope.kind === 'folder' && scope.id === pinnedFolderId)) {
+			scope = { kind: 'folder', id: pinnedFolderId };
+		}
+	});
 	let types = $state<AssetTypeSummary[]>([]);
 	let assets = $state<AssetSummary[]>([]);
 	let typeFilter = $state<string>('');
@@ -48,6 +68,12 @@
 	let editingAsset = $state<AssetSummary | null>(null);
 	let csvOpen = $state(false);
 	let csvAsset = $state<AssetSummary | null>(null);
+	let shareOpen = $state(false);
+	let shareAsset = $state<AssetSummary | null>(null);
+	function openShare(a: AssetSummary) {
+		shareAsset = a;
+		shareOpen = true;
+	}
 
 	// Collapsed virtual folders (by path prefix).
 	let collapsed = $state<Record<string, boolean>>({});
@@ -152,13 +178,17 @@
 			error = 'Ref-key must be a lowercase identifier (^[a-z][a-z0-9_]*$).';
 			return;
 		}
+		const restricted = confirm(
+			'Make this asset private?\n\nOK = private (only you + people you grant + workspace admins).\nCancel = shared workspace-wide (default).'
+		);
 		try {
 			const created = await createAsset({
 				type_id: targetType,
 				ref_key: refKey,
 				display_name: refKey,
 				scope_kind: scope.kind,
-				scope_id: scope.kind === 'workspace' ? null : scope.id
+				scope_id: scope.kind === 'workspace' ? null : scope.id,
+				restricted
 			});
 			await load();
 			openEditAsset(created);
@@ -183,13 +213,13 @@
 	function toggleFolder(folder: string) {
 		collapsed = { ...collapsed, [folder]: !collapsed[folder] };
 	}
-
-	const formatDate = (s: string) => new Date(s).toLocaleString();
 </script>
 
 <div class="space-y-6" data-testid="assets-list">
 	<div class="flex flex-wrap items-center gap-3">
-		<ScopeSelector value={scope} onChange={(s) => (scope = s)} />
+		{#if !pinnedFolderId}
+			<ScopeSelector value={scope} onChange={(s) => (scope = s)} />
+		{/if}
 		<div class="flex items-center gap-2">
 			<span class="text-sm font-medium text-muted-foreground">Type</span>
 			<Select.Root type="single" value={typeFilter} onValueChange={(v) => (typeFilter = v ?? '')}>
@@ -310,6 +340,8 @@
 						{#if !group.folder || !collapsed[group.folder]}
 							<div class="space-y-2 {group.folder ? 'ml-5' : ''}">
 								{#each group.assets as a (a.id)}
+									{@const canEdit = roleAtLeast(a.my_effective_role, 'editor')}
+									{@const canShare = roleAtLeast(a.my_effective_role, 'admin')}
 									<div class="group flex items-center justify-between rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40" data-testid="asset-item-{a.id}">
 										<button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => openEditAsset(a)}>
 											<Database class="size-4 shrink-0 text-muted-foreground" />
@@ -318,27 +350,49 @@
 													<span class="font-mono text-sm font-medium">{a.ref_key}</span>
 													<Badge variant="secondary">{typeName(a.type_id)}</Badge>
 													<Badge variant="outline">v{a.version}</Badge>
+													{#if a.restricted}
+														<Badge
+															class="gap-1 bg-amber-100 text-amber-800"
+															variant="secondary"
+															title="Private — access by grant only, not shared workspace-wide"
+														>
+															<Lock class="size-3" /> Private
+														</Badge>
+													{/if}
 												</div>
 												<p class="mt-0.5 truncate text-sm text-muted-foreground">{a.display_name}</p>
-												<p class="mt-0.5 text-sm text-muted-foreground">Updated {formatDate(a.updated_at)}</p>
+												<AuthorshipChips
+													class="mt-0.5"
+													createdBy={a.created_by}
+													createdAt={a.created_at}
+													updatedBy={a.updated_by}
+													updatedAt={a.updated_at}
+												/>
 											</div>
 										</button>
 										<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-											<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openCsv(a)} title="Import CSV">
-												<Upload class="size-3.5" /> CSV
-											</Button>
-											<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditAsset(a)}>
-												<Pencil class="size-3.5" /> Edit
-											</Button>
-											<Button
-												variant="ghost"
-												size="sm"
-												class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-												onclick={() => handleDeleteAsset(a)}
-												title="Soft-delete"
-											>
-												<Trash2 class="size-3.5" />
-											</Button>
+											{#if canShare}
+												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openShare(a)} title="Share / manage access" data-testid="asset-share-{a.id}">
+													<Share2 class="size-3.5" /> Share
+												</Button>
+											{/if}
+											{#if canEdit}
+												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openCsv(a)} title="Import CSV">
+													<Upload class="size-3.5" /> CSV
+												</Button>
+												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditAsset(a)}>
+													<Pencil class="size-3.5" /> Edit
+												</Button>
+												<Button
+													variant="ghost"
+													size="sm"
+													class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+													onclick={() => handleDeleteAsset(a)}
+													title="Soft-delete"
+												>
+													<Trash2 class="size-3.5" />
+												</Button>
+											{/if}
 										</div>
 									</div>
 								{/each}
@@ -354,3 +408,14 @@
 <AssetTypeBuilder bind:open={typeBuilderOpen} typeId={editingTypeId} {scope} onsaved={onTypeSaved} />
 <AssetEditor bind:open={editorOpen} asset={editingAsset} onsaved={onAssetSaved} />
 <CsvImport bind:open={csvOpen} asset={csvAsset} onsaved={onAssetSaved} />
+
+{#if shareAsset}
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="asset"
+		objectId={shareAsset.id}
+		objectName={shareAsset.ref_key}
+		myEffectiveRole={shareAsset.my_effective_role}
+		onChanged={load}
+	/>
+{/if}
