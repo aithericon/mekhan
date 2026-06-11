@@ -11,6 +11,10 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
     // Touch this line whenever a migration is added/renamed so the macro re-embeds
     // it — sccache content-hashes this file but NOT the external migrations dir, so
     // a real edit here is required to bust the cache (a bare `touch` won't).
+    // (latest: 20240173000000_catalogue_data_types.sql — registered data types
+    //  (schema-digest promotion): catalogue_data_types +
+    //  catalogue_data_type_digests. 20240171–172 are reserved by the in-flight
+    //  IAM worktree — renumber-check `ls migrations | tail` before commit.)
     // (latest: 20240168000000_catalogue_query.sql — catalogue query layer:
     //  fmeta expression indexes (format/num_rows/schema digest) +
     //  catalogue_saved_queries table.)

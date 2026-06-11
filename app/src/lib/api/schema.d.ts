@@ -547,6 +547,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalogue/data-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/catalogue/data-types — list registered data types, newest first. */
+        get: operations["list_data_types"];
+        put?: never;
+        /**
+         * POST /api/v1/catalogue/data-types — promote a schema digest to a named
+         *     data type. The server derives the canonical columns from an exemplar entry.
+         */
+        post: operations["promote_data_type"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue/data-types/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/catalogue/data-types/{id}. */
+        get: operations["get_data_type"];
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/catalogue/data-types/{id} — digest rows cascade. */
+        delete: operations["delete_data_type"];
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/v1/catalogue/data-types/{id} — rename/redescribe and/or
+         *     attach/detach schema digests.
+         */
+        patch: operations["update_data_type"];
+        trace?: never;
+    };
     "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
         parameters: {
             query?: never;
@@ -5478,6 +5521,39 @@ export interface components {
                 };
             };
         };
+        /**
+         * @description A registered data type: a named set of schema digests with the canonical
+         *     column projection derived from an exemplar entry at promote time.
+         */
+        CatalogueDataType: {
+            /** @description Canonical display columns (derived from the promote-time exemplar). */
+            columns: components["schemas"]["DataTypeColumn"][];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Author (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
+            description?: string | null;
+            /** @description Schema digests owned by this type (hex16; a digest belongs to ≤1 type). */
+            digests: string[];
+            /**
+             * Format: int64
+             * @description Live count of catalogue entries carrying any owned digest.
+             */
+            entry_count: number;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`).
+             */
+            updated_by?: string | null;
+        };
         /** @description A single catalogue entry (maps 1:1 to the `catalogue_entries` table). */
         CatalogueEntry: {
             /** Format: date-time */
@@ -6386,6 +6462,39 @@ export interface components {
              * @description Mean completeness across scored columns (0.0–1.0).
              */
             completeness: number;
+        };
+        /** @description One column of a registered data type's canonical schema. */
+        DataTypeColumn: {
+            /**
+             * @description Humanized display type (e.g. `int64`, `timestamp<UTC>`), NOT the
+             *     fingerprint-canonical serde form.
+             */
+            data_type: string;
+            name: string;
+            nullable: boolean;
+        };
+        /** @description Promote payload: name a schema digest. */
+        DataTypePromote: {
+            description?: string | null;
+            /**
+             * @description Schema-fingerprint digest (hex16) — must be carried by at least one
+             *     catalogue entry (the exemplar).
+             */
+            digest: string;
+            name: string;
+        };
+        /** @description Patch payload — every field optional; only provided fields are applied. */
+        DataTypeUpdate: {
+            /**
+             * @description Digests to attach. Each must resolve + verify against a live exemplar
+             *     (columns are NOT required to match — attaching schema variants under
+             *     one name is the point). An already-owned digest is a conflict.
+             */
+            attach_digests?: string[] | null;
+            description?: string | null;
+            /** @description Digests to detach (unconditional; unknown digests are no-ops). */
+            detach_digests?: string[] | null;
+            name?: string | null;
         };
         DeleteConfig: {
             ignore_missing?: boolean;
@@ -9841,6 +9950,12 @@ export interface components {
         };
         /** @description One filterable field, described for the frontend field picker. */
         QueryFieldDesc: {
+            /**
+             * @description Probed file formats (snake_case `meta.format` values) this field is
+             *     meaningful for; empty = universal. Discovery metadata only — the
+             *     server accepts the filter regardless.
+             */
+            applies_to: string[];
             description: string;
             /** @description Wire name: `filter[<name>][op]=` / `sort=<name>`. */
             name: string;
@@ -14020,6 +14135,238 @@ export interface operations {
             };
             /** @description Invalid query DSL */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_data_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered data types, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueDataType"][];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    promote_data_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataTypePromote"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueDataType"];
+                };
+            };
+            /** @description No catalogue entry carries the digest */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Duplicate name, or digest already owned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Exemplar unparseable or fingerprint drift */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_data_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Data type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The data type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueDataType"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_data_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Data type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_data_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Data type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataTypeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogueDataType"];
+                };
+            };
+            /** @description Type not found, or an attach digest has no exemplar */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Duplicate name, or digest already owned */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Attach exemplar unparseable or fingerprint drift */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

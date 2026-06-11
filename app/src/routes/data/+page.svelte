@@ -8,6 +8,7 @@
 	import ServersTab from '$lib/components/data/ServersTab.svelte';
 	import AnalyticsTab from '$lib/components/data/AnalyticsTab.svelte';
 	import { EntriesQueryState } from '$lib/components/data/entries-query.svelte';
+	import { DataTypesState } from '$lib/components/data/data-types.svelte';
 
 	const TABS = ['entries', 'copies', 'servers', 'analytics'];
 
@@ -29,6 +30,12 @@
 	// One query-state instance per page mount, shared between the Entries tab
 	// body and the rail in the sidebar snippet (which captures it lexically).
 	const entries = new EntriesQueryState(initialQ());
+	// Registered data types — same per-mount sharing as `entries` (the rail's
+	// sections and the tab's compile sites both resolve through it).
+	const datatypes = new DataTypesState();
+	$effect(() => {
+		datatypes.load();
+	});
 	// Server key to highlight when jumping to the Servers tab from a copy link.
 	let focusServer = $state<string | null>(null);
 
@@ -80,12 +87,12 @@
 		{/snippet}
 		{#snippet sidebar()}
 			{#if tab === 'entries'}
-				<EntriesRail {entries} />
+				<EntriesRail {entries} {datatypes} />
 			{/if}
 		{/snippet}
 
 		<Tabs.Content value="entries">
-			<EntriesTab {entries} onViewServer={viewServer} />
+			<EntriesTab {entries} {datatypes} onViewServer={viewServer} />
 		</Tabs.Content>
 		<Tabs.Content value="copies">
 			<CopiesTab onViewServer={viewServer} />

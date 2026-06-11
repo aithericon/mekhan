@@ -379,6 +379,11 @@ use utoipa::OpenApi;
             crate::catalogue::saved_queries::SavedQuery,
             crate::catalogue::saved_queries::SavedQueryCreate,
             crate::catalogue::saved_queries::SavedQueryUpdate,
+            // Registered data types (`columns: Vec<DataTypeColumn>` nests).
+            crate::catalogue::data_types::CatalogueDataType,
+            crate::catalogue::data_types::DataTypeColumn,
+            crate::catalogue::data_types::DataTypePromote,
+            crate::catalogue::data_types::DataTypeUpdate,
         ),
     ),
     tags(

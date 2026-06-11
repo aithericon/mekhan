@@ -347,8 +347,10 @@ fn attribute_view(key: &str, v: &AttributeValue) -> AttributeView {
     }
 }
 
-/// Render a [`DataType`] as a compact display string the frontend can show as-is.
-fn humanize_data_type(dt: &DataType) -> String {
+/// Render a [`DataType`] as a compact display string the frontend can show
+/// as-is. `pub(crate)`: also projects the canonical column set of a registered
+/// data type (see `catalogue::data_types`).
+pub(crate) fn humanize_data_type(dt: &DataType) -> String {
     match dt {
         DataType::Boolean => "boolean".into(),
         DataType::Int8 => "int8".into(),
