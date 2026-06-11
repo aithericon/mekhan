@@ -270,9 +270,13 @@ set-based**:
   upsert hashless observations (status `indexed`), and hash-carrying items couple the catalogue
   half in the same tx. Both stamp `endpoint_root` + `serve_group` into provenance, keeping the
   file-server `adopt` autostamp chain intact for batch-crawled servers. All upserts idempotent
-  on `(file_server_id, path)` → at-least-once delivery is harmless. NOTE: `reconcile_batch` is
-  still a per-item statement loop — a set-based `UNNEST` rewrite is the flagged follow-up before
-  the real 4M run.
+  on `(file_server_id, path)` → at-least-once delivery is harmless. Both fold disciplines are
+  set-based: the batch binds as parallel arrays and one `UNNEST` statement joins
+  `legacy_file_index` (LATERAL `LIMIT 1`), classifies, and upserts — a constant number of
+  statements per batch regardless of item count (`reconcile_batch` /
+  `inventory::queries::fold_index_batch`), which is what makes the 4M campaign a few hundred
+  statements instead of ~8M round-trips. Duplicate paths within one batch collapse to the last
+  occurrence.
 - **Chunking**: `CrawlConfig.max_batches` caps one invocation; new `exhausted` output (lister
   EOF, not a cap/cancel stop) is the campaign's exit condition. Resume is capability-aware:
   native `start_after` on S3; client-side skip-until-cursor elsewhere (the `fs` lister silently

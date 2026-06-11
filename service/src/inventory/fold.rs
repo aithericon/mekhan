@@ -39,9 +39,10 @@ pub async fn start_inventory_fold_ingest(nats: MekhanNats, db: PgPool) {
     };
 
     // Cap the pull batch (see step_executions_consumer's incident rationale):
-    // one 5000-item fold batch is thousands of statements with today's
-    // per-item loop, and anything prefetched but un-acked within `ack_wait`
-    // redelivers. 8 × worst-case seconds stays inside the 120s ack_wait.
+    // folds are set-based (constant statements per batch), but anything
+    // prefetched and not acked within `ack_wait` redelivers, so keep the
+    // prefetch window small. 8 × worst-case seconds stays inside the 120s
+    // ack_wait with a wide margin.
     let mut messages = match consumer.stream().max_messages_per_batch(8).messages().await {
         Ok(m) => m,
         Err(e) => {
@@ -116,57 +117,48 @@ async fn process_batch(
             );
         }
         FoldMode::Index => {
-            let mut tx = db.begin().await?;
-            for item in &batch.items {
-                let mut provenance = serde_json::json!({
-                    "source": "crawl_sink",
-                    "observed_size": item.size,
-                    "mtime": item.mtime,
-                });
-                if let Some(root) = ctx.endpoint_root.as_deref() {
-                    provenance["endpoint_root"] = serde_json::json!(root);
-                }
-                if let Some(group) = ctx.serve_group.as_deref() {
-                    provenance["serve_group"] = serde_json::json!(group);
-                }
-                // st_mode is provenance-only (no promoted column for it).
-                if let Some(mode) = item.mode {
-                    provenance["mode"] = serde_json::json!(mode);
-                }
+            // Pre-shape each item (provenance + normalized hash) client-side;
+            // the write itself is set-based — constant statements per batch
+            // via `fold_index_batch` (catalogue coupling for hash-carrying
+            // items + one UNNEST upsert, same tx).
+            let items: Vec<super::queries::FoldIndexItem> = batch
+                .items
+                .iter()
+                .map(|item| {
+                    let mut provenance = serde_json::json!({
+                        "source": "crawl_sink",
+                        "observed_size": item.size,
+                        "mtime": item.mtime,
+                    });
+                    if let Some(root) = ctx.endpoint_root.as_deref() {
+                        provenance["endpoint_root"] = serde_json::json!(root);
+                    }
+                    if let Some(group) = ctx.serve_group.as_deref() {
+                        provenance["serve_group"] = serde_json::json!(group);
+                    }
+                    // st_mode is provenance-only (no promoted column for it).
+                    if let Some(mode) = item.mode {
+                        provenance["mode"] = serde_json::json!(mode);
+                    }
+                    super::queries::FoldIndexItem {
+                        path: item.path.clone(),
+                        size: item.size as i64,
+                        mtime: parse_mtime(item.mtime.as_deref()),
+                        hash: item
+                            .hash
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|h| !h.is_empty())
+                            .map(str::to_string),
+                        uid: item.uid.map(|v| v as i32),
+                        gid: item.gid.map(|v| v as i32),
+                        provenance,
+                    }
+                })
+                .collect();
 
-                // A hash-carrying item couples the catalogue half in the same
-                // tx; hashless items are plain observations (inventory only).
-                let hash = item.hash.as_deref().filter(|h| !h.trim().is_empty());
-                if let Some(hash) = hash {
-                    let name = item.path.rsplit('/').next().filter(|n| !n.is_empty());
-                    super::queries::upsert_catalogue_by_hash(
-                        &mut tx,
-                        hash,
-                        "legacy",
-                        name,
-                        Some(item.size as i64),
-                        None,
-                    )
-                    .await?;
-                }
-                let facts = super::model::ObservedFacts {
-                    size_bytes: Some(item.size as i64),
-                    mtime: parse_mtime(item.mtime.as_deref()),
-                    uid: item.uid.map(|v| v as i32),
-                    gid: item.gid.map(|v| v as i32),
-                };
-                super::queries::upsert_inventory_copy(
-                    &mut tx,
-                    hash,
-                    &batch.file_server_id,
-                    &item.path,
-                    "indexed",
-                    false,
-                    &provenance,
-                    &facts,
-                )
-                .await?;
-            }
+            let mut tx = db.begin().await?;
+            super::queries::fold_index_batch(&mut tx, &batch.file_server_id, &items).await?;
             tx.commit().await?;
             tracing::debug!(
                 server = %batch.file_server_id,

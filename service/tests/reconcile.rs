@@ -390,6 +390,166 @@ async fn collect_all_orphans(pool: &PgPool, server: &str) -> Vec<OrphanDbRow> {
     out
 }
 
+/// Hash-coupling + batch-edge-case legs of the set-based `reconcile_batch`:
+/// an OBSERVED hash must win over the inherited legacy hash, couple the
+/// catalogue half (with the legacy owner stamped into `user_metadata`), and
+/// duplicate paths within one batch must collapse to the LAST occurrence.
+#[tokio::test]
+async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
+    let Some(_url) = db_url() else {
+        eprintln!(
+            "SKIP reconcile_couples_catalogue_and_collapses_dup_paths: set \
+             MEKHAN__DATABASE_URL to run"
+        );
+        return;
+    };
+    let pool = connect().await;
+
+    let run = Uuid::new_v4().simple().to_string();
+    let server = format!("test-recouple-{run}");
+    let hash_legacy = sha_like(&format!("dd{run}"));
+    let hash_observed = sha_like(&format!("ee{run}"));
+
+    let cleanup_servers = [server.as_str()];
+    let cleanup_hashes = [hash_legacy.as_str(), hash_observed.as_str()];
+    cleanup(&pool, &cleanup_servers, &cleanup_hashes).await;
+
+    // Legacy row carries a hash AND an owner_id (seed_legacy doesn't set
+    // owner, so insert directly).
+    sqlx::query(
+        "INSERT INTO legacy_file_index \
+         (legacy_key, file_server_id, path, hash, size, modified, owner_id) \
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6)",
+    )
+    .bind(format!("{run}-probed"))
+    .bind(&server)
+    .bind("/data/probed.bin")
+    .bind(&hash_legacy)
+    .bind(100i64)
+    .bind("legacy-user-42")
+    .execute(&pool)
+    .await
+    .expect("seed legacy row with owner");
+
+    // One batch: a hash-carrying observation of the probed path, PLUS the
+    // same orphan path twice with different sizes (dup must collapse to the
+    // LAST occurrence and count once).
+    let counts = reconcile::reconcile_batch(
+        &pool,
+        &server,
+        &[
+            ObservedItem {
+                path: "/data/probed.bin".into(),
+                size: 100,
+                mtime: None,
+                hash: Some(hash_observed.clone()),
+                uid: Some(1000),
+                gid: None,
+                mode: Some(0o100644),
+            },
+            ObservedItem {
+                path: "/data/dup_path.bin".into(),
+                size: 1,
+                mtime: None,
+                hash: None,
+                uid: None,
+                gid: None,
+                mode: None,
+            },
+            ObservedItem {
+                path: "/data/dup_path.bin".into(),
+                size: 2,
+                mtime: None,
+                hash: None,
+                uid: None,
+                gid: None,
+                mode: None,
+            },
+        ],
+        &reconcile::ObservationContext {
+            endpoint_root: Some("/data".into()),
+            serve_group: Some("test-group".into()),
+        },
+    )
+    .await
+    .expect("reconcile_batch");
+
+    assert_eq!(counts.verified, 1, "probed path verified");
+    assert_eq!(counts.orphan_disk, 1, "dup path counted ONCE");
+    assert_eq!(counts.mismatch, 0, "no mismatch");
+
+    // Observed hash wins over the inherited legacy hash.
+    let (status, ch) = inv_row(&pool, &server, "/data/probed.bin")
+        .await
+        .expect("probed row exists");
+    assert_eq!(status, "verified");
+    assert_eq!(ch.as_deref(), Some(hash_observed.as_str()), "observed hash wins");
+
+    // Catalogue half coupled in the same tx: name from the path's final
+    // segment, category legacy, legacy owner stamped into user_metadata.
+    let cat: (String, Option<String>, serde_json::Value) = sqlx::query_as(
+        "SELECT category, name, user_metadata FROM catalogue_entries WHERE content_hash = $1",
+    )
+    .bind(&hash_observed)
+    .fetch_one(&pool)
+    .await
+    .expect("catalogue row coupled");
+    assert_eq!(cat.0, "legacy");
+    assert_eq!(cat.1.as_deref(), Some("probed.bin"));
+    assert_eq!(
+        cat.2["legacy_owner_id"],
+        serde_json::json!("legacy-user-42"),
+        "legacy owner stamped"
+    );
+
+    // Dup path: LAST occurrence wins (size 2), and the ctx + uid landed in
+    // the right places for the hash row.
+    let (size, prov): (Option<i64>, serde_json::Value) = sqlx::query_as(
+        "SELECT size_bytes, provenance FROM file_inventory \
+         WHERE file_server_id = $1 AND path = $2",
+    )
+    .bind(&server)
+    .bind("/data/dup_path.bin")
+    .fetch_one(&pool)
+    .await
+    .expect("dup row exists once");
+    assert_eq!(size, Some(2), "last occurrence wins");
+    assert_eq!(prov["endpoint_root"], serde_json::json!("/data"), "ctx stamped");
+    assert_eq!(prov["serve_group"], serde_json::json!("test-group"));
+
+    let probed_prov: serde_json::Value = sqlx::query_scalar(
+        "SELECT provenance FROM file_inventory WHERE file_server_id = $1 AND path = $2",
+    )
+    .bind(&server)
+    .bind("/data/probed.bin")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(probed_prov["mode"], serde_json::json!(0o100644), "mode in provenance");
+    let probed_uid: Option<i32> = sqlx::query_scalar(
+        "SELECT uid FROM file_inventory WHERE file_server_id = $1 AND path = $2",
+    )
+    .bind(&server)
+    .bind("/data/probed.bin")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(probed_uid, Some(1000), "uid promoted");
+
+    // Empty batch is a no-op with zero counts.
+    let empty = reconcile::reconcile_batch(
+        &pool,
+        &server,
+        &[],
+        &reconcile::ObservationContext::default(),
+    )
+    .await
+    .expect("empty batch");
+    assert_eq!(empty, reconcile::ReconcileCounts::default());
+
+    cleanup(&pool, &cleanup_servers, &cleanup_hashes).await;
+}
+
 /// Coerce an arbitrary string into a deterministic 64-char lowercase hex blob.
 fn sha_like(seed: &str) -> String {
     let mut s: String = seed

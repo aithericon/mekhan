@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 
 use crate::query::builder::{self, QueryError};
@@ -227,6 +228,132 @@ pub async fn upsert_inventory_copy(
     .bind(facts.mtime)
     .bind(facts.uid)
     .bind(facts.gid)
+    .execute(&mut **tx)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Set-based sibling of [`upsert_catalogue_by_hash`] for the fold/reconcile
+/// batch paths (caller owns the tx): one statement couples the catalogue half
+/// for EVERY hash-carrying item of a batch. `hashes` rides positionally with
+/// `paths`/`sizes`; `None` rows (hashless observations) are filtered in SQL.
+/// `category = 'legacy'`, name = the path's final segment (empty → NULL) —
+/// exactly what the per-item callers passed. Intra-batch duplicate hashes are
+/// safe (`ON CONFLICT DO NOTHING` skips same-statement conflicts; first
+/// occurrence wins, like the loop did). Returns rows newly inserted.
+pub async fn upsert_catalogue_by_hash_unnest(
+    tx: &mut Transaction<'_, Postgres>,
+    hashes: &[Option<String>],
+    paths: &[String],
+    sizes: &[i64],
+) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query(
+        r#"
+        INSERT INTO catalogue_entries
+            (content_hash, category, name, size_bytes, mime_type)
+        SELECT t.hash, 'legacy',
+               NULLIF(regexp_replace(t.path, '^.*/', ''), ''),
+               t.size, NULL
+        FROM UNNEST($1::text[], $2::text[], $3::bigint[]) AS t(hash, path, size)
+        WHERE t.hash IS NOT NULL
+        ON CONFLICT (content_hash) DO NOTHING
+        "#,
+    )
+    .bind(hashes)
+    .bind(paths)
+    .bind(sizes)
+    .execute(&mut **tx)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// One pre-shaped item of a set-based index fold — the [`fold_index_batch`]
+/// carrier. `hash` must be pre-normalized (trimmed; `None` if empty) and
+/// `provenance` fully built by the caller; this layer only moves rows.
+pub struct FoldIndexItem {
+    pub path: String,
+    pub size: i64,
+    pub mtime: Option<DateTime<Utc>>,
+    pub hash: Option<String>,
+    pub uid: Option<i32>,
+    pub gid: Option<i32>,
+    pub provenance: serde_json::Value,
+}
+
+/// Set-based index fold (caller owns the tx) — the batch sibling of the
+/// per-item `upsert_catalogue_by_hash` + [`upsert_inventory_copy`] pair, with
+/// identical semantics: hash-carrying items couple the catalogue half first
+/// ("register fills both, never half"), then ONE statement upserts every
+/// physical copy (status `indexed`, `is_canonical` insert-only-false,
+/// content_hash/size/mtime/uid/gid COALESCE non-clobber). Constant statements
+/// per batch — this is the 4M-campaign hot path. Duplicate paths within one
+/// batch collapse to the LAST occurrence (the loop's last-write-wins).
+pub async fn fold_index_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    file_server_id: &str,
+    items: &[FoldIndexItem],
+) -> Result<u64, sqlx::Error> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+
+    let n = items.len();
+    let mut paths = Vec::with_capacity(n);
+    let mut sizes = Vec::with_capacity(n);
+    let mut mtimes: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(n);
+    let mut hashes: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut uids: Vec<Option<i32>> = Vec::with_capacity(n);
+    let mut gids: Vec<Option<i32>> = Vec::with_capacity(n);
+    let mut provenances: Vec<serde_json::Value> = Vec::with_capacity(n);
+    for item in items {
+        paths.push(item.path.clone());
+        sizes.push(item.size);
+        mtimes.push(item.mtime);
+        hashes.push(item.hash.clone());
+        uids.push(item.uid);
+        gids.push(item.gid);
+        provenances.push(item.provenance.clone());
+    }
+
+    if hashes.iter().any(Option::is_some) {
+        upsert_catalogue_by_hash_unnest(tx, &hashes, &paths, &sizes).await?;
+    }
+
+    let r = sqlx::query(
+        r#"
+        INSERT INTO file_inventory
+            (content_hash, file_server_id, path, status, is_canonical, provenance,
+             size_bytes, mtime, uid, gid, last_seen, updated_at)
+        SELECT t.hash, $1, t.path, 'indexed', false, t.provenance,
+               t.size, t.mtime, t.uid, t.gid, NOW(), NOW()
+        FROM (
+            SELECT DISTINCT ON (u.path)
+                   u.path, u.size, u.mtime, u.hash, u.uid, u.gid, u.provenance
+            FROM UNNEST($2::text[], $3::bigint[], $4::timestamptz[], $5::text[],
+                        $6::int4[], $7::int4[], $8::jsonb[])
+                 WITH ORDINALITY AS u(path, size, mtime, hash, uid, gid, provenance, ord)
+            ORDER BY u.path, u.ord DESC
+        ) t
+        ON CONFLICT (file_server_id, path) DO UPDATE SET
+            status       = EXCLUDED.status,
+            content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
+            provenance   = EXCLUDED.provenance,
+            size_bytes   = COALESCE(EXCLUDED.size_bytes, file_inventory.size_bytes),
+            mtime        = COALESCE(EXCLUDED.mtime, file_inventory.mtime),
+            uid          = COALESCE(EXCLUDED.uid, file_inventory.uid),
+            gid          = COALESCE(EXCLUDED.gid, file_inventory.gid),
+            last_seen    = NOW(),
+            updated_at   = NOW()
+        "#,
+    )
+    .bind(file_server_id)
+    .bind(&paths)
+    .bind(&sizes)
+    .bind(&mtimes)
+    .bind(&hashes)
+    .bind(&uids)
+    .bind(&gids)
+    .bind(&provenances)
     .execute(&mut **tx)
     .await?;
     Ok(r.rows_affected())

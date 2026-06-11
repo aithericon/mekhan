@@ -115,95 +115,38 @@ pub struct ReconcileSummary {
 /// Classify a batch of crawl-observed items against the legacy baseline and
 /// upsert the resulting `file_inventory` rows.
 ///
-/// For each item, the legacy `(hash, size)` is looked up by
-/// `(file_server_id, path)`; the item is bucketed into verified / mismatch /
-/// orphan_disk and the row is upserted on `(file_server_id, path)`. The
-/// per-item upserts run inside one transaction.
+/// Set-based: the batch is bound as parallel arrays and one statement UNNESTs
+/// them, joins the legacy baseline, classifies into verified / mismatch /
+/// orphan_disk, and upserts on `(file_server_id, path)` — a constant number of
+/// statements per batch regardless of item count (the 4M-campaign throughput
+/// requirement; the per-item loop this replaced was ~2 round-trips per file).
+/// Duplicate paths within one batch collapse to the LAST occurrence (the
+/// loop's last-write-wins) and are counted once.
 pub async fn reconcile_batch(
     pool: &PgPool,
     file_server_id: &str,
     items: &[ObservedItem],
     ctx: &ObservationContext,
 ) -> Result<ReconcileCounts, sqlx::Error> {
-    let mut counts = ReconcileCounts::default();
-    let mut tx = pool.begin().await?;
+    if items.is_empty() {
+        return Ok(ReconcileCounts::default());
+    }
+
+    // Decompose into parallel arrays, one bind per UNNEST column. Provenance
+    // is pre-built client-side (observed_size/mtime + ctx stamp + mode);
+    // `legacy_size` is the one key only the join can supply, added in SQL.
+    let n = items.len();
+    let mut paths = Vec::with_capacity(n);
+    let mut sizes = Vec::with_capacity(n);
+    let mut mtimes: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(n);
+    let mut hashes: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut uids: Vec<Option<i32>> = Vec::with_capacity(n);
+    let mut gids: Vec<Option<i32>> = Vec::with_capacity(n);
+    let mut provenances: Vec<serde_json::Value> = Vec::with_capacity(n);
 
     for item in items {
-        // Inherit the legacy hash + size by (file_server_id, path); owner_id
-        // rides along so a catalogue coupling can stamp the legacy owner.
-        let legacy: Option<(Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
-            "SELECT hash, size, owner_id FROM legacy_file_index \
-             WHERE file_server_id = $1 AND path = $2",
-        )
-        .bind(file_server_id)
-        .bind(&item.path)
-        .fetch_optional(&mut *tx)
-        .await?;
-
-        let legacy_owner_id = legacy.as_ref().and_then(|(_, _, o)| o.clone());
-        let legacy = legacy.map(|(hash, size, _)| (hash, size));
-
-        let (status, content_hash, mut provenance) = match legacy {
-            Some((hash, legacy_size)) => {
-                // A legacy row with a NULL size can't be size-compared; treat a
-                // present-and-equal size as verified, otherwise mismatch.
-                if legacy_size == Some(item.size) {
-                    (
-                        "verified",
-                        hash,
-                        serde_json::json!({ "observed_size": item.size, "mtime": item.mtime }),
-                    )
-                } else {
-                    (
-                        "mismatch",
-                        hash,
-                        serde_json::json!({
-                            "observed_size": item.size,
-                            "legacy_size": legacy_size,
-                            "mtime": item.mtime,
-                        }),
-                    )
-                }
-            }
-            None => (
-                "orphan_disk",
-                None,
-                serde_json::json!({ "observed_size": item.size, "mtime": item.mtime }),
-            ),
-        };
-
-        // An OBSERVED hash wins over the inherited legacy one, and a hashful
-        // observation couples the catalogue half in the same tx ("register
-        // fills both, never half").
-        let observed_hash = item.hash.as_deref().filter(|h| !h.trim().is_empty());
-        let content_hash = observed_hash.map(str::to_string).or(content_hash);
-        if let Some(hash) = observed_hash {
-            let name = item.path.rsplit('/').next().filter(|n| !n.is_empty());
-            super::queries::upsert_catalogue_by_hash(
-                &mut tx,
-                hash,
-                "legacy",
-                name,
-                Some(item.size),
-                None,
-            )
-            .await?;
-            // Legacy owner → user_metadata stamp on the coupled catalogue row
-            // (the decided posture: NO native owner backfill from legacy data;
-            // legacy `owner_id` is preserved as JSONB context only).
-            if let Some(owner) = legacy_owner_id.as_deref().filter(|o| !o.trim().is_empty()) {
-                sqlx::query(
-                    "UPDATE catalogue_entries SET user_metadata = \
-                        jsonb_set(user_metadata, '{legacy_owner_id}', to_jsonb($1::text), true) \
-                     WHERE content_hash = $2",
-                )
-                .bind(owner)
-                .bind(hash)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-
+        let mut provenance =
+            serde_json::json!({ "observed_size": item.size, "mtime": item.mtime });
         // Where the observation came from (adopt autostamp chain).
         ctx.stamp(&mut provenance);
         // st_mode is provenance-only (no promoted column for it).
@@ -211,22 +154,103 @@ pub async fn reconcile_batch(
             obj.insert("mode".into(), serde_json::json!(mode));
         }
 
-        // `verified`/`mismatch` set last_verified (we just compared against the
-        // baseline); `orphan_disk` leaves it NULL (nothing was verified).
-        let verified_now = status != "orphan_disk";
+        paths.push(item.path.clone());
+        sizes.push(item.size);
+        mtimes.push(item.mtime);
+        hashes.push(
+            item.hash
+                .as_deref()
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(str::to_string),
+        );
+        uids.push(item.uid);
+        gids.push(item.gid);
+        provenances.push(provenance);
+    }
 
-        // Promoted analytics columns: a reconcile observation is FRESH state,
-        // so observed size/mtime OVERWRITE on conflict; uid/gid COALESCE (a
-        // non-stat-capable re-crawl never NULLs known ownership). The
-        // provenance keys above stay for compat. `extension` is GENERATED.
+    let mut tx = pool.begin().await?;
+
+    // A hashful observation couples the catalogue half in the same tx
+    // ("register fills both, never half"); plain crawl never carries a hash,
+    // so the hot path skips both coupling statements.
+    if hashes.iter().any(Option::is_some) {
+        super::queries::upsert_catalogue_by_hash_unnest(&mut tx, &hashes, &paths, &sizes).await?;
+
+        // Legacy owner → user_metadata stamp on the coupled catalogue row
+        // (the decided posture: NO native owner backfill from legacy data;
+        // legacy `owner_id` is preserved as JSONB context only).
         sqlx::query(
             r#"
+            UPDATE catalogue_entries c
+            SET user_metadata = jsonb_set(c.user_metadata, '{legacy_owner_id}',
+                                          to_jsonb(l.owner_id), true)
+            FROM UNNEST($2::text[], $3::text[]) AS t(path, hash)
+            JOIN LATERAL (
+                SELECT owner_id FROM legacy_file_index
+                WHERE file_server_id = $1 AND path = t.path
+                LIMIT 1
+            ) l ON true
+            WHERE t.hash IS NOT NULL
+              AND l.owner_id IS NOT NULL AND btrim(l.owner_id) <> ''
+              AND c.content_hash = t.hash
+            "#,
+        )
+        .bind(file_server_id)
+        .bind(&paths)
+        .bind(&hashes)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Classification rules (unchanged from the per-item version):
+    //  * legacy row, sizes equal → verified; a NULL legacy size can't be
+    //    size-compared → mismatch (`l.size = o.size` is NULL-safe-false here)
+    //  * no legacy row → orphan_disk (content_hash NULL unless observed)
+    //  * an OBSERVED hash wins over the inherited legacy one
+    //  * verified/mismatch set last_verified; orphan_disk leaves it alone
+    // Promoted analytics columns: a reconcile observation is FRESH state, so
+    // observed size/mtime OVERWRITE on conflict; uid/gid COALESCE (a
+    // non-stat-capable re-crawl never NULLs known ownership). `extension` is
+    // GENERATED. The LATERAL LIMIT 1 mirrors the old `fetch_optional` against
+    // a possibly-duplicated (file_server_id, path) baseline; DISTINCT ON the
+    // observed side keeps ON CONFLICT DO UPDATE from touching a row twice.
+    let count_rows: Vec<(String, i64)> = sqlx::query_as(
+        r#"
+        WITH obs AS (
+            SELECT DISTINCT ON (t.path)
+                   t.path, t.size, t.mtime, t.hash, t.uid, t.gid, t.provenance
+            FROM UNNEST($2::text[], $3::bigint[], $4::timestamptz[], $5::text[],
+                        $6::int4[], $7::int4[], $8::jsonb[])
+                 WITH ORDINALITY AS t(path, size, mtime, hash, uid, gid, provenance, ord)
+            ORDER BY t.path, t.ord DESC
+        ),
+        classified AS (
+            SELECT o.path, o.size, o.mtime, o.uid, o.gid,
+                   COALESCE(o.hash, l.hash) AS content_hash,
+                   CASE WHEN l.found IS NULL THEN 'orphan_disk'
+                        WHEN l.size = o.size THEN 'verified'
+                        ELSE                      'mismatch' END AS status,
+                   CASE WHEN l.found IS NOT NULL AND l.size IS DISTINCT FROM o.size
+                        THEN o.provenance || jsonb_build_object('legacy_size', l.size)
+                        ELSE o.provenance END AS provenance
+            FROM obs o
+            LEFT JOIN LATERAL (
+                SELECT true AS found, li.hash, li.size
+                FROM legacy_file_index li
+                WHERE li.file_server_id = $1 AND li.path = o.path
+                LIMIT 1
+            ) l ON true
+        ),
+        upserted AS (
             INSERT INTO file_inventory
                 (content_hash, file_server_id, path, status, provenance,
                  size_bytes, mtime, uid, gid,
                  last_seen, last_verified, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $7, $8, $9, $10, NOW(),
-                    CASE WHEN $6 THEN NOW() ELSE NULL END, NOW())
+            SELECT c.content_hash, $1, c.path, c.status, c.provenance,
+                   c.size, c.mtime, c.uid, c.gid, NOW(),
+                   CASE WHEN c.status <> 'orphan_disk' THEN NOW() END, NOW()
+            FROM classified c
             ON CONFLICT (file_server_id, path) DO UPDATE SET
                 status        = EXCLUDED.status,
                 content_hash  = EXCLUDED.content_hash,
@@ -236,32 +260,34 @@ pub async fn reconcile_batch(
                 uid           = COALESCE(EXCLUDED.uid, file_inventory.uid),
                 gid           = COALESCE(EXCLUDED.gid, file_inventory.gid),
                 last_seen     = NOW(),
-                last_verified = CASE WHEN $6 THEN NOW()
+                last_verified = CASE WHEN EXCLUDED.status <> 'orphan_disk' THEN NOW()
                                      ELSE file_inventory.last_verified END,
                 updated_at    = NOW()
-            "#,
         )
-        .bind(&content_hash)
-        .bind(file_server_id)
-        .bind(&item.path)
-        .bind(status)
-        .bind(&provenance)
-        .bind(verified_now)
-        .bind(item.size)
-        .bind(item.mtime)
-        .bind(item.uid)
-        .bind(item.gid)
-        .execute(&mut *tx)
-        .await?;
-
-        match status {
-            "verified" => counts.verified += 1,
-            "mismatch" => counts.mismatch += 1,
-            _ => counts.orphan_disk += 1,
-        }
-    }
+        SELECT status, COUNT(*)::bigint FROM classified GROUP BY status
+        "#,
+    )
+    .bind(file_server_id)
+    .bind(&paths)
+    .bind(&sizes)
+    .bind(&mtimes)
+    .bind(&hashes)
+    .bind(&uids)
+    .bind(&gids)
+    .bind(&provenances)
+    .fetch_all(&mut *tx)
+    .await?;
 
     tx.commit().await?;
+
+    let mut counts = ReconcileCounts::default();
+    for (status, count) in count_rows {
+        match status.as_str() {
+            "verified" => counts.verified += count,
+            "mismatch" => counts.mismatch += count,
+            _ => counts.orphan_disk += count,
+        }
+    }
     Ok(counts)
 }
 
