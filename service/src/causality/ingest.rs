@@ -2214,6 +2214,16 @@ async fn register_catalogue_entry(
     // content_hash — see ON CONFLICT below).
     let nats_msg_id = format!("cat-{}-{}", cmd.execution_id, cmd.artifact_id);
 
+    // Catalogue authorship (Phase 2): inherited from the PRODUCING INSTANCE, not
+    // the executor identity and not a request user. Best-effort resolve the
+    // instance that owns this net; NULL when unresolvable (pool/infra nets,
+    // legacy, by-reference) — never fabricated.
+    let created_by: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT created_by FROM workflow_instances WHERE net_id = $1")
+            .bind(net_id)
+            .fetch_optional(db)
+            .await?;
+
     let mut tx = db.begin().await?;
 
     // Logical catalogue row — content-addressed. ON CONFLICT (content_hash):
@@ -2228,14 +2238,14 @@ async fn register_catalogue_entry(
             source_net, source_place, signal_key, process_id, process_step,
             source_event_sequence,
             file_metadata, user_metadata, created_at, nats_msg_id,
-            content_hash
+            content_hash, created_by
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9,
             $10, $11, $12, $13, $14,
             $15,
             $16, $17, $18, $19,
-            $20
+            $20, $21
         )
         ON CONFLICT (content_hash) DO NOTHING
         "#,
@@ -2260,6 +2270,7 @@ async fn register_catalogue_entry(
     .bind(cmd.created_at)
     .bind(&nats_msg_id)
     .bind(&content_hash)
+    .bind(created_by)
     .execute(&mut *tx)
     .await;
 
@@ -2413,6 +2424,7 @@ async fn register_catalogue_entry(
             user_metadata,
             created_at: cmd.created_at,
             catalogued_at: Utc::now(),
+            created_by,
             // Filter-evaluation only; display view is hydrated on the read path.
             metadata_view: None,
         };

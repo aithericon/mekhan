@@ -36,6 +36,13 @@ pub struct CatalogueEntry {
     pub user_metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub catalogued_at: DateTime<Utc>,
+    /// Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
+    /// the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+    /// / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
+    /// catalogue SELECTs that don't project it still `FromRow` cleanly.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<uuid::Uuid>,
     /// Normalized, UI-facing projection of `file_metadata` (see
     /// [`crate::catalogue::metadata_view`]). Computed at read time via
     /// [`CatalogueEntry::hydrate_view`] — NOT a DB column (`#[sqlx(default)]`).

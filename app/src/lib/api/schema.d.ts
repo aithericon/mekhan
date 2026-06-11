@@ -4680,6 +4680,11 @@ export interface components {
         AssetDetail: {
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
             display_name: string;
             display_path?: string | null;
             /** Format: uuid */
@@ -4699,6 +4704,11 @@ export interface components {
             type_id: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -4725,6 +4735,11 @@ export interface components {
         AssetSummary: {
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
             display_name: string;
             display_path?: string | null;
             /** Format: uuid */
@@ -4737,6 +4752,11 @@ export interface components {
             type_id: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -4745,6 +4765,11 @@ export interface components {
             cardinality: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
             display_name: string;
             display_path?: string | null;
             /** @description The schema: an ordered list of [`PortField`]s. */
@@ -4757,6 +4782,11 @@ export interface components {
             scope_kind: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -4768,6 +4798,11 @@ export interface components {
             cardinality: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
             display_name: string;
             display_path?: string | null;
             /** Format: uuid */
@@ -4778,6 +4813,11 @@ export interface components {
             scope_kind: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -5450,6 +5490,14 @@ export interface components {
             content_hash?: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
+             *     the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+             *     / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
+             *     catalogue SELECTs that don't project it still `FromRow` cleanly.
+             */
+            created_by?: string | null;
             /**
              * Format: uuid
              * @description Surrogate primary key (content-addressed reshape, docs/32).
@@ -7042,6 +7090,16 @@ export interface components {
             /** @description Materialized path, e.g. `/research/q3`. Unique within a workspace. */
             path: string;
             slug: string;
+            /**
+             * Format: date-time
+             * @description Advanced on rename/move (Phase 2). DEFAULT NOW() at row birth.
+             */
+            updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). Backfilled to `created_by`.
+             */
+            updated_by?: string | null;
             /** Format: uuid */
             workspace_id: string;
         };
@@ -7461,6 +7519,14 @@ export interface components {
             template_version: number;
             /** Format: uuid */
             test_id?: string | null;
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for projector-driven status
+             *     transitions and pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
         };
         InstanceStateResponse: {
             current_step?: string | null;
@@ -7652,6 +7718,11 @@ export interface components {
             container_resource_id?: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by?: string | null;
             display_name: string;
             flavor: string;
             /** Format: uuid */
@@ -7663,6 +7734,11 @@ export interface components {
             stagings: components["schemas"]["TemplateStaging"][];
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`).
+             */
+            updated_by?: string | null;
             /** @description All versions, newest first. */
             versions: components["schemas"]["JobTemplateVersion"][];
             visibility: string;
@@ -7677,6 +7753,12 @@ export interface components {
             container_resource_id?: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+             *     pre-Phase-2 rows.
+             */
+            created_by?: string | null;
             display_name: string;
             flavor: string;
             /** Format: uuid */
@@ -7686,6 +7768,11 @@ export interface components {
             slug: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
             visibility: string;
         };
         /**
@@ -8603,6 +8690,11 @@ export interface components {
             items: {
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 */
+                created_by?: string | null;
                 display_name: string;
                 display_path?: string | null;
                 /** Format: uuid */
@@ -8615,6 +8707,11 @@ export interface components {
                 type_id: string;
                 /** Format: date-time */
                 updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+                 */
+                updated_by?: string | null;
                 /** Format: int32 */
                 version: number;
             }[];
@@ -8630,6 +8727,11 @@ export interface components {
                 cardinality: string;
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 */
+                created_by?: string | null;
                 display_name: string;
                 display_path?: string | null;
                 /** Format: uuid */
@@ -8640,6 +8742,11 @@ export interface components {
                 scope_kind: string;
                 /** Format: date-time */
                 updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+                 */
+                updated_by?: string | null;
                 /** Format: int32 */
                 version: number;
             }[];
@@ -8718,6 +8825,14 @@ export interface components {
                 template_version: number;
                 /** Format: uuid */
                 test_id?: string | null;
+                /** Format: date-time */
+                updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description Last mutator (`subject_as_uuid()`). NULL for projector-driven status
+                 *     transitions and pre-Phase-2 rows.
+                 */
+                updated_by?: string | null;
             }[];
             /** Format: int64 */
             page: number;
@@ -8733,6 +8848,12 @@ export interface components {
                 container_resource_id?: string | null;
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+                 *     pre-Phase-2 rows.
+                 */
+                created_by?: string | null;
                 display_name: string;
                 flavor: string;
                 /** Format: uuid */
@@ -8742,6 +8863,11 @@ export interface components {
                 slug: string;
                 /** Format: date-time */
                 updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+                 */
+                updated_by?: string | null;
                 visibility: string;
             }[];
             /** Format: int64 */
@@ -8802,6 +8928,11 @@ export interface components {
             items: {
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 */
+                created_by: string;
                 display_name: string;
                 /**
                  * @description User-supplied key names for dynamic-fields resources (`kv`). The
@@ -8827,6 +8958,11 @@ export interface components {
                 resource_type: string;
                 /** Format: date-time */
                 updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+                 */
+                updated_by?: string | null;
             }[];
             /** Format: int64 */
             page: number;
@@ -8958,6 +9094,14 @@ export interface components {
                 content_hash?: string | null;
                 /** Format: date-time */
                 created_at: string;
+                /**
+                 * Format: uuid
+                 * @description Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
+                 *     the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+                 *     / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
+                 *     catalogue SELECTs that don't project it still `FromRow` cleanly.
+                 */
+                created_by?: string | null;
                 /**
                  * Format: uuid
                  * @description Surrogate primary key (content-addressed reshape, docs/32).
@@ -9194,6 +9338,13 @@ export interface components {
                 source_ref?: unknown;
                 /** Format: date-time */
                 updated_at: string;
+                /**
+                 * Format: uuid
+                 * @description `subject_as_uuid()` of whoever last mutated the template (Phase 2).
+                 *     Backfilled to `author_id` for pre-migration rows; NULL only on a row
+                 *     written before the migration that somehow had a NULL author.
+                 */
+                updated_by?: string | null;
                 /** Format: int32 */
                 version: number;
                 visibility: string;
@@ -9851,6 +10002,11 @@ export interface components {
         ResourceDetail: {
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by: string;
             display_name: string;
             /** Format: uuid */
             id: string;
@@ -9870,6 +10026,11 @@ export interface components {
             resource_type: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
         };
         /** @description Resource limits for the container. */
         ResourceLimits: {
@@ -9897,6 +10058,11 @@ export interface components {
         ResourceSummary: {
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             */
+            created_by: string;
             display_name: string;
             /**
              * @description User-supplied key names for dynamic-fields resources (`kv`). The
@@ -9922,6 +10088,11 @@ export interface components {
             resource_type: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
         };
         /**
          * @description One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
@@ -10402,6 +10573,12 @@ export interface components {
         SavedQuery: {
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+             *     pre-Phase-2 rows.
+             */
+            created_by?: string | null;
             description?: string | null;
             /** Format: uuid */
             id: string;
@@ -10415,6 +10592,11 @@ export interface components {
             q: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
         };
         /** @description Create payload for a saved query. */
         SavedQueryCreate: {
@@ -11879,6 +12061,17 @@ export interface components {
              * @description Set when `mode = 'test_run'`: the test this instance is running.
              */
             test_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Advanced on every mutation (Phase 2). DEFAULT NOW() at row birth.
+             */
+            updated_at: string;
+            /**
+             * Format: uuid
+             * @description Last mutator (`subject_as_uuid()`). NULL for projector-driven status
+             *     transitions (FE renders "System") and for pre-Phase-2 rows.
+             */
+            updated_by?: string | null;
         };
         WorkflowNode: {
             data: components["schemas"]["WorkflowNodeData"];
@@ -12407,6 +12600,13 @@ export interface components {
             source_ref?: unknown;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description `subject_as_uuid()` of whoever last mutated the template (Phase 2).
+             *     Backfilled to `author_id` for pre-migration rows; NULL only on a row
+             *     written before the migration that somehow had a NULL author.
+             */
+            updated_by?: string | null;
             /** Format: int32 */
             version: number;
             visibility: string;

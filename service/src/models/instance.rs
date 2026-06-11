@@ -11,7 +11,13 @@ pub struct WorkflowInstance {
     pub net_id: String,
     pub status: String,
     pub created_by: Uuid,
+    /// Last mutator (`subject_as_uuid()`). NULL for projector-driven status
+    /// transitions (FE renders "System") and for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Advanced on every mutation (Phase 2). DEFAULT NOW() at row birth.
+    pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub current_step: Option<String>,
@@ -92,7 +98,12 @@ pub struct InstanceListItem {
     pub net_id: String,
     pub status: String,
     pub created_by: Uuid,
+    /// Last mutator (`subject_as_uuid()`). NULL for projector-driven status
+    /// transitions and pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub current_step: Option<String>,

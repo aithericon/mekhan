@@ -124,11 +124,12 @@ async fn insert_version(
     hatch: Option<&Value>,
     params: &Value,
     created_by: Option<&str>,
+    created_by_uuid: Option<Uuid>,
 ) -> Result<(), ApiError> {
     sqlx::query(
         "INSERT INTO job_template_versions \
-            (template_id, version, common_spec, escape_hatch, parameters, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+            (template_id, version, common_spec, escape_hatch, parameters, created_by, created_by_uuid) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(template_id)
     .bind(version)
@@ -136,6 +137,7 @@ async fn insert_version(
     .bind(hatch)
     .bind(params)
     .bind(created_by)
+    .bind(created_by_uuid)
     .execute(db)
     .await?;
     Ok(())
@@ -271,6 +273,7 @@ pub async fn create_job_template(
 
     let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let created_by = user.subject.clone();
+    let created_by_uuid = user.subject_as_uuid();
     let parameters = req.parameters.clone().unwrap_or_default();
     let (common, hatch, params) =
         version_payload_json(&req.common_spec, req.escape_hatch.as_ref(), &parameters)?;
@@ -283,8 +286,9 @@ pub async fn create_job_template(
     let insert_parent = sqlx::query(
         "INSERT INTO job_templates \
             (id, workspace_id, slug, display_name, flavor, visibility, \
-             consumer_locked, latest_version, created_by, container_resource_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+             consumer_locked, latest_version, created_by, container_resource_id, \
+             created_by_uuid, updated_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(template_id)
     .bind(workspace_id)
@@ -296,6 +300,8 @@ pub async fn create_job_template(
     .bind(version)
     .bind(&created_by)
     .bind(req.container_resource_id)
+    .bind(created_by_uuid)
+    .bind(created_by_uuid)
     .execute(&state.db)
     .await;
     if let Err(e) = insert_parent {
@@ -320,6 +326,7 @@ pub async fn create_job_template(
         hatch.as_ref(),
         &params,
         Some(created_by.as_str()),
+        Some(created_by_uuid),
     )
     .await
     {
@@ -386,6 +393,8 @@ pub async fn get_job_template(
         created_at: row.created_at,
         updated_at: row.updated_at,
         container_resource_id: row.container_resource_id,
+        created_by: row.created_by_uuid,
+        updated_by: row.updated_by,
         versions,
         stagings,
     }))
@@ -439,6 +448,7 @@ pub async fn update_job_template(
     }
 
     let created_by = user.subject.clone();
+    let updated_by = user.subject_as_uuid();
     let mut latest_version = row.latest_version;
     let mut display_name = row.display_name.clone();
     let mut visibility = row.visibility.clone();
@@ -467,13 +477,14 @@ pub async fn update_job_template(
         sqlx::query(
             "UPDATE job_templates \
              SET display_name = $1, visibility = $2, consumer_locked = $3, \
-                 container_resource_id = $4, updated_at = NOW() \
-             WHERE id = $5",
+                 container_resource_id = $4, updated_at = NOW(), updated_by = $5 \
+             WHERE id = $6",
         )
         .bind(&display_name)
         .bind(&visibility)
         .bind(consumer_locked)
         .bind(container_resource_id)
+        .bind(updated_by)
         .bind(row.id)
         .execute(&state.db)
         .await?;
@@ -512,12 +523,15 @@ pub async fn update_job_template(
             hatch.as_ref(),
             &params,
             Some(created_by.as_str()),
+            Some(updated_by),
         )
         .await?;
         sqlx::query(
-            "UPDATE job_templates SET latest_version = $1, updated_at = NOW() WHERE id = $2",
+            "UPDATE job_templates SET latest_version = $1, updated_at = NOW(), updated_by = $2 \
+             WHERE id = $3",
         )
         .bind(latest_version)
+        .bind(updated_by)
         .bind(row.id)
         .execute(&state.db)
         .await?;
@@ -534,6 +548,8 @@ pub async fn update_job_template(
         created_at: row.created_at,
         updated_at: chrono::Utc::now(),
         container_resource_id,
+        created_by: row.created_by_uuid,
+        updated_by: Some(updated_by),
     }))
 }
 
@@ -565,10 +581,14 @@ pub async fn delete_job_template(
     .await?
     .ok_or_else(|| ApiError::not_found("job template not found"))?;
 
-    sqlx::query("UPDATE job_templates SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE job_templates SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 \
+         WHERE id = $2",
+    )
+    .bind(user.subject_as_uuid())
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

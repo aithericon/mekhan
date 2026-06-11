@@ -32,6 +32,9 @@ pub struct JobTemplateRow {
     pub visibility: String,
     pub consumer_locked: bool,
     pub latest_version: i32,
+    /// Legacy raw OIDC subject string (deprecated). Cannot join `user_profiles`
+    /// — superseded by `created_by_uuid`. Kept one release; dropped in a
+    /// follow-up migration.
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -41,6 +44,11 @@ pub struct JobTemplateRow {
     /// Appended last to match the `ALTER ADD COLUMN` physical order so
     /// `SELECT *` → `FromRow` reads it back without reordering.
     pub container_resource_id: Option<Uuid>,
+    /// `subject_as_uuid()` of the creator — joins `user_profiles` (Phase 2).
+    /// NULL for pre-migration rows (legacy `created_by` TEXT is unrecoverable).
+    pub created_by_uuid: Option<Uuid>,
+    /// `subject_as_uuid()` of whoever last mutated the template (Phase 2).
+    pub updated_by: Option<Uuid>,
 }
 
 /// One row from the `job_template_versions` table. Immutable once written; a
@@ -56,8 +64,11 @@ pub struct JobTemplateVersionRow {
     pub escape_hatch: Option<serde_json::Value>,
     /// Declared parameters — see [`TemplateParameter`].
     pub parameters: serde_json::Value,
+    /// Legacy raw OIDC subject string (deprecated) — see [`JobTemplateRow`].
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// `subject_as_uuid()` of the version author — joins `user_profiles`.
+    pub created_by_uuid: Option<Uuid>,
 }
 
 /// One row from the `template_stagings` table.
@@ -147,6 +158,13 @@ pub struct JobTemplateSummary {
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_resource_id: Option<Uuid>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+    /// pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 impl From<JobTemplateRow> for JobTemplateSummary {
@@ -162,6 +180,8 @@ impl From<JobTemplateRow> for JobTemplateSummary {
             created_at: r.created_at,
             updated_at: r.updated_at,
             container_resource_id: r.container_resource_id,
+            created_by: r.created_by_uuid,
+            updated_by: r.updated_by,
         }
     }
 }
@@ -230,6 +250,12 @@ pub struct JobTemplateDetail {
     /// Optional `container_image` resource bound to this template (docs/22).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_resource_id: Option<Uuid>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     /// All versions, newest first.
     pub versions: Vec<JobTemplateVersion>,
     /// Current stagings across every datacenter.

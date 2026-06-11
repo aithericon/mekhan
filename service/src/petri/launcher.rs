@@ -274,8 +274,8 @@ impl<'a> InstanceLauncher<'a> {
         let mode_str = mode.unwrap_or("live");
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata, mode, test_id, asset_pins)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6, $7, $8, $9)
+            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, updated_by, started_at, metadata, mode, test_id, asset_pins)
+            VALUES ($1, $2, $3, $4, 'running', $5, $5, NOW(), $6, $7, $8, $9)
             RETURNING *
             "#,
         )

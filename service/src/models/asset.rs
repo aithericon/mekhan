@@ -102,6 +102,8 @@ pub struct AssetTypeRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    pub updated_by: Option<Uuid>,
 }
 
 /// One row from the `assets` table. A named, version-pinned, scope-owned
@@ -121,6 +123,8 @@ pub struct AssetRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    pub updated_by: Option<Uuid>,
 }
 
 /// One row from the `asset_records` table. A schema-validated JSONB row,
@@ -151,6 +155,12 @@ pub struct AssetTypeSummary {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 impl From<AssetTypeRow> for AssetTypeSummary {
@@ -166,6 +176,8 @@ impl From<AssetTypeRow> for AssetTypeSummary {
             version: r.version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by: r.created_by,
+            updated_by: r.updated_by,
         }
     }
 }
@@ -186,6 +198,12 @@ pub struct AssetTypeDetail {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 /// Request body for `POST /api/v1/asset-types`. Validates the schema +
@@ -242,6 +260,12 @@ pub struct AssetSummary {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 impl From<AssetRow> for AssetSummary {
@@ -257,6 +281,8 @@ impl From<AssetRow> for AssetSummary {
             version: r.version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by: r.created_by,
+            updated_by: r.updated_by,
         }
     }
 }
@@ -275,6 +301,12 @@ pub struct AssetDetail {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     /// The current-version records (paged). Each is a validated JSONB row.
     pub records: Vec<serde_json::Value>,
     /// Total record count for the current version (for pagination).

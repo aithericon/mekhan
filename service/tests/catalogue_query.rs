@@ -374,6 +374,7 @@ async fn saved_queries_crud_round_trip() {
     let name = format!("test-catq-{run}");
 
     // Create.
+    let author = Uuid::new_v4();
     let created = saved_queries::create(
         &pool,
         &SavedQueryCreate {
@@ -382,10 +383,13 @@ async fn saved_queries_crud_round_trip() {
             q: "filter[meta.format][eq]=csv&sort=-meta.num_rows".into(),
             params: None,
         },
+        author,
     )
     .await
     .expect("create saved query");
     assert_eq!(created.name, name);
+    assert_eq!(created.created_by, Some(author), "create stamps created_by");
+    assert_eq!(created.updated_by, Some(author), "create stamps updated_by");
     assert_eq!(
         created.params,
         serde_json::json!({}),
@@ -405,6 +409,7 @@ async fn saved_queries_crud_round_trip() {
             q: "search=x".into(),
             params: None,
         },
+        author,
     )
     .await
     .unwrap_err();
@@ -415,6 +420,7 @@ async fn saved_queries_crud_round_trip() {
 
     // Patch: rename + new q + params; description untouched.
     let renamed = format!("test-catq-{run}-v2");
+    let editor = Uuid::new_v4();
     let updated = saved_queries::update(
         &pool,
         created.id,
@@ -424,6 +430,7 @@ async fn saved_queries_crud_round_trip() {
             q: Some("filter[meta.completeness][gte]=0.9".into()),
             params: Some(serde_json::json!({"columns": ["name"]})),
         },
+        editor,
     )
     .await
     .expect("update")
@@ -433,6 +440,12 @@ async fn saved_queries_crud_round_trip() {
     assert_eq!(updated.description.as_deref(), Some("big csvs"));
     assert_eq!(updated.params, serde_json::json!({"columns": ["name"]}));
     assert!(updated.updated_at >= created.updated_at);
+    assert_eq!(
+        updated.created_by,
+        Some(author),
+        "update preserves created_by"
+    );
+    assert_eq!(updated.updated_by, Some(editor), "update stamps updated_by");
 
     // Patch a missing id → None (handler maps to 404).
     let missing = saved_queries::update(
@@ -444,6 +457,7 @@ async fn saved_queries_crud_round_trip() {
             q: None,
             params: None,
         },
+        editor,
     )
     .await
     .expect("update missing runs");

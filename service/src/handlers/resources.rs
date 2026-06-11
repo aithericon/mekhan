@@ -915,8 +915,8 @@ pub(crate) async fn create_resource_internal(
     let insert_resource = sqlx::query(
         "INSERT INTO resources \
             (id, workspace_id, path, resource_type, display_name, latest_version, created_by, \
-             scope_kind, scope_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'workspace', $2)",
+             updated_by, scope_kind, scope_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 'workspace', $2)",
     )
     .bind(resource_id)
     .bind(workspace_id)
@@ -1005,6 +1005,8 @@ pub(crate) async fn create_resource_internal(
         latest_version: version,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        created_by: principal_id,
+        updated_by: Some(principal_id),
         dynamic_keys,
         // The list endpoint surfaces `public_config` for capacity rows (the
         // picker's discriminator); the single-row create/update/rotate returns
@@ -1259,6 +1261,8 @@ pub async fn get_resource(
         latest_version: row.latest_version,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        created_by: row.created_by,
+        updated_by: row.updated_by,
         public_config: version.public_config,
         redacted_secret_fields: descriptor
             .secret_fields
@@ -1315,11 +1319,15 @@ pub async fn update_resource(
         if trimmed.is_empty() {
             return Err(ApiError::bad_request("display_name cannot be empty"));
         }
-        sqlx::query("UPDATE resources SET display_name = $1, updated_at = NOW() WHERE id = $2")
-            .bind(&trimmed)
-            .bind(row.id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE resources SET display_name = $1, updated_at = NOW(), updated_by = $2 \
+             WHERE id = $3",
+        )
+        .bind(&trimmed)
+        .bind(principal_id)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
         display_name = trimmed;
     }
 
@@ -1347,11 +1355,15 @@ pub async fn update_resource(
         )
         .await?;
 
-        sqlx::query("UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2")
-            .bind(latest_version)
-            .bind(row.id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE resources SET latest_version = $1, updated_at = NOW(), updated_by = $2 \
+             WHERE id = $3",
+        )
+        .bind(latest_version)
+        .bind(principal_id)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
 
         write_audit(
             &state.db,
@@ -1402,6 +1414,8 @@ pub async fn update_resource(
         latest_version,
         created_at: row.created_at,
         updated_at: Utc::now(),
+        created_by: row.created_by,
+        updated_by: Some(principal_id),
         dynamic_keys,
         public_config: None,
     }))
@@ -1433,10 +1447,14 @@ pub async fn delete_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    sqlx::query("UPDATE resources SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE resources SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 \
+         WHERE id = $2",
+    )
+    .bind(user.subject_as_uuid())
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
 
     write_audit(
         &state.db,
@@ -1505,11 +1523,15 @@ pub async fn rotate_resource(
     )
     .await?;
 
-    sqlx::query("UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2")
-        .bind(new_version)
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE resources SET latest_version = $1, updated_at = NOW(), updated_by = $2 \
+         WHERE id = $3",
+    )
+    .bind(new_version)
+    .bind(principal_id)
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
 
     write_audit(
         &state.db,
@@ -1529,6 +1551,8 @@ pub async fn rotate_resource(
         latest_version: new_version,
         created_at: row.created_at,
         updated_at: Utc::now(),
+        created_by: row.created_by,
+        updated_by: Some(principal_id),
         dynamic_keys,
         public_config: None,
     }))

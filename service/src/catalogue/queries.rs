@@ -23,7 +23,7 @@ const ENTRY_COLUMNS: &str = "entry_id, content_hash, \
      COALESCE(filename, '') AS filename, \
      mime_type, size_bytes, storage_path, source_net, source_place, \
      signal_key, process_id, process_step, source_event_sequence, \
-     file_metadata, user_metadata, created_at, catalogued_at";
+     file_metadata, user_metadata, created_at, catalogued_at, created_by";
 
 /// Allowed filter fields for catalogue entries (whitelist).
 const ALLOWED_FILTER_FIELDS: &[&str] = &[

@@ -30,6 +30,9 @@ pub struct ResourceRow {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// `subject_as_uuid()` of whoever last mutated the resource (Phase 2).
+    /// Backfilled to `created_by` for pre-migration rows.
+    pub updated_by: Option<Uuid>,
     /// Polymorphic owner kind (docs/20 §2). Backfilled to `'workspace'` for
     /// existing rows; `scope_id` then equals `workspace_id`.
     #[serde(default)]
@@ -75,6 +78,11 @@ pub struct ResourceSummary {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    pub created_by: Uuid,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     /// User-supplied key names for dynamic-fields resources (`kv`). The
     /// picker uses this list to emit `<path>.<key>` entries; resolver
     /// uses it to build the secret-template envelope. `None` for typed
@@ -101,6 +109,8 @@ impl From<ResourceRow> for ResourceSummary {
             latest_version: r.latest_version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            created_by: r.created_by,
+            updated_by: r.updated_by,
             dynamic_keys: None,
             public_config: None,
         }
@@ -119,6 +129,11 @@ pub struct ResourceDetail {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    pub created_by: Uuid,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     /// Public fields of the latest version, inline. Same shape the resolver
     /// would assemble (minus the secret-template refs).
     pub public_config: serde_json::Value,

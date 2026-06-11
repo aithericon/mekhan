@@ -15,7 +15,8 @@ use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
-const SAVED_QUERY_COLUMNS: &str = "id, name, description, q, params, created_at, updated_at";
+const SAVED_QUERY_COLUMNS: &str =
+    "id, name, description, q, params, created_at, updated_at, created_by, updated_by";
 
 /// A saved catalogue query.
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
@@ -30,6 +31,13 @@ pub struct SavedQuery {
     pub params: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+    /// pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<Uuid>,
+    /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 /// Create payload for a saved query.
@@ -69,15 +77,17 @@ pub async fn list(pool: &sqlx::PgPool) -> Result<Vec<SavedQuery>, sqlx::Error> {
 pub async fn create(
     pool: &sqlx::PgPool,
     body: &SavedQueryCreate,
+    created_by: Uuid,
 ) -> Result<SavedQuery, sqlx::Error> {
     sqlx::query_as(&format!(
-        "INSERT INTO catalogue_saved_queries (name, description, q, params) \
-         VALUES ($1, $2, $3, $4) RETURNING {SAVED_QUERY_COLUMNS}"
+        "INSERT INTO catalogue_saved_queries (name, description, q, params, created_by, updated_by) \
+         VALUES ($1, $2, $3, $4, $5, $5) RETURNING {SAVED_QUERY_COLUMNS}"
     ))
     .bind(&body.name)
     .bind(&body.description)
     .bind(&body.q)
     .bind(body.params.clone().unwrap_or_else(|| serde_json::json!({})))
+    .bind(created_by)
     .fetch_one(pool)
     .await
 }
@@ -86,6 +96,7 @@ pub async fn update(
     pool: &sqlx::PgPool,
     id: Uuid,
     body: &SavedQueryUpdate,
+    updated_by: Uuid,
 ) -> Result<Option<SavedQuery>, sqlx::Error> {
     sqlx::query_as(&format!(
         "UPDATE catalogue_saved_queries SET \
@@ -93,7 +104,8 @@ pub async fn update(
            description = COALESCE($3, description), \
            q = COALESCE($4, q), \
            params = COALESCE($5, params), \
-           updated_at = now() \
+           updated_at = now(), \
+           updated_by = $6 \
          WHERE id = $1 RETURNING {SAVED_QUERY_COLUMNS}"
     ))
     .bind(id)
@@ -101,6 +113,7 @@ pub async fn update(
     .bind(&body.description)
     .bind(&body.q)
     .bind(&body.params)
+    .bind(updated_by)
     .fetch_optional(pool)
     .await
 }
@@ -150,16 +163,18 @@ pub async fn list_saved_queries(
 )]
 pub async fn create_saved_query(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Json(body): Json<SavedQueryCreate>,
 ) -> Result<(StatusCode, Json<SavedQuery>), ApiError> {
-    let row = create(&state.db, &body).await.map_err(|e| {
-        if is_unique_violation(&e) {
-            ApiError::conflict(format!("saved query named {:?} already exists", body.name))
-        } else {
-            ApiError::internal(format!("saved query create: {e}"))
-        }
-    })?;
+    let row = create(&state.db, &body, user.subject_as_uuid())
+        .await
+        .map_err(|e| {
+            if is_unique_violation(&e) {
+                ApiError::conflict(format!("saved query named {:?} already exists", body.name))
+            } else {
+                ApiError::internal(format!("saved query create: {e}"))
+            }
+        })?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -179,17 +194,19 @@ pub async fn create_saved_query(
 )]
 pub async fn update_saved_query(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Json(body): Json<SavedQueryUpdate>,
 ) -> Result<Json<SavedQuery>, ApiError> {
-    let row = update(&state.db, id, &body).await.map_err(|e| {
-        if is_unique_violation(&e) {
-            ApiError::conflict("a saved query with that name already exists")
-        } else {
-            ApiError::internal(format!("saved query update: {e}"))
-        }
-    })?;
+    let row = update(&state.db, id, &body, user.subject_as_uuid())
+        .await
+        .map_err(|e| {
+            if is_unique_violation(&e) {
+                ApiError::conflict("a saved query with that name already exists")
+            } else {
+                ApiError::internal(format!("saved query update: {e}"))
+            }
+        })?;
     row.map(Json)
         .ok_or_else(|| ApiError::not_found(format!("saved query {id} not found")))
 }

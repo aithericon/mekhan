@@ -26,7 +26,8 @@ use crate::AppState;
 
 /// Columns selected for a `Folder` row, in struct field order.
 const FOLDER_COLS: &str =
-    "id, workspace_id, parent_id, slug, display_name, description, path, created_at, created_by";
+    "id, workspace_id, parent_id, slug, display_name, description, path, created_at, created_by, \
+     updated_at, updated_by";
 
 /// Reject folder slugs that aren't kebab-safe (`[a-z0-9-]+`). The slug is the
 /// path segment in the materialized `path` column, so it MUST contain neither a
@@ -161,8 +162,8 @@ pub async fn create_folder(
     let path = format!("{parent_path}/{}", req.slug);
 
     let row: Result<Folder, sqlx::Error> = sqlx::query_as(&format!(
-        "INSERT INTO folders (workspace_id, parent_id, slug, display_name, description, path, created_by) \
-              VALUES ($1, $2, $3, $4, $5, $6, $7) \
+        "INSERT INTO folders (workspace_id, parent_id, slug, display_name, description, path, created_by, updated_by) \
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
          RETURNING {FOLDER_COLS}"
     ))
     .bind(workspace_id)
@@ -281,7 +282,8 @@ pub async fn update_folder(
             "UPDATE folders \
                 SET parent_id = $2, slug = $3, path = $4, \
                     display_name = COALESCE($5, display_name), \
-                    description  = COALESCE($6, description) \
+                    description  = COALESCE($6, description), \
+                    updated_at = NOW(), updated_by = $7 \
               WHERE id = $1 \
              RETURNING {FOLDER_COLS}"
         ))
@@ -291,6 +293,7 @@ pub async fn update_folder(
         .bind(&new_path)
         .bind(req.display_name.as_deref())
         .bind(req.description.as_deref())
+        .bind(user.subject_as_uuid())
         .fetch_one(&mut *tx)
         .await;
 
@@ -314,12 +317,14 @@ pub async fn update_folder(
         // Rewrite every descendant's path: replace the old prefix with the new.
         sqlx::query(
             "UPDATE folders \
-                SET path = $1 || substring(path FROM length($2) + 1) \
+                SET path = $1 || substring(path FROM length($2) + 1), \
+                    updated_at = NOW(), updated_by = $4 \
               WHERE workspace_id = $3 AND path LIKE $2 || '/%'",
         )
         .bind(&new_path)
         .bind(&old_path)
         .bind(current.workspace_id)
+        .bind(user.subject_as_uuid())
         .execute(&mut *tx)
         .await?;
 
@@ -331,13 +336,15 @@ pub async fn update_folder(
     let updated: Folder = sqlx::query_as(&format!(
         "UPDATE folders \
             SET display_name = COALESCE($2, display_name), \
-                description  = COALESCE($3, description) \
+                description  = COALESCE($3, description), \
+                updated_at = NOW(), updated_by = $4 \
           WHERE id = $1 \
          RETURNING {FOLDER_COLS}"
     ))
     .bind(folder_id)
     .bind(req.display_name.as_deref())
     .bind(req.description.as_deref())
+    .bind(user.subject_as_uuid())
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -403,21 +410,27 @@ pub async fn delete_folder(
     for (child_id, child_slug, child_old_path) in &children {
         let child_new_path = format!("{parent_path}/{child_slug}");
         // Move the child itself.
-        sqlx::query("UPDATE folders SET parent_id = $1, path = $2 WHERE id = $3")
-            .bind(current.parent_id)
-            .bind(&child_new_path)
-            .bind(child_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE folders SET parent_id = $1, path = $2, updated_at = NOW(), updated_by = $4 \
+              WHERE id = $3",
+        )
+        .bind(current.parent_id)
+        .bind(&child_new_path)
+        .bind(child_id)
+        .bind(user.subject_as_uuid())
+        .execute(&mut *tx)
+        .await?;
         // Rewrite the child's descendants.
         sqlx::query(
             "UPDATE folders \
-                SET path = $1 || substring(path FROM length($2) + 1) \
+                SET path = $1 || substring(path FROM length($2) + 1), \
+                    updated_at = NOW(), updated_by = $4 \
               WHERE workspace_id = $3 AND path LIKE $2 || '/%'",
         )
         .bind(&child_new_path)
         .bind(child_old_path)
         .bind(current.workspace_id)
+        .bind(user.subject_as_uuid())
         .execute(&mut *tx)
         .await?;
     }

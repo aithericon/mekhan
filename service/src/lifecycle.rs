@@ -74,8 +74,12 @@ async fn handle_terminal_event(
     result_envelope: Option<serde_json::Value>,
 ) -> bool {
     let result = sqlx::query(
+        // Projector-driven transition: advance `updated_at` but NULL `updated_by`
+        // — this is the engine acting, not a request principal (FE renders
+        // "System"). See Phase 2 audit/provenance design.
         "UPDATE workflow_instances \
-         SET status = $2, completed_at = NOW(), result = COALESCE($3::jsonb, result) \
+         SET status = $2, completed_at = NOW(), result = COALESCE($3::jsonb, result), \
+             updated_at = NOW(), updated_by = NULL \
          WHERE net_id = $1 AND status = 'running'",
     )
     .bind(net_id)
@@ -344,11 +348,13 @@ async fn cleanup_finished_instances(
         }
 
         // Update status to archived
-        if let Err(e) =
-            sqlx::query("UPDATE workflow_instances SET status = 'archived' WHERE id = $1")
-                .bind(instance_id)
-                .execute(db)
-                .await
+        if let Err(e) = sqlx::query(
+            "UPDATE workflow_instances SET status = 'archived', updated_at = NOW(), \
+                     updated_by = NULL WHERE id = $1",
+        )
+        .bind(instance_id)
+        .execute(db)
+        .await
         {
             tracing::error!("failed to archive instance {instance_id}: {e}");
         }

@@ -431,8 +431,8 @@ pub(crate) async fn create_asset_type_internal(
     let res = sqlx::query(
         "INSERT INTO asset_types \
             (id, scope_kind, scope_id, name, display_name, display_path, \
-             fields_json, cardinality, version, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)",
+             fields_json, cardinality, version, created_by, updated_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $9)",
     )
     .bind(id)
     .bind(scope_kind.as_db())
@@ -469,6 +469,8 @@ pub(crate) async fn create_asset_type_internal(
         version: 1,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        created_by: Some(principal),
+        updated_by: Some(principal),
     })
 }
 
@@ -524,25 +526,34 @@ pub async fn update_asset_type(
     }
 
     let mut version = row.version;
+    let principal = user.subject_as_uuid();
 
     if let Some(name) = req.display_name {
         let trimmed = name.trim().to_string();
         if trimmed.is_empty() {
             return Err(ApiError::bad_request("display_name cannot be empty"));
         }
-        sqlx::query("UPDATE asset_types SET display_name = $1, updated_at = NOW() WHERE id = $2")
-            .bind(&trimmed)
-            .bind(id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE asset_types SET display_name = $1, updated_at = NOW(), updated_by = $2 \
+             WHERE id = $3",
+        )
+        .bind(&trimmed)
+        .bind(principal)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     if let Some(dp) = req.display_path {
-        sqlx::query("UPDATE asset_types SET display_path = $1, updated_at = NOW() WHERE id = $2")
-            .bind(&dp)
-            .bind(id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE asset_types SET display_path = $1, updated_at = NOW(), updated_by = $2 \
+             WHERE id = $3",
+        )
+        .bind(&dp)
+        .bind(principal)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     if let Some(new_fields) = req.fields {
@@ -554,11 +565,13 @@ pub async fn update_asset_type(
         let fields_json = serde_json::to_value(&new_fields)
             .map_err(|e| ApiError::internal(format!("schema serialize: {e}")))?;
         sqlx::query(
-            "UPDATE asset_types SET fields_json = $1, version = $2, updated_at = NOW() \
-             WHERE id = $3",
+            "UPDATE asset_types SET fields_json = $1, version = $2, updated_at = NOW(), \
+                 updated_by = $3 \
+             WHERE id = $4",
         )
         .bind(&fields_json)
         .bind(version)
+        .bind(principal)
         .bind(id)
         .execute(&state.db)
         .await?;
@@ -605,10 +618,14 @@ pub async fn delete_asset_type(
         )));
     }
 
-    sqlx::query("UPDATE asset_types SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE asset_types SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 \
+         WHERE id = $2",
+    )
+    .bind(user.subject_as_uuid())
+    .bind(id)
+    .execute(&state.db)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -728,8 +745,8 @@ pub(crate) async fn create_asset_internal(
     let res = sqlx::query(
         "INSERT INTO assets \
             (id, scope_kind, scope_id, type_id, ref_key, display_name, display_path, \
-             version, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)",
+             version, created_by, updated_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)",
     )
     .bind(id)
     .bind(scope_kind.as_db())
@@ -764,6 +781,8 @@ pub(crate) async fn create_asset_internal(
         version: 1,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        created_by: Some(principal),
+        updated_by: Some(principal),
     })
 }
 
@@ -775,7 +794,7 @@ pub(crate) async fn replace_records_internal(
     records: &[Value],
 ) -> Result<i32, ApiError> {
     let row = fetch_asset(&state.db, asset_id).await?;
-    write_records(state, &row, records, false).await
+    write_records(state, &row, records, false, None).await
 }
 
 /// `GET /api/v1/assets/{id}` — metadata + a page of the current-version records.
@@ -831,6 +850,8 @@ pub async fn get_asset(
         version: row.version,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        created_by: row.created_by,
+        updated_by: row.updated_by,
         records: records.into_iter().map(|(v,)| v).collect(),
         record_count,
     }))
@@ -862,7 +883,9 @@ pub async fn put_asset_records(
         .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
     require_editor(&state, &user, scope_kind, row.scope_id).await?;
 
-    let new_version = write_records(&state, &row, &req.records, req.append).await?;
+    let principal = user.subject_as_uuid();
+    let new_version =
+        write_records(&state, &row, &req.records, req.append, Some(principal)).await?;
 
     Ok(Json(AssetSummary {
         id: row.id,
@@ -875,6 +898,8 @@ pub async fn put_asset_records(
         version: new_version,
         created_at: row.created_at,
         updated_at: chrono::Utc::now(),
+        created_by: row.created_by,
+        updated_by: Some(principal),
     }))
 }
 
@@ -925,7 +950,8 @@ pub async fn import_asset_csv(
     let fields = parse_fields(&type_row.fields_json)?;
 
     let records = parse_csv(&bytes, &fields, params.has_header)?;
-    let new_version = write_records(&state, &row, &records, params.append).await?;
+    let principal = user.subject_as_uuid();
+    let new_version = write_records(&state, &row, &records, params.append, Some(principal)).await?;
 
     Ok(Json(AssetSummary {
         id: row.id,
@@ -938,6 +964,8 @@ pub async fn import_asset_csv(
         version: new_version,
         created_at: row.created_at,
         updated_at: chrono::Utc::now(),
+        created_by: row.created_by,
+        updated_by: Some(principal),
     }))
 }
 
@@ -1044,10 +1072,13 @@ pub async fn delete_asset(
         .ok_or_else(|| ApiError::internal("asset has invalid scope_kind"))?;
     require_editor(&state, &user, scope_kind, row.scope_id).await?;
 
-    sqlx::query("UPDATE assets SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE assets SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 WHERE id = $2",
+    )
+    .bind(user.subject_as_uuid())
+    .bind(id)
+    .execute(&state.db)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1368,6 +1399,8 @@ fn asset_type_detail(row: AssetTypeRow) -> Result<AssetTypeDetail, ApiError> {
         version: row.version,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        created_by: row.created_by,
+        updated_by: row.updated_by,
     })
 }
 
@@ -1411,6 +1444,7 @@ async fn write_records(
     asset: &AssetRow,
     new_records: &[Value],
     append: bool,
+    updated_by: Option<Uuid>,
 ) -> Result<i32, ApiError> {
     let type_row = fetch_asset_type(&state.db, asset.type_id).await?;
     let fields = parse_fields(&type_row.fields_json)?;
@@ -1485,11 +1519,16 @@ async fn write_records(
         next_idx += 1;
     }
 
-    sqlx::query("UPDATE assets SET version = $1, updated_at = NOW() WHERE id = $2")
-        .bind(new_version)
-        .bind(asset.id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE assets SET version = $1, updated_at = NOW(), \
+             updated_by = COALESCE($2, updated_by) \
+         WHERE id = $3",
+    )
+    .bind(new_version)
+    .bind(updated_by)
+    .bind(asset.id)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(new_version)

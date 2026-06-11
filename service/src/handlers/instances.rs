@@ -861,7 +861,7 @@ pub async fn cancel_instance(
     let instance = sqlx::query_as::<_, WorkflowInstance>(
         r#"
         UPDATE workflow_instances
-        SET status = 'cancelled', completed_at = NOW()
+        SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
         WHERE id = $1
         RETURNING *
         "#,

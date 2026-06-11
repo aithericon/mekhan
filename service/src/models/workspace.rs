@@ -69,6 +69,11 @@ pub struct Folder {
     pub path: String,
     pub created_at: DateTime<Utc>,
     pub created_by: Uuid,
+    /// Advanced on rename/move (Phase 2). DEFAULT NOW() at row birth.
+    pub updated_at: DateTime<Utc>,
+    /// Last mutator (`subject_as_uuid()`). Backfilled to `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

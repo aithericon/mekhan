@@ -13109,6 +13109,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+          },
           "display_name": {
             "type": "string"
           },
@@ -13149,6 +13157,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           },
           "version": {
             "type": "integer",
@@ -13215,6 +13231,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+          },
           "display_name": {
             "type": "string"
           },
@@ -13246,6 +13270,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
+          },
           "version": {
             "type": "integer",
             "format": "int32"
@@ -13274,6 +13306,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
           },
           "display_name": {
             "type": "string"
@@ -13309,6 +13349,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
+          },
           "version": {
             "type": "integer",
             "format": "int32"
@@ -13337,6 +13385,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+          },
           "display_name": {
             "type": "string"
           },
@@ -13363,6 +13419,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           },
           "version": {
             "type": "integer",
@@ -14666,6 +14730,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `user_profiles`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
           },
           "entry_id": {
             "type": [
@@ -18374,7 +18446,8 @@
           "description",
           "path",
           "created_at",
-          "created_by"
+          "created_by",
+          "updated_at"
         ],
         "properties": {
           "created_at": {
@@ -18409,6 +18482,19 @@
           },
           "slug": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Advanced on rename/move (Phase 2). DEFAULT NOW() at row birth."
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). Backfilled to `created_by`."
           },
           "workspace_id": {
             "type": "string",
@@ -19351,6 +19437,7 @@
           "status",
           "created_by",
           "created_at",
+          "updated_at",
           "metadata",
           "template_name",
           "mode"
@@ -19415,6 +19502,18 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for projector-driven status\ntransitions and pre-Phase-2 rows."
           }
         }
       },
@@ -19853,6 +19952,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+          },
           "display_name": {
             "type": "string"
           },
@@ -19880,6 +19987,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`)."
           },
           "versions": {
             "type": "array",
@@ -19922,6 +20037,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+          },
           "display_name": {
             "type": "string"
           },
@@ -19942,6 +20065,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           },
           "visibility": {
             "type": "string"
@@ -21632,6 +21763,14 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "created_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+                },
                 "display_name": {
                   "type": "string"
                 },
@@ -21662,6 +21801,14 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
                 },
                 "version": {
                   "type": "integer",
@@ -21717,6 +21864,14 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "created_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+                },
                 "display_name": {
                   "type": "string"
                 },
@@ -21743,6 +21898,14 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
                 },
                 "version": {
                   "type": "integer",
@@ -21919,6 +22082,7 @@
                 "status",
                 "created_by",
                 "created_at",
+                "updated_at",
                 "metadata",
                 "template_name",
                 "mode"
@@ -21983,6 +22147,18 @@
                     "null"
                   ],
                   "format": "uuid"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Last mutator (`subject_as_uuid()`). NULL for projector-driven status\ntransitions and pre-Phase-2 rows."
                 }
               }
             }
@@ -22041,6 +22217,14 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "created_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+                },
                 "display_name": {
                   "type": "string"
                 },
@@ -22061,6 +22245,14 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
                 },
                 "visibility": {
                   "type": "string"
@@ -22256,12 +22448,18 @@
                 "display_name",
                 "latest_version",
                 "created_at",
-                "updated_at"
+                "updated_at",
+                "created_by"
               ],
               "properties": {
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "created_by": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
                 },
                 "display_name": {
                   "type": "string"
@@ -22296,6 +22494,14 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
                 }
               }
             }
@@ -22668,6 +22874,14 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "created_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `user_profiles`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
                 },
                 "entry_id": {
                   "type": [
@@ -23434,6 +23648,14 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "updated_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "`subject_as_uuid()` of whoever last mutated the template (Phase 2).\nBackfilled to `author_id` for pre-migration rows; NULL only on a row\nwritten before the migration that somehow had a NULL author."
                 },
                 "version": {
                   "type": "integer",
@@ -24598,6 +24820,7 @@
           "latest_version",
           "created_at",
           "updated_at",
+          "created_by",
           "public_config",
           "redacted_secret_fields"
         ],
@@ -24605,6 +24828,11 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
           },
           "display_name": {
             "type": "string"
@@ -24636,6 +24864,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           }
         }
       },
@@ -24679,12 +24915,18 @@
           "display_name",
           "latest_version",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "created_by"
         ],
         "properties": {
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
           },
           "display_name": {
             "type": "string"
@@ -24719,6 +24961,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           }
         }
       },
@@ -25545,6 +25795,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+          },
           "description": {
             "type": [
               "string",
@@ -25568,6 +25826,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows."
           }
         }
       },
@@ -28555,6 +28821,7 @@
           "status",
           "created_by",
           "created_at",
+          "updated_at",
           "metadata",
           "mode"
         ],
@@ -28659,6 +28926,19 @@
             ],
             "format": "uuid",
             "description": "Set when `mode = 'test_run'`: the test this instance is running."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Advanced on every mutation (Phase 2). DEFAULT NOW() at row birth."
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Last mutator (`subject_as_uuid()`). NULL for projector-driven status\ntransitions (FE renders \"System\") and for pre-Phase-2 rows."
           }
         }
       },
@@ -29723,6 +30003,14 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`subject_as_uuid()` of whoever last mutated the template (Phase 2).\nBackfilled to `author_id` for pre-migration rows; NULL only on a row\nwritten before the migration that somehow had a NULL author."
           },
           "version": {
             "type": "integer",

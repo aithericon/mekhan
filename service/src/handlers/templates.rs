@@ -146,8 +146,8 @@ pub async fn create_template(
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
-        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id, workspace_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5, $6)
+        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id, workspace_id, updated_by)
+        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5, $6, $5)
         RETURNING *
         "#,
     )
@@ -559,7 +559,7 @@ pub async fn update_template(
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         UPDATE workflow_templates
-        SET name = $2, description = $3, graph = $4, updated_at = NOW()
+        SET name = $2, description = $3, graph = $4, updated_at = NOW(), updated_by = $5
         WHERE id = $1
         RETURNING *
         "#,
@@ -568,6 +568,7 @@ pub async fn update_template(
     .bind(&name)
     .bind(&description)
     .bind(&graph)
+    .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -795,8 +796,16 @@ pub async fn publish_template(
     // nodes (a published trigger fired with "trigger node missing in graph").
     //
     // UI publish: no git provenance (column stays NULL).
-    let template =
-        finalize_publish_row(&state.db, id, &air_json, &graph_json, &interface_json, None).await?;
+    let template = finalize_publish_row(
+        &state.db,
+        id,
+        &air_json,
+        &graph_json,
+        &interface_json,
+        None,
+        user.subject_as_uuid(),
+    )
+    .await?;
 
     // Make the just-published template's triggers live immediately. The
     // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
@@ -914,6 +923,7 @@ async fn finalize_publish_row<'e, E>(
     graph_json: &serde_json::Value,
     interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
+    updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
 where
     E: sqlx::PgExecutor<'e>,
@@ -922,7 +932,7 @@ where
         r#"
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
-            interface_json = $4, source_ref = $5, updated_at = NOW()
+            interface_json = $4, source_ref = $5, updated_at = NOW(), updated_by = $6
         WHERE id = $1
         RETURNING *
         "#,
@@ -932,6 +942,7 @@ where
     .bind(graph_json)
     .bind(interface_json)
     .bind(source_ref)
+    .bind(updated_by)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -955,6 +966,7 @@ async fn insert_published_version<'e, E>(
     graph_json: &serde_json::Value,
     interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
+    updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
 where
     E: sqlx::PgExecutor<'e>,
@@ -966,8 +978,8 @@ where
             (id, name, description, base_template_id, parent_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, source_ref, author_id,
-             workspace_id, visibility, owner_template_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14)
+             workspace_id, visibility, owner_template_id, updated_by)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *
         "#,
     )
@@ -985,6 +997,7 @@ where
     .bind(src.workspace_id)
     .bind(&src.visibility)
     .bind(src.owner_template_id)
+    .bind(updated_by)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1056,8 +1069,8 @@ pub async fn new_version(
     // Create new version
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
-        INSERT INTO workflow_templates (id, name, description, base_template_id, parent_id, version, is_latest, graph, author_id, workspace_id, visibility, owner_template_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $10, $11)
+        INSERT INTO workflow_templates (id, name, description, base_template_id, parent_id, version, is_latest, graph, author_id, workspace_id, visibility, owner_template_id, updated_by)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $10, $11, $8)
         RETURNING *
         "#,
     )
@@ -1249,6 +1262,7 @@ pub async fn apply_template(
                 &graph_json,
                 &interface_json,
                 source_ref_json.as_ref(),
+                user.subject_as_uuid(),
             )
             .await?
         }
@@ -1263,6 +1277,7 @@ pub async fn apply_template(
                 &graph_json,
                 &interface_json,
                 source_ref_json.as_ref(),
+                user.subject_as_uuid(),
             )
             .await?
         }
@@ -1455,8 +1470,8 @@ pub async fn apply_air_template(
                 INSERT INTO workflow_templates
                     (id, name, description, base_template_id, parent_id, version,
                      is_latest, published, published_at, published_by,
-                     graph, air_json, source_ref, author_id, workspace_id, visibility)
-                VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13)
+                     graph, air_json, source_ref, author_id, workspace_id, visibility, updated_by)
+                VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $7)
                 RETURNING *
                 "#,
             )
@@ -1489,8 +1504,8 @@ pub async fn apply_air_template(
                 INSERT INTO workflow_templates
                     (id, name, description, base_template_id, version,
                      is_latest, published, published_at, published_by,
-                     graph, air_json, source_ref, author_id, workspace_id, visibility)
-                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
+                     graph, air_json, source_ref, author_id, workspace_id, visibility, updated_by)
+                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10, $4)
                 RETURNING *
                 "#,
             )
@@ -2050,6 +2065,7 @@ mod apply_mode_tests {
             interface_json: None,
             source_ref: None,
             author_id: Uuid::new_v4(),
+            updated_by: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             workspace_id: Uuid::nil(),

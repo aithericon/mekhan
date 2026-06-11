@@ -44,6 +44,11 @@ pub struct WorkflowTemplate {
 
     // Metadata
     pub author_id: Uuid,
+    /// `subject_as_uuid()` of whoever last mutated the template (Phase 2).
+    /// Backfilled to `author_id` for pre-migration rows; NULL only on a row
+    /// written before the migration that somehow had a NULL author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 
