@@ -208,7 +208,7 @@
 	const hasDetails = $derived(
 		allCopies.length > 0 ||
 		!!contentHash || !!entry.entry_id || !!executionId || !!entry.source_net ||
-		!!entry.signal_key || !!entry.process_step || !!schema ||
+		!!entry.process_step || !!schema ||
 		columns.length > 0 || !!details || numRows != null || dims.length > 0 ||
 		attributes.length > 0 || !!preview || !!dataQuality || unixMode != null ||
 		!!entry.storage_path || Object.keys(um).length > 0
@@ -599,17 +599,6 @@
 								<span class="truncate font-mono text-xs text-muted-foreground">{entry.source_net}</span>
 							{/if}
 						</dd>
-					{/if}
-					{#if executionId}
-						<dt class="text-muted-foreground">Execution</dt>
-						<dd class="flex min-w-0 items-center gap-1.5">
-							<span class="truncate font-mono text-xs text-muted-foreground" title={executionId}>{executionId}</span>
-							<CopyButton text={executionId} title="Copy execution id" iconClass="size-3" />
-						</dd>
-					{/if}
-					{#if entry.signal_key}
-						<dt class="text-muted-foreground">Correlation</dt>
-						<dd class="min-w-0 truncate font-mono text-xs text-muted-foreground" title={entry.signal_key}>{entry.signal_key}</dd>
 					{/if}
 					<dt class="text-muted-foreground">Created</dt>
 					<dd class="min-w-0 text-foreground">{fullDate(entry.created_at)}</dd>
