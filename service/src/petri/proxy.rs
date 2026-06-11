@@ -19,7 +19,9 @@ use axum_extra::extract::cookie::CookieJar;
 use futures::TryStreamExt;
 use reqwest::Client;
 
-use crate::auth::{instance_workspace, member_role, AuthUser, MembershipError};
+use crate::auth::{
+    effective_object_role, instance_ref_by_net_id, AuthUser, MembershipError, ObjectRef, Role,
+};
 use crate::AppState;
 
 const STRIP_PREFIX: &str = "/petri";
@@ -180,39 +182,42 @@ async fn gate_petri_instance(
     net_id: &str,
     method: &Method,
 ) -> Result<(), ProxyError> {
-    let (workspace_id, visibility) = match instance_workspace(&state.db, net_id).await {
-        Ok(v) => v,
-        // The net_id isn't a mekhan-managed workflow instance. That means it's
-        // either a shared INFRA net deployed straight to the engine
-        // (`resource-pool-net`, `executor-net`) or a
-        // non-net engine listing path the extractor optimistically treated as
-        // an id (e.g. `/api/nets/metadata`). None of these enumerate
-        // per-principal instance data, and every genuine user instance lives
-        // in mekhan's DB — so a not-found id is necessarily non-sensitive.
-        // Allow read-only (safe) methods through (this is what powers the
-        // Engine Nets browser and the resource-pool dashboard); deny anything
-        // state-changing.
-        Err(MembershipError::TemplateNotFound(_)) => {
-            return if method.is_safe() {
-                Ok(())
-            } else {
-                Err(ProxyError::NotFound)
-            };
-        }
-        Err(MembershipError::Db(e)) => return Err(ProxyError::Db(e.to_string())),
-        // `instance_workspace` never returns NotMember / InsufficientRole;
-        // collapse to Db for completeness.
-        Err(other) => return Err(ProxyError::Db(other.to_string())),
-    };
+    let (instance_id, _workspace_id, visibility) =
+        match instance_ref_by_net_id(&state.db, net_id).await {
+            Ok(Some(v)) => v,
+            // The net_id isn't a mekhan-managed workflow instance. That means
+            // it's either a shared INFRA net deployed straight to the engine
+            // (`resource-pool-net`, `executor-net`) or a non-net engine listing
+            // path the extractor optimistically treated as an id (e.g.
+            // `/api/nets/metadata`). None of these enumerate per-principal
+            // instance data, and every genuine user instance lives in mekhan's
+            // DB — so a not-found id is necessarily non-sensitive. Allow
+            // read-only (safe) methods through (this powers the Engine Nets
+            // browser and the resource-pool dashboard); deny state-changing.
+            Ok(None) => {
+                return if method.is_safe() {
+                    Ok(())
+                } else {
+                    Err(ProxyError::NotFound)
+                };
+            }
+            Err(MembershipError::Db(e)) => return Err(ProxyError::Db(e.to_string())),
+            Err(other) => return Err(ProxyError::Db(other.to_string())),
+        };
 
     let is_safe = method.is_safe();
+    // Public template: safe methods are open to anyone (read-only inspection).
     if is_safe && visibility == "public" {
         return Ok(());
     }
 
-    match member_role(&state.db, user, workspace_id).await {
-        Ok(_) => Ok(()),
-        Err(MembershipError::NotMember(_)) => Err(ProxyError::Forbidden),
+    // Object ACL on the instance (resolves instance → template → folder, applies
+    // workspace floor + grants). Safe methods require ≥ Viewer (no more blanket
+    // member-only safe-allow); state-changing methods require ≥ Editor.
+    let need = if is_safe { Role::Viewer } else { Role::Editor };
+    match effective_object_role(&state.db, user, ObjectRef::instance(instance_id)).await {
+        Ok(Some(role)) if role >= need => Ok(()),
+        Ok(_) => Err(ProxyError::Forbidden),
         Err(MembershipError::Db(e)) => Err(ProxyError::Db(e.to_string())),
         Err(other) => Err(ProxyError::Db(other.to_string())),
     }

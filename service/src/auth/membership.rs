@@ -169,6 +169,26 @@ pub async fn instance_workspace(
     row.ok_or(MembershipError::TemplateNotFound(Uuid::nil()))
 }
 
+/// Like [`instance_workspace`] but also returns the instance's own id, so the
+/// caller can build an `ObjectRef::instance` for the object-ACL resolver. `None`
+/// when the `net_id` isn't a mekhan-managed instance (an infra net) — callers
+/// translate that to the safe-method-allow branch.
+pub async fn instance_ref_by_net_id(
+    db: &PgPool,
+    net_id: &str,
+) -> Result<Option<(Uuid, Uuid, String)>, MembershipError> {
+    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT i.id, t.workspace_id, t.visibility \
+           FROM workflow_instances i \
+           JOIN workflow_templates t ON t.id = i.template_id \
+          WHERE i.net_id = $1",
+    )
+    .bind(net_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row)
+}
+
 /// Translate a `MembershipError` to the standard `ApiError` shape used by
 /// handler gates. Lifted out of the per-handler match blocks so new gates
 /// don't re-paste the 8-line pattern.

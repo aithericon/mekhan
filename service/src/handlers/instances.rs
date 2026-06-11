@@ -13,7 +13,10 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{
+    effective_object_roles, map_to_api_error, require_object_role, AuthUser, ObjectKind, ObjectRef,
+    Role,
+};
 use crate::handlers::require_template;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::instance::{
@@ -50,6 +53,20 @@ pub async fn create_instance(
     let created_by = user.subject_as_uuid();
     // Fetch the template (must be published)
     let template = require_template(&state.db, req.template_id).await?;
+
+    // Object-ACL gate: the launched instance doesn't exist yet, so key the
+    // check on the TEMPLATE (+ its folder). Requires Editor on the template —
+    // a workspace member's floor satisfies this; a non-member (even of a
+    // public template) is now rejected. Behavior change vs. the prior
+    // published-only check; covered by a non-member-launch regression test.
+    require_object_role(
+        &state.db,
+        &user,
+        ObjectRef::template(template.id),
+        Role::Editor,
+    )
+    .await
+    .map_err(map_to_api_error)?;
 
     if !template.published {
         return Err(ApiError::bad_request("template is not published"));
@@ -148,9 +165,15 @@ pub async fn create_instance(
 )]
 pub async fn list_instances(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(params): Query<ListInstancesQuery>,
 ) -> Result<Json<PaginatedResponse<InstanceListItem>>, ApiError> {
     let offset = (params.page - 1) * params.per_page;
+    // Workspace scope (closes the pre-Phase-3 leak: this list had no auth and
+    // returned instances across ALL workspaces). Instances carry no
+    // workspace_id, so scope through the joined template's workspace + public
+    // visibility — mirroring `list_templates`.
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
     // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
     // historical view). `any`/`all` returns everything. Anything else is an
@@ -183,25 +206,28 @@ pub async fn list_instances(
         conditions.push(format!("wi.mode = ${bind_index}"));
         bind_index += 1;
     }
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conditions.join(" AND "))
-    };
+    // Workspace + public gate on the joined template (bound last among filters).
+    let ws_bind = bind_index;
+    conditions.push(format!(
+        "(wt.workspace_id = ${ws_bind} OR wt.visibility = 'public')"
+    ));
+    bind_index += 1;
 
+    let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+    // Both COUNT and SELECT JOIN the version-pinned template so the workspace
+    // predicate resolves identically.
+    let join =
+        "JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version";
     let list_sql = format!(
         "SELECT wi.*, wt.name as template_name \
-         FROM workflow_instances wi \
-         JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version \
+         FROM workflow_instances wi {join} \
          {} ORDER BY wi.created_at DESC LIMIT ${} OFFSET ${}",
         where_clause,
         bind_index,
         bind_index + 1
     );
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM workflow_instances wi {}",
-        where_clause
-    );
+    let count_sql = format!("SELECT COUNT(*) FROM workflow_instances wi {join} {where_clause}");
 
     let mut list_query = sqlx::query_as::<_, InstanceListItem>(&list_sql);
     let mut count_query = sqlx::query_as::<_, (i64,)>(&count_sql);
@@ -218,10 +244,23 @@ pub async fn list_instances(
         list_query = list_query.bind(mode);
         count_query = count_query.bind(mode);
     }
+    list_query = list_query.bind(workspace_id);
+    count_query = count_query.bind(workspace_id);
     list_query = list_query.bind(params.per_page).bind(offset);
 
-    let items = list_query.fetch_all(&state.db).await?;
+    let mut items = list_query.fetch_all(&state.db).await?;
     let total = count_query.fetch_one(&state.db).await?.0;
+
+    // Annotate each row with the caller's effective role (one query for the
+    // whole page) so the SPA can hide stale edit affordances; the backend still
+    // enforces on every mutate path.
+    let ids: Vec<Uuid> = items.iter().map(|i| i.id).collect();
+    let roles = effective_object_roles(&state.db, &user, ObjectKind::Instance, workspace_id, &ids)
+        .await
+        .map_err(map_to_api_error)?;
+    for item in &mut items {
+        item.my_effective_role = roles.get(&item.id).map(|r| role_label(*r));
+    }
 
     Ok(Json(PaginatedResponse {
         items,
@@ -229,6 +268,33 @@ pub async fn list_instances(
         page: params.page,
         per_page: params.per_page,
     }))
+}
+
+/// Lowercase role label for the `my_effective_role` row annotation.
+fn role_label(role: Role) -> String {
+    match role {
+        Role::Owner => "owner",
+        Role::Admin => "admin",
+        Role::Editor => "editor",
+        Role::Viewer => "viewer",
+    }
+    .to_string()
+}
+
+/// Object-ACL gate for a single instance. Call AFTER the handler's existence
+/// check so a genuine member hitting a vanished instance still gets 404; a
+/// non-member gets 403 (`require_object_role` resolves the instance → template
+/// → folder and applies the workspace floor / grant elevation).
+async fn gate_instance(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    need: Role,
+) -> Result<(), ApiError> {
+    require_object_role(&state.db, user, ObjectRef::instance(id), need)
+        .await
+        .map_err(map_to_api_error)?;
+    Ok(())
 }
 
 /// GET /api/v1/instances/:id
@@ -245,6 +311,7 @@ pub async fn list_instances(
 )]
 pub async fn get_instance(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowInstance>, ApiError> {
     let instance =
@@ -254,6 +321,7 @@ pub async fn get_instance(
             .await?
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
+    gate_instance(&state, &user, id, Role::Viewer).await?;
     Ok(Json(instance))
 }
 
@@ -277,7 +345,7 @@ pub async fn get_instance(
 )]
 pub async fn stream_instance(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     // Pre-stream existence check so 404 is a real HTTP status (not an SSE
@@ -291,6 +359,8 @@ pub async fn stream_instance(
     .await?;
     let (net_id, status, db_result) =
         row.ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     let already_terminal = matches!(
         status.as_str(),
@@ -433,6 +503,7 @@ pub(crate) fn instance_jetstream_events(
 )]
 pub async fn get_instance_state(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InstanceStateResponse>, ApiError> {
     let instance =
@@ -441,6 +512,8 @@ pub async fn get_instance_state(
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     // 1. Fetch events from JetStream (source of truth)
     let events = fetch_events(&state.nats, &instance.net_id)
@@ -515,6 +588,7 @@ pub async fn get_instance_state(
 )]
 pub async fn get_instance_events(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InstanceEventsResponse>, ApiError> {
     let instance =
@@ -523,6 +597,8 @@ pub async fn get_instance_events(
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     let events = fetch_events(&state.nats, &instance.net_id)
         .await
@@ -563,6 +639,7 @@ pub async fn get_instance_events(
 #[allow(clippy::type_complexity)]
 pub async fn list_step_executions(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<StepExecutionResponse>>, ApiError> {
     // Existence check so the 404 path is honest (the projection may have no
@@ -575,6 +652,7 @@ pub async fn list_step_executions(
     if instance_exists.is_none() {
         return Err(ApiError::not_found("instance not found"));
     }
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     let rows: Vec<(
         String,
@@ -665,6 +743,7 @@ pub async fn list_step_executions(
 #[allow(clippy::type_complexity)]
 pub async fn list_instance_children(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<InstanceChild>>, ApiError> {
     let instance_exists: Option<(Uuid,)> =
@@ -675,6 +754,7 @@ pub async fn list_instance_children(
     if instance_exists.is_none() {
         return Err(ApiError::not_found("instance not found"));
     }
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     let rows: Vec<(
         Uuid,
@@ -755,6 +835,7 @@ pub async fn list_instance_children(
 )]
 pub async fn list_instance_allocations(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<AllocationResponse>>, ApiError> {
     // Existence check so the 404 path is honest (the projection may have no
@@ -767,6 +848,7 @@ pub async fn list_instance_allocations(
     if instance_exists.is_none() {
         return Err(ApiError::not_found("instance not found"));
     }
+    gate_instance(&state, &user, id, Role::Viewer).await?;
 
     let rows: Vec<AllocationResponse> = sqlx::query_as(
         "SELECT id, kind, net_id, instance_id, node_id, grant_id, \
@@ -805,6 +887,7 @@ pub async fn list_instance_allocations(
 )]
 pub async fn cancel_instance(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowInstance>, ApiError> {
     let instance =
@@ -813,6 +896,9 @@ pub async fn cancel_instance(
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
+
+    // Cancelling is a state-changing operation → Editor on the instance.
+    gate_instance(&state, &user, id, Role::Editor).await?;
 
     if instance.status == "completed" || instance.status == "cancelled" {
         return Err(ApiError::conflict(format!(
@@ -861,12 +947,13 @@ pub async fn cancel_instance(
     let instance = sqlx::query_as::<_, WorkflowInstance>(
         r#"
         UPDATE workflow_instances
-        SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+        SET status = 'cancelled', completed_at = NOW(), updated_at = NOW(), updated_by = $2
         WHERE id = $1
         RETURNING *
         "#,
     )
     .bind(id)
+    .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
     .await?;
 

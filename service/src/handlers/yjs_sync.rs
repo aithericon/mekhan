@@ -13,6 +13,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::auth::{effective_object_role, ObjectRef, Role};
 use crate::models::template::WorkflowTemplate;
 use crate::AppState;
 
@@ -60,23 +61,34 @@ pub async fn ws_handler(
         }
     };
 
-    // Workspace ACL: public templates open to all authenticated users
-    // (read-only since publish-immutability already prevents writes); private
-    // templates require workspace membership. Editor-or-above is enforced
-    // implicitly via the existing `published` -> readonly check; viewers of
-    // a public template fall through to readonly anyway.
-    let user_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
-    if template.visibility != "public" && template.workspace_id != user_ws {
-        tracing::debug!(
-            template_id = %template_id,
-            "yjs ws rejected: cross-workspace + not public"
-        );
-        return crate::models::error::ApiError::forbidden(
-            "not a member of this template's workspace",
-        )
-        .into_response();
-    }
-    let readonly = template.published;
+    // Object ACL: a public template connects read-only to any authenticated
+    // user (publish-immutability prevents writes anyway). Otherwise the caller's
+    // effective role on the template (workspace floor + folder/object grants)
+    // must be ≥ Viewer to connect; a Viewer (or any sub-Editor) gets a
+    // read-only socket even on an unpublished draft — `handle_socket` drops
+    // their updates. This is load-bearing: a folder-scoped Editor cannot
+    // collaborate unless the grant is honored here.
+    let readonly = if template.visibility == "public" {
+        true
+    } else {
+        match effective_object_role(&state.db, &user, ObjectRef::template(template.id)).await {
+            Ok(Some(role)) => template.published || role < Role::Editor,
+            Ok(None) => {
+                tracing::debug!(
+                    template_id = %template_id,
+                    "yjs ws rejected: no effective role on template"
+                );
+                return crate::models::error::ApiError::forbidden(
+                    "not authorized for this template",
+                )
+                .into_response();
+            }
+            Err(e) => {
+                tracing::error!("yjs ws role resolution failed: {e}");
+                return crate::models::error::ApiError::internal(e.to_string()).into_response();
+            }
+        }
+    };
 
     ws.on_upgrade(move |socket| handle_socket(socket, template_id, readonly, state))
 }

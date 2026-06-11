@@ -1390,6 +1390,38 @@ export interface paths {
         patch: operations["update_folder"];
         trace?: never;
     };
+    "/api/v1/folders/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_folder_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/folders/{id}/grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_folder_grant"];
+        post?: never;
+        delete: operations["delete_folder_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/human-presence": {
         parameters: {
             query?: never;
@@ -1626,6 +1658,38 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_instance_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_instance_grant"];
+        post?: never;
+        delete: operations["delete_instance_grant"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3553,6 +3617,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_template_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_template_grant"];
+        post?: never;
+        delete: operations["delete_template_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/io-contract": {
         parameters: {
             query?: never;
@@ -4352,7 +4448,12 @@ export interface paths {
         delete: operations["remove_member"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * PATCH /api/v1/workspaces/{id}/members/{user_id}
+         * @description Change an existing member's workspace role. Admin-gated. Refuses to demote
+         *     the last `owner` (would orphan the workspace), mirroring `remove_member`.
+         */
+        patch: operations["update_member_role"];
         trace?: never;
     };
     "/api/v1/workspaces/{id}/tags": {
@@ -7129,6 +7230,37 @@ export interface components {
             /** @description RFC3339 acquisition timestamp, when recorded. */
             since?: string | null;
         };
+        /**
+         * @description One row in the effective access list for an object. `source` distinguishes a
+         *     direct object grant (editable here) from an inherited folder grant or the
+         *     workspace-member floor (read-only context).
+         */
+        GrantView: {
+            avatar_url?: string | null;
+            /** Format: date-time */
+            granted_at?: string | null;
+            /** Format: uuid */
+            granted_by?: string | null;
+            /**
+             * Format: uuid
+             * @description `object_grants.id` — present only for `source == "object"` (the editable
+             *     rows). `null` for synthesized inherited/workspace rows.
+             */
+            id?: string | null;
+            /**
+             * Format: uuid
+             * @description For `source == "folder"` rows: which ancestor folder the grant lives on.
+             */
+            inherited_from_folder_id?: string | null;
+            inherited_from_folder_path?: string | null;
+            member_display_name?: string | null;
+            member_email?: string | null;
+            role: string;
+            /** @description `"object"` | `"folder"` | `"workspace"`. */
+            source: string;
+            /** Format: uuid */
+            user_id: string;
+        };
         /** @description Flattened guard diagnostic (`node_id` is highlighted in the editor). */
         GuardDiagnosticDto: {
             kind: string;
@@ -7508,6 +7640,14 @@ export interface components {
             id: string;
             metadata: unknown;
             mode: string;
+            /**
+             * @description The caller's effective role on this instance (`owner|admin|editor|
+             *     viewer`), annotated by `list_instances` so the SPA can hide stale edit
+             *     affordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`
+             *     working; the handler fills it after the row fetch. The backend still
+             *     enforces on every mutate path regardless of this hint.
+             */
+            my_effective_role?: string | null;
             net_id: string;
             /** Format: date-time */
             started_at?: string | null;
@@ -8814,6 +8954,14 @@ export interface components {
                 id: string;
                 metadata: unknown;
                 mode: string;
+                /**
+                 * @description The caller's effective role on this instance (`owner|admin|editor|
+                 *     viewer`), annotated by `list_instances` so the SPA can hide stale edit
+                 *     affordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`
+                 *     working; the handler fills it after the row fetch. The backend still
+                 *     enforces on every mutate path regardless of this hint.
+                 */
+                my_effective_role?: string | null;
                 net_id: string;
                 /** Format: date-time */
                 started_at?: string | null;
@@ -9320,6 +9468,13 @@ export interface components {
                 id: string;
                 interface_json?: unknown;
                 is_latest: boolean;
+                /**
+                 * @description The caller's effective role (`owner|admin|editor|viewer`) on this
+                 *     template — annotated by `list_templates`/`get_template` so the SPA can
+                 *     hide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps
+                 *     `FromRow` working); the backend still enforces on every mutate path.
+                 */
+                my_effective_role?: string | null;
                 name: string;
                 /**
                  * Format: uuid
@@ -9811,6 +9966,11 @@ export interface components {
              * @description Total messages removed from PETRI_GLOBAL across all purged nets.
              */
             total_messages: number;
+        };
+        /** @description `PUT .../grants/{user_id}` body. */
+        PutGrantRequest: {
+            /** @description One of `owner|admin|editor|viewer`. */
+            role: string;
         };
         /**
          * @description Configuration for the Python execution backend.
@@ -11693,6 +11853,11 @@ export interface components {
             parameters?: components["schemas"]["TemplateParameter"][] | null;
             visibility?: string | null;
         };
+        /** @description PATCH body for changing an existing member's workspace role. */
+        UpdateMemberRoleRequest: {
+            /** @description One of: `owner`, `admin`, `editor`, `viewer`. */
+            role: string;
+        };
         /**
          * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
          *     `config` (or both) may be set; if `config` is set the call bumps
@@ -12582,6 +12747,13 @@ export interface components {
             id: string;
             interface_json?: unknown;
             is_latest: boolean;
+            /**
+             * @description The caller's effective role (`owner|admin|editor|viewer`) on this
+             *     template — annotated by `list_templates`/`get_template` so the SPA can
+             *     hide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps
+             *     `FromRow` working); the backend still enforces on every mutate path.
+             */
+            my_effective_role?: string | null;
             name: string;
             /**
              * Format: uuid
@@ -12630,6 +12802,8 @@ export interface components {
              * @description Human-readable identity, LEFT JOINed from `user_profiles` (populated by
              *     the auth extractor on each authenticated request). `None` for a member
              *     who was added by `subject` but has never logged into mekhan.
+             *     `#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,
+             *     which don't JOIN `user_profiles`) still satisfy `FromRow`.
              */
             display_name?: string | null;
             email?: string | null;
@@ -15730,6 +15904,153 @@ export interface operations {
             };
         };
     };
+    list_folder_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective access list (direct + inherited + workspace) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"][];
+                };
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_folder_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object-admin required / escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Grantee not a workspace member */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_folder_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     human_presence: {
         parameters: {
             query?: never;
@@ -16129,6 +16450,153 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_instance_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective access list (direct + inherited + workspace) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"][];
+                };
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_instance_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object-admin required / escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Grantee not a workspace member */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_instance_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20163,6 +20631,153 @@ export interface operations {
             };
         };
     };
+    list_template_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective access list (direct + inherited + workspace) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"][];
+                };
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_template_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object-admin required / escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Grantee not a workspace member */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_template_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_io_contract: {
         parameters: {
             query?: {
@@ -21801,6 +22416,71 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Would orphan workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_member_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+                /** @description Member user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMemberRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Role updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMember"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Admin role required */
             403: {

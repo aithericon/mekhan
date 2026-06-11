@@ -647,6 +647,24 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::add_member
         ))
         .routes(routes!(handlers::workspaces::remove_member))
+        .routes(routes!(handlers::workspaces::update_member_role))
+        // Object grants (Phase 3) — per-object ACLs for folders / templates /
+        // instances. GET = effective access list; PUT/DELETE edit direct grants.
+        .routes(routes!(handlers::object_grants::list_folder_grants))
+        .routes(routes!(
+            handlers::object_grants::put_folder_grant,
+            handlers::object_grants::delete_folder_grant
+        ))
+        .routes(routes!(handlers::object_grants::list_template_grants))
+        .routes(routes!(
+            handlers::object_grants::put_template_grant,
+            handlers::object_grants::delete_template_grant
+        ))
+        .routes(routes!(handlers::object_grants::list_instance_grants))
+        .routes(routes!(
+            handlers::object_grants::put_instance_grant,
+            handlers::object_grants::delete_instance_grant
+        ))
         // Folders — single-parent hierarchical grouping of templates within
         // a workspace (filesystem model). Not an ACL boundary.
         .routes(routes!(handlers::folders::list_workspace_tags))

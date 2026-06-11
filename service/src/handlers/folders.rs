@@ -15,7 +15,8 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{
-    can_read_template, map_to_api_error, require_role, template_workspace, AuthUser, Role,
+    can_read_template, map_to_api_error, require_object_role, require_role, template_workspace,
+    AuthUser, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -137,9 +138,21 @@ pub async fn create_folder(
     Path(workspace_id): Path<Uuid>,
     Json(req): Json<CreateFolderRequest>,
 ) -> Result<(StatusCode, Json<Folder>), ApiError> {
-    require_role(&state.db, &user, workspace_id, Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Creating inside a subtree requires Editor on the PARENT folder (object
+    // ACL); creating at the workspace root has no parent object, so it falls
+    // back to the workspace Editor gate.
+    match req.parent_id {
+        Some(parent_id) => {
+            require_object_role(&state.db, &user, ObjectRef::folder(parent_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        None => {
+            require_role(&state.db, &user, workspace_id, Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+    }
 
     validate_slug(&req.slug)?;
 
@@ -230,7 +243,7 @@ pub async fn update_folder(
             .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
-    require_role(&state.db, &user, current.workspace_id, Role::Editor)
+    require_object_role(&state.db, &user, ObjectRef::folder(folder_id), Role::Editor)
         .await
         .map_err(map_to_api_error)?;
 
@@ -382,7 +395,7 @@ pub async fn delete_folder(
             .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
-    require_role(&state.db, &user, current.workspace_id, Role::Editor)
+    require_object_role(&state.db, &user, ObjectRef::folder(folder_id), Role::Editor)
         .await
         .map_err(map_to_api_error)?;
 
@@ -457,6 +470,16 @@ pub async fn delete_folder(
         }
     }
 
+    // Polymorphic object-grant cleanup (no FK on object_grants.object_id):
+    // drop grants on this folder. Children are reparented (not deleted), so
+    // only this folder's grants go.
+    sqlx::query(
+        "DELETE FROM object_grants WHERE object_type = 'folder'::object_kind AND object_id = $1",
+    )
+    .bind(folder_id)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("DELETE FROM folders WHERE id = $1")
         .bind(folder_id)
         .execute(&mut *tx)
@@ -494,9 +517,15 @@ pub async fn set_template_folder(
     let workspace_id = template_workspace(&state.db, template_id)
         .await
         .map_err(map_to_api_error)?;
-    require_role(&state.db, &user, workspace_id, Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Moving a template's home folder is a write on the TEMPLATE.
+    require_object_role(
+        &state.db,
+        &user,
+        ObjectRef::template(template_id),
+        Role::Editor,
+    )
+    .await
+    .map_err(map_to_api_error)?;
 
     let base_id = template_base_id(&state, template_id).await?;
 

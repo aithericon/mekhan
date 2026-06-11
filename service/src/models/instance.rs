@@ -111,6 +111,14 @@ pub struct InstanceListItem {
     pub template_name: String,
     pub mode: String,
     pub test_id: Option<Uuid>,
+    /// The caller's effective role on this instance (`owner|admin|editor|
+    /// viewer`), annotated by `list_instances` so the SPA can hide stale edit
+    /// affordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`
+    /// working; the handler fills it after the row fetch. The backend still
+    /// enforces on every mutate path regardless of this hint.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
 }
 
 // --- API request/response types ---
