@@ -1584,10 +1584,15 @@ isaac-runner-up bridge_url="ws://131.246.221.73:9090":
           -H 'content-type: application/json' -d '{"group":"xarm_fleet"}' | jq -r '.token')
       [ -n "$rt" ] && [ "$rt" != "null" ] || { echo "✗ failed to mint registration token" >&2; exit 1; }
       name="dev-isaac-$(date +%s)"
-      echo "▶ enrolling runner '$name' (caps: ros.robot_model=xarm6, ros.ros_distro=jazzy, ros.sim=isaac)…"
+      # NOTE: no `sim:isaac` cap — the ros capability type only declares the
+      # optional `sim` field on DBs seeded after it landed (the seeder is
+      # insert-only, it never updates an existing type), and enroll-time
+      # validation rejects undeclared fields. Demo claims only match on
+      # robot_model anyway.
+      echo "▶ enrolling runner '$name' (caps: ros.robot_model=xarm6, ros.ros_distro=jazzy)…"
       ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
           --token "$rt" --name "$name" --pool xarm_fleet \
-          --capabilities '{"ros":{"robot_model":"xarm6","ros_distro":"jazzy","sim":"isaac"}}' )
+          --capabilities '{"ros":{"robot_model":"xarm6","ros_distro":"jazzy"}}' )
     fi
 
     echo "▶ starting isaac runner daemon…"
