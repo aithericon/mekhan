@@ -604,6 +604,16 @@ async fn process_domain_event(
                 // For EffectCompleted (executor_submit): consumed tokens carry the process.
                 // For TokenBridgedOut (bridge): the produced token carries the process.
                 // We check both roles to handle both cases.
+                //
+                // Pool-net egress is quarantined: a pool's capacity unit is
+                // consumed and re-produced on every lease cycle, so it
+                // accumulates the process tags of every instance that ever
+                // leased it, and a grant bridging back out would smear those
+                // foreign tags into the receiving net (cross-run
+                // mis-attribution of artifacts/completions/renames). A tag
+                // may leave a `pool-*` net only into its process's own home
+                // net (`hpi_processes.net_id` = the ingress net), or if the
+                // process predates net stamping (NULL net_id — fail open).
                 let copied = sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      SELECT $1, pt.process_id \
@@ -612,10 +622,15 @@ async fn process_domain_event(
                          ON et.net_id = cl.egress_net AND et.event_seq = cl.egress_seq \
                      JOIN causality_process_tags pt ON pt.token_id = et.token_id \
                      WHERE cl.signal_key = $2 \
+                       AND (cl.egress_net NOT LIKE 'pool-%' \
+                            OR EXISTS (SELECT 1 FROM hpi_processes hp \
+                                       WHERE hp.process_id = pt.process_id \
+                                         AND (hp.net_id = $3 OR hp.net_id IS NULL))) \
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&token_id_str)
                 .bind(sk)
+                .bind(net_id)
                 .execute(db)
                 .await?;
 
@@ -641,9 +656,17 @@ async fn process_domain_event(
                 .bind(ts)
                 .execute(db)
                 .await?;
-            } else if token.created_by_event.is_none() {
+            } else if token.created_by_event.is_none()
+                && !crate::compiler::well_known::is_infrastructure_net(net_id)
+            {
                 // True seed token (scenario initialization — no signal, no parent event).
                 // Self-tag as process root and auto-create HPI process.
+                //
+                // Infrastructure nets (pool-/staging-/materialize-) are
+                // excluded: their seeds are capacity units / one-shot command
+                // tokens, not process roots. Self-tagging a pool capacity
+                // token would create a phantom process AND make every grant
+                // derived from that unit carry the phantom's tag.
                 sqlx::query(
                     "INSERT INTO causality_process_tags (token_id, process_id) \
                      VALUES ($1, $1) \
@@ -657,11 +680,16 @@ async fn process_domain_event(
                 // for (injected in petri::instance). Record it so a process
                 // links back to its instance/net; backfill if the row already
                 // exists from an earlier re-ingest with no instance.
+                //
+                // net_id is the EVENT's net: for a launcher-deployed root
+                // that is `mekhan-{instance}` (same as the old derived value);
+                // for a spawned sub-workflow child it is the child_net_id —
+                // which the old `_instance_id`-derived form left NULL,
+                // breaking net-scoped process resolution for children.
                 let instance_id = token_data
                     .get("_instance_id")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
-                let proc_net_id = instance_id.as_ref().map(|i| format!("mekhan-{i}"));
 
                 sqlx::query(
                     "INSERT INTO hpi_processes \
@@ -674,13 +702,15 @@ async fn process_domain_event(
                 .bind(&token_id_str)
                 .bind(ts)
                 .bind(&instance_id)
-                .bind(&proc_net_id)
+                .bind(net_id)
                 .execute(db)
                 .await?;
             }
             // else: token produced by a transition (created_by_event is set) —
             // inherits process tags via propagate_process_tags() when the
-            // TransitionFired/EffectCompleted event is processed.
+            // TransitionFired/EffectCompleted event is processed — or an
+            // infrastructure-net seed (pool capacity unit), which carries no
+            // process identity at all.
 
             // Pooled human-task offer/claim projection (docs/34 §4). Cheap
             // prefix check first so the hot path skips it for every non-pool
@@ -817,6 +847,7 @@ impl Projector for ProcessStart {
         // the name, description, and steps from the effect result.
         enrich_processes_from_start_event(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -830,7 +861,7 @@ struct ProcessComplete;
 #[async_trait]
 impl Projector for ProcessComplete {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        complete_processes(ctx.db, ctx.consumed_ids, ctx.read_ids, ctx.ts).await
+        complete_processes(ctx.db, ctx.net_id, ctx.consumed_ids, ctx.read_ids, ctx.ts).await
     }
 }
 
@@ -843,6 +874,7 @@ impl Projector for ProcessFail {
         // intentionally left untouched.
         fail_processes(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -858,6 +890,7 @@ impl Projector for ProcessLogMetric {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
         record_metric_event(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -876,6 +909,7 @@ impl Projector for ProcessPhase {
         // the whole typed value and project the PhaseChanged variant.
         project_phase_status_detail(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -893,6 +927,7 @@ impl Projector for ProcessProgress {
         // the whole typed value and project the ProgressUpdated variant.
         project_progress_status_detail(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -908,6 +943,7 @@ impl Projector for ProcessLogMessage {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
         record_log_event(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -924,6 +960,7 @@ impl Projector for HumanTask {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
         record_task_event(
             ctx.db,
+            ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
             ctx.effect_result,
@@ -1258,6 +1295,7 @@ async fn insert_event_token(
 /// causality-discovered process rows directly.
 async fn enrich_processes_from_start_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1280,21 +1318,11 @@ async fn enrich_processes_from_start_event(
         }
     });
 
-    // Find process_ids from consumed + read tokens
-    let mut source_ids = consumed_ids.to_vec();
-    source_ids.extend_from_slice(read_ids);
-
-    if source_ids.is_empty() {
-        return Ok(());
-    }
-
-    // Get distinct process_ids from these tokens
-    let process_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT process_id FROM causality_process_tags WHERE token_id = ANY($1)",
-    )
-    .bind(&source_ids)
-    .fetch_all(db)
-    .await?;
+    // Resolve the processes these tokens belong to, scoped to the firing
+    // net. The unscoped form once renamed every process whose tag rode along
+    // on a contaminated token — a sub-workflow's process_start clobbering the
+    // names of unrelated runs that shared a runner pool.
+    let process_ids = resolve_process_ids(db, net_id, consumed_ids, read_ids).await?;
 
     for pid in &process_ids {
         sqlx::query(
@@ -1330,11 +1358,12 @@ async fn enrich_processes_from_start_event(
 /// the workflow has reached its End and no further PhaseUpdate will fire.
 async fn complete_processes(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolve_process_ids(db, net_id, consumed_ids, read_ids).await?;
     for pid in &process_ids {
         sqlx::query(
             "UPDATE hpi_processes SET status = 'completed', updated_at = $2 WHERE process_id = $1",
@@ -1390,12 +1419,13 @@ async fn close_running_phases(
 /// (the Failure node was used outside a named process).
 async fn fail_processes(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolve_process_ids(db, net_id, consumed_ids, read_ids).await?;
     if process_ids.is_empty() {
         return Ok(());
     }
@@ -1467,11 +1497,28 @@ async fn propagate_process_tags(
     Ok(())
 }
 
-/// Resolve the set of process IDs that the given tokens belong to.
+/// Resolve the set of process IDs that the given tokens belong to, scoped to
+/// the event's own net.
+///
 /// Used by the breadcrumb projectors (step/metric/log) to find which
 /// auto-discovered process to write events against.
+///
+/// Why scoped: tokens can carry FOREIGN process tags — most notably anything
+/// derived from a shared pool's capacity unit, which accumulates the tags of
+/// every instance that ever leased it. An unscoped lookup then resolves
+/// several unrelated processes and the projector picks one arbitrarily:
+/// artifacts land on a sibling run's process, completions cross-fire, and
+/// `process_start` renames every resolved row. Preferring tags whose process
+/// is homed on the firing net (`hpi_processes.net_id` = the event's net)
+/// disambiguates exactly.
+///
+/// Fallback: when NO tag matches the net — infrastructure nets like
+/// `pool-*` host no processes (the offers projection resolves the requesting
+/// instance's process there), and legacy rows predate net stamping — the
+/// unscoped set is returned, preserving the old behavior.
 async fn resolve_process_ids(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
 ) -> Result<Vec<String>, sqlx::Error> {
@@ -1479,6 +1526,19 @@ async fn resolve_process_ids(
     source_ids.extend_from_slice(read_ids);
     if source_ids.is_empty() {
         return Ok(vec![]);
+    }
+    let scoped: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT pt.process_id \
+         FROM causality_process_tags pt \
+         JOIN hpi_processes hp ON hp.process_id = pt.process_id \
+         WHERE pt.token_id = ANY($1) AND hp.net_id = $2",
+    )
+    .bind(&source_ids)
+    .bind(net_id)
+    .fetch_all(db)
+    .await?;
+    if !scoped.is_empty() {
+        return Ok(scoped);
     }
     sqlx::query_scalar(
         "SELECT DISTINCT process_id FROM causality_process_tags WHERE token_id = ANY($1)",
@@ -1493,14 +1553,14 @@ async fn resolve_process_ids(
 ///
 /// Every breadcrumb projector opens with the same three lines: resolve the
 /// process IDs, bail if empty, then loop per process. This macro collapses the
-/// first two — `let pids = resolved_or_done!(db, consumed, read);` — leaving
-/// each projector with only its parse + per-pid write specifics. It expands to
-/// a `Vec` binding (not a closure-driven loop) so each projector's
+/// first two — `let pids = resolved_or_done!(db, net, consumed, read);` —
+/// leaving each projector with only its parse + per-pid write specifics. It
+/// expands to a `Vec` binding (not a closure-driven loop) so each projector's
 /// `await`-in-loop borrows stay trivial and behavior is byte-identical to the
 /// hand-written form it replaces.
 macro_rules! resolved_or_done {
-    ($db:expr, $consumed:expr, $read:expr) => {{
-        let pids = resolve_process_ids($db, $consumed, $read).await?;
+    ($db:expr, $net:expr, $consumed:expr, $read:expr) => {{
+        let pids = resolve_process_ids($db, $net, $consumed, $read).await?;
         if pids.is_empty() {
             return Ok(());
         }
@@ -1566,6 +1626,7 @@ async fn write_progress(
 /// is no field-by-field reconstruction or magic-string detection here.
 async fn record_phase_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     phase_name: &str,
@@ -1582,7 +1643,7 @@ async fn record_phase_event(
         PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
     );
 
-    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1625,6 +1686,7 @@ async fn record_phase_event(
 /// reconstruction here.
 async fn record_progress_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     fraction: f64,
@@ -1635,7 +1697,7 @@ async fn record_progress_event(
 ) -> Result<(), sqlx::Error> {
     let message = message.map(str::to_string);
 
-    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
 
     for pid in &process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
@@ -1656,6 +1718,7 @@ async fn record_progress_event(
 /// is a structural no-op — there is no stringly fallback.
 async fn project_phase_status_detail(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1669,6 +1732,7 @@ async fn project_phase_status_detail(
     {
         record_phase_event(
             db,
+            net_id,
             consumed_ids,
             read_ids,
             &phase_name,
@@ -1686,6 +1750,7 @@ async fn project_phase_status_detail(
 /// payload) is a structural no-op — there is no stringly fallback.
 async fn project_progress_status_detail(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1700,6 +1765,7 @@ async fn project_progress_status_detail(
     {
         record_progress_event(
             db,
+            net_id,
             consumed_ids,
             read_ids,
             fraction,
@@ -1750,6 +1816,7 @@ async fn resolve_signal_key_from_consumed(
 
 async fn record_metric_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1768,7 +1835,7 @@ async fn record_metric_event(
         return Ok(());
     }
 
-    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
@@ -1795,6 +1862,7 @@ async fn record_metric_event(
 /// matching process.
 async fn record_log_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1815,7 +1883,7 @@ async fn record_log_event(
         .cloned()
         .unwrap_or(serde_json::json!({}));
 
-    let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
         sqlx::query(
@@ -1853,6 +1921,7 @@ async fn record_log_event(
 /// it by task_id = signal_key.
 async fn record_task_event(
     db: &PgPool,
+    net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
     effect_result: &serde_json::Value,
@@ -1868,7 +1937,7 @@ async fn record_task_event(
         .unwrap_or("Untitled Task")
         .to_string();
 
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    let process_ids = resolve_process_ids(db, net_id, consumed_ids, read_ids).await?;
     // Attach to the first resolved process (tasks belong to exactly one process)
     let process_id = match process_ids.first() {
         Some(pid) => pid.clone(),
@@ -2008,7 +2077,7 @@ async fn project_pool_task_state(
             // resolves yet, log + skip (mirrors record_task_event) — the offer
             // becomes visible on a later re-ingest once the tag lands.
             let offer_token = [token_id_str.to_string()];
-            let process_ids = resolve_process_ids(db, &offer_token, &[]).await?;
+            let process_ids = resolve_process_ids(db, net_id, &offer_token, &[]).await?;
             let process_id = match process_ids.first() {
                 Some(pid) => pid.clone(),
                 None => {
@@ -2113,8 +2182,10 @@ async fn register_catalogue_entry(
         }
     };
 
-    // Resolve provenance from causality context
-    let process_ids = resolve_process_ids(db, consumed_ids, read_ids).await?;
+    // Resolve provenance from causality context (net-scoped: the artifact
+    // belongs to the process homed on the registering net, not whatever
+    // foreign tags rode along on a pooled-lease token).
+    let process_ids = resolve_process_ids(db, net_id, consumed_ids, read_ids).await?;
     let process_id = process_ids.into_iter().next();
 
     // source_place: look up the consumed token's place from causality_event_tokens.

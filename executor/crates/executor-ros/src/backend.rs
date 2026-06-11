@@ -73,6 +73,13 @@ const SCENE_CONTENT_TYPE: &str = "application/vnd.aithericon.planning-scene+x-nd
 /// a concrete type to set up the ROS2 subscription.
 const STOP_TOPIC_TYPE: &str = "std_msgs/msg/Bool";
 
+/// Content-type stamped on a DATA-plane topic recording (the `record_topics`
+/// op). Each NDJSON line is one captured message
+/// `{t_ms, topic, msg}` — receive wall-clock (unix epoch ms), source topic,
+/// raw rosbridge message body — so a downstream tee persists a multi-topic
+/// experiment capture as a single ordered artifact (no rosbag anywhere).
+const RECORD_CONTENT_TYPE: &str = "application/vnd.aithericon.ros-record+x-ndjson";
+
 /// Fully-resolved ROS request parked in `backend_state` after `prepare()`.
 ///
 /// `execute()` rebuilds the rosbridge op from this without re-resolving
@@ -123,6 +130,12 @@ struct ResolvedRosConfig {
     /// ⇒ stops only on duration/timeout/cancel. Only `MonitorScene` reads it.
     #[serde(default)]
     stop_topic: Option<String>,
+    /// `record_topics` subscription set: every `(topic, message_type)` pair the
+    /// recorder captures — the primary `interface_name`/`interface_type` plus
+    /// any extra `topics` entries, deduped by topic name at prepare time. Only
+    /// the `RecordTopics` op reads it.
+    #[serde(default)]
+    record_topics: Vec<(String, String)>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -204,6 +217,24 @@ impl ExecutionBackend for RosBackend {
                 .map(|c| c.name.clone())
         };
 
+        // `record_topics` subscription set: the primary interface pair plus any
+        // extra `topics` entries, deduped by topic name (first declaration
+        // wins) so a duplicated topic never double-subscribes.
+        let record_topics = if config.operation == RosOperation::RecordTopics {
+            let mut seen: Vec<(String, String)> = vec![(
+                config.interface_name.clone(),
+                config.interface_type.clone(),
+            )];
+            for t in config.topics.iter().flatten() {
+                if !seen.iter().any(|(name, _)| name == &t.name) {
+                    seen.push((t.name.clone(), t.message_type.clone()));
+                }
+            }
+            seen
+        } else {
+            Vec::new()
+        };
+
         let resolved = ResolvedRosConfig {
             operation: config.operation,
             interface_name: config.interface_name,
@@ -215,6 +246,7 @@ impl ExecutionBackend for RosBackend {
             scene_stream_ms: config.scene_stream_ms,
             scene_duration_ms: config.scene_duration_ms,
             stop_topic: config.stop_topic,
+            record_topics,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -296,6 +328,22 @@ impl ExecutionBackend for RosBackend {
             };
         }
 
+        // RecordTopics is long-running + streaming like MonitorScene, but
+        // PASSIVE: it subscribes to the configured topics and forwards every
+        // received message as a timestamped NDJSON envelope onto its data
+        // channel until stopped. It owns its own cancel + deadline handling
+        // inside `run_record_topics`, so it is NOT run through the
+        // `run_operation` select below.
+        if resolved.operation == RosOperation::RecordTopics {
+            return match self
+                .run_record_topics(&resolved, event_stream, &cancel, timeout)
+                .await
+            {
+                Ok(outputs) => Ok(make_success(run_context, start, outputs, resolved.operation)),
+                Err(message) => Ok(make_backend_error(run_context, start, message)),
+            };
+        }
+
         // The whole op (connect + the rosbridge exchange) races cancel + a hard
         // outer timeout so a wedged connection can't outlive the job.
         let op = self.run_operation(&resolved, timeout);
@@ -366,6 +414,7 @@ impl RosBackend {
             }
             RosOperation::SendActionGoal => unreachable!("handled in execute()"),
             RosOperation::MonitorScene => unreachable!("handled in execute()"),
+            RosOperation::RecordTopics => unreachable!("handled in execute()"),
         }
         Ok(outputs)
     }
@@ -787,6 +836,155 @@ impl RosBackend {
         outputs.insert("frames_streamed".into(), json!(data_seq));
         Ok(outputs)
     }
+
+    /// Run a `record_topics` op: a PASSIVE multi-topic recorder. It subscribes
+    /// to every `(topic, type)` pair in `record_topics`, and forwards each
+    /// received message as one NDJSON envelope `{t_ms, topic, msg}` onto the
+    /// node's declared DATA `out` channel — the SAME `open → chunk* → close`
+    /// contract the scene monitor uses, just message-driven instead of polled.
+    /// `t_ms` is the receive wall-clock (unix epoch ms): rosbridge timestamps
+    /// are header-dependent per type, so the recorder stamps arrival time
+    /// uniformly and leaves any in-message stamps untouched inside `msg`.
+    ///
+    /// This is the experiment-capture primitive (no rosbag anywhere): a sibling
+    /// recorder under a held lease captures a whole multi-step run's signal
+    /// set, and a downstream consumer tees the stream into a persisted
+    /// artifact. Stops on `stop_topic` / `scene_duration_ms` / `timeout_ms` /
+    /// cancel, exactly like the monitor. A subscribe failure on any topic is
+    /// fatal (a partial recording would silently misrepresent the experiment);
+    /// with no data channel declared it still runs to its deadline but emits
+    /// nothing. Returns `messages_recorded` (total envelopes) and `topic_count`
+    /// (subscription count).
+    async fn run_record_topics(
+        &self,
+        resolved: &ResolvedRosConfig,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
+        cancel: &CancellationToken,
+        timeout: Duration,
+    ) -> Result<HashMap<String, Value>, String> {
+        let client = RosbridgeClient::connect(&self.ws_url)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let channel = resolved.feedback_data_channel.clone();
+
+        // Recording window: explicit `scene_duration_ms`, else the node timeout
+        // (so the recorder ALWAYS terminates and its sibling `join` can fire).
+        let duration = resolved
+            .scene_duration_ms
+            .map(Duration::from_millis)
+            .unwrap_or(timeout)
+            .min(timeout);
+        let deadline = tokio::time::sleep(duration);
+        tokio::pin!(deadline);
+
+        // Subscribe to every recorded topic and merge the per-topic receivers
+        // into ONE ordered-by-arrival channel, each message tagged with its
+        // source topic. Any subscribe failure aborts the op — a recording
+        // missing one of its declared signals is worse than no recording.
+        let (merged_tx, mut merged_rx) = tokio::sync::mpsc::unbounded_channel::<(String, Value)>();
+        let mut forwarders = Vec::new();
+        for (topic, type_name) in &resolved.record_topics {
+            let mut rx = client
+                .subscribe(topic, type_name)
+                .await
+                .map_err(|e| format!("record_topics: subscribe {topic} failed: {e}"))?;
+            let tx = merged_tx.clone();
+            let topic = topic.clone();
+            forwarders.push(tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    if tx.send((topic.clone(), msg)).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        drop(merged_tx);
+
+        // STOP signal: same contract as the scene monitor — the work branch
+        // publishes one message here when it finishes and the recorder closes
+        // within one event. A subscribe failure is non-fatal (deadline holds).
+        let mut stop_rx = match resolved.stop_topic.as_deref() {
+            Some(topic) => match client.subscribe(topic, STOP_TOPIC_TYPE).await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    debug!(error = %e, topic, "record: stop-topic subscribe failed — falling back to deadline");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let mut data_seq: u64 = 0;
+        let mut per_topic: HashMap<String, u64> = HashMap::new();
+        if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+            es.data_open(ch.clone(), RECORD_CONTENT_TYPE.to_string()).await;
+        }
+
+        loop {
+            tokio::select! { biased;
+                _ = cancel.cancelled() => break,
+                _ = &mut deadline => break,
+                _ = async {
+                    match stop_rx.as_mut() {
+                        Some(rx) => { rx.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    debug!("record: stop signal received — closing recording stream");
+                    break;
+                }
+                received = merged_rx.recv() => {
+                    // `None` means every forwarder ended (connection dropped) —
+                    // nothing more will arrive, stop cleanly with what we have.
+                    let Some((topic, msg)) = received else { break };
+                    if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+                        let t_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let frame = json!({ "t_ms": t_ms, "topic": topic, "msg": msg });
+                        let mut line = serde_json::to_vec(&frame).unwrap_or_default();
+                        line.push(b'\n');
+                        es.data_chunk(
+                            ch.clone(),
+                            data_seq,
+                            RECORD_CONTENT_TYPE.to_string(),
+                            line,
+                        )
+                        .await;
+                        data_seq += 1;
+                        *per_topic.entry(topic).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Tear down: drop the recorded-topic + stop-topic subscriptions
+        // (best-effort) before closing the data channel, so no route lingers on
+        // the shared rosbridge connection.
+        for (topic, _) in &resolved.record_topics {
+            client.unsubscribe(topic).await;
+        }
+        if let Some(topic) = resolved.stop_topic.as_deref() {
+            if stop_rx.is_some() {
+                client.unsubscribe(topic).await;
+            }
+        }
+        for f in forwarders {
+            f.abort();
+        }
+
+        if let (Some(es), Some(ch)) = (event_stream.as_ref(), channel.as_ref()) {
+            es.data_close(ch.clone(), data_seq, data_seq).await;
+        }
+
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        outputs.insert("messages_recorded".into(), json!(data_seq));
+        outputs.insert("topic_count".into(), json!(resolved.record_topics.len()));
+        outputs.insert("per_topic".into(), json!(per_topic));
+        Ok(outputs)
+    }
 }
 
 /// Why a `send_action_goal` run ended without a successful result. `execute()`
@@ -968,6 +1166,7 @@ fn operation_label(op: RosOperation) -> &'static str {
         RosOperation::AwaitTopic => "await_topic",
         RosOperation::SendActionGoal => "send_action_goal",
         RosOperation::MonitorScene => "monitor_scene",
+        RosOperation::RecordTopics => "record_topics",
     }
 }
 
@@ -1234,6 +1433,17 @@ mod tests {
         }
     }
 
+    /// A minimal `ExecutionJob` wrapping `spec` — built through serde so the
+    /// wire defaults (priority, channels, …) apply without enumerating fields.
+    fn job_stub(spec: &ExecutionSpec) -> ExecutionJob {
+        serde_json::from_value(json!({
+            "execution_id": "t",
+            "spec": spec,
+            "metadata": {}
+        }))
+        .unwrap()
+    }
+
     fn stage_envelope(ctx: &mut RunContext, slug: &str, value: Value) {
         std::fs::create_dir_all(&ctx.run_dir.inputs_dir).unwrap();
         let p = ctx.run_dir.inputs_dir.join(format!("{slug}.json"));
@@ -1271,6 +1481,7 @@ mod tests {
             scene_stream_ms: None,
             scene_duration_ms: None,
             stop_topic: None,
+            topics: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_name"));
@@ -1287,6 +1498,7 @@ mod tests {
             scene_stream_ms: None,
             scene_duration_ms: None,
             stop_topic: None,
+            topics: None,
         };
         let err = validate_static(&cfg).unwrap_err();
         assert!(err.to_string().contains("interface_type"));
@@ -1303,6 +1515,7 @@ mod tests {
             scene_stream_ms: None,
             scene_duration_ms: None,
             stop_topic: None,
+            topics: None,
         };
         assert!(validate_static(&cfg).is_ok());
     }
@@ -1633,5 +1846,90 @@ mod tests {
             operation_label(RosOperation::SendActionGoal),
             "send_action_goal"
         );
+        assert_eq!(operation_label(RosOperation::MonitorScene), "monitor_scene");
+        assert_eq!(operation_label(RosOperation::RecordTopics), "record_topics");
+    }
+
+    /// `record_topics` requires an interface_type — it is a subscribe, and
+    /// rosbridge needs the concrete ROS type for the subscription.
+    #[test]
+    fn validate_requires_type_for_record_topics() {
+        let cfg = RosConfig {
+            operation: RosOperation::RecordTopics,
+            interface_name: "/isaac_joint_states".into(),
+            interface_type: "".into(),
+            fields: Value::Null,
+            timeout_ms: 30_000,
+            scene_stream_ms: None,
+            scene_duration_ms: None,
+            stop_topic: None,
+            topics: None,
+        };
+        let err = validate_static(&cfg).unwrap_err();
+        assert!(err.to_string().contains("interface_type"));
+    }
+
+    /// `prepare()` folds the primary interface pair + the extra `topics` list
+    /// into the resolved subscription set, deduping by topic name (first
+    /// declaration wins) so a duplicated topic never double-subscribes.
+    #[tokio::test]
+    async fn prepare_resolves_record_topics_subscription_set() {
+        let td = tempfile::TempDir::new().unwrap();
+        let mut c = ctx(&td);
+        c.spec.config = json!({
+            "operation": "record_topics",
+            "interface_name": "/isaac_joint_states",
+            "interface_type": "sensor_msgs/msg/JointState",
+            "scene_duration_ms": 60000,
+            "stop_topic": "/aithericon/record_stop",
+            "topics": [
+                { "name": "/isaac_joint_commands", "message_type": "sensor_msgs/msg/JointState" },
+                // Duplicate of the primary — must NOT double-subscribe.
+                { "name": "/isaac_joint_states", "message_type": "sensor_msgs/msg/JointState" }
+            ]
+        });
+        let backend = RosBackend::new("ws://localhost:9090");
+        let job = job_stub(&c.spec);
+        let prepared = backend.prepare(&job, c).await.unwrap();
+        let resolved: ResolvedRosConfig =
+            serde_json::from_value(prepared.backend_state).unwrap();
+        assert_eq!(resolved.operation, RosOperation::RecordTopics);
+        assert_eq!(
+            resolved.record_topics,
+            vec![
+                (
+                    "/isaac_joint_states".to_string(),
+                    "sensor_msgs/msg/JointState".to_string()
+                ),
+                (
+                    "/isaac_joint_commands".to_string(),
+                    "sensor_msgs/msg/JointState".to_string()
+                ),
+            ]
+        );
+        assert_eq!(resolved.stop_topic.as_deref(), Some("/aithericon/record_stop"));
+        assert_eq!(resolved.scene_duration_ms, Some(60_000));
+    }
+
+    /// Non-record operations carry an EMPTY subscription set — the field is
+    /// inert for them.
+    #[tokio::test]
+    async fn prepare_leaves_record_topics_empty_for_other_ops() {
+        let td = tempfile::TempDir::new().unwrap();
+        let mut c = ctx(&td);
+        c.spec.config = json!({
+            "operation": "publish_topic",
+            "interface_name": "/turtle1/cmd_vel",
+            "interface_type": "geometry_msgs/Twist",
+            "topics": [
+                { "name": "/ignored", "message_type": "std_msgs/msg/Bool" }
+            ]
+        });
+        let backend = RosBackend::new("ws://localhost:9090");
+        let job = job_stub(&c.spec);
+        let prepared = backend.prepare(&job, c).await.unwrap();
+        let resolved: ResolvedRosConfig =
+            serde_json::from_value(prepared.backend_state).unwrap();
+        assert!(resolved.record_topics.is_empty());
     }
 }

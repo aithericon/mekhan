@@ -15,6 +15,23 @@ pub fn pool_net_id(resource_id: uuid::Uuid) -> String {
     format!("pool-{resource_id}")
 }
 
+/// Is this net an infrastructure net (a pool / staging / materialize net
+/// deployed by mekhan as plumbing) rather than a workflow-instance net?
+///
+/// Infrastructure nets host no HPI processes: their seed tokens are capacity
+/// units / one-shot command tokens, not process roots. The causality projector
+/// uses this to (a) skip auto-creating a process for their seed tokens and
+/// (b) treat tags flowing OUT of a pool net as suspect — a pool's long-lived
+/// capacity token is consumed and re-produced on every lease cycle, so it
+/// accumulates the process tags of every instance that ever leased it.
+/// Classified next to the id constructors above so the scheme and its
+/// classification cannot drift apart.
+pub fn is_infrastructure_net(net_id: &str) -> bool {
+    net_id.starts_with("pool-")
+        || net_id.starts_with("staging-")
+        || net_id.starts_with("materialize-")
+}
+
 /// Deterministic net id for a one-shot **staging run** (B-staging, Phase 4). A
 /// staging run pushes one job-template *version* onto one *datacenter* cluster;
 /// mekhan generates a short-lived Petri net (`build_staging_net`) that fires the

@@ -14,15 +14,31 @@ ros2_control loop through real physics. MoveIt, motion_bridge, rosbridge and
 the executor ROS backend are all upstream of that loop and run unchanged.
 
 Run inside nvcr.io/nvidia/isaac-sim:5.1.0:  ./python.sh isaac_xarm_scene.py
+Phase 1 scene mirror: motion_bridge publishes a declarative FULL SNAPSHOT of
+the move_group world objects on /aithericon/scene_objects (std_msgs/String
+JSON, see MIRROR_TOPIC in motion_bridge_node.py). A generic ROS2Subscriber og
+node receives it and the main loop reconciles USD prims under
+/World/AithericonMirror against the latest snapshot — so the work surface and
+sample boxes EXIST sim-side. Attached (grasped) objects are withdrawn from the
+world set while held (the MoveIt twin renders them riding the gripper).
+
 Env knobs:
   XARM_URDF        path to the prepared URDF (default /assets/xarm6_isaac.urdf,
                    produced by prepare-assets.sh: ros2_control blocks stripped,
                    package:// mesh refs relativized)
   ISAAC_HEADLESS   "1" (default) headless / "0" with viewport (local debug)
   SIM_HZ           physics rate (default 60)
+  MIRROR_COLLIDERS "0" (default) mirrored prims are VISUAL-ONLY. "1" applies
+                   static colliders. Default off on purpose: the gripper is
+                   scene-attach (no contact grasping yet), so a pick pose puts
+                   locked gripper geometry INSIDE the sample box — a collider
+                   there is exactly the phantom-contact constraint that broke
+                   home approaches with the ground plane (P0 root cause).
 """
 
+import json
 import os
+import re
 import sys
 
 from isaacsim import SimulationApp
@@ -210,13 +226,19 @@ og.Controller.edit(
             ("SubscribeJointState", "isaacsim.ros2.bridge.ROS2SubscribeJointState"),
             ("ArticulationController", "isaacsim.core.nodes.IsaacArticulationController"),
             ("PublishJointState", "isaacsim.ros2.bridge.ROS2PublishJointState"),
+            # Phase 1 scene mirror: generic subscriber for the motion_bridge
+            # world-object snapshot feed (std_msgs/String JSON). The main loop
+            # below polls its dynamic outputs:data attribute and reconciles.
+            ("MirrorSubscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
         ],
         keys.CONNECT: [
             ("OnPlaybackTick.outputs:tick", "SubscribeJointState.inputs:execIn"),
             ("OnPlaybackTick.outputs:tick", "PublishJointState.inputs:execIn"),
             ("OnPlaybackTick.outputs:tick", "ArticulationController.inputs:execIn"),
+            ("OnPlaybackTick.outputs:tick", "MirrorSubscriber.inputs:execIn"),
             ("Context.outputs:context", "SubscribeJointState.inputs:context"),
             ("Context.outputs:context", "PublishJointState.inputs:context"),
+            ("Context.outputs:context", "MirrorSubscriber.inputs:context"),
             ("ReadSimTime.outputs:simulationTime", "PublishJointState.inputs:timeStamp"),
             ("SubscribeJointState.outputs:jointNames", "ArticulationController.inputs:jointNames"),
             # POSITION-ONLY on purpose. Wiring velocityCommand as well makes
@@ -234,18 +256,161 @@ og.Controller.edit(
             ("PublishJointState.inputs:topicName", "/isaac_joint_states"),
             ("ArticulationController.inputs:targetPrim", [art_root]),
             ("PublishJointState.inputs:targetPrim", [art_root]),
+            ("MirrorSubscriber.inputs:messagePackage", "std_msgs"),
+            ("MirrorSubscriber.inputs:messageSubfolder", "msg"),
+            ("MirrorSubscriber.inputs:messageName", "String"),
+            ("MirrorSubscriber.inputs:topicName", "/aithericon/scene_objects"),
         ],
     },
 )
 
+# ── Phase 1 scene mirror: reconcile USD prims against the latest snapshot ──
+
+MIRROR_ROOT = "/World/AithericonMirror"
+MIRROR_COLLIDERS = os.environ.get("MIRROR_COLLIDERS", "0") == "1"
+MIRROR_COLOR = (0.25, 0.55, 0.95)
+
+
+def _mirror_prim_name(object_id: str) -> str:
+    """Sanitize a MoveIt object id into a legal USD prim name."""
+    name = re.sub(r"[^A-Za-z0-9_]", "_", object_id)
+    if not name or name[0].isdigit():
+        name = "o_" + name
+    return name
+
+
+def _set_mirror_pose(prim, pose: dict, scale) -> None:
+    """Idempotently (re)write translate/orient/scale xform ops on `prim`."""
+    from pxr import Gf, UsdGeom
+
+    xf = UsdGeom.Xformable(prim)
+    ops = {op.GetOpName(): op for op in xf.GetOrderedXformOps()}
+    t = ops.get("xformOp:translate") or xf.AddTranslateOp()
+    o = ops.get("xformOp:orient") or xf.AddOrientOp()
+    s = ops.get("xformOp:scale") or xf.AddScaleOp()
+    p = pose.get("position", {})
+    q = pose.get("orientation", {})
+    t.Set(Gf.Vec3d(float(p.get("x", 0)), float(p.get("y", 0)), float(p.get("z", 0))))
+    o.Set(Gf.Quatf(
+        float(q.get("w", 1)),
+        Gf.Vec3f(float(q.get("x", 0)), float(q.get("y", 0)), float(q.get("z", 0))),
+    ))
+    s.Set(Gf.Vec3f(*scale))
+
+
+def reconcile_mirror(snapshot: dict) -> None:
+    """Make /World/AithericonMirror match the snapshot's world-object set.
+
+    Declarative + idempotent: create missing prims, delete stale ones, rewrite
+    poses in place. Objects listed as `attached` (grasped) are withdrawn from
+    the world set while held — the MoveIt scene twin renders them riding the
+    gripper; physical contact grasping is a later phase. Poses are taken in
+    the robot base frame, which this scene places at the world origin (the
+    URDF imports fixed-base at /World with no offset), so no frame transform
+    is applied; objects in any OTHER frame are skipped with a warning.
+    """
+    import omni.usd
+    from pxr import UsdGeom, UsdPhysics
+
+    stage = omni.usd.get_context().get_stage()
+    stage.DefinePrim(MIRROR_ROOT, "Scope")
+
+    attached = set(snapshot.get("attached", []))
+    desired = {}
+    for obj in snapshot.get("objects", []):
+        if obj.get("id") in attached:
+            continue
+        if obj.get("frame") not in (None, "", "link_base", "world"):
+            print(f"[isaac_xarm_scene] mirror: skipping {obj.get('id')} in "
+                  f"unsupported frame {obj.get('frame')}")
+            continue
+        desired[_mirror_prim_name(str(obj.get("id")))] = obj
+
+    # Delete stale prims (present sim-side, gone MoveIt-side or now attached).
+    root = stage.GetPrimAtPath(MIRROR_ROOT)
+    removed = 0
+    for child in list(root.GetChildren()):
+        if child.GetName() not in desired:
+            stage.RemovePrim(child.GetPath())
+            removed += 1
+    created = 0
+
+    # Create/update the desired set.
+    for name, obj in desired.items():
+        path = f"{MIRROR_ROOT}/{name}"
+        primitive = obj.get("primitive")
+        dims = [float(d) for d in obj.get("dimensions", [])]
+        spec = json.dumps({"primitive": primitive, "dims": dims})
+
+        prim = stage.GetPrimAtPath(path)
+        if prim and prim.GetCustomDataByKey("aithericon_spec") != spec:
+            # Shape/size changed — rebuild rather than morph.
+            stage.RemovePrim(path)
+            prim = None
+
+        if not prim:
+            if primitive == "box" and len(dims) >= 3:
+                geom = UsdGeom.Cube.Define(stage, path)
+                geom.GetSizeAttr().Set(1.0)  # unit cube; dims ride the scale op
+            elif primitive == "sphere" and len(dims) >= 1:
+                geom = UsdGeom.Sphere.Define(stage, path)
+                geom.GetRadiusAttr().Set(dims[0])
+            elif primitive == "cylinder" and len(dims) >= 2:
+                geom = UsdGeom.Cylinder.Define(stage, path)
+                # SolidPrimitive CYLINDER dims = [height, radius]; USD axis Z
+                # matches MoveIt's cylinder convention.
+                geom.GetHeightAttr().Set(dims[0])
+                geom.GetRadiusAttr().Set(dims[1])
+                geom.GetAxisAttr().Set("Z")
+            else:
+                print(f"[isaac_xarm_scene] mirror: skipping {obj.get('id')} — "
+                      f"unsupported primitive {primitive} dims {dims}")
+                continue
+            geom.GetDisplayColorAttr().Set([MIRROR_COLOR])
+            prim = geom.GetPrim()
+            prim.SetCustomDataByKey("aithericon_spec", spec)
+            if MIRROR_COLLIDERS:
+                # Static collider (no RigidBodyAPI): immovable scenery, the
+                # same physics role the lab bench plays.
+                UsdPhysics.CollisionAPI.Apply(prim)
+            created += 1
+
+        scale = (dims[0], dims[1], dims[2]) if primitive == "box" else (1.0, 1.0, 1.0)
+        _set_mirror_pose(prim, obj.get("pose", {}), scale)
+
+    print(f"[isaac_xarm_scene] mirror: reconciled {len(desired)} prims "
+          f"(+{created} -{removed}, {len(attached)} attached withheld) "
+          f"under {MIRROR_ROOT}")
+
+
 world.reset()
 omni.timeline.get_timeline_interface().play()
 print(f"[isaac_xarm_scene] running: {SIM_HZ:.0f} Hz physics, domain {os.environ.get('ROS_DOMAIN_ID', '42')}, "
-      f"sub /isaac_joint_commands pub /isaac_joint_states")
+      f"sub /isaac_joint_commands pub /isaac_joint_states, "
+      f"mirror /aithericon/scene_objects (colliders={'on' if MIRROR_COLLIDERS else 'off'})")
 
 # render=True even headless: app updates drive the OmniGraph playback tick (a
 # physics-only step would never evaluate the ROS bridge nodes).
+#
+# The mirror poll rides the same loop: the generic ROS2Subscriber og node
+# parks the latest std_msgs/String payload on its dynamic outputs:data
+# attribute; we re-parse + reconcile only when the raw payload CHANGES
+# (snapshots are latest-wins, so missed intermediates are free). The dynamic
+# attribute appears only after the node first initializes — reads before that
+# fail harmlessly and we just retry next frame.
+_mirror_attr_path = "/ActionGraph/MirrorSubscriber.outputs:data"
+_last_mirror_raw = None
 while simulation_app.is_running():
     world.step(render=True)
+    try:
+        raw = og.Controller.get(og.Controller.attribute(_mirror_attr_path))
+    except Exception:
+        raw = None
+    if raw and raw != _last_mirror_raw:
+        _last_mirror_raw = raw
+        try:
+            reconcile_mirror(json.loads(raw))
+        except Exception as exc:  # noqa: BLE001 - mirror is best-effort
+            print(f"[isaac_xarm_scene] mirror reconcile failed: {exc}")
 
 simulation_app.close()

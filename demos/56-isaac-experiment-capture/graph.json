@@ -1,0 +1,489 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 0, "y": 400 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Isaac Experiment Capture",
+        "initial": {
+          "id": "in",
+          "label": "Experiment parameters",
+          "fields": [
+            {
+              "name": "experiment_name",
+              "label": "Experiment name",
+              "kind": "text",
+              "required": false,
+              "default": "isaac-capture",
+              "description": "Stamped onto the persisted recording artifact as user metadata (experiment_name) — the key the catalogue containment query finds the capture by."
+            },
+            {
+              "name": "trial_id",
+              "label": "Trial id",
+              "kind": "text",
+              "required": false,
+              "default": "t1",
+              "description": "Distinguishes repeated runs of the same experiment in the catalogue (user metadata trial_id)."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lease",
+      "type": "lease_scope",
+      "slug": "cell",
+      "position": { "x": 190, "y": 0 },
+      "width": 2640,
+      "height": 900,
+      "data": {
+        "type": "lease_scope",
+        "label": "xArm Capture Cell",
+        "description": "Acquires ONE `xarm_fleet` runner for the whole run and releases it on exit. The body forks (`parallel_split`) into (A) the `record_topics` recorder that captures the Isaac hardware-seam topics for the whole run and (B) the experiment motions. Both branches ride the held `runner.<id>` namespace by containment, so the recorder hears exactly the joint commands/states the motions in (B) produce. A `join` waits for both before the lease releases.",
+        "lease": {
+          "pool": "xarm_fleet"
+        },
+        "requirements": {
+          "constraints": [
+            {
+              "capability": "ros",
+              "field": "robot_model",
+              "op": "eq",
+              "value": "xarm6"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "split",
+      "type": "parallel_split",
+      "parentId": "lease",
+      "position": { "x": 16, "y": 530 },
+      "data": {
+        "type": "parallel_split",
+        "label": "Fork (record ‖ experiment)",
+        "description": "Forks the held-lease body into the signal-recorder branch and the experiment branch. Both children inherit the enclosing cell lease's held `runner.<id>` namespace by containment, so the recorder subscribes on the SAME runner-local rosbridge the motions execute through."
+      }
+    },
+    {
+      "id": "recorder",
+      "type": "automated_step",
+      "slug": "recorder",
+      "parentId": "lease",
+      "position": { "x": 300, "y": 660 },
+      "data": {
+        "type": "automated_step",
+        "label": "Record Topics (capture · whole run)",
+        "description": "The CAPTURE PRODUCER — a passive multi-topic recorder decoupled from any single motion (the `record_topics` sibling of demo 52's `monitor_scene`). Subscribes to BOTH sides of the Isaac hardware seam — `/isaac_joint_states` (PhysX read-backs) and `/isaac_joint_commands` (ros2_control targets) — and streams every received message as one timestamped NDJSON line `{t_ms, topic, msg}` onto its Data/Out channel `recording`. Against the fake xarm backend these topics are silent (the fake hardware loops internally), so the recording is legitimately EMPTY there — the demo still completes; against Isaac (`just dev isaac-runner-up`) the capture carries the full commanded-vs-tracked signal record, which IS the experiment outcome. STOPS the moment the work branch finishes: `stop_recorder` publishes one `std_msgs/msg/Bool` to `/aithericon/record_stop` and this step (subscribed) closes the stream within one event; `scene_duration_ms` (120s) is only the failsafe ceiling. The bulk stream rides the out-of-band JetStream datastream transport — the net sees only open + close. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "channels": [
+          {
+            "name": "recording",
+            "direction": "out",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.ros-record+x-ndjson"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "record_topics",
+            "interface_name": "/isaac_joint_states",
+            "interface_type": "sensor_msgs/msg/JointState",
+            "topics": [
+              {
+                "name": "/isaac_joint_commands",
+                "message_type": "sensor_msgs/msg/JointState"
+              }
+            ],
+            "scene_duration_ms": 120000,
+            "timeout_ms": 130000,
+            "fields": {},
+            "stop_topic": "/aithericon/record_stop"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "messages_recorded",
+              "label": "Messages recorded",
+              "kind": "number"
+            },
+            {
+              "name": "topic_count",
+              "label": "Topic count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "capture_tee",
+      "type": "automated_step",
+      "slug": "capture_tee",
+      "parentId": "lease",
+      "position": { "x": 1560, "y": 660 },
+      "data": {
+        "type": "automated_step",
+        "label": "Persist Recording (tee → catalogue artifact)",
+        "description": "The STREAM TEE — turns the ephemeral recording channel into a durable, queryable artifact. Drains the NDJSON record with the ordinary transport-unaware `for chunk in stream('recording')` API, writes the full byte stream to `recording.ndjson`, counts messages per topic, and registers the file via `log_artifact` (blocking) with EXPERIMENT METADATA from the Start form: experiment_name, trial_id, capture kind and the recorded topic list — flat string user-metadata keys the catalogue indexes (GIN) for containment queries. The artifact lands content-addressed in the data catalogue, linked to THIS instance by provenance (producer edge + lineage), so `GET /api/v1/catalogue?metadata={\"experiment_name\":…}` finds every capture of an experiment across runs. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "channels": [
+          {
+            "name": "recording",
+            "direction": "in",
+            "plane": "data",
+            "element": {
+              "type": "binary",
+              "content_type": "application/vnd.aithericon.ros-record+x-ndjson"
+            }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Capture",
+          "fields": [
+            {
+              "name": "received_messages",
+              "label": "Messages persisted",
+              "kind": "number"
+            },
+            {
+              "name": "recorded_bytes",
+              "label": "Recorded bytes",
+              "kind": "number"
+            },
+            {
+              "name": "artifact_logged",
+              "label": "Artifact logged",
+              "kind": "bool"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "move_out",
+      "type": "automated_step",
+      "slug": "move_out",
+      "parentId": "lease",
+      "position": { "x": 300, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Move to Working Pose",
+        "description": "The experiment, part 1: a FollowJointTrajectory motion out to an offset working pose. Everything the controller commands and everything PhysX tracks during this motion lands in the sibling recorder's capture. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [0.3, -0.8, -0.7, 0.0, 0.9, 0.3],
+                    "time_from_start": { "sec": 3, "nanosec": 0 }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": ["error_code", "error_string"],
+                "fieldtypes": ["int32", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "feedback_count",
+              "label": "Feedback count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "move_home",
+      "type": "automated_step",
+      "slug": "move_home",
+      "parentId": "lease",
+      "position": { "x": 940, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Return to Ready Pose",
+        "description": "The experiment, part 2: return to the raised ready pose (same deterministic parking config demos 30/52 use), leaving the cell idempotent for the next run. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": [
+                  "joint1",
+                  "joint2",
+                  "joint3",
+                  "joint4",
+                  "joint5",
+                  "joint6"
+                ],
+                "points": [
+                  {
+                    "positions": [0.0, -1.1, -0.9, 0.0, 1.0, 0.0],
+                    "time_from_start": { "sec": 3, "nanosec": 0 }
+                  }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              {
+                "type": "control_msgs/FollowJointTrajectory_Result",
+                "fieldnames": ["error_code", "error_string"],
+                "fieldtypes": ["int32", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            {
+              "name": "feedback_count",
+              "label": "Feedback count",
+              "kind": "number"
+            }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "stop_recorder",
+      "type": "automated_step",
+      "slug": "stop_recorder",
+      "parentId": "lease",
+      "position": { "x": 1560, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Stop Recorder (signal work done)",
+        "description": "WORK-DONE signal. After the experiment motions finish, this ROS `publish_topic` posts a single `std_msgs/msg/Bool {data:true}` to `/aithericon/record_stop`. The sibling `recorder` step is subscribed and closes the recording stream cleanly within one event, so the recorder's lifetime tracks the actual EXPERIMENT instead of the 120s failsafe window — the `join` (and lease release) fire ~immediately after the arm parks. Plain `executor`: rides the held lease.",
+        "deploymentModel": {
+          "mode": "executor"
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "publish_topic",
+            "interface_name": "/aithericon/record_stop",
+            "interface_type": "std_msgs/msg/Bool",
+            "fields": {
+              "data": true
+            },
+            "interface_typedefs": [
+              {
+                "type": "std_msgs/Bool",
+                "fieldnames": ["data"],
+                "fieldtypes": ["boolean"],
+                "fieldarraylen": [-1]
+              }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": []
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "backoff": "immediate"
+        }
+      }
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "parentId": "lease",
+      "position": { "x": 2230, "y": 450 },
+      "data": {
+        "type": "join",
+        "label": "Join (record + experiment)",
+        "mode": "all",
+        "mergeStrategy": "shallow_last_wins",
+        "description": "Waits for BOTH branches — the recorder + its capture_tee persist, and the experiment motions + stop signal — before the cell lease releases."
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 2980, "y": 380 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          {
+            "targetField": "messages_recorded",
+            "expression": "recorder.messages_recorded"
+          },
+          {
+            "targetField": "messages_persisted",
+            "expression": "capture_tee.received_messages"
+          },
+          {
+            "targetField": "artifact_logged",
+            "expression": "capture_tee.artifact_logged"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_lease",
+      "source": "start",
+      "target": "lease",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_lease_split",
+      "source": "lease",
+      "target": "split",
+      "sourceHandle": "body_in",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_split_recorder",
+      "source": "split",
+      "target": "recorder",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_recorder_tee",
+      "source": "recorder",
+      "target": "capture_tee",
+      "sourceHandle": "recording",
+      "targetHandle": "recording",
+      "type": "sequence"
+    },
+    {
+      "id": "e_tee_join",
+      "source": "capture_tee",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_split_move",
+      "source": "split",
+      "target": "move_out",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_move_out_home",
+      "source": "move_out",
+      "target": "move_home",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_home_stop",
+      "source": "move_home",
+      "target": "stop_recorder",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_stop_join",
+      "source": "stop_recorder",
+      "target": "join",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_join_lease",
+      "source": "join",
+      "target": "lease",
+      "targetHandle": "body_out",
+      "type": "sequence"
+    },
+    {
+      "id": "e_lease_end",
+      "source": "lease",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

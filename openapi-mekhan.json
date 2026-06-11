@@ -26824,6 +26824,24 @@
           }
         }
       },
+      "RecordTopicSpec": {
+        "type": "object",
+        "description": "One additional topic a `record_topics` op subscribes to, beyond the primary\n`interface_name`/`interface_type` pair. Rosbridge needs the concrete ROS\ntype to set up each ROS2 subscription.",
+        "required": [
+          "name",
+          "message_type"
+        ],
+        "properties": {
+          "message_type": {
+            "type": "string",
+            "description": "The ROS message type, e.g. `sensor_msgs/msg/JointState`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The topic name, e.g. `/isaac_joint_states`."
+          }
+        }
+      },
       "RegistrationTokenSummary": {
         "type": "object",
         "description": "Compact list-row for registration tokens. MUST NOT carry `token_hash`.",
@@ -27394,7 +27412,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). With `stop_topic` set this is only a FAILSAFE\nceiling — the monitor normally stops the moment the work branch signals\nit. Ignored by the non-monitor operations.",
+            "description": "How long a `monitor_scene` op keeps polling `/get_planning_scene` (in\nmilliseconds) before it closes its data channel — and equally the\nrecording window for a `record_topics` op. Decouples the\nplanning-scene twin from any single motion: a monitor sized to outlast\nthe run streams the WHOLE multi-step session (arm picking/placing several\nsamples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`\n(so it always terminates). With `stop_topic` set this is only a FAILSAFE\nceiling — the monitor/recorder normally stops the moment the work branch\nsignals it. Ignored by the other operations.",
             "minimum": 0
           },
           "scene_stream_ms": {
@@ -27411,25 +27429,36 @@
               "string",
               "null"
             ],
-            "description": "`monitor_scene` STOP signal: a ROS topic the monitor subscribes to and\nbreaks its poll loop on the FIRST message it receives, closing the data\nchannel cleanly. This makes a continuous monitor's lifetime track the\nWORK it watches instead of a guessed `scene_duration_ms` timer — the work\nbranch publishes one `std_msgs/msg/Bool` here when its last step finishes,\nthe monitor stops within one poll, and the sibling `join` fires\nimmediately (no idle wait for the timer). `None`/absent ⇒ the monitor only\nstops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the\nnon-monitor operations."
+            "description": "`monitor_scene` / `record_topics` STOP signal: a ROS topic the op\nsubscribes to and breaks its loop on the FIRST message it receives,\nclosing the data channel cleanly. This makes a continuous monitor's (or\nrecorder's) lifetime track the WORK it watches instead of a guessed\n`scene_duration_ms` timer — the work branch publishes one\n`std_msgs/msg/Bool` here when its last step finishes, the op stops\nwithin one poll, and the sibling `join` fires immediately (no idle wait\nfor the timer). `None`/absent ⇒ the op only stops on\n`scene_duration_ms`/`timeout_ms`/cancel. Ignored by the other\noperations."
           },
           "timeout_ms": {
             "type": "integer",
             "format": "int64",
             "description": "Per-request timeout in milliseconds. Defaults to 30000.",
             "minimum": 0
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RecordTopicSpec"
+            },
+            "description": "`record_topics` ONLY: additional topics to record beyond the primary\n`interface_name`/`interface_type` pair. The recorder subscribes to the\nunion (deduped by topic name) and stamps every NDJSON line with its\nsource topic, so one recorder captures a whole experiment's signal set.\nIgnored by the other operations."
           }
         }
       },
       "RosOperation": {
         "type": "string",
-        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. `MonitorScene` polls move_group's\n`/get_planning_scene` on a cadence for a bounded duration and streams each\nsnapshot onto a DATA channel — a live planning-scene twin DECOUPLED from\nany single motion, so one monitor can watch a whole multi-step run. This is\nthe source of truth for which rosbridge op the backend issues.",
+        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. `MonitorScene` polls move_group's\n`/get_planning_scene` on a cadence for a bounded duration and streams each\nsnapshot onto a DATA channel — a live planning-scene twin DECOUPLED from\nany single motion, so one monitor can watch a whole multi-step run.\n`RecordTopics` subscribes to one or more topics for a bounded window and\nstreams every received message as a timestamped NDJSON line onto a DATA\nchannel — the experiment-capture primitive: a downstream consumer tees the\nstream into a persisted artifact (no rosbag anywhere). This is the source\nof truth for which rosbridge op the backend issues.",
         "enum": [
           "publish_topic",
           "call_service",
           "await_topic",
           "send_action_goal",
-          "monitor_scene"
+          "monitor_scene",
+          "record_topics"
         ]
       },
       "RosterMemberDetail": {

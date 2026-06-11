@@ -667,3 +667,469 @@ async fn non_seed_token_without_signal_key_does_not_create_process() {
         "token with created_by_event should NOT self-tag as process"
     );
 }
+
+// ── Pool-net process-tag containment ───────────────────────────────────────
+//
+// A shared `pool-*` net's capacity unit is consumed and re-produced on every
+// lease cycle, so it accumulates the process tags of every instance that ever
+// leased it. Pre-fix, a grant bridging back out smeared those foreign tags
+// into the receiving instance net: catalogue artifacts landed on a sibling
+// run's process, process_complete cross-fired, and process_start renamed
+// every resolved process. These tests pin the containment rules.
+
+/// Fetch the full tag set for a token.
+async fn process_tags_for(db: &sqlx::PgPool, token_id: &str) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT process_id FROM causality_process_tags WHERE token_id = $1 ORDER BY process_id",
+    )
+    .bind(token_id)
+    .fetch_all(db)
+    .await
+    .expect("query process tags")
+}
+
+fn token_bridged_out_event(
+    token_id: &str,
+    source_place: &str,
+    target_net: &str,
+    target_place: &str,
+    signal_key: &str,
+) -> serde_json::Value {
+    json!({
+        "type": "TokenBridgedOut",
+        "token": token_json(token_id),
+        "source_place_id": source_place,
+        "source_place_name": source_place,
+        "target_net_id": target_net,
+        "target_place_name": target_place,
+        "transition_id": Uuid::new_v4().to_string(),
+        "signal_key": signal_key
+    })
+}
+
+/// Seed tokens in infrastructure nets (pool capacity units) must NOT
+/// auto-create an HPI process or self-tag — they are plumbing, not process
+/// roots. A phantom pool process would otherwise tag every grant derived
+/// from the unit.
+#[tokio::test]
+#[serial]
+async fn pool_seed_does_not_create_phantom_process() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&common::nats_url(), None)
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    let pool_net = format!("pool-{}", Uuid::new_v4());
+    let unit_token = Uuid::new_v4().to_string();
+
+    let ev = persisted_event(1, token_created_event(&unit_token, "free_units"));
+    publish_event(nats.jetstream(), &pool_net, "token.created", &ev).await;
+    wait_for_causality_event(&db, &pool_net, 1, Duration::from_secs(5)).await;
+    // Tags are written after the event row — give the handler time to finish.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(
+        process_tags_for(&db, &unit_token).await.is_empty(),
+        "pool capacity seed must not self-tag as a process"
+    );
+    let has_process: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM hpi_processes WHERE process_id = $1)")
+            .bind(&unit_token)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(
+        !has_process,
+        "pool capacity seed must not create a phantom hpi_processes row"
+    );
+}
+
+/// The full two-instance lease cycle: instance A leases and releases the
+/// pool's unit (the recycled unit legitimately accumulates A's tag inside the
+/// pool), then instance B leases the same unit. The grant bridging back into
+/// B's net must carry ONLY B's process tag — A's must be quarantined at the
+/// pool boundary.
+#[tokio::test]
+#[serial]
+async fn pool_grant_does_not_bleed_foreign_process_tags() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&common::nats_url(), None)
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    let net_a = format!("inst-a-{}", Uuid::new_v4().simple());
+    let net_b = format!("inst-b-{}", Uuid::new_v4().simple());
+    let pool_net = format!("pool-{}", Uuid::new_v4());
+
+    let seed_a = Uuid::new_v4().to_string();
+    let seed_b = Uuid::new_v4().to_string();
+    let req_a_out = Uuid::new_v4().to_string();
+    let req_a_in = Uuid::new_v4().to_string();
+    let unit0 = Uuid::new_v4().to_string();
+    let grant_a = Uuid::new_v4().to_string();
+    let hold_a = Uuid::new_v4().to_string();
+    let grant_a_in = Uuid::new_v4().to_string();
+    let rel_a_out = Uuid::new_v4().to_string();
+    let rel_a_in = Uuid::new_v4().to_string();
+    let unit1 = Uuid::new_v4().to_string();
+    let req_b_out = Uuid::new_v4().to_string();
+    let req_b_in = Uuid::new_v4().to_string();
+    let grant_b = Uuid::new_v4().to_string();
+    let hold_b = Uuid::new_v4().to_string();
+    let grant_b_in = Uuid::new_v4().to_string();
+
+    let k_req_a = format!("claim-{}", Uuid::new_v4().simple());
+    let k_grant_a = format!("grant-{}", Uuid::new_v4().simple());
+    let k_rel_a = format!("release-{}", Uuid::new_v4().simple());
+    let k_req_b = format!("claim-{}", Uuid::new_v4().simple());
+    let k_grant_b = format!("grant-{}", Uuid::new_v4().simple());
+
+    // Instance A: seed (process PA) → claim request bridges to the pool.
+    let ev = persisted_event(1, token_created_event(&seed_a, "start"));
+    publish_event(nats.jetstream(), &net_a, "token.created", &ev).await;
+    wait_for_process_tag(&db, &seed_a, Duration::from_secs(5)).await;
+
+    let ev = persisted_event(
+        2,
+        transition_fired_event(
+            "t_claim",
+            &[("start", &seed_a)],
+            &[("claim_outbox", &req_a_out, token_json(&req_a_out))],
+        ),
+    );
+    publish_event(nats.jetstream(), &net_a, "transition.fired", &ev).await;
+    let ev = persisted_event(
+        3,
+        token_bridged_out_event(
+            &req_a_out,
+            "claim_outbox",
+            &pool_net,
+            "claim_inbox",
+            &k_req_a,
+        ),
+    );
+    publish_event(nats.jetstream(), &net_a, "token.bridged_out", &ev).await;
+    wait_for_cross_link(&db, &k_req_a, Duration::from_secs(5)).await;
+
+    // Pool: request arrives (inherits PA — instance-net egress is unfiltered),
+    // capacity unit seeded (no tag), grant fired.
+    let ev = persisted_event(
+        1,
+        token_created_with_signal_key(&req_a_in, "claim_inbox", &k_req_a),
+    );
+    publish_event(nats.jetstream(), &pool_net, "token.created", &ev).await;
+    wait_for_process_tag(&db, &req_a_in, Duration::from_secs(5)).await;
+    assert_eq!(
+        process_tags_for(&db, &req_a_in).await,
+        vec![seed_a.clone()],
+        "claim request entering the pool should carry A's process tag"
+    );
+
+    let ev = persisted_event(2, token_created_event(&unit0, "free_units"));
+    publish_event(nats.jetstream(), &pool_net, "token.created", &ev).await;
+    wait_for_causality_event(&db, &pool_net, 2, Duration::from_secs(5)).await;
+
+    let ev = persisted_event(
+        3,
+        transition_fired_event(
+            "t_grant",
+            &[("claim_inbox", &req_a_in), ("free_units", &unit0)],
+            &[
+                ("grant_outbox", &grant_a, token_json(&grant_a)),
+                ("in_use", &hold_a, token_json(&hold_a)),
+            ],
+        ),
+    );
+    publish_event(nats.jetstream(), &pool_net, "transition.fired", &ev).await;
+    wait_for_process_tag(&db, &grant_a, Duration::from_secs(5)).await;
+
+    // Grant bridges back into A's own net: A's tag comes home (pool egress
+    // filter must keep own-net tags).
+    let ev = persisted_event(
+        4,
+        token_bridged_out_event(&grant_a, "grant_outbox", &net_a, "grant_inbox", &k_grant_a),
+    );
+    publish_event(nats.jetstream(), &pool_net, "token.bridged_out", &ev).await;
+    wait_for_cross_link(&db, &k_grant_a, Duration::from_secs(5)).await;
+    let ev = persisted_event(
+        4,
+        token_created_with_signal_key(&grant_a_in, "grant_inbox", &k_grant_a),
+    );
+    publish_event(nats.jetstream(), &net_a, "token.created", &ev).await;
+    wait_for_process_tag(&db, &grant_a_in, Duration::from_secs(5)).await;
+    assert_eq!(
+        process_tags_for(&db, &grant_a_in).await,
+        vec![seed_a.clone()],
+        "grant returning to A's own net should carry A's process tag"
+    );
+
+    // A releases: the recycled unit (unit1) legitimately picks up A's tag
+    // INSIDE the pool.
+    let ev = persisted_event(
+        5,
+        transition_fired_event(
+            "t_done",
+            &[("grant_inbox", &grant_a_in)],
+            &[("release_outbox", &rel_a_out, token_json(&rel_a_out))],
+        ),
+    );
+    publish_event(nats.jetstream(), &net_a, "transition.fired", &ev).await;
+    let ev = persisted_event(
+        6,
+        token_bridged_out_event(
+            &rel_a_out,
+            "release_outbox",
+            &pool_net,
+            "release_inbox",
+            &k_rel_a,
+        ),
+    );
+    publish_event(nats.jetstream(), &net_a, "token.bridged_out", &ev).await;
+    wait_for_cross_link(&db, &k_rel_a, Duration::from_secs(5)).await;
+    let ev = persisted_event(
+        4,
+        token_created_with_signal_key(&rel_a_in, "release_inbox", &k_rel_a),
+    );
+    publish_event(nats.jetstream(), &pool_net, "token.created", &ev).await;
+    wait_for_process_tag(&db, &rel_a_in, Duration::from_secs(5)).await;
+
+    let ev = persisted_event(
+        5,
+        transition_fired_event(
+            "t_release",
+            &[("in_use", &hold_a), ("release_inbox", &rel_a_in)],
+            &[("free_units", &unit1, token_json(&unit1))],
+        ),
+    );
+    publish_event(nats.jetstream(), &pool_net, "transition.fired", &ev).await;
+    wait_for_process_tag(&db, &unit1, Duration::from_secs(5)).await;
+    assert_eq!(
+        process_tags_for(&db, &unit1).await,
+        vec![seed_a.clone()],
+        "recycled unit accumulates the prior holder's tag inside the pool"
+    );
+
+    // Instance B: seed (process PB) → claim → grant consumes the
+    // contaminated unit1.
+    let ev = persisted_event(1, token_created_event(&seed_b, "start"));
+    publish_event(nats.jetstream(), &net_b, "token.created", &ev).await;
+    wait_for_process_tag(&db, &seed_b, Duration::from_secs(5)).await;
+
+    let ev = persisted_event(
+        2,
+        transition_fired_event(
+            "t_claim",
+            &[("start", &seed_b)],
+            &[("claim_outbox", &req_b_out, token_json(&req_b_out))],
+        ),
+    );
+    publish_event(nats.jetstream(), &net_b, "transition.fired", &ev).await;
+    let ev = persisted_event(
+        3,
+        token_bridged_out_event(
+            &req_b_out,
+            "claim_outbox",
+            &pool_net,
+            "claim_inbox",
+            &k_req_b,
+        ),
+    );
+    publish_event(nats.jetstream(), &net_b, "token.bridged_out", &ev).await;
+    wait_for_cross_link(&db, &k_req_b, Duration::from_secs(5)).await;
+    let ev = persisted_event(
+        6,
+        token_created_with_signal_key(&req_b_in, "claim_inbox", &k_req_b),
+    );
+    publish_event(nats.jetstream(), &pool_net, "token.created", &ev).await;
+    wait_for_process_tag(&db, &req_b_in, Duration::from_secs(5)).await;
+
+    let ev = persisted_event(
+        7,
+        transition_fired_event(
+            "t_grant",
+            &[("claim_inbox", &req_b_in), ("free_units", &unit1)],
+            &[
+                ("grant_outbox", &grant_b, token_json(&grant_b)),
+                ("in_use", &hold_b, token_json(&hold_b)),
+            ],
+        ),
+    );
+    publish_event(nats.jetstream(), &pool_net, "transition.fired", &ev).await;
+    wait_for_process_tag(&db, &grant_b, Duration::from_secs(5)).await;
+    // Inside the pool the grant carries BOTH tags (propagation from the
+    // contaminated unit) — that is exactly what must not cross the bridge.
+    let mut both = vec![seed_a.clone(), seed_b.clone()];
+    both.sort();
+    assert_eq!(
+        process_tags_for(&db, &grant_b).await,
+        both,
+        "pool-internal grant carries both tags pre-bridge (the hazard)"
+    );
+
+    // The fix: the grant bridging into B's net carries ONLY B's process tag.
+    let ev = persisted_event(
+        8,
+        token_bridged_out_event(&grant_b, "grant_outbox", &net_b, "grant_inbox", &k_grant_b),
+    );
+    publish_event(nats.jetstream(), &pool_net, "token.bridged_out", &ev).await;
+    wait_for_cross_link(&db, &k_grant_b, Duration::from_secs(5)).await;
+    let ev = persisted_event(
+        4,
+        token_created_with_signal_key(&grant_b_in, "grant_inbox", &k_grant_b),
+    );
+    publish_event(nats.jetstream(), &net_b, "token.created", &ev).await;
+    wait_for_process_tag(&db, &grant_b_in, Duration::from_secs(5)).await;
+    assert_eq!(
+        process_tags_for(&db, &grant_b_in).await,
+        vec![seed_b.clone()],
+        "grant entering B's net must NOT carry A's process tag (pool bleed)"
+    );
+}
+
+/// Even when a token DOES carry foreign tags (legacy contamination, or
+/// in-net propagation that pre-dates the bridge filter), the projectors must
+/// attribute to the firing net's own process: process_start renames and
+/// process_complete completes ONLY the process homed on the event's net.
+#[tokio::test]
+#[serial]
+async fn process_resolution_is_scoped_to_event_net() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&common::nats_url(), None)
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    let net_a = format!("inst-a-{}", Uuid::new_v4().simple());
+    let net_b = format!("inst-b-{}", Uuid::new_v4().simple());
+    let seed_a = Uuid::new_v4().to_string();
+    let seed_b = Uuid::new_v4().to_string();
+
+    let ev = persisted_event(1, token_created_event(&seed_a, "start"));
+    publish_event(nats.jetstream(), &net_a, "token.created", &ev).await;
+    wait_for_process_tag(&db, &seed_a, Duration::from_secs(5)).await;
+    let ev = persisted_event(1, token_created_event(&seed_b, "start"));
+    publish_event(nats.jetstream(), &net_b, "token.created", &ev).await;
+    wait_for_process_tag(&db, &seed_b, Duration::from_secs(5)).await;
+
+    // A token in net B contaminated with BOTH processes' tags.
+    let mixed = Uuid::new_v4().to_string();
+    for pid in [&seed_a, &seed_b] {
+        sqlx::query("INSERT INTO causality_process_tags (token_id, process_id) VALUES ($1, $2)")
+            .bind(&mixed)
+            .bind(pid)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    // process_start fired in net B consuming the contaminated token: only
+    // B's process may be renamed.
+    let ev = persisted_event(
+        2,
+        json!({
+            "type": "EffectCompleted",
+            "transition_id": Uuid::new_v4().to_string(),
+            "transition_name": "process_start",
+            "consumed_tokens": [["p_start", &mixed]],
+            "produced_tokens": [],
+            "effect_handler_id": "process_start",
+            "effect_result": { "name": "Renamed By B" }
+        }),
+    );
+    publish_event(nats.jetstream(), &net_b, "effect.completed", &ev).await;
+    wait_for_causality_event(&db, &net_b, 2, Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let name_b: Option<String> =
+        sqlx::query_scalar("SELECT name FROM hpi_processes WHERE process_id = $1")
+            .bind(&seed_b)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(name_b.as_deref(), Some("Renamed By B"));
+    let name_a: Option<String> =
+        sqlx::query_scalar("SELECT name FROM hpi_processes WHERE process_id = $1")
+            .bind(&seed_a)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        name_a, None,
+        "process_start in net B must not rename net A's process"
+    );
+
+    // process_complete fired in net B: only B's process completes.
+    let ev = persisted_event(
+        3,
+        json!({
+            "type": "EffectCompleted",
+            "transition_id": Uuid::new_v4().to_string(),
+            "transition_name": "process_complete",
+            "consumed_tokens": [["p_end", &mixed]],
+            "produced_tokens": [],
+            "effect_handler_id": "process_complete",
+            "effect_result": {}
+        }),
+    );
+    publish_event(nats.jetstream(), &net_b, "effect.completed", &ev).await;
+    wait_for_causality_event(&db, &net_b, 3, Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let status_b: String =
+        sqlx::query_scalar("SELECT status FROM hpi_processes WHERE process_id = $1")
+            .bind(&seed_b)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(status_b, "completed");
+    let status_a: String =
+        sqlx::query_scalar("SELECT status FROM hpi_processes WHERE process_id = $1")
+            .bind(&seed_a)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        status_a, "active",
+        "process_complete in net B must not cross-fire onto net A's process"
+    );
+}
+
+/// Spawned sub-workflow child nets seed their own process — the process row
+/// must be stamped with the CHILD net id (pre-fix it was NULL, breaking
+/// net-scoped resolution for everything the child does).
+#[tokio::test]
+#[serial]
+async fn seed_process_is_stamped_with_event_net() {
+    let db = common::create_test_db().await;
+    let nats = MekhanNats::connect(&common::nats_url(), None)
+        .await
+        .expect("connect NATS");
+    ensure_petri_global_stream(nats.jetstream()).await;
+    let _handle = spawn_causality_ingest(&nats, &db).await;
+
+    // A child net id is an arbitrary uuid (no mekhan- prefix, no
+    // _instance_id in the seed's data).
+    let child_net = Uuid::new_v4().to_string();
+    let seed = Uuid::new_v4().to_string();
+
+    let ev = persisted_event(1, token_created_event(&seed, "start"));
+    publish_event(nats.jetstream(), &child_net, "token.created", &ev).await;
+    wait_for_process_tag(&db, &seed, Duration::from_secs(5)).await;
+
+    let net: Option<String> =
+        sqlx::query_scalar("SELECT net_id FROM hpi_processes WHERE process_id = $1")
+            .bind(&seed)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        net.as_deref(),
+        Some(child_net.as_str()),
+        "seed-created process must be homed on the event's net"
+    );
+}

@@ -10457,6 +10457,17 @@ export interface components {
              */
             orphan_db: number;
         };
+        /**
+         * @description One additional topic a `record_topics` op subscribes to, beyond the primary
+         *     `interface_name`/`interface_type` pair. Rosbridge needs the concrete ROS
+         *     type to set up each ROS2 subscription.
+         */
+        RecordTopicSpec: {
+            /** @description The ROS message type, e.g. `sensor_msgs/msg/JointState`. */
+            message_type: string;
+            /** @description The topic name, e.g. `/isaac_joint_states`. */
+            name: string;
+        };
         /** @description Compact list-row for registration tokens. MUST NOT carry `token_hash`. */
         RegistrationTokenSummary: {
             /** Format: date-time */
@@ -10807,13 +10818,14 @@ export interface components {
             /**
              * Format: int64
              * @description How long a `monitor_scene` op keeps polling `/get_planning_scene` (in
-             *     milliseconds) before it closes its data channel. Decouples the
+             *     milliseconds) before it closes its data channel — and equally the
+             *     recording window for a `record_topics` op. Decouples the
              *     planning-scene twin from any single motion: a monitor sized to outlast
              *     the run streams the WHOLE multi-step session (arm picking/placing several
              *     samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
              *     (so it always terminates). With `stop_topic` set this is only a FAILSAFE
-             *     ceiling — the monitor normally stops the moment the work branch signals
-             *     it. Ignored by the non-monitor operations.
+             *     ceiling — the monitor/recorder normally stops the moment the work branch
+             *     signals it. Ignored by the other operations.
              */
             scene_duration_ms?: number | null;
             /**
@@ -10827,15 +10839,16 @@ export interface components {
              */
             scene_stream_ms?: number | null;
             /**
-             * @description `monitor_scene` STOP signal: a ROS topic the monitor subscribes to and
-             *     breaks its poll loop on the FIRST message it receives, closing the data
-             *     channel cleanly. This makes a continuous monitor's lifetime track the
-             *     WORK it watches instead of a guessed `scene_duration_ms` timer — the work
-             *     branch publishes one `std_msgs/msg/Bool` here when its last step finishes,
-             *     the monitor stops within one poll, and the sibling `join` fires
-             *     immediately (no idle wait for the timer). `None`/absent ⇒ the monitor only
-             *     stops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the
-             *     non-monitor operations.
+             * @description `monitor_scene` / `record_topics` STOP signal: a ROS topic the op
+             *     subscribes to and breaks its loop on the FIRST message it receives,
+             *     closing the data channel cleanly. This makes a continuous monitor's (or
+             *     recorder's) lifetime track the WORK it watches instead of a guessed
+             *     `scene_duration_ms` timer — the work branch publishes one
+             *     `std_msgs/msg/Bool` here when its last step finishes, the op stops
+             *     within one poll, and the sibling `join` fires immediately (no idle wait
+             *     for the timer). `None`/absent ⇒ the op only stops on
+             *     `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the other
+             *     operations.
              */
             stop_topic?: string | null;
             /**
@@ -10843,6 +10856,14 @@ export interface components {
              * @description Per-request timeout in milliseconds. Defaults to 30000.
              */
             timeout_ms?: number;
+            /**
+             * @description `record_topics` ONLY: additional topics to record beyond the primary
+             *     `interface_name`/`interface_type` pair. The recorder subscribes to the
+             *     union (deduped by topic name) and stamps every NDJSON line with its
+             *     source topic, so one recorder captures a whole experiment's signal set.
+             *     Ignored by the other operations.
+             */
+            topics?: components["schemas"]["RecordTopicSpec"][] | null;
         };
         /**
          * @description Which ROS interaction the step performs.
@@ -10853,11 +10874,15 @@ export interface components {
          *     goal to an action server. `MonitorScene` polls move_group's
          *     `/get_planning_scene` on a cadence for a bounded duration and streams each
          *     snapshot onto a DATA channel — a live planning-scene twin DECOUPLED from
-         *     any single motion, so one monitor can watch a whole multi-step run. This is
-         *     the source of truth for which rosbridge op the backend issues.
+         *     any single motion, so one monitor can watch a whole multi-step run.
+         *     `RecordTopics` subscribes to one or more topics for a bounded window and
+         *     streams every received message as a timestamped NDJSON line onto a DATA
+         *     channel — the experiment-capture primitive: a downstream consumer tees the
+         *     stream into a persisted artifact (no rosbag anywhere). This is the source
+         *     of truth for which rosbridge op the backend issues.
          * @enum {string}
          */
-        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal" | "monitor_scene";
+        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal" | "monitor_scene" | "record_topics";
         /**
          * @description Admin view for a single roster member — carries the trusted caps and the
          *     typed availability config.
