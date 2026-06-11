@@ -176,7 +176,9 @@ fn output_root_key(interface_type: &str, operation: RosOperation) -> Option<Stri
     match operation {
         // No ROS-typed response: a synthetic port is surfaced in
         // `derive_output_port` instead, so these return no registry root.
-        RosOperation::PublishTopic | RosOperation::MonitorScene => None,
+        RosOperation::PublishTopic | RosOperation::MonitorScene | RosOperation::RecordTopics => {
+            None
+        }
         RosOperation::AwaitTopic => Some(base),
         RosOperation::CallService => Some(format!("{base}_Response")),
         RosOperation::SendActionGoal => Some(format!("{base}_Result")),
@@ -227,6 +229,41 @@ fn derive_output_port(config: &Value) -> Port {
             id: "out".into(),
             label: "Output".into(),
             fields: vec![published_field()],
+        };
+    }
+
+    // RecordTopics streams every captured message onto a data channel — the
+    // outputs are synthetic recording counters, not a typed message port.
+    if operation == RosOperation::RecordTopics {
+        return Port {
+            id: "out".into(),
+            label: "Output".into(),
+            fields: vec![
+                PortField {
+                    default: None,
+                    name: "messages_recorded".into(),
+                    label: "Messages recorded".into(),
+                    kind: FieldKind::Number,
+                    required: false,
+                    options: None,
+                    description: Some(
+                        "Total messages captured across all recorded topics.".into(),
+                    ),
+                    accept: None,
+                    schema: None,
+                },
+                PortField {
+                    default: None,
+                    name: "topic_count".into(),
+                    label: "Topic count".into(),
+                    kind: FieldKind::Number,
+                    required: false,
+                    options: None,
+                    description: Some("Number of topics the recorder subscribed to.".into()),
+                    accept: None,
+                    schema: None,
+                },
+            ],
         };
     }
 
@@ -590,6 +627,26 @@ mod tests {
         }];
         assert!(root_present(&embedded, "fake_pkg/Ack_Response"));
         assert!(!root_present(&embedded, "fake_pkg/Other_Response"));
+    }
+
+    #[test]
+    fn derive_record_topics_is_synthetic_counters() {
+        // RecordTopics streams captured messages onto a data channel — the
+        // output port is the synthetic recording counters, regardless of the
+        // recorded message type.
+        let port = derive_output_port(&json!({
+            "operation": "record_topics",
+            "interface_type": "sensor_msgs/msg/JointState",
+        }));
+        assert_eq!(port.fields.len(), 2);
+        let mr = port
+            .fields
+            .iter()
+            .find(|f| f.name == "messages_recorded")
+            .unwrap();
+        assert_eq!(mr.kind, FieldKind::Number);
+        let tc = port.fields.iter().find(|f| f.name == "topic_count").unwrap();
+        assert_eq!(tc.kind, FieldKind::Number);
     }
 
     #[test]

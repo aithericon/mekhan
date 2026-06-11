@@ -61,6 +61,7 @@ from moveit_msgs.srv import (
     GetPositionIK,
 )
 from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from rosidl_runtime_py.convert import message_to_ordereddict
 
@@ -147,6 +148,18 @@ _PRIMITIVE_TYPES = {
     "sphere": SolidPrimitive.SPHERE,
     "cylinder": SolidPrimitive.CYLINDER,
 }
+_PRIMITIVE_NAMES = {v: k for k, v in _PRIMITIVE_TYPES.items()}
+
+# Scene-mirror feed (Phase 1, Isaac integration): a declarative FULL SNAPSHOT
+# of the move_group world objects, published as one std_msgs/String JSON
+# payload after every successful scene mutation AND on a slow steady timer.
+# The Isaac scene script subscribes and reconciles its PhysX/USD prims against
+# the latest snapshot, so MoveIt-side objects (work surface, sample boxes)
+# physically exist sim-side. Snapshot semantics (latest-wins, idempotent
+# reconcile) make the feed robust to missed messages — no latched QoS or
+# per-mutation event ordering needed across the DDS container boundary.
+MIRROR_TOPIC = "/aithericon/scene_objects"
+MIRROR_PERIOD_SEC = 2.0
 
 
 class MotionBridge(Node):
@@ -210,6 +223,15 @@ class MotionBridge(Node):
         )
         self._release_srv = self.create_service(
             Release, "/release", self._handle_release,
+            callback_group=self._cb_group,
+        )
+
+        # Phase 1 scene mirror: snapshot publisher + steady reconcile timer.
+        # Depth 1 — only the LATEST snapshot matters to a reconciling consumer.
+        self._mirror_pub = self.create_publisher(String, MIRROR_TOPIC, 1)
+        self._mirror_seq = 0
+        self._mirror_timer = self.create_timer(
+            MIRROR_PERIOD_SEC, self._publish_scene_mirror,
             callback_group=self._cb_group,
         )
 
@@ -411,6 +433,118 @@ class MotionBridge(Node):
             return False, "%s rejected the scene diff" % APPLY_SCENE_SERVICE
         return True, ""
 
+    # ---- Phase 1: Isaac scene mirror --------------------------------------
+
+    @staticmethod
+    def _pose_to_dict(pose):
+        """geometry_msgs/Pose -> plain JSON dict."""
+        return {
+            "position": {
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "z": float(pose.position.z),
+            },
+            "orientation": {
+                "x": float(pose.orientation.x),
+                "y": float(pose.orientation.y),
+                "z": float(pose.orientation.z),
+                "w": float(pose.orientation.w),
+            },
+        }
+
+    @staticmethod
+    def _compose_pose(origin, child):
+        """Compose origin ∘ child (both geometry_msgs/Pose) into a JSON dict.
+
+        MoveIt NORMALIZES collision objects on GET: the world transform rides
+        the top-level `pose` and `primitive_poses` come back identity — but a
+        freshly-applied diff may still carry the transform in the primitive
+        pose, so composing both is correct either way.
+        """
+        if child is None:
+            return MotionBridge._pose_to_dict(origin)
+        # Quaternion q1 ⊗ q2 (origin then child), Hamilton convention.
+        q1 = origin.orientation
+        q2 = child.orientation
+        qw = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
+        qx = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y
+        qy = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x
+        qz = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w
+        # Rotate child position by origin orientation: v' = q v q*.
+        vx, vy, vz = child.position.x, child.position.y, child.position.z
+        tx = 2.0 * (q1.y * vz - q1.z * vy)
+        ty = 2.0 * (q1.z * vx - q1.x * vz)
+        tz = 2.0 * (q1.x * vy - q1.y * vx)
+        rx = vx + q1.w * tx + (q1.y * tz - q1.z * ty)
+        ry = vy + q1.w * ty + (q1.z * tx - q1.x * tz)
+        rz = vz + q1.w * tz + (q1.x * ty - q1.y * tx)
+        return {
+            "position": {
+                "x": float(origin.position.x + rx),
+                "y": float(origin.position.y + ry),
+                "z": float(origin.position.z + rz),
+            },
+            "orientation": {
+                "x": float(qx),
+                "y": float(qy),
+                "z": float(qz),
+                "w": float(qw),
+            },
+        }
+
+    def _publish_scene_mirror(self):
+        """Publish the declarative world-object snapshot for the Isaac mirror.
+
+        Best-effort by design: the steady timer re-publishes every
+        MIRROR_PERIOD_SEC, so a failed/skipped snapshot self-heals on the next
+        tick and a reconciling consumer never depends on any single message.
+        """
+        if not self._get_scene_client.service_is_ready():
+            return
+        get_req = GetPlanningScene.Request()
+        get_req.components.components = (
+            PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+            | PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        )
+        try:
+            get_resp = self._get_scene_client.call(get_req)
+        except Exception:  # noqa: BLE001 - mirror is best-effort, never raises
+            return
+        if get_resp is None:
+            return
+
+        objects = []
+        for co in get_resp.scene.world.collision_objects:
+            if not co.primitives:
+                continue
+            prim = co.primitives[0]
+            prim_name = _PRIMITIVE_NAMES.get(prim.type)
+            if prim_name is None:
+                continue  # meshes/planes are not mirrored (Phase 1: primitives)
+            child = co.primitive_poses[0] if co.primitive_poses else None
+            objects.append({
+                "id": co.id,
+                "primitive": prim_name,
+                "dimensions": [float(d) for d in prim.dimensions],
+                "frame": co.header.frame_id or DEFAULT_FRAME,
+                "pose": self._compose_pose(co.pose, child),
+            })
+        attached = [
+            a.object.id
+            for a in get_resp.scene.robot_state.attached_collision_objects
+        ]
+
+        self._mirror_seq += 1
+        msg = String()
+        msg.data = json.dumps({
+            "schema": 1,
+            "seq": self._mirror_seq,
+            "objects": objects,
+            "attached": attached,
+        })
+        self._mirror_pub.publish(msg)
+
     def _handle_add_object(self, req, resp):
         prim_key = (req.primitive or "").strip().lower()
         if prim_key not in _PRIMITIVE_TYPES:
@@ -450,6 +584,7 @@ class MotionBridge(Node):
             "add_object ok: id=%s primitive=%s frame=%s"
             % (req.object_id, prim_key, frame)
         )
+        self._publish_scene_mirror()
         return resp
 
     def _handle_remove_object(self, req, resp):
@@ -473,6 +608,7 @@ class MotionBridge(Node):
         resp.success = True
         resp.error_message = ""
         self.get_logger().info("remove_object ok: id=%s" % req.object_id)
+        self._publish_scene_mirror()
         return resp
 
     def _handle_clear_scene(self, req, resp):
@@ -561,6 +697,7 @@ class MotionBridge(Node):
         self.get_logger().info(
             "clear_scene ok: removed=%d" % resp.removed_count
         )
+        self._publish_scene_mirror()
         return resp
 
     # ---- S2: Cartesian planning -----------------------------------------
@@ -849,6 +986,7 @@ class MotionBridge(Node):
                 "" if gripper_ok else " (gripper skipped)",
             )
         )
+        self._publish_scene_mirror()
         return resp
 
     def _handle_release(self, req, resp):
@@ -894,6 +1032,7 @@ class MotionBridge(Node):
                 "" if gripper_ok else " (gripper skipped)",
             )
         )
+        self._publish_scene_mirror()
         return resp
 
 

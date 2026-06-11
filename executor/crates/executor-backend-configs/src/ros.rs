@@ -25,8 +25,12 @@ use serde::{Deserialize, Serialize};
 /// goal to an action server. `MonitorScene` polls move_group's
 /// `/get_planning_scene` on a cadence for a bounded duration and streams each
 /// snapshot onto a DATA channel — a live planning-scene twin DECOUPLED from
-/// any single motion, so one monitor can watch a whole multi-step run. This is
-/// the source of truth for which rosbridge op the backend issues.
+/// any single motion, so one monitor can watch a whole multi-step run.
+/// `RecordTopics` subscribes to one or more topics for a bounded window and
+/// streams every received message as a timestamped NDJSON line onto a DATA
+/// channel — the experiment-capture primitive: a downstream consumer tees the
+/// stream into a persisted artifact (no rosbag anywhere). This is the source
+/// of truth for which rosbridge op the backend issues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +41,20 @@ pub enum RosOperation {
     AwaitTopic,
     SendActionGoal,
     MonitorScene,
+    RecordTopics,
+}
+
+/// One additional topic a `record_topics` op subscribes to, beyond the primary
+/// `interface_name`/`interface_type` pair. Rosbridge needs the concrete ROS
+/// type to set up each ROS2 subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+pub struct RecordTopicSpec {
+    /// The topic name, e.g. `/isaac_joint_states`.
+    pub name: String,
+    /// The ROS message type, e.g. `sensor_msgs/msg/JointState`.
+    #[serde(alias = "type")]
+    pub message_type: String,
 }
 
 /// Configuration for a single ROS interaction job.
@@ -78,27 +96,37 @@ pub struct RosConfig {
     pub scene_stream_ms: Option<u64>,
 
     /// How long a `monitor_scene` op keeps polling `/get_planning_scene` (in
-    /// milliseconds) before it closes its data channel. Decouples the
+    /// milliseconds) before it closes its data channel — and equally the
+    /// recording window for a `record_topics` op. Decouples the
     /// planning-scene twin from any single motion: a monitor sized to outlast
     /// the run streams the WHOLE multi-step session (arm picking/placing several
     /// samples) to one twin. `None`/absent ⇒ the op runs until its `timeout_ms`
     /// (so it always terminates). With `stop_topic` set this is only a FAILSAFE
-    /// ceiling — the monitor normally stops the moment the work branch signals
-    /// it. Ignored by the non-monitor operations.
+    /// ceiling — the monitor/recorder normally stops the moment the work branch
+    /// signals it. Ignored by the other operations.
     #[serde(default)]
     pub scene_duration_ms: Option<u64>,
 
-    /// `monitor_scene` STOP signal: a ROS topic the monitor subscribes to and
-    /// breaks its poll loop on the FIRST message it receives, closing the data
-    /// channel cleanly. This makes a continuous monitor's lifetime track the
-    /// WORK it watches instead of a guessed `scene_duration_ms` timer — the work
-    /// branch publishes one `std_msgs/msg/Bool` here when its last step finishes,
-    /// the monitor stops within one poll, and the sibling `join` fires
-    /// immediately (no idle wait for the timer). `None`/absent ⇒ the monitor only
-    /// stops on `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the
-    /// non-monitor operations.
+    /// `monitor_scene` / `record_topics` STOP signal: a ROS topic the op
+    /// subscribes to and breaks its loop on the FIRST message it receives,
+    /// closing the data channel cleanly. This makes a continuous monitor's (or
+    /// recorder's) lifetime track the WORK it watches instead of a guessed
+    /// `scene_duration_ms` timer — the work branch publishes one
+    /// `std_msgs/msg/Bool` here when its last step finishes, the op stops
+    /// within one poll, and the sibling `join` fires immediately (no idle wait
+    /// for the timer). `None`/absent ⇒ the op only stops on
+    /// `scene_duration_ms`/`timeout_ms`/cancel. Ignored by the other
+    /// operations.
     #[serde(default)]
     pub stop_topic: Option<String>,
+
+    /// `record_topics` ONLY: additional topics to record beyond the primary
+    /// `interface_name`/`interface_type` pair. The recorder subscribes to the
+    /// union (deduped by topic name) and stamps every NDJSON line with its
+    /// source topic, so one recorder captures a whole experiment's signal set.
+    /// Ignored by the other operations.
+    #[serde(default)]
+    pub topics: Option<Vec<RecordTopicSpec>>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -120,6 +148,7 @@ mod tests {
             scene_stream_ms: None,
             scene_duration_ms: None,
             stop_topic: None,
+            topics: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let de: RosConfig = serde_json::from_str(&json).unwrap();
@@ -219,5 +248,38 @@ mod tests {
         }"#;
         let cfg: RosConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.stop_topic, None);
+    }
+
+    #[test]
+    fn record_topics_op_and_topics_parse() {
+        // The full shape: primary topic on interface_name/_type, extra topics
+        // in `topics` (accepting both `message_type` and the `type` alias).
+        let json = r#"{
+            "operation": "record_topics",
+            "interface_name": "/isaac_joint_states",
+            "interface_type": "sensor_msgs/msg/JointState",
+            "scene_duration_ms": 60000,
+            "stop_topic": "/aithericon/record_stop",
+            "topics": [
+                { "name": "/isaac_joint_commands", "message_type": "sensor_msgs/msg/JointState" },
+                { "name": "/tf", "type": "tf2_msgs/msg/TFMessage" }
+            ]
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.operation, RosOperation::RecordTopics);
+        let topics = cfg.topics.unwrap();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(topics[0].name, "/isaac_joint_commands");
+        assert_eq!(topics[1].message_type, "tf2_msgs/msg/TFMessage");
+
+        // Omitted `topics` → None (single-topic recording needs no new fields).
+        let json = r#"{
+            "operation": "record_topics",
+            "interface_name": "/isaac_joint_states",
+            "interface_type": "sensor_msgs/msg/JointState"
+        }"#;
+        let cfg: RosConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.operation, RosOperation::RecordTopics);
+        assert_eq!(cfg.topics, None);
     }
 }

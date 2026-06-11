@@ -46,6 +46,10 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       FASTRTPS_DEFAULT_PROFILES_FILE: /profiles/fastdds-udp-only.xml
       XARM_URDF: /assets/xarm6_isaac.urdf
+      # Phase 1 scene mirror: "0" = mirrored MoveIt objects are visual-only
+      # prims; "1" adds static colliders (see isaac_xarm_scene.py header for
+      # why off is the safe default while grasping is scene-attach).
+      MIRROR_COLLIDERS: ${MIRROR_COLLIDERS:-0}
     # Pin Isaac to ONE GPU (device 0 = an RTX 3080 on hydra-2; the Titan X
     # Pascal at index 1 has no RT cores and must not be picked up).
     deploy:
