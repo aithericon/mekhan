@@ -1957,6 +1957,62 @@
         }
       }
     },
+    "/api/v1/catalogue/facets": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/v1/catalogue/facets",
+        "description": "Group-by buckets (count + bytes) over the scoped catalogue. The `column`\nand `classification` dimensions unnest the probe metadata (`column_names` /\nper-column `classifications`); counts there are ENTRIES having the key.",
+        "operationId": "facets",
+        "parameters": [
+          {
+            "name": "group_by",
+            "in": "query",
+            "description": "Dimension to group by:\n`format|category|mime_type|source_net|process_step|column|classification`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max buckets returned (default 30, clamped 1..=200). Totals always\ncover the whole scope.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facet buckets + scope totals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown group_by or invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalogue/lineage/{process_id}": {
       "get": {
         "tags": [
@@ -1982,6 +2038,228 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LineageResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalogue/query-fields": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/v1/catalogue/query-fields",
+        "description": "The query-surface registry: filterable native + virtual `meta.*` fields\n(with type + sortability), `file_metadata` containment idioms, and the\nvalid facet dimensions. Served FROM the same registry that compiles\nWHERE/ORDER BY, so the frontend field picker cannot drift.",
+        "operationId": "query_fields",
+        "responses": {
+          "200": {
+            "description": "Filter/sort/containment/facet registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryFieldsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalogue/saved-queries": {
+      "get": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "GET /api/v1/catalogue/saved-queries — list saved queries, newest first.",
+        "operationId": "list_saved_queries",
+        "responses": {
+          "200": {
+            "description": "Saved queries, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedQuery"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "POST /api/v1/catalogue/saved-queries — create a saved query.",
+        "operationId": "create_saved_query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedQueryCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQuery"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalogue/saved-queries/{id}": {
+      "delete": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "DELETE /api/v1/catalogue/saved-queries/{id}.",
+        "operationId": "delete_saved_query",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Saved query id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "catalogue"
+        ],
+        "summary": "PATCH /api/v1/catalogue/saved-queries/{id} — update any subset of fields.",
+        "operationId": "update_saved_query",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Saved query id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedQueryUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQuery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -15130,6 +15408,27 @@
           "exists"
         ]
       },
+      "ContainmentTermDesc": {
+        "type": "object",
+        "description": "One `file_metadata` containment idiom (the `file_metadata=` query param).",
+        "required": [
+          "term",
+          "description",
+          "example"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "example": {
+            "type": "string",
+            "description": "A literal `file_metadata=` JSON value demonstrating the idiom."
+          },
+          "term": {
+            "type": "string"
+          }
+        }
+      },
       "ContextStrategy": {
         "type": "string",
         "description": "Context-window management strategy for an [`WorkflowNodeData::Agent`].\nInert in PR 1's degenerate path; declared upfront so the type stays\nstable across the follow-up loop-lowering PR (`docs/12` § 3).",
@@ -17080,6 +17379,57 @@
           "single",
           "batch"
         ]
+      },
+      "FacetBucket": {
+        "type": "object",
+        "description": "One facet bucket: key + entry count + summed entry bytes.",
+        "required": [
+          "key",
+          "count",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "FacetsResponse": {
+        "type": "object",
+        "description": "Facet buckets + totals over the SAME scope (totals cover the whole scope,\nnot just the returned buckets).",
+        "required": [
+          "group_by",
+          "buckets",
+          "total_count",
+          "total_bytes"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FacetBucket"
+            }
+          },
+          "group_by": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "FailingTestInfo": {
         "type": "object",
@@ -23800,6 +24150,73 @@
           }
         }
       },
+      "QueryFieldDesc": {
+        "type": "object",
+        "description": "One filterable field, described for the frontend field picker.",
+        "required": [
+          "name",
+          "value_type",
+          "sortable",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Wire name: `filter[<name>][op]=` / `sort=<name>`."
+          },
+          "sortable": {
+            "type": "boolean",
+            "description": "Whether `sort=<name>` is accepted."
+          },
+          "value_type": {
+            "type": "string",
+            "description": "`text` | `number` | `timestamp` | `boolean`."
+          }
+        }
+      },
+      "QueryFieldsResponse": {
+        "type": "object",
+        "description": "The full query-surface registry served by `GET /api/v1/catalogue/query-fields`.",
+        "required": [
+          "native",
+          "meta",
+          "containment",
+          "facet_dimensions"
+        ],
+        "properties": {
+          "containment": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainmentTermDesc"
+            },
+            "description": "JSONB containment idioms for the `file_metadata=` param."
+          },
+          "facet_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Valid `group_by` values for `GET /api/v1/catalogue/facets`."
+          },
+          "meta": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryFieldDesc"
+            },
+            "description": "Virtual `meta.*` fields projected from `file_metadata`."
+          },
+          "native": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryFieldDesc"
+            },
+            "description": "Native catalogue columns."
+          }
+        }
+      },
       "ReconcileBatchRequest": {
         "type": "object",
         "description": "Body of `POST /api/v1/inventory/reconcile-batch`.\n\nThe FOLD TARGET a crawl driver calls with one server's observed batch\n(`{path,size,mtime}` — no hash). The live crawl→driver transport is Phase 6.",
@@ -25014,6 +25431,98 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "SavedQuery": {
+        "type": "object",
+        "description": "A saved catalogue query.",
+        "required": [
+          "id",
+          "name",
+          "q",
+          "params",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "params": {
+            "description": "Free-form UI state side-car."
+          },
+          "q": {
+            "type": "string",
+            "description": "The raw catalogue list query string (e.g.\n`filter[meta.format][eq]=csv&sort=-meta.num_rows`)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SavedQueryCreate": {
+        "type": "object",
+        "description": "Create payload for a saved query.",
+        "required": [
+          "name",
+          "q"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "params": {
+            "description": "Defaults to `{}`."
+          },
+          "q": {
+            "type": "string"
+          }
+        }
+      },
+      "SavedQueryUpdate": {
+        "type": "object",
+        "description": "Patch payload — every field optional; only provided fields are updated.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "params": {},
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

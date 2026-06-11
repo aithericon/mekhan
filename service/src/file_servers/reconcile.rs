@@ -570,9 +570,14 @@ mod tests {
             "a/x.txt",
             ReadOutcome::Present(b"DIFFERENT".to_vec()),
         )]);
-        let r = probe_endpoint(&reader, &ep("local_mount"), &[s.clone()], &HashMap::new())
-            .await
-            .unwrap();
+        let r = probe_endpoint(
+            &reader,
+            &ep("local_mount"),
+            std::slice::from_ref(&s),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.verification_status, "mismatch");
         assert_eq!(r.mismatched, 1);
         assert_eq!(r.passed, 0);

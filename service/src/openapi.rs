@@ -362,6 +362,18 @@ use utoipa::OpenApi;
             crate::catalogue::metadata_view::PreviewView,
             crate::catalogue::metadata_view::DataQualityView,
             crate::catalogue::metadata_view::ColumnQualityView,
+            // Catalogue query layer — facet buckets ride inside
+            // `FacetsResponse.buckets: Vec<_>` and the query-fields registry
+            // nests its DTOs in Vec<_>, which auto-discovery doesn't fully
+            // walk; register everything explicitly for frontend codegen.
+            crate::catalogue::facets::FacetBucket,
+            crate::catalogue::facets::FacetsResponse,
+            crate::catalogue::queries::QueryFieldDesc,
+            crate::catalogue::queries::ContainmentTermDesc,
+            crate::catalogue::queries::QueryFieldsResponse,
+            crate::catalogue::saved_queries::SavedQuery,
+            crate::catalogue::saved_queries::SavedQueryCreate,
+            crate::catalogue::saved_queries::SavedQueryUpdate,
         ),
     ),
     tags(

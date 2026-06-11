@@ -1,20 +1,21 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { listDataEntries, type DataEntry, type DataEntriesResponse } from '$lib/api/data';
 	import {
-		getCatalogueStats,
-		getCatalogueDistinct,
-		getCatalogueDistinctJsonb,
-		type CatalogueStats
-	} from '$lib/api/client';
+		listDataEntries,
+		getCatalogueQueryFields,
+		type DataEntry,
+		type DataEntriesResponse
+	} from '$lib/api/data';
+	import { getCatalogueStats, type CatalogueStats } from '$lib/api/client';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { formatBytes } from './format';
+	import { parseQuery, compileQuery, formatQuery, addTerm } from './query-language';
+	import QueryBar from './QueryBar.svelte';
+	import FacetStrip from './FacetStrip.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import { Separator } from '$lib/components/ui/separator';
 	import * as Select from '$lib/components/ui/select';
-	import Search from '@lucide/svelte/icons/search';
 	import FileBox from '@lucide/svelte/icons/file-box';
 	import HardDrive from '@lucide/svelte/icons/hard-drive';
 	import BarChart3 from '@lucide/svelte/icons/bar-chart-3';
@@ -34,18 +35,56 @@
 	let error = $state<string | null>(null);
 	let page = $state(0);
 
-	// Filters
-	let activeCategory = $state('all');
-	let searchQuery = $state('');
-	let sourceNetFilter = $state('');
-	let formatFilter = $state('');
-	let schemaFilter = $state('');
+	// ── ONE source of truth for the filter state: the query text (?q=) ───────
+	let queryText = $state(
+		browser ? (new URLSearchParams(window.location.search).get('q') ?? '') : ''
+	);
 	let sortField = $state('-created_at');
 
-	// Dynamic dropdown facets (from the catalogue distinct endpoints).
-	let sourceNets = $state<string[]>([]);
-	let categories = $state<string[]>([]);
-	let formats = $state<string[]>([]);
+	// Known filter fields for the QueryBar's unknown-field validation — the
+	// server registry (native + meta names), fetched once.
+	let knownFields = $state<Set<string> | null>(null);
+	$effect(() => {
+		getCatalogueQueryFields()
+			.then((r) => {
+				knownFields = new Set([...r.native, ...r.meta].map((f) => f.name));
+			})
+			.catch(() => {});
+	});
+
+	function syncUrl(text: string) {
+		if (!browser) return;
+		const url = new URL(window.location.href);
+		if (text.trim()) url.searchParams.set('q', text);
+		else url.searchParams.delete('q');
+		history.replaceState(null, '', url.toString());
+	}
+
+	/** Apply new query text: reset paging + sync ?q= (same pattern as ?inspect). */
+	function applyQuery(text: string) {
+		queryText = text;
+		page = 0;
+		syncUrl(text);
+	}
+
+	function addAndApply(term: string) {
+		applyQuery(addTerm(queryText, term));
+	}
+
+	// ── Category pills write/remove a `category:x` term on the query text ────
+	const activeCategory = $derived.by(() => {
+		const { terms } = parseQuery(queryText);
+		const t = terms.find((t) => t.kind === 'filter' && t.field === 'category' && t.op === 'eq');
+		return t && t.kind === 'filter' ? t.value : 'all';
+	});
+
+	function setCategory(cat: string) {
+		const p = parseQuery(queryText);
+		const kept = p.terms.filter((t) => !(t.kind === 'filter' && t.field === 'category'));
+		let text = [formatQuery(kept), ...p.errors.map((e) => e.raw)].filter(Boolean).join(' ');
+		if (cat !== 'all') text = addTerm(text, `category:${cat}`);
+		applyQuery(text);
+	}
 
 	// Inspected artifact — driven by ?inspect= query param (parity w/ old page).
 	let inspectId = $state<string | null>(
@@ -59,10 +98,15 @@
 		{ value: '-size_bytes', label: 'Largest first' },
 		{ value: 'size_bytes', label: 'Smallest first' },
 		{ value: 'name', label: 'Name A-Z' },
-		{ value: '-name', label: 'Name Z-A' }
+		{ value: '-name', label: 'Name Z-A' },
+		{ value: '-meta.num_rows', label: 'Most rows' },
+		{ value: '-meta.completeness', label: 'Most complete' }
 	];
 
-	const categoryColors = ['model', 'dataset', 'plot', 'log', 'checkpoint', 'config', 'metric', 'legacy', 'other'];
+	const fallbackCategories = ['model', 'dataset', 'plot', 'log', 'checkpoint', 'config', 'metric', 'legacy', 'other'];
+	const categories = $derived(
+		stats && stats.by_category.length > 0 ? stats.by_category.map((c) => c.category) : fallbackCategories
+	);
 
 	const statusColors: Record<string, string> = {
 		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
@@ -88,26 +132,17 @@
 		}
 	}
 
-	function resetPage() {
-		page = 0;
-	}
-
-	async function load(
-		cat: string, search: string, net: string, fmt: string, schema: string, sort: string, pg: number
-	) {
+	async function load(q: string, sort: string, pg: number) {
 		loading = true;
 		error = null;
 		try {
-			const fmObj: Record<string, unknown> = {};
-			if (fmt) fmObj.format = fmt;
-			if (schema) fmObj.schema_fingerprint = { digest: schema };
-			const fileMetaFilter = Object.keys(fmObj).length > 0 ? JSON.stringify(fmObj) : undefined;
+			// Parse errors are excluded from `terms` — fetch with the valid ones.
+			const compiled = compileQuery(parseQuery(q).terms);
 			const [listResult, statsResult] = await Promise.all([
 				listDataEntries({
-					category: cat === 'all' ? undefined : cat,
-					search: search.trim() || undefined,
-					source_net: net.trim() || undefined,
-					file_metadata: fileMetaFilter,
+					search: compiled.search,
+					filters: compiled.filters,
+					file_metadata: compiled.fileMetadata ? JSON.stringify(compiled.fileMetadata) : undefined,
 					sort,
 					page: pg,
 					page_size: 25
@@ -124,32 +159,12 @@
 		}
 	}
 
-	async function loadDropdowns() {
-		try {
-			const [nets, cats, fmts] = await Promise.all([
-				getCatalogueDistinct('source_net'),
-				getCatalogueDistinct('category'),
-				getCatalogueDistinctJsonb('file_metadata', 'format')
-			]);
-			sourceNets = nets;
-			categories = cats;
-			formats = fmts;
-		} catch {
-			// Non-fatal — dropdowns just stay empty.
-		}
-	}
-
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	$effect(() => {
-		const cat = activeCategory, search = searchQuery, net = sourceNetFilter;
-		const fmt = formatFilter, schema = schemaFilter, sort = sortField, pg = page;
+		const q = queryText, sort = sortField, pg = page;
 		clearTimeout(debounce);
-		debounce = setTimeout(() => load(cat, search, net, fmt, schema, sort, pg), 300);
+		debounce = setTimeout(() => load(q, sort, pg), 300);
 		return () => clearTimeout(debounce);
-	});
-
-	$effect(() => {
-		loadDropdowns();
 	});
 </script>
 
@@ -177,7 +192,7 @@
 			</div>
 			<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
 				{#each stats.by_category as cat}
-					<button class="text-sm text-muted-foreground hover:text-foreground" onclick={() => { activeCategory = cat.category; resetPage(); }}>
+					<button class="text-sm text-muted-foreground hover:text-foreground" onclick={() => setCategory(cat.category)}>
 						{cat.category}: <span class="font-semibold text-foreground">{cat.count}</span>
 					</button>
 				{/each}
@@ -188,65 +203,36 @@
 
 <Separator class="mb-4" />
 
-<!-- Filters -->
+<!-- Filters: category pills + sort, then the query bar, then the facet strip -->
 <div class="mb-4 space-y-3">
-	<div class="flex flex-wrap gap-1">
-		<Button variant={activeCategory === 'all' ? 'default' : 'ghost'} size="sm" onclick={() => { activeCategory = 'all'; resetPage(); }}>All</Button>
-		{#each (categories.length > 0 ? categories : categoryColors) as cat}
-			<Button variant={activeCategory === cat ? 'default' : 'ghost'} size="sm" onclick={() => { activeCategory = cat; resetPage(); }}>
-				{cat.charAt(0).toUpperCase() + cat.slice(1)}
-			</Button>
-		{/each}
-	</div>
-
 	<div class="flex flex-wrap items-center gap-2">
-		<div class="relative min-w-[14rem] flex-1">
-			<Search class="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-			<Input type="text" placeholder="Search name or content hash…" class="h-8 pl-8 text-sm" bind:value={searchQuery} oninput={resetPage} data-testid="data-search" />
+		<div class="flex flex-wrap gap-1">
+			<Button variant={activeCategory === 'all' ? 'default' : 'ghost'} size="sm" onclick={() => setCategory('all')}>All</Button>
+			{#each categories as cat}
+				<Button variant={activeCategory === cat ? 'default' : 'ghost'} size="sm" onclick={() => setCategory(cat)}>
+					{cat.charAt(0).toUpperCase() + cat.slice(1)}
+				</Button>
+			{/each}
 		</div>
 
-		{#if sourceNets.length > 0}
-			<Select.Root type="single" value={sourceNetFilter} onValueChange={(v) => { sourceNetFilter = v ?? ''; resetPage(); }}>
-				<Select.Trigger class="h-8 w-44 text-sm">{sourceNetFilter || 'All nets'}</Select.Trigger>
+		<div class="ml-auto">
+			<Select.Root type="single" value={sortField} onValueChange={(v) => { if (v) { sortField = v; page = 0; } }}>
+				<Select.Trigger class="h-8 w-44 text-sm">
+					<div class="flex items-center gap-1.5">
+						<ArrowUpDown class="size-3.5 text-muted-foreground" />
+						{sortOptions.find((o) => o.value === sortField)?.label ?? 'Sort'}
+					</div>
+				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All nets" />
-					{#each sourceNets as net}<Select.Item value={net} label={net} />{/each}
+					{#each sortOptions as opt}<Select.Item value={opt.value} label={opt.label} />{/each}
 				</Select.Content>
 			</Select.Root>
-		{/if}
-
-		{#if formats.length > 0}
-			<Select.Root type="single" value={formatFilter} onValueChange={(v) => { formatFilter = v ?? ''; resetPage(); }}>
-				<Select.Trigger class="h-8 w-28 text-sm">{formatFilter || 'All formats'}</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="All formats" />
-					{#each formats as fmt}<Select.Item value={fmt} label={fmt} />{/each}
-				</Select.Content>
-			</Select.Root>
-		{/if}
-
-		<Select.Root type="single" value={sortField} onValueChange={(v) => { if (v) { sortField = v; resetPage(); } }}>
-			<Select.Trigger class="h-8 w-40 text-sm">
-				<div class="flex items-center gap-1.5">
-					<ArrowUpDown class="size-3.5 text-muted-foreground" />
-					{sortOptions.find((o) => o.value === sortField)?.label ?? 'Sort'}
-				</div>
-			</Select.Trigger>
-			<Select.Content>
-				{#each sortOptions as opt}<Select.Item value={opt.value} label={opt.label} />{/each}
-			</Select.Content>
-		</Select.Root>
+		</div>
 	</div>
 
-	{#if schemaFilter}
-		<div class="flex items-center gap-2">
-			<span class="text-sm text-muted-foreground">Schema filter:</span>
-			<Badge variant="secondary" class="gap-1 font-mono text-sm">
-				{schemaFilter.slice(0, 12)}
-				<button class="ml-1 hover:text-foreground" onclick={() => { schemaFilter = ''; resetPage(); }}>&times;</button>
-			</Badge>
-		</div>
-	{/if}
+	<QueryBar value={queryText} onApply={applyQuery} {knownFields} />
+
+	<FacetStrip query={queryText} onAdd={addAndApply} />
 </div>
 
 {#if error}
@@ -271,8 +257,8 @@
 				expanded={inspectId === key}
 				highlighted={inspectId === key}
 				onToggle={() => toggleInspect(key)}
-				onSchemaClick={(digest) => { schemaFilter = digest; resetPage(); }}
-				onNetClick={(net) => { sourceNetFilter = net; resetPage(); }}
+				onSchemaClick={(digest) => addAndApply(`meta.schema:${digest}`)}
+				onNetClick={(net) => addAndApply(`source_net:${net}`)}
 				onViewServer={(key) => onViewServer(key)}
 			/>
 		{/each}
