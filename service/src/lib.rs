@@ -699,6 +699,16 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::object_grants::put_instance_grant,
             handlers::object_grants::delete_instance_grant
         ))
+        .routes(routes!(handlers::object_grants::list_resource_grants))
+        .routes(routes!(
+            handlers::object_grants::put_resource_grant,
+            handlers::object_grants::delete_resource_grant
+        ))
+        .routes(routes!(handlers::object_grants::list_asset_grants))
+        .routes(routes!(
+            handlers::object_grants::put_asset_grant,
+            handlers::object_grants::delete_asset_grant
+        ))
         // Folders — single-parent hierarchical grouping of templates within
         // a workspace (filesystem model). Not an ACL boundary.
         .routes(routes!(handlers::folders::list_workspace_tags))

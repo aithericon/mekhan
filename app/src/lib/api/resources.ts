@@ -68,6 +68,10 @@ export interface ListResourcesParams {
 	perPage?: number;
 	resource_type?: string;
 	workspace_id?: string;
+	/** Placement scope token: `workspace`, `folder:<uuid>`, or `template:<uuid>`.
+	 *  When set, returns the downward-visible (most-specific-wins) set for that
+	 *  context instead of the flat workspace list. */
+	scope?: string;
 }
 
 export async function listResources(params?: ListResourcesParams): Promise<PaginatedResources> {
@@ -78,7 +82,8 @@ export async function listResources(params?: ListResourcesParams): Promise<Pagin
 					page: params?.page ?? 1,
 					per_page: params?.perPage ?? 20,
 					resource_type: params?.resource_type,
-					workspace_id: params?.workspace_id
+					workspace_id: params?.workspace_id,
+					scope: params?.scope
 				}
 			}
 		})

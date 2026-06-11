@@ -443,3 +443,21 @@ grant_routes!(
     "/api/v1/instances/{id}/grants/{user_id}",
     "instances"
 );
+grant_routes!(
+    ObjectKind::Resource,
+    list_resource_grants,
+    put_resource_grant,
+    delete_resource_grant,
+    "/api/v1/resources/{id}/grants",
+    "/api/v1/resources/{id}/grants/{user_id}",
+    "resources"
+);
+grant_routes!(
+    ObjectKind::Asset,
+    list_asset_grants,
+    put_asset_grant,
+    delete_asset_grant,
+    "/api/v1/assets/{id}/grants",
+    "/api/v1/assets/{id}/grants/{user_id}",
+    "assets"
+);

@@ -35,8 +35,8 @@ client.use(sessionExpiryMiddleware);
 export type GrantView = components['schemas']['GrantView'];
 export type PutGrantRequest = components['schemas']['PutGrantRequest'];
 
-/** The three kinds the grant routes are defined for. */
-export type ObjectType = 'folder' | 'template' | 'instance';
+/** The object kinds the grant routes are defined for. */
+export type ObjectType = 'folder' | 'template' | 'instance' | 'resource' | 'asset';
 
 /** Effective-role rank for client-side gating. Higher = more privilege.
  *  Mirrors the backend `Role` ordering. */
@@ -66,12 +66,16 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
 const LIST_PATHS = {
 	folder: '/api/v1/folders/{id}/grants',
 	template: '/api/v1/templates/{id}/grants',
-	instance: '/api/v1/instances/{id}/grants'
+	instance: '/api/v1/instances/{id}/grants',
+	resource: '/api/v1/resources/{id}/grants',
+	asset: '/api/v1/assets/{id}/grants'
 } as const;
 const ITEM_PATHS = {
 	folder: '/api/v1/folders/{id}/grants/{user_id}',
 	template: '/api/v1/templates/{id}/grants/{user_id}',
-	instance: '/api/v1/instances/{id}/grants/{user_id}'
+	instance: '/api/v1/instances/{id}/grants/{user_id}',
+	resource: '/api/v1/resources/{id}/grants/{user_id}',
+	asset: '/api/v1/assets/{id}/grants/{user_id}'
 } as const;
 
 // ── Object grants ────────────────────────────────────────────────────────────

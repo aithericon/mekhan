@@ -26,6 +26,8 @@
 	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
 	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
 	import FolderSettingsPanel from '$lib/components/folders/FolderSettingsPanel.svelte';
+	import ResourceList from '$lib/components/resources/ResourceList.svelte';
+	import AssetList from '$lib/components/assets/AssetList.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
@@ -511,6 +513,12 @@
 											<Tabs.Trigger variant="underline" value="templates" data-testid="tab-templates">
 												Templates
 											</Tabs.Trigger>
+											<Tabs.Trigger variant="underline" value="resources" data-testid="tab-resources">
+												Resources
+											</Tabs.Trigger>
+											<Tabs.Trigger variant="underline" value="assets" data-testid="tab-assets">
+												Assets
+											</Tabs.Trigger>
 											<Tabs.Trigger variant="underline" value="settings" data-testid="tab-settings">
 												Settings
 											</Tabs.Trigger>
@@ -521,6 +529,12 @@
 									</Tabs.Content>
 									<Tabs.Content value="templates" class="pt-4">
 										<FolderTemplatesPanel folderId={selected.id} />
+									</Tabs.Content>
+									<Tabs.Content value="resources" class="pt-4">
+										<ResourceList workspace_id={selected.workspace_id} folderId={selected.id} />
+									</Tabs.Content>
+									<Tabs.Content value="assets" class="pt-4">
+										<AssetList pinnedFolderId={selected.id} />
 									</Tabs.Content>
 									<Tabs.Content value="settings" class="pt-4">
 										<FolderSettingsPanel folder={selected} onUpdated={handleUpdated} />

@@ -288,6 +288,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assets/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_asset_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_asset_grant"];
+        post?: never;
+        delete: operations["delete_asset_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets/{id}/import-csv": {
         parameters: {
             query?: never;
@@ -2957,6 +2989,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_resource_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{id}/grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_resource_grant"];
+        post?: never;
+        delete: operations["delete_resource_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/resources/{id}/rotate": {
         parameters: {
             query?: never;
@@ -4948,6 +5012,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             /**
+             * @description The caller's effective object role on this asset — drives edit/share
+             *     gating. NOT a DB column — stamped by the handler.
+             */
+            my_effective_role?: string | null;
+            /**
              * Format: int64
              * @description Total record count for the current version (for pagination).
              */
@@ -4955,6 +5024,8 @@ export interface components {
             /** @description The current-version records (paged). Each is a validated JSONB row. */
             records: unknown[];
             ref_key: string;
+            /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+            restricted?: boolean;
             /** Format: uuid */
             scope_id: string;
             scope_kind: string;
@@ -5002,7 +5073,14 @@ export interface components {
             display_path?: string | null;
             /** Format: uuid */
             id: string;
+            /**
+             * @description The caller's effective object role on this asset — drives edit/share
+             *     gating. NOT a DB column — stamped by the handler.
+             */
+            my_effective_role?: string | null;
             ref_key: string;
+            /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+            restricted?: boolean;
             /** Format: uuid */
             scope_id: string;
             scope_kind: string;
@@ -6300,6 +6378,8 @@ export interface components {
             display_path?: string | null;
             /** @description Flat identifier, `^[a-z][a-z0-9_]*$`. */
             ref_key: string;
+            /** @description Create the asset `restricted` (private — no workspace-role floor). */
+            restricted?: boolean | null;
             /** Format: uuid */
             scope_id?: string | null;
             scope_kind?: null | components["schemas"]["ScopeKind"];
@@ -6476,6 +6556,19 @@ export interface components {
             path: string;
             /** @description Wire identifier from `ResourceTypeDescriptor.name`. */
             resource_type: string;
+            /** @description Create the resource `restricted` (private — no workspace-role floor). */
+            restricted?: boolean | null;
+            /**
+             * Format: uuid
+             * @description Owner id for a `folder`/`template` scope. Ignored for `workspace`.
+             */
+            scope_id?: string | null;
+            /**
+             * @description Placement scope (docs/20 §2): `workspace` (default), `folder`, or
+             *     `template`. Folder/template placement makes the resource non-
+             *     workspace-wide and is the inheritance parent for the object ACL.
+             */
+            scope_kind?: string | null;
             /**
              * Format: uuid
              * @description Optional workspace scoping. No `workspaces` table exists in v1; a
@@ -9119,7 +9212,14 @@ export interface components {
                 display_path?: string | null;
                 /** Format: uuid */
                 id: string;
+                /**
+                 * @description The caller's effective object role on this asset — drives edit/share
+                 *     gating. NOT a DB column — stamped by the handler.
+                 */
+                my_effective_role?: string | null;
                 ref_key: string;
+                /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+                restricted?: boolean;
                 /** Format: uuid */
                 scope_id: string;
                 scope_kind: string;
@@ -9373,6 +9473,12 @@ export interface components {
                 id: string;
                 /** Format: int32 */
                 latest_version: number;
+                /**
+                 * @description The caller's effective object role on this resource (folder cascade +
+                 *     override + grants, ws floor unless `restricted`). Drives the editor's
+                 *     edit/share gating. NOT a DB column — stamped by the handler.
+                 */
+                my_effective_role?: string | null;
                 path: string;
                 /**
                  * @description The latest version's public config — populated ONLY for `capacity`
@@ -9384,6 +9490,8 @@ export interface components {
                  */
                 public_config?: unknown;
                 resource_type: string;
+                /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+                restricted?: boolean;
                 /** Format: date-time */
                 updated_at: string;
                 /**
@@ -10469,6 +10577,11 @@ export interface components {
             id: string;
             /** Format: int32 */
             latest_version: number;
+            /**
+             * @description The caller's effective object role on this resource — drives edit/share
+             *     gating. NOT a DB column — stamped by the handler.
+             */
+            my_effective_role?: string | null;
             path: string;
             /**
              * @description Public fields of the latest version, inline. Same shape the resolver
@@ -10481,6 +10594,8 @@ export interface components {
              */
             redacted_secret_fields: string[];
             resource_type: string;
+            /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+            restricted?: boolean;
             /** Format: date-time */
             updated_at: string;
             /**
@@ -10532,6 +10647,12 @@ export interface components {
             id: string;
             /** Format: int32 */
             latest_version: number;
+            /**
+             * @description The caller's effective object role on this resource (folder cascade +
+             *     override + grants, ws floor unless `restricted`). Drives the editor's
+             *     edit/share gating. NOT a DB column — stamped by the handler.
+             */
+            my_effective_role?: string | null;
             path: string;
             /**
              * @description The latest version's public config — populated ONLY for `capacity`
@@ -10543,6 +10664,8 @@ export interface components {
              */
             public_config?: unknown;
             resource_type: string;
+            /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
+            restricted?: boolean;
             /** Format: date-time */
             updated_at: string;
             /**
@@ -13956,6 +14079,153 @@ export interface operations {
                 };
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_asset_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective access list (direct + inherited + workspace) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"][];
+                };
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_asset_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object-admin required / escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Grantee not a workspace member */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_asset_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -19627,6 +19897,153 @@ export interface operations {
                 };
             };
             /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_resource_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective access list (direct + inherited + workspace) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"][];
+                };
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_resource_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantView"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object-admin required / escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Grantee not a workspace member */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_resource_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Object id */
+                id: string;
+                /** @description Grantee user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Object-admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Object not found */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -6,29 +6,34 @@
 //!
 //! - **Workspace Owner/Admin bypass:** if the caller's workspace role ≥ Admin,
 //!   that role is returned immediately — never constrained by an object ACL.
-//! - **Floor:** the workspace role is a FLOOR. The result is
+//! - **Floor (default):** the workspace role is a FLOOR. The result is
 //!   `max(most-specific grant, workspace_role)`. A grant can *elevate* a member
 //!   above their workspace role on a specific object, and the most-specific
 //!   grant can *downgrade an inherited higher grant* (a deep Viewer overrides a
 //!   shallow Owner) — but it can never drop a member below their workspace role.
-//! - **Most-specific wins among grant tiers:** instance grant > parent-template
+//! - **`restricted` opt-out:** when an object (or an ancestor folder) is
+//!   `restricted`, the floor is REMOVED — access is exactly the grant (direct
+//!   or inherited), or none at all. ws Owner/Admin still bypass. This is what
+//!   makes an object genuinely private (hidden from ordinary members). A
+//!   restricted folder cascades privacy to its whole subtree.
+//! - **Most-specific wins among grant tiers:** object grant > parent-template
 //!   grant > nearest-ancestor folder grant. Folders nest via the materialized
 //!   `folders.path`, so ancestry is a path-prefix match — no recursive CTE.
 //!
-//! Because the workspace role is a floor, a workspace member can *view* every
-//! object in their workspace; grants only differentiate the role above that
-//! floor. List endpoints therefore stay workspace-scoped (the leak fix for
-//! instances is workspace+public scoping, which the list lacked entirely) and
-//! annotate each row with the caller's effective role via
-//! [`effective_object_roles`]; there is intentionally no grant-scoped list
-//! filter (`accessible_object_ids`) in v1 — it would contradict the floor.
+//! For a non-restricted object the floor means a member views every object in
+//! their workspace, so the list annotation in [`effective_object_roles`] covers
+//! every input id. For a RESTRICTED object the returned map OMITS ids the caller
+//! cannot reach — so a list endpoint filters to the map's keys (the
+//! grant-scoped visibility the floor otherwise made moot).
 //!
 //! `object_id` for a TEMPLATE is the chain-root `COALESCE(base_template_id, id)`
 //! so a grant follows the whole version chain. Instances carry no workspace_id
-//! and join their template by per-version `template_id`; instance resolution is
-//! a two-hop join (instance → template → folder) so an object grant on a
-//! *folderless* template still propagates to its instances via the template
-//! tier.
+//! and join their template by per-version `template_id` (two-hop). RESOURCES and
+//! ASSETS are ACL objects too: their `(scope_kind, scope_id)` placement is the
+//! inheritance parent — folder-scoped inherits that folder's chain, template-
+//! scoped inherits the owning template (and its folder chain), workspace-scoped
+//! inherits nothing but the floor. A grant on a resource/asset keys on its own
+//! id (like an instance).
 
 use std::collections::HashMap;
 
@@ -38,12 +43,17 @@ use uuid::Uuid;
 use super::membership::{member_role, MembershipError, Role};
 use super::model::AuthUser;
 
-/// The three granular-ACL object kinds. Maps to the `object_kind` Postgres enum.
+/// The granular-ACL object kinds. Maps to the `object_kind` Postgres enum.
+/// Resources and assets are full ACL objects too — their existing
+/// `(scope_kind, scope_id)` placement is reused as the inheritance parent
+/// (folder path / owning template / workspace); see [`resolve_ctx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectKind {
     Folder,
     Template,
     Instance,
+    Resource,
+    Asset,
 }
 
 impl ObjectKind {
@@ -54,19 +64,28 @@ impl ObjectKind {
             ObjectKind::Folder => "folder",
             ObjectKind::Template => "template",
             ObjectKind::Instance => "instance",
+            ObjectKind::Resource => "resource",
+            ObjectKind::Asset => "asset",
         }
     }
 
-    /// Parse the plural REST path segment (`folders|templates|instances`). The
-    /// grant routes register three concrete literals so the resolver never sees
-    /// an unknown kind.
+    /// Parse the plural REST path segment. The grant routes register concrete
+    /// literals so the resolver never sees an unknown kind.
     pub fn from_path_segment(s: &str) -> Option<Self> {
         match s {
             "folders" => Some(ObjectKind::Folder),
             "templates" => Some(ObjectKind::Template),
             "instances" => Some(ObjectKind::Instance),
+            "resources" => Some(ObjectKind::Resource),
+            "assets" => Some(ObjectKind::Asset),
             _ => None,
         }
+    }
+
+    /// Resources and assets key a direct grant on their OWN id (like an
+    /// instance), not on a chain-root base.
+    fn keys_on_self(self) -> bool {
+        matches!(self, ObjectKind::Instance | ObjectKind::Resource | ObjectKind::Asset)
     }
 }
 
@@ -97,16 +116,35 @@ impl ObjectRef {
             id,
         }
     }
+    pub fn resource(id: Uuid) -> Self {
+        Self {
+            kind: ObjectKind::Resource,
+            id,
+        }
+    }
+    pub fn asset(id: Uuid) -> Self {
+        Self {
+            kind: ObjectKind::Asset,
+            id,
+        }
+    }
 }
 
 /// Resolved object context: the workspace it lives in, the grant chain-root id
-/// (folder id / template base id), and the home-folder materialized path (None
-/// for a folderless template or an instance of one).
+/// (folder id / template base id), the home-folder materialized path (None for
+/// a folderless template / workspace-scoped resource), and whether access is
+/// `restricted` (the object itself or an ancestor folder turned off the
+/// workspace-role floor — see [`is_restricted`]).
 struct ObjCtx {
     workspace_id: Uuid,
-    /// For folder: the folder id. For template/instance: the template chain root.
+    /// For folder: the folder id. For template/instance: the template chain
+    /// root. For resource/asset: the owning template's chain root when
+    /// template-scoped, else `Uuid::nil()` (no template tier to inherit).
     base_id: Uuid,
     home_path: Option<String>,
+    /// `true` ⇒ no workspace floor; access is grants + inheritance + ws
+    /// Owner/Admin bypass only.
+    restricted: bool,
 }
 
 /// SQL fragment ranking the four role tiers by privilege. Shared so the
@@ -114,18 +152,82 @@ struct ObjCtx {
 const ROLE_RANK: &str =
     "(CASE role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 WHEN 'editor' THEN 1 ELSE 0 END)";
 
-/// Resolve `(workspace_id, base_id, home_path)` for an object, or `None` if the
-/// object row doesn't exist.
+/// Resolve a `(scope_kind, scope_id)` placement (used by resources & assets)
+/// into `(workspace_id, base_id, home_path)`:
+/// - `workspace` → the workspace itself, no folder, no template tier.
+/// - `folder`    → the folder's workspace + its materialized path.
+/// - `template`  → the owning template's workspace, chain-root base (template
+///   tier), and the template's home-folder path.
+///
+/// Returns `None` when the referenced scope row no longer exists.
+async fn resolve_scope(
+    db: &PgPool,
+    scope_kind: &str,
+    scope_id: Uuid,
+) -> Result<Option<(Uuid, Uuid, Option<String>)>, MembershipError> {
+    match scope_kind {
+        "workspace" => Ok(Some((scope_id, Uuid::nil(), None))),
+        "folder" => Ok(sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT workspace_id, path FROM folders WHERE id = $1",
+        )
+        .bind(scope_id)
+        .fetch_optional(db)
+        .await?
+        .map(|(ws, path)| (ws, Uuid::nil(), Some(path)))),
+        "template" => Ok(sqlx::query_as::<_, (Uuid, Uuid, Option<String>)>(
+            "SELECT t.workspace_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path \
+               FROM workflow_templates t \
+               LEFT JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id) \
+               LEFT JOIN folders f ON f.id = tf.folder_id \
+              WHERE t.id = $1",
+        )
+        .bind(scope_id)
+        .fetch_optional(db)
+        .await?),
+        _ => Ok(None),
+    }
+}
+
+/// Whether an object is `restricted`: its own flag OR any ANCESTOR folder
+/// (a path-prefix of `home_path`) carrying `restricted = true`. A restricted
+/// folder thus makes its whole subtree private.
+async fn is_restricted(
+    db: &PgPool,
+    workspace_id: Uuid,
+    home_path: Option<&str>,
+    self_restricted: bool,
+) -> Result<bool, MembershipError> {
+    if self_restricted {
+        return Ok(true);
+    }
+    let Some(home) = home_path else {
+        return Ok(false);
+    };
+    let row: Option<(bool,)> = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM folders \
+           WHERE workspace_id = $1 AND restricted \
+             AND ($2 = path OR $2 LIKE path || '/%'))",
+    )
+    .bind(workspace_id)
+    .bind(home)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(b,)| b).unwrap_or(false))
+}
+
+/// Resolve `(workspace_id, base_id, home_path, restricted)` for an object, or
+/// `None` if the object row doesn't exist.
 async fn resolve_ctx(db: &PgPool, obj: ObjectRef) -> Result<Option<ObjCtx>, MembershipError> {
-    let row: Option<(Uuid, Uuid, Option<String>)> = match obj.kind {
-        ObjectKind::Folder => sqlx::query_as(
-            "SELECT workspace_id, id, path FROM folders WHERE id = $1",
+    // (workspace_id, base_id, home_path, self_restricted)
+    let resolved: Option<(Uuid, Uuid, Option<String>, bool)> = match obj.kind {
+        ObjectKind::Folder => sqlx::query_as::<_, (Uuid, Uuid, String, bool)>(
+            "SELECT workspace_id, id, path, restricted FROM folders WHERE id = $1",
         )
         .bind(obj.id)
         .fetch_optional(db)
         .await?
-        .map(|(ws, id, path): (Uuid, Uuid, String)| (ws, id, Some(path))),
-        ObjectKind::Template => sqlx::query_as(
+        .map(|(ws, id, path, r)| (ws, id, Some(path), r)),
+        ObjectKind::Template => sqlx::query_as::<_, (Uuid, Uuid, Option<String>)>(
             "SELECT t.workspace_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path \
                FROM workflow_templates t \
                LEFT JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id) \
@@ -134,8 +236,9 @@ async fn resolve_ctx(db: &PgPool, obj: ObjectRef) -> Result<Option<ObjCtx>, Memb
         )
         .bind(obj.id)
         .fetch_optional(db)
-        .await?,
-        ObjectKind::Instance => sqlx::query_as(
+        .await?
+        .map(|(ws, base, path)| (ws, base, path, false)),
+        ObjectKind::Instance => sqlx::query_as::<_, (Uuid, Uuid, Option<String>)>(
             "SELECT t.workspace_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path \
                FROM workflow_instances i \
                JOIN workflow_templates t ON t.id = i.template_id \
@@ -145,13 +248,55 @@ async fn resolve_ctx(db: &PgPool, obj: ObjectRef) -> Result<Option<ObjCtx>, Memb
         )
         .bind(obj.id)
         .fetch_optional(db)
-        .await?,
+        .await?
+        .map(|(ws, base, path)| (ws, base, path, false)),
+        ObjectKind::Resource => {
+            // resources keep a denormalized workspace_id; scope_id may be NULL
+            // for legacy workspace-scoped rows → coalesce to the workspace.
+            let row: Option<(Uuid, String, Option<Uuid>, bool)> = sqlx::query_as(
+                "SELECT workspace_id, scope_kind, scope_id, restricted FROM resources WHERE id = $1",
+            )
+            .bind(obj.id)
+            .fetch_optional(db)
+            .await?;
+            match row {
+                None => None,
+                Some((ws, sk, sid, restr)) => {
+                    let sid = sid.unwrap_or(ws);
+                    match resolve_scope(db, &sk, sid).await? {
+                        Some((_, base, home)) => Some((ws, base, home, restr)),
+                        // Scope row vanished — fall back to workspace placement.
+                        None => Some((ws, Uuid::nil(), None, restr)),
+                    }
+                }
+            }
+        }
+        ObjectKind::Asset => {
+            // assets are pure scope-addressed (no workspace_id column).
+            let row: Option<(String, Uuid, bool)> = sqlx::query_as(
+                "SELECT scope_kind, scope_id, restricted FROM assets WHERE id = $1",
+            )
+            .bind(obj.id)
+            .fetch_optional(db)
+            .await?;
+            match row {
+                None => None,
+                Some((sk, sid, restr)) => resolve_scope(db, &sk, sid)
+                    .await?
+                    .map(|(ws, base, home)| (ws, base, home, restr)),
+            }
+        }
     };
 
-    Ok(row.map(|(workspace_id, base_id, home_path)| ObjCtx {
+    let Some((workspace_id, base_id, home_path, self_restricted)) = resolved else {
+        return Ok(None);
+    };
+    let restricted = is_restricted(db, workspace_id, home_path.as_deref(), self_restricted).await?;
+    Ok(Some(ObjCtx {
         workspace_id,
         base_id,
         home_path,
+        restricted,
     }))
 }
 
@@ -174,11 +319,12 @@ pub async fn grant_context(
 ) -> Result<Option<GrantContext>, MembershipError> {
     Ok(resolve_ctx(db, obj).await?.map(|ctx| GrantContext {
         workspace_id: ctx.workspace_id,
-        grant_object_id: match obj.kind {
-            // An instance grant keys on the instance itself; the template base
-            // is only the inheritance hop.
-            ObjectKind::Instance => obj.id,
-            _ => ctx.base_id,
+        grant_object_id: if obj.kind.keys_on_self() {
+            // Instance/resource/asset grants key on the object itself; the
+            // template base (if any) is only the inheritance hop.
+            obj.id
+        } else {
+            ctx.base_id
         },
         home_path: ctx.home_path,
     }))
@@ -224,6 +370,22 @@ async fn best_grant_role(
                UNION ALL {folder_tier} \
              ) s ORDER BY source_rank DESC, depth DESC, {ROLE_RANK} DESC LIMIT 1"
         ),
+        // Resource/asset: direct tier on the object's own id ($4), the optional
+        // template tier ($3 = owning template base, Uuid::nil() when not
+        // template-scoped → matches nothing), and the folder-ancestry tier.
+        ObjectKind::Resource | ObjectKind::Asset => {
+            let direct = kind.as_db();
+            format!(
+                "SELECT role FROM ( \
+                   SELECT role, 4 AS source_rank, 0 AS depth FROM object_grants \
+                    WHERE object_type = '{direct}'::object_kind AND object_id = $4 AND user_id = $1 \
+                   UNION ALL \
+                   SELECT role, 3 AS source_rank, 0 AS depth FROM object_grants \
+                    WHERE object_type = 'template'::object_kind AND object_id = $3 AND user_id = $1 \
+                   UNION ALL {folder_tier} \
+                 ) s ORDER BY source_rank DESC, depth DESC, {ROLE_RANK} DESC LIMIT 1"
+            )
+        }
     };
 
     // All three query shapes bind the same four params positionally so the
@@ -265,6 +427,12 @@ pub async fn effective_object_role(
     }
 
     let grant = best_grant_role(db, obj.kind, &ctx, obj.id, user.subject_as_uuid()).await?;
+    // Restricted: NO floor — access is exactly the grant (direct or inherited),
+    // or None (no access) when the user has no grant. ws Owner/Admin already
+    // bypassed above. This is what makes an object genuinely private.
+    if ctx.restricted {
+        return Ok(grant);
+    }
     // Floor: the workspace role is the minimum; the grant can only raise it (or,
     // when more specific than an inherited grant, override down to the grant —
     // but the final `max` keeps it at/above the workspace floor).
@@ -288,9 +456,11 @@ pub async fn require_object_role(
 }
 
 /// Per-row effective role for a list of candidate objects of one kind, in one
-/// workspace. ONE role-resolution query regardless of row count. Returns a map
-/// covering EVERY input id — ids with no grant fall back to the workspace floor.
-/// Empty input or a non-member caller yields an empty map.
+/// workspace. ONE role-resolution query regardless of row count. For
+/// non-restricted objects every input id is present (floor fallback); for a
+/// RESTRICTED object an id the caller cannot reach is OMITTED — so the map
+/// doubles as an accessibility filter (keys = visible ids). Empty input or a
+/// non-member caller yields an empty map.
 pub async fn effective_object_roles(
     db: &PgPool,
     user: &AuthUser,
@@ -312,73 +482,121 @@ pub async fn effective_object_roles(
         return Ok(ids.iter().map(|&id| (id, ws_role)).collect());
     }
 
-    // Floor for every candidate, overlaid below by the single grant query.
-    let mut out: HashMap<Uuid, Role> = ids.iter().map(|&id| (id, ws_role)).collect();
-
     let folder_tier = "SELECT g.role, 2 AS source_rank, length(f.path) AS depth \
            FROM object_grants g JOIN folders f ON f.id = g.object_id \
           WHERE g.object_type = 'folder'::object_kind AND g.user_id = $2 \
             AND ctx.home_path IS NOT NULL \
             AND (ctx.home_path = f.path OR ctx.home_path LIKE f.path || '/%')";
 
+    // Each CTE yields (cand_id, base_id, home_path, self_restricted). For
+    // resource/asset, the scope (folder/template/workspace) is resolved inline
+    // via LEFT JOINs guarded on scope_kind so one row is produced per candidate.
     let ctx_cte = match kind {
         ObjectKind::Folder => {
-            "SELECT id AS cand_id, id AS base_id, path AS home_path \
+            "SELECT id AS cand_id, id AS base_id, path AS home_path, restricted AS self_restricted \
                FROM folders WHERE id = ANY($1)"
         }
         ObjectKind::Template => {
-            "SELECT t.id AS cand_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path AS home_path \
+            "SELECT t.id AS cand_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path AS home_path, false AS self_restricted \
                FROM workflow_templates t \
                LEFT JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id) \
                LEFT JOIN folders f ON f.id = tf.folder_id \
               WHERE t.id = ANY($1)"
         }
         ObjectKind::Instance => {
-            "SELECT i.id AS cand_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path AS home_path \
+            "SELECT i.id AS cand_id, COALESCE(t.base_template_id, t.id) AS base_id, f.path AS home_path, false AS self_restricted \
                FROM workflow_instances i \
                JOIN workflow_templates t ON t.id = i.template_id \
                LEFT JOIN template_folders tf ON tf.base_template_id = COALESCE(t.base_template_id, t.id) \
                LEFT JOIN folders f ON f.id = tf.folder_id \
               WHERE i.id = ANY($1)"
         }
+        ObjectKind::Resource => {
+            "SELECT r.id AS cand_id, \
+                    CASE WHEN r.scope_kind = 'template' THEN COALESCE(t.base_template_id, t.id) END AS base_id, \
+                    CASE WHEN r.scope_kind = 'folder' THEN ff.path \
+                         WHEN r.scope_kind = 'template' THEN tff.path END AS home_path, \
+                    r.restricted AS self_restricted \
+               FROM resources r \
+               LEFT JOIN folders ff ON r.scope_kind = 'folder' AND ff.id = r.scope_id \
+               LEFT JOIN workflow_templates t ON r.scope_kind = 'template' AND t.id = r.scope_id \
+               LEFT JOIN template_folders ttf ON r.scope_kind = 'template' AND ttf.base_template_id = COALESCE(t.base_template_id, t.id) \
+               LEFT JOIN folders tff ON tff.id = ttf.folder_id \
+              WHERE r.id = ANY($1)"
+        }
+        ObjectKind::Asset => {
+            "SELECT a.id AS cand_id, \
+                    CASE WHEN a.scope_kind = 'template' THEN COALESCE(t.base_template_id, t.id) END AS base_id, \
+                    CASE WHEN a.scope_kind = 'folder' THEN ff.path \
+                         WHEN a.scope_kind = 'template' THEN tff.path END AS home_path, \
+                    a.restricted AS self_restricted \
+               FROM assets a \
+               LEFT JOIN folders ff ON a.scope_kind = 'folder' AND ff.id = a.scope_id \
+               LEFT JOIN workflow_templates t ON a.scope_kind = 'template' AND t.id = a.scope_id \
+               LEFT JOIN template_folders ttf ON a.scope_kind = 'template' AND ttf.base_template_id = COALESCE(t.base_template_id, t.id) \
+               LEFT JOIN folders tff ON tff.id = ttf.folder_id \
+              WHERE a.id = ANY($1)"
+        }
     };
 
-    // The object/instance tiers reference ctx.base_id / ctx.cand_id from the CTE.
+    // Object-self / template tiers, referencing ctx.cand_id / ctx.base_id.
     let object_tiers: String = match kind {
         ObjectKind::Folder => String::new(),
         ObjectKind::Template => "SELECT g.role, 3 AS source_rank, 0 AS depth FROM object_grants g \
               WHERE g.object_type = 'template'::object_kind AND g.object_id = ctx.base_id AND g.user_id = $2 \
              UNION ALL "
             .to_string(),
-        ObjectKind::Instance => "SELECT g.role, 4 AS source_rank, 0 AS depth FROM object_grants g \
-              WHERE g.object_type = 'instance'::object_kind AND g.object_id = ctx.cand_id AND g.user_id = $2 \
+        ObjectKind::Instance | ObjectKind::Resource | ObjectKind::Asset => format!(
+            "SELECT g.role, 4 AS source_rank, 0 AS depth FROM object_grants g \
+              WHERE g.object_type = '{direct}'::object_kind AND g.object_id = ctx.cand_id AND g.user_id = $2 \
              UNION ALL \
              SELECT g.role, 3 AS source_rank, 0 AS depth FROM object_grants g \
               WHERE g.object_type = 'template'::object_kind AND g.object_id = ctx.base_id AND g.user_id = $2 \
-             UNION ALL "
-            .to_string(),
+             UNION ALL ",
+            direct = kind.as_db()
+        ),
     };
 
+    // LEFT JOIN LATERAL: candidates with no grant still return a row (role
+    // NULL) so the floor / restricted decision is made per candidate in Rust.
+    // `restricted` = self flag OR any ancestor folder ($3 = workspace) carrying
+    // restricted.
     let sql = format!(
         "WITH ctx AS ( {ctx_cte} ) \
-         SELECT ctx.cand_id, best.role FROM ctx \
-         JOIN LATERAL ( \
+         SELECT ctx.cand_id, best.role, \
+                (ctx.self_restricted OR EXISTS( \
+                   SELECT 1 FROM folders fr \
+                    WHERE fr.workspace_id = $3 AND fr.restricted \
+                      AND ctx.home_path IS NOT NULL \
+                      AND (ctx.home_path = fr.path OR ctx.home_path LIKE fr.path || '/%') \
+                )) AS restricted \
+         FROM ctx \
+         LEFT JOIN LATERAL ( \
            SELECT role FROM ( {object_tiers} {folder_tier} ) s \
            ORDER BY source_rank DESC, depth DESC, {ROLE_RANK} DESC LIMIT 1 \
          ) best ON TRUE"
     );
 
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(&sql)
+    let rows: Vec<(Uuid, Option<String>, bool)> = sqlx::query_as(&sql)
         .bind(ids) // $1
         .bind(user.subject_as_uuid()) // $2
+        .bind(workspace_id) // $3
         .fetch_all(db)
         .await?;
 
-    for (cand_id, role) in rows {
-        if let Some(grant) = Role::from_db(&role) {
+    let mut out: HashMap<Uuid, Role> = HashMap::with_capacity(rows.len());
+    for (cand_id, role, restricted) in rows {
+        let grant = role.and_then(|r| Role::from_db(&r));
+        if restricted {
+            // No floor: only an explicit/inherited grant grants access. No
+            // grant ⇒ the candidate is omitted (no access).
+            if let Some(g) = grant {
+                out.insert(cand_id, g);
+            }
+        } else {
             // Floor: a grant only takes effect when it raises the row above the
             // workspace role.
-            out.entry(cand_id).and_modify(|r| *r = grant.max(ws_role));
+            out.insert(cand_id, grant.map_or(ws_role, |g| g.max(ws_role)));
         }
     }
 
@@ -441,10 +659,29 @@ mod tests {
             ObjectKind::from_path_segment("instances"),
             Some(ObjectKind::Instance)
         );
+        assert_eq!(
+            ObjectKind::from_path_segment("resources"),
+            Some(ObjectKind::Resource)
+        );
+        assert_eq!(
+            ObjectKind::from_path_segment("assets"),
+            Some(ObjectKind::Asset)
+        );
         assert_eq!(ObjectKind::from_path_segment("widgets"), None);
         assert_eq!(ObjectKind::Folder.as_db(), "folder");
         assert_eq!(ObjectKind::Template.as_db(), "template");
         assert_eq!(ObjectKind::Instance.as_db(), "instance");
+        assert_eq!(ObjectKind::Resource.as_db(), "resource");
+        assert_eq!(ObjectKind::Asset.as_db(), "asset");
+    }
+
+    #[test]
+    fn resource_asset_key_on_self() {
+        assert!(ObjectKind::Resource.keys_on_self());
+        assert!(ObjectKind::Asset.keys_on_self());
+        assert!(ObjectKind::Instance.keys_on_self());
+        assert!(!ObjectKind::Folder.keys_on_self());
+        assert!(!ObjectKind::Template.keys_on_self());
     }
 
     /// The floor + most-specific-override role math, isolated from SQL. Mirrors
@@ -452,6 +689,63 @@ mod tests {
     /// `member_role` have run.
     fn effective(grant: Option<Role>, ws_role: Role) -> Role {
         grant.map_or(ws_role, |g| g.max(ws_role))
+    }
+
+    /// The full effective-role decision including the `restricted` opt-out and
+    /// the ws Owner/Admin bypass — mirrors `effective_object_role`'s branches.
+    fn effective_full(
+        grant: Option<Role>,
+        ws_role: Role,
+        restricted: bool,
+    ) -> Option<Role> {
+        if ws_role >= Role::Admin {
+            return Some(ws_role); // bypass
+        }
+        if restricted {
+            return grant; // no floor — None means no access
+        }
+        Some(grant.map_or(ws_role, |g| g.max(ws_role)))
+    }
+
+    #[test]
+    fn restricted_drops_the_floor() {
+        // A ws Viewer with NO grant on a restricted object → no access.
+        assert_eq!(effective_full(None, Role::Viewer, true), None);
+        // A ws Editor with no grant on a restricted object → also no access
+        // (the floor that would have admitted them is gone).
+        assert_eq!(effective_full(None, Role::Editor, true), None);
+        // An explicit Viewer grant on a restricted object → exactly Viewer,
+        // NOT raised to the ws Editor floor.
+        assert_eq!(
+            effective_full(Some(Role::Viewer), Role::Editor, true),
+            Some(Role::Viewer)
+        );
+    }
+
+    #[test]
+    fn restricted_still_honours_admin_bypass() {
+        // ws Admin/Owner see restricted objects regardless of any grant.
+        assert_eq!(
+            effective_full(None, Role::Admin, true),
+            Some(Role::Admin)
+        );
+        assert_eq!(
+            effective_full(None, Role::Owner, true),
+            Some(Role::Owner)
+        );
+    }
+
+    #[test]
+    fn unrestricted_keeps_the_floor() {
+        // Same inputs, restricted = false → the floor admits the member.
+        assert_eq!(
+            effective_full(None, Role::Editor, false),
+            Some(Role::Editor)
+        );
+        assert_eq!(
+            effective_full(Some(Role::Owner), Role::Viewer, false),
+            Some(Role::Owner)
+        );
     }
 
     #[test]
