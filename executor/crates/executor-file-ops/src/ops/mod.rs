@@ -225,11 +225,13 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
             if c.prefix.is_empty() {
                 return Err("crawl: prefix must not be empty".into());
             }
-            if c.batch_size == 0 {
+            if c.batch_size.get("crawl: batch_size")? == 0 {
                 return Err("crawl: batch_size must be greater than 0".into());
             }
-            if c.max_batches == Some(0) {
-                return Err("crawl: max_batches must be greater than 0 when set".into());
+            if let Some(mb) = &c.max_batches {
+                if mb.get("crawl: max_batches")? == 0 {
+                    return Err("crawl: max_batches must be greater than 0 when set".into());
+                }
             }
             if let Some(ref sink) = c.sink {
                 if !matches!(sink.mode.as_str(), "reconcile" | "index") {

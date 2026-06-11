@@ -370,7 +370,17 @@ pub async fn execute(
     // ownership. Non-local (or any lstat error) falls back to opendal below.
     let lstat_root = local_stat_root(&config.storage);
 
-    let batch_cap = config.batch_size.max(1);
+    let batch_cap = config
+        .batch_size
+        .get("crawl: batch_size")
+        .map_err(FileOpsError::Config)?
+        .max(1);
+    let max_batches = config
+        .max_batches
+        .as_ref()
+        .map(|m| m.get("crawl: max_batches"))
+        .transpose()
+        .map_err(FileOpsError::Config)?;
     let mut batch: Vec<Observed> = Vec::with_capacity(batch_cap);
     let mut total: u64 = 0;
     let mut batch_idx: u64 = 0;
@@ -467,7 +477,7 @@ pub async fn execute(
 
             // Chunk cap for cursor-loop campaigns: stop after N filled
             // batches; the caller resumes from `last_path`.
-            if let Some(max) = config.max_batches {
+            if let Some(max) = max_batches {
                 if batch_idx >= max {
                     stopped_by_max = true;
                     break;
@@ -598,7 +608,7 @@ mod tests {
         let config = CrawlConfig {
             prefix: "nas/".into(),
             storage,
-            batch_size: 10,
+            batch_size: 10.into(),
             resume_from: None,
             stat: true,
             max_batches: None,
@@ -666,7 +676,7 @@ mod tests {
         CrawlConfig {
             prefix: "nas/".into(),
             storage,
-            batch_size: 10,
+            batch_size: 10.into(),
             resume_from: None,
             stat: true,
             max_batches: None,

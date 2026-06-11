@@ -1,6 +1,7 @@
 pub mod docker;
 pub mod file_ops;
 pub mod http;
+pub mod interp;
 pub mod kreuzberg;
 pub mod llm;
 pub mod loki;

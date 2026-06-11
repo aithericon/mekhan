@@ -52,6 +52,12 @@
                     "null"
                   ]
                 },
+                "prefix": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "root": {
                   "type": [
                     "string",
@@ -220,6 +226,12 @@
                     "null"
                   ]
                 },
+                "prefix": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "root": {
                   "type": [
                     "string",
@@ -280,7 +292,25 @@
             "null"
           ]
         },
+        "batch_size": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "file_server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_batches": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "path": {
           "type": [
             "string",
             "null"
@@ -1339,7 +1369,7 @@
   "groups": [
     {
       "id": "group_1",
-      "name": "Seed a synthetic NAS (63 files)"
+      "name": "Prepare target (seed demo NAS, or pass override through)"
     },
     {
       "id": "group_10",
@@ -1705,19 +1735,19 @@
     },
     {
       "id": "p_seed_ctrl",
-      "name": "Seed a synthetic NAS (63 files) - Control Token",
+      "name": "Prepare target (seed demo NAS, or pass override through) - Control Token",
       "token_schema": "#/definitions/Ctrl__seed",
       "type": "state"
     },
     {
       "id": "p_seed_data",
-      "name": "Seed a synthetic NAS (63 files) - Parked Data (write-once)",
+      "name": "Prepare target (seed demo NAS, or pass override through) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__seed",
       "type": "state"
     },
     {
       "id": "p_seed_output",
-      "name": "Seed a synthetic NAS (63 files) - Output",
+      "name": "Prepare target (seed demo NAS, or pass override through) - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -2707,13 +2737,18 @@
         },
         {
           "cardinality": "single",
-          "name": "d_campaign",
-          "schema_ref": "#/definitions/Data__campaign"
+          "name": "d_seed",
+          "schema_ref": "#/definitions/Data__seed"
         },
         {
           "cardinality": "single",
           "name": "d_start",
           "schema_ref": "#/definitions/Data__start"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_campaign",
+          "schema_ref": "#/definitions/Data__campaign"
         }
       ],
       "input_schema": {
@@ -2731,8 +2766,8 @@
           "weight": 1
         },
         {
-          "place": "p_campaign_data",
-          "port": "d_campaign",
+          "place": "p_seed_data",
+          "port": "d_seed",
           "read": true,
           "weight": 1
         },
@@ -2741,10 +2776,16 @@
           "port": "d_start",
           "read": true,
           "weight": 1
+        },
+        {
+          "place": "p_campaign_data",
+          "port": "d_campaign",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"crawl\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_campaign_cursor = __pluck(d_campaign, [\"cursor\"]); job_inputs.push(#{ \"name\": \"__borrow_campaign__cursor\", \"source\": #{ \"type\": \"inline\", \"value\": __c_campaign_cursor } }); let __c_start_probe = __pluck(d_start, [\"probe\"]); job_inputs.push(#{ \"name\": \"__borrow_start__probe\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_probe } }); let __c_start_file_server = __pluck(d_start, [\"file_server\"]); job_inputs.push(#{ \"name\": \"__borrow_start__file_server\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_file_server } });  d.spec = #{ \"backend\": \"file_ops\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/crawl/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-file_ops-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"crawl\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_seed_prefix = __pluck(d_seed, [\"detail\", \"outputs\", \"prefix\"]); job_inputs.push(#{ \"name\": \"__borrow_seed__prefix\", \"source\": #{ \"type\": \"inline\", \"value\": __c_seed_prefix } }); let __c_seed_root = __pluck(d_seed, [\"detail\", \"outputs\", \"root\"]); job_inputs.push(#{ \"name\": \"__borrow_seed__root\", \"source\": #{ \"type\": \"inline\", \"value\": __c_seed_root } }); let __c_start_batch_size = __pluck(d_start, [\"batch_size\"]); job_inputs.push(#{ \"name\": \"__borrow_start__batch_size\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_batch_size } }); let __c_start_max_batches = __pluck(d_start, [\"max_batches\"]); job_inputs.push(#{ \"name\": \"__borrow_start__max_batches\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_max_batches } }); let __c_campaign_cursor = __pluck(d_campaign, [\"cursor\"]); job_inputs.push(#{ \"name\": \"__borrow_campaign__cursor\", \"source\": #{ \"type\": \"inline\", \"value\": __c_campaign_cursor } }); let __c_start_probe = __pluck(d_start, [\"probe\"]); job_inputs.push(#{ \"name\": \"__borrow_start__probe\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_probe } }); let __c_start_file_server = __pluck(d_start, [\"file_server\"]); job_inputs.push(#{ \"name\": \"__borrow_start__file_server\", \"source\": #{ \"type\": \"inline\", \"value\": __c_start_file_server } });  d.spec = #{ \"backend\": \"file_ops\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/crawl/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-file_ops-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
       "name": "Crawl one chunk → fold sink - Prepare",
@@ -3727,7 +3768,7 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Seed a synthetic NAS (63 files)' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Prepare target (seed demo NAS, or pass override through)' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
@@ -4237,6 +4278,11 @@
           "cardinality": "single",
           "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
         }
       ],
       "input_schema": {
@@ -4252,13 +4298,19 @@
           "place": "p_start_main",
           "port": "input",
           "weight": 1
+        },
+        {
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"seed\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Seed a synthetic NAS tree on local disk so the campaign has files to walk.\\n\\nSelf-contained: writes a deterministic 63-file tree under\\n/tmp/mekhan-campaign-demo (cleaning any prior run first), the SAME path the\\ncrawl step's storage root points at. 63 is deliberately not divisible by the\\ncampaign's 20-files-per-chunk (batch_size 10 × max_batches 2), so the last\\niteration exercises the trailing-partial-batch path: 20 + 20 + 20 + 3.\\n\\\"\\\"\\\"\\n\\nimport os\\nimport shutil\\n\\nfrom aithericon import log_info, set_output\\n\\nROOT = \\\"/tmp/mekhan-campaign-demo\\\"\\n\\nshutil.rmtree(ROOT, ignore_errors=True)\\n\\nn = 0\\nfor shard in range(7):  # 7 shards × 9 files = 63\\n    for i in range(9):\\n        rel = f\\\"shard_{shard:02d}/file_{i:03d}.txt\\\"\\n        path = os.path.join(ROOT, rel)\\n        os.makedirs(os.path.dirname(path), exist_ok=True)\\n        with open(path, \\\"w\\\") as f:\\n            f.write(f\\\"campaign demo content shard={shard} i={i}\\\\n\\\")\\n        n += 1\\n\\nlog_info(f\\\"seeded {n} files under {ROOT}\\\", root=ROOT, files_created=n)\\n\\nset_output(\\\"root\\\", ROOT)\\nset_output(\\\"files_created\\\", n)\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"root\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"files_created\", \"required\": false, \"kind\": \"number\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/seed/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"seed\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Prepare the campaign target: seed the synthetic demo NAS, or pass an\\noverride path through untouched.\\n\\nThe Start form's optional `path` field makes this demo point at ANY local\\ndirectory (an NFS mount, a workstation tree) instead of the synthetic NAS:\\n\\n* `path` empty  -> seed a deterministic 63-file tree under\\n  /tmp/mekhan-campaign-demo (cleaning any prior run first) and emit\\n  root=/tmp, prefix=mekhan-campaign-demo/. 63 is deliberately not divisible\\n  by the demo chunk (batch_size 10 x max_batches 2), so the last iteration\\n  exercises the trailing-partial-batch path: 20 + 20 + 20 + 3.\\n* `path` set    -> seed NOTHING (files_created=0); split the path into\\n  root=<parent dir> + prefix=<basename>/ so the crawl walks the tree in\\n  place. The split (rather than prefix=\\\"\\\") respects the crawl op's\\n  non-empty-prefix guard and gives adoption a sane endpoint root.\\n\\nThe crawl step borrows `{{ seed.root }}` / `{{ seed.prefix }}`, so this step\\nis the single place the demo-vs-override conditional lives — the placeholders\\ndownstream stay dumb.\\n\\\"\\\"\\\"\\n\\nimport os\\nimport shutil\\n\\nfrom aithericon import log_info, set_output\\n\\n# Literal slug read — DO NOT remove: the compiler scans for it and stages the\\n# Start field as this step's input.\\noverride = start.path  # noqa: F821\\n\\noverride = (override or \\\"\\\").strip() if isinstance(override, str) else \\\"\\\"\\n\\nif override:\\n    p = override.rstrip(\\\"/\\\") or \\\"/\\\"\\n    root = os.path.dirname(p) or \\\"/\\\"\\n    prefix = os.path.basename(p) + \\\"/\\\"\\n    log_info(\\n        f\\\"path override set — skipping seed; campaign walks {p} in place\\\",\\n        root=root,\\n        prefix=prefix,\\n    )\\n    set_output(\\\"root\\\", root)\\n    set_output(\\\"prefix\\\", prefix)\\n    set_output(\\\"files_created\\\", 0)\\nelse:\\n    ROOT = \\\"/tmp/mekhan-campaign-demo\\\"\\n    shutil.rmtree(ROOT, ignore_errors=True)\\n\\n    n = 0\\n    for shard in range(7):  # 7 shards × 9 files = 63\\n        for i in range(9):\\n            rel = f\\\"shard_{shard:02d}/file_{i:03d}.txt\\\"\\n            path = os.path.join(ROOT, rel)\\n            os.makedirs(os.path.dirname(path), exist_ok=True)\\n            with open(path, \\\"w\\\") as f:\\n                f.write(f\\\"campaign demo content shard={shard} i={i}\\\\n\\\")\\n            n += 1\\n\\n    log_info(f\\\"seeded {n} files under {ROOT}\\\", root=ROOT, files_created=n)\\n\\n    set_output(\\\"root\\\", \\\"/tmp\\\")\\n    set_output(\\\"prefix\\\", \\\"mekhan-campaign-demo/\\\")\\n    set_output(\\\"files_created\\\", n)\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"start.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_start } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"root\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"prefix\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"files_created\", \"required\": false, \"kind\": \"number\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/seed/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
-      "name": "Seed a synthetic NAS (63 files) - Prepare",
+      "name": "Prepare target (seed demo NAS, or pass override through) - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5067,7 +5119,7 @@
     },
     {
       "guard": {
-        "source": "d_campaign.iteration < 20 && (d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
+        "source": "d_campaign.iteration < 1000 && (d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
         "type": "rhai"
       },
       "id": "t_campaign_continue",
@@ -5216,7 +5268,7 @@
     },
     {
       "guard": {
-        "source": "d_campaign.iteration >= 20 || !(d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
+        "source": "d_campaign.iteration >= 1000 || !(d_crawl.detail.outputs.exhausted == false || d_crawl.detail.outputs.count > 0)",
         "type": "rhai"
       },
       "id": "t_campaign_exit",
@@ -5516,7 +5568,7 @@
         "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Seed a synthetic NAS (63 files) -> Crawl campaign",
+      "name": "Prepare target (seed demo NAS, or pass override through) -> Crawl campaign",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5702,10 +5754,10 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Seed a synthetic NAS (63 files)' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Prepare target (seed demo NAS, or pass override through)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Seed a synthetic NAS (63 files) - Dead-letter (no handler — crash net)"
+      "name": "Prepare target (seed demo NAS, or pass override through) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_seed_to_output",
@@ -5735,7 +5787,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Seed a synthetic NAS (63 files) - To Output",
+      "name": "Prepare target (seed demo NAS, or pass override through) - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5787,7 +5839,7 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Seed a synthetic NAS (63 files) - Yield (park data, forward control)",
+      "name": "Prepare target (seed demo NAS, or pass override through) - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",

@@ -34,6 +34,30 @@
                 { "value": "hash", "label": "Hash (SHA-256 identity)" },
                 { "value": "full", "label": "Full (hash + fmeta metadata)" }
               ]
+            },
+            {
+              "name": "path",
+              "label": "Path override (crawl this directory instead)",
+              "kind": "text",
+              "required": false,
+              "default": "",
+              "description": "Absolute directory to crawl IN PLACE of the synthetic demo NAS. When set, the prepare step seeds nothing and the campaign walks this tree where it lives (root = parent dir, prefix = basename/). Leave empty for the self-contained demo (seeds 63 files under /tmp/mekhan-campaign-demo). Point it at a real corpus — an NFS mount, a workstation home — and raise batch_size/max_batches to match."
+            },
+            {
+              "name": "batch_size",
+              "label": "Batch size (files per fold batch)",
+              "kind": "number",
+              "required": true,
+              "default": 10,
+              "description": "Files per durable fold-batch publish. Demo default 10; for a real corpus use 1000-5000 (probe=full needs ≤ ~500 — each item carries its fmeta blob inside one NATS publish)."
+            },
+            {
+              "name": "max_batches",
+              "label": "Max batches per iteration",
+              "kind": "number",
+              "required": true,
+              "default": 2,
+              "description": "Filled batches per loop iteration (one executor job crawls batch_size × max_batches files, then the cursor loops). Demo default 2; for a real corpus use 10-25 so each chunk is tens of thousands of files."
             }
           ]
         }
@@ -49,8 +73,8 @@
       },
       "data": {
         "type": "automated_step",
-        "label": "Seed a synthetic NAS (63 files)",
-        "description": "Writes a deterministic 63-file tree into /tmp/mekhan-campaign-demo (cleaning any prior run first). 63 is deliberately NOT divisible by the campaign's 20-files-per-chunk so the final iteration exercises the trailing-partial-batch path: 20 + 20 + 20 + 3.",
+        "label": "Prepare target (seed demo NAS, or pass override through)",
+        "description": "The single place the demo-vs-real conditional lives. With Start's `path` empty: writes a deterministic 63-file tree into /tmp/mekhan-campaign-demo (cleaning any prior run first; 63 is deliberately NOT divisible by the demo's 20-files-per-chunk so the final iteration exercises the trailing-partial-batch path: 20+20+20+3) and emits root=/tmp + prefix=mekhan-campaign-demo/. With `path` set: seeds NOTHING and emits root=<parent>/prefix=<basename>/ so the campaign walks the given tree in place. The crawl step borrows `{{ seed.root }}`/`{{ seed.prefix }}` — downstream placeholders stay dumb.",
         "channels": [],
         "executionSpec": {
           "backendType": "python",
@@ -66,16 +90,21 @@
         },
         "output": {
           "id": "out",
-          "label": "Seeded",
+          "label": "Target prepared",
           "fields": [
             {
               "name": "root",
-              "label": "Root path",
+              "label": "Storage endpoint root",
+              "kind": "text"
+            },
+            {
+              "name": "prefix",
+              "label": "Walk prefix (relative to root)",
               "kind": "text"
             },
             {
               "name": "files_created",
-              "label": "Files created",
+              "label": "Files created (0 on override)",
               "kind": "number"
             }
           ]
@@ -96,7 +125,7 @@
         "type": "loop",
         "label": "Crawl campaign",
         "description": "Cursor loop: each iteration crawls ONE bounded chunk (max_batches × batch_size files), resuming after the previous iteration's cursor. The accumulators are the ONLY state crossing iterations: `cursor` folds `crawl.last_path`, `total` sums `crawl.count`. Engine work per iteration is constant no matter how big the corpus is. ACCOUNTING PATTERN: the loop's mergeExpr folds on the CONTINUE transition only — the exit path skips it — so the condition keeps looping until a chunk comes back EMPTY (`exhausted && count == 0`). The merge-skipped exit chunk then contributes zero and `campaign.total` is exact; the price is one extra readdir-cheap iteration that walks nothing.",
-        "maxIterations": 20,
+        "maxIterations": 1000,
         "loopCondition": "crawl.exhausted == false || crawl.count > 0",
         "accumulators": [
           {
@@ -129,19 +158,19 @@
       "data": {
         "type": "automated_step",
         "label": "Crawl one chunk → fold sink",
-        "description": "The file-ops `crawl` op in SINK MODE (docs/32 batch-fold): walks /tmp/mekhan-campaign-demo resuming after `{{ campaign.cursor }}` (a Loop-accumulator borrow interpolated into the config — empty string on iteration 0 means from-the-start), stops after `max_batches: 2` filled batches of `batch_size: 10`, and PUBLISHES each batch durably to the `INVENTORY_FOLD` JetStream stream instead of emitting channel items (note: no channels declared on this node). The publish-ack lands BEFORE the cursor advances, and mekhan's fold consumer upserts rows idempotently on (file_server_id, path) — so a retried or re-run chunk never duplicates. `sink.file_server_id` is itself a borrow (`{{ start.file_server }}`), as is `probe` (`{{ start.probe }}`): with probing on, every file is read once during the walk — SHA-256 content identity (and, on 'full', the fmeta metadata blob) rides each fold item, so the catalogue fills in the same pass (hash → content-addressed entry, blob → file_metadata/mime). Probe failures never kill a chunk; they're counted per chunk in `probe_errors` and totalled by the campaign. Outputs are slim scalars; `exhausted` is the loop's exit signal and `last_path` the next iteration's cursor.",
+        "description": "The file-ops `crawl` op in SINK MODE (docs/32 batch-fold): walks `{{ seed.root }}`/`{{ seed.prefix }}` (the prepare step's resolved target — synthetic NAS or path override) resuming after `{{ campaign.cursor }}` (a Loop-accumulator borrow interpolated into the config — empty string on iteration 0 means from-the-start), stops after `{{ start.max_batches }}` filled batches of `{{ start.batch_size }}` files (NUMBER-typed borrows: full-value substitution is typed, so placeholders aren't string-only), and PUBLISHES each batch durably to the `INVENTORY_FOLD` JetStream stream instead of emitting channel items (note: no channels declared on this node). The publish-ack lands BEFORE the cursor advances, and mekhan's fold consumer upserts rows idempotently on (file_server_id, path) — so a retried or re-run chunk never duplicates. `sink.file_server_id` is itself a borrow (`{{ start.file_server }}`), as is `probe` (`{{ start.probe }}`): with probing on, every file is read once during the walk — SHA-256 content identity (and, on 'full', the fmeta metadata blob) rides each fold item, so the catalogue fills in the same pass (hash → content-addressed entry, blob → file_metadata/mime). Probe failures never kill a chunk; they're counted per chunk in `probe_errors` and totalled by the campaign. Outputs are slim scalars; `exhausted` is the loop's exit signal and `last_path` the next iteration's cursor.",
         "channels": [],
         "executionSpec": {
           "backendType": "file_ops",
           "config": {
             "operation": "crawl",
-            "prefix": "mekhan-campaign-demo/",
+            "prefix": "{{ seed.prefix }}",
             "storage": {
               "backend": "local",
-              "endpoint": "/tmp"
+              "endpoint": "{{ seed.root }}"
             },
-            "batch_size": 10,
-            "max_batches": 2,
+            "batch_size": "{{ start.batch_size }}",
+            "max_batches": "{{ start.max_batches }}",
             "stat": true,
             "resume_from": "{{ campaign.cursor }}",
             "probe": "{{ start.probe }}",

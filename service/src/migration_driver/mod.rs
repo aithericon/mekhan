@@ -201,9 +201,12 @@ pub async fn index_reconcile(
     let config = CrawlConfig {
         prefix: String::new(),
         storage: storage.clone(),
-        batch_size: batch_size.max(1),
+        batch_size: batch_size.max(1).into(),
         resume_from: None,
         stat: true,
+        max_batches: None,
+        sink: None,
+        probe: None,
     };
 
     let sink = Arc::new(ReconcileSink::new(pool.clone(), file_server_id.to_string()));
@@ -215,12 +218,17 @@ pub async fn index_reconcile(
     // the path-resolution prefix; pass the same here. `endpoint_root` is the
     // canonical root stamped into each row's provenance — for the synthetic-NAS
     // driver that's the crawl `root` (an NFS mount stand-in).
+    // probe is None and sink mode is off, so the probe temp dir and batch
+    // sink are inert; the events-mode EventStream is the driver's fold sink.
     aithericon_executor_file_ops::ops::crawl::execute(
         &config,
         &operator,
         &storage.prefix,
         root,
         Some(sink.clone() as Arc<dyn EventStream>),
+        None,
+        "migration-driver",
+        &std::env::temp_dir(),
         &cancel,
     )
     .await

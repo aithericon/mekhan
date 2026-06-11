@@ -1884,7 +1884,7 @@ export interface paths {
          * @description Batched by-reference register — **fills both halves of the equation**. Every
          *     item MUST carry a `content_hash`; for each, in one transaction, UPSERTs a
          *     logical `catalogue_entries` row (keyed on `content_hash`, `category =
-         *     'legacy'`) AND the physical `file_inventory` row on `(file_server_id,
+         *     'file'`) AND the physical `file_inventory` row on `(file_server_id,
          *     path)`. A hashless item is rejected (400) — observe-only goes through
          *     `/index`. No bytes are transferred. Returns insert/upsert counts.
          */
@@ -5841,13 +5841,18 @@ export interface components {
          *     size/mtime, so crawl streams + per-entry stats instead.
          */
         CrawlConfig: {
-            /** @description Number of `{path,size,mtime}` entries per emitted `item` batch. */
+            /**
+             * @description Number of `{path,size,mtime}` entries per emitted `item` batch.
+             *     Interpolation-capable: may be authored as a `{{ ... }}` placeholder
+             *     resolving to a number (e.g. a Start field carrying campaign sizing).
+             */
             batch_size?: number;
             /**
              * Format: int64
              * @description Optional cap on the number of *filled* batches per invocation — the
              *     chunking knob for cursor-loop campaigns (`resume_from` carries the
              *     cursor between invocations). `None` walks to exhaustion.
+             *     Interpolation-capable like `batch_size`.
              */
             max_batches?: number | null;
             /** @description Prefix (relative to the storage root) to walk recursively. */

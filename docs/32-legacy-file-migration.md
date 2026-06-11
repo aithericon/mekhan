@@ -300,6 +300,15 @@ set-based**:
   config (file_ops configs now run the same PerField placeholder pipeline as LLM prompts).
   Engine work per iteration is constant regardless of corpus size; cancel/resume granularity is
   one chunk.
+- **Path override + typed sizing borrows** (2026-06-11): the demo's Start form takes an
+  optional `path` — when set, the prepare step seeds nothing and resolves
+  `root=<parent>/prefix=<basename>/` so the same template walks ANY local directory in place
+  (first real-corpus run: a 1.28M-file workstation tree). Chunk sizing is a Run-form knob:
+  `batch_size`/`max_batches` are **number-typed borrows** (`"{{ start.batch_size }}"` in a
+  `usize` config field), enabled by `Interpolable<T>` in `executor-backend-configs` — an
+  untagged `Value(T) | Placeholder(String)` wire type, so the compile-time shape check passes
+  with the placeholder in place and the executor's typed full-value substitution lands a real
+  number; a placeholder that survives to execution is a precise config error.
 
 ### Reconcile + targeted-hash + migrate scaffold (`service` + campaign)
 - Reconcile: SQL views (new migration) joining `file_inventory ⋈ legacy_file_index ⋈

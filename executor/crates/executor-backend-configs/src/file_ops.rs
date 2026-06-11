@@ -12,12 +12,14 @@ use aithericon_executor_domain::{ExecutionSpec, ExecutorError};
 use aithericon_executor_storage_types::StorageConfig;
 use aithericon_file_metadata::ChecksumAlgorithm;
 
+use crate::interp::Interpolable;
+
 /// Default crawl batch size — number of `{path,size,mtime}` entries accumulated
 /// before a streaming `item` event is emitted. Sized to keep per-batch JSON
 /// payloads well under the NATS max-payload while still amortizing emit overhead
 /// across the ~4M-file corpus the crawler targets.
-fn default_crawl_batch_size() -> usize {
-    5000
+fn default_crawl_batch_size() -> Interpolable<usize> {
+    Interpolable::Value(5000)
 }
 
 /// Default for `CrawlConfig.stat` — crawl `stat()`s each entry by default
@@ -166,8 +168,11 @@ pub struct CrawlConfig {
     /// file server.
     pub storage: StorageConfig,
     /// Number of `{path,size,mtime}` entries per emitted `item` batch.
+    /// Interpolation-capable: may be authored as a `{{ ... }}` placeholder
+    /// resolving to a number (e.g. a Start field carrying campaign sizing).
     #[serde(default = "default_crawl_batch_size")]
-    pub batch_size: usize,
+    #[cfg_attr(feature = "schema", schema(value_type = usize))]
+    pub batch_size: Interpolable<usize>,
     /// Optional resume cursor: the walk resumes *after* this path. Native
     /// `start_after` on backends that support it (S3); elsewhere a
     /// client-side skip-until-cursor (readdir-cheap, assumes stable
@@ -184,8 +189,10 @@ pub struct CrawlConfig {
     /// Optional cap on the number of *filled* batches per invocation — the
     /// chunking knob for cursor-loop campaigns (`resume_from` carries the
     /// cursor between invocations). `None` walks to exhaustion.
+    /// Interpolation-capable like `batch_size`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_batches: Option<u64>,
+    #[cfg_attr(feature = "schema", schema(value_type = Option<u64>))]
+    pub max_batches: Option<Interpolable<u64>>,
     /// Opt-in batch-fold sink (docs/32): when set, each batch is published
     /// durably to the `INVENTORY_FOLD` stream for set-based folding into the
     /// inventory, and NO per-file channel items are emitted. When `None`
@@ -295,7 +302,7 @@ mod tests {
         match config {
             FileOpsConfig::Crawl(c) => {
                 assert_eq!(c.prefix, "Data/");
-                assert_eq!(c.batch_size, 5000);
+                assert_eq!(c.batch_size, 5000.into());
                 assert!(c.stat);
                 assert!(c.resume_from.is_none());
                 assert!(c.max_batches.is_none());
@@ -317,7 +324,7 @@ mod tests {
         let config: FileOpsConfig = serde_json::from_value(json).unwrap();
         match config {
             FileOpsConfig::Crawl(c) => {
-                assert_eq!(c.max_batches, Some(50));
+                assert_eq!(c.max_batches, Some(50.into()));
                 let sink = c.sink.expect("sink");
                 assert_eq!(sink.mode, "reconcile");
                 assert_eq!(sink.file_server_id, "legacy-nas-2");
@@ -329,7 +336,7 @@ mod tests {
                     max_batches: None,
                     prefix: "Data/".into(),
                     storage: serde_json::from_value(local_storage_json()).unwrap(),
-                    batch_size: 5000,
+                    batch_size: 5000.into(),
                     resume_from: None,
                     stat: true,
                 }))
@@ -354,7 +361,7 @@ mod tests {
         let config: FileOpsConfig = serde_json::from_value(json).unwrap();
         match config {
             FileOpsConfig::Crawl(c) => {
-                assert_eq!(c.batch_size, 100);
+                assert_eq!(c.batch_size, 100.into());
                 assert_eq!(c.resume_from.as_deref(), Some("Data/x/last.txt"));
                 assert!(!c.stat);
             }
