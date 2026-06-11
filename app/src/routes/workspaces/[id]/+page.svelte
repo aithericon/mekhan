@@ -10,6 +10,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
 	import UserChip from '$lib/components/iam/UserChip.svelte';
+	import RoleSelect from '$lib/components/iam/RoleSelect.svelte';
 	import {
 		Card,
 		CardHeader,
@@ -37,6 +38,8 @@
 	import { auth } from '$lib/auth/store.svelte';
 
 	const workspaceId = $derived($page.params.id ?? '');
+
+	const WS_ROLES = ['viewer', 'editor', 'admin', 'owner'] as const;
 
 	// Workspace Owner/Admin gates every member/invite mutation. The server is
 	// authoritative; this just hides affordances the caller can't use.
@@ -214,16 +217,14 @@
 									data-testid="input-new-member-email"
 									class="flex-1"
 								/>
-								<select
-									bind:value={newMemberRole}
-									class="rounded-md border border-input bg-background px-2 text-sm"
-									data-testid="select-new-member-role"
-								>
-									<option value="viewer">Viewer</option>
-									<option value="editor">Editor</option>
-									<option value="admin">Admin</option>
-									<option value="owner">Owner</option>
-								</select>
+								<RoleSelect
+									value={newMemberRole}
+									roles={WS_ROLES}
+									onSelect={(r) => (newMemberRole = r as typeof newMemberRole)}
+									size="default"
+									testid="select-new-member-role"
+									ariaLabel="New member role"
+								/>
 								<Button type="submit" disabled={addingMember} data-testid="btn-add-member">
 									<UserPlus class="size-4" />
 									Add
@@ -255,20 +256,16 @@
 									/>
 								</div>
 								{#if canAdmin}
-									<select
+									<RoleSelect
 										value={m.role}
+										roles={WS_ROLES}
 										disabled={roleBusy !== null || lastOwner}
 										title={lastOwner ? 'A workspace must keep at least one owner' : undefined}
-										onchange={(e) => changeRole(m, (e.currentTarget as HTMLSelectElement).value)}
-										class="rounded-md border border-input bg-background px-2 py-1 text-sm disabled:opacity-60"
-										data-testid={`member-role-${m.user_id}`}
-										aria-label="Member role"
-									>
-										<option value="viewer">viewer</option>
-										<option value="editor">editor</option>
-										<option value="admin">admin</option>
-										<option value="owner">owner</option>
-									</select>
+										onSelect={(r) => changeRole(m, r)}
+										testid={`member-role-${m.user_id}`}
+										ariaLabel="Member role"
+										class="w-28"
+									/>
 									<button
 										type="button"
 										class="text-muted-foreground hover:text-destructive disabled:opacity-40"
@@ -309,16 +306,14 @@
 								data-testid="input-invite-email"
 								class="flex-1"
 							/>
-							<select
-								bind:value={inviteRole}
-								class="rounded-md border border-input bg-background px-2 text-sm"
-								data-testid="select-invite-role"
-							>
-								<option value="viewer">Viewer</option>
-								<option value="editor">Editor</option>
-								<option value="admin">Admin</option>
-								<option value="owner">Owner</option>
-							</select>
+							<RoleSelect
+								value={inviteRole}
+								roles={WS_ROLES}
+								onSelect={(r) => (inviteRole = r as typeof inviteRole)}
+								size="default"
+								testid="select-invite-role"
+								ariaLabel="Invite role"
+							/>
 							<Button type="submit" disabled={inviting} data-testid="btn-send-invite">
 								<Mail class="size-4" />
 								Invite

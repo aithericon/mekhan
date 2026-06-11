@@ -247,7 +247,7 @@ impl ResourceResolver {
         let resource: Option<ResourceRow> = sqlx::query_as::<_, ResourceRow>(
             "SELECT id, workspace_id, path, resource_type, display_name, \
                     latest_version, deleted_at, created_by, created_at, updated_at, \
-                    scope_kind, scope_id, display_path \
+                    updated_by, scope_kind, scope_id, display_path \
              FROM resources \
              WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL",
         )

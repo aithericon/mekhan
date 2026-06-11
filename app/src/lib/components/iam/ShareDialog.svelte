@@ -29,6 +29,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import UserChip from './UserChip.svelte';
+	import RoleSelect from './RoleSelect.svelte';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import { listGrants, putGrant, deleteGrant, roleAtLeast, type GrantView, type ObjectType } from '$lib/api/iam';
@@ -178,24 +179,21 @@
 							{/if}
 
 							{#if canManage}
-								<select
+								<!-- The current effective role may exceed what the caller can
+								     grant (e.g. an owner row seen by an admin) — keep it in the
+								     option list as display-only so the trigger isn't blank. -->
+								{@const roleOptions = grantableRoles.includes(eff as (typeof ALL_ROLES)[number])
+									? grantableRoles
+									: [...grantableRoles, eff]}
+								<RoleSelect
 									value={eff}
+									roles={roleOptions}
 									disabled={busyUser !== null}
-									onchange={(e) => applyRole(m, (e.currentTarget as HTMLSelectElement).value)}
-									class="rounded-md border border-input bg-background px-2 py-1 text-sm"
-									data-testid={`share-role-${m.userId}`}
-									aria-label="Role on this object"
-								>
-									{#each grantableRoles as r (r)}
-										<option value={r}>{r}</option>
-									{/each}
-									<!-- The current effective role may exceed what the caller can
-									     grant (e.g. an owner row seen by an admin) — keep it
-									     selectable-as-display so the select isn't blank. -->
-									{#if !grantableRoles.includes(eff as (typeof ALL_ROLES)[number])}
-										<option value={eff}>{eff}</option>
-									{/if}
-								</select>
+									onSelect={(role) => applyRole(m, role)}
+									testid={`share-role-${m.userId}`}
+									ariaLabel="Role on this object"
+									class="w-28"
+								/>
 								{#if m.object}
 									<button
 										type="button"
