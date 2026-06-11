@@ -25,7 +25,7 @@ fn repo(state: &AppState) -> PgInventoryRepository {
 /// Batched by-reference register — **fills both halves of the equation**. Every
 /// item MUST carry a `content_hash`; for each, in one transaction, UPSERTs a
 /// logical `catalogue_entries` row (keyed on `content_hash`, `category =
-/// 'legacy'`) AND the physical `file_inventory` row on `(file_server_id,
+/// 'file'`) AND the physical `file_inventory` row on `(file_server_id,
 /// path)`. A hashless item is rejected (400) — observe-only goes through
 /// `/index`. No bytes are transferred. Returns insert/upsert counts.
 #[utoipa::path(

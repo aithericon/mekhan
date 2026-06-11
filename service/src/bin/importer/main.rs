@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
     if cli.skip_dedup {
         tracing::info!("--skip-dedup set; leaving catalogue untouched");
     } else {
-        tracing::info!("deduping legacy_file_index → catalogue_entries (category='legacy')");
+        tracing::info!("deduping legacy_file_index → catalogue_entries (category='file')");
         let inserted = dedup::run(&pool).await?;
         tracing::info!(catalogue_inserted = inserted, "dedup complete");
     }

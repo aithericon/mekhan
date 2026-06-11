@@ -33,7 +33,7 @@ Three design refinements from planning (reflected in §4 below):
   - `ALTER catalogue_entries`: add `entry_id UUID` (new PK, `DEFAULT gen_random_uuid()`), add
     `content_hash TEXT`; **drop the composite `(execution_id, id)` PK and add the surrogate PK
     FIRST** (Postgres refuses to drop NOT NULL on a PK column), then relax `NOT NULL` on
-    `execution_id/id/name/category/filename` (legacy logical rows set `category='legacy'`).
+    `execution_id/id/name/category/filename` (by-reference logical rows set `category='file'`).
   - `ALTER TABLE catalogue_entries ADD CONSTRAINT uq_cat_content_hash UNIQUE (content_hash);` —
     a UNIQUE **constraint** (FK-targetable), not a partial index. The nullable column permits
     many NULLs (job artifacts) while enforcing uniqueness on every non-null hash.
@@ -215,7 +215,7 @@ New `service/src/inventory/` module (mirrors `catalogue/`: `mod/model/queries/re
 + routes in `service/src/lib.rs`, `#[utoipa::path]` + `ToSchema` DTOs, then `just dev::openapi`:
 - `POST /api/v1/inventory/register` — batched by-reference upsert. Per item: if it carries
   content metadata + a `content_hash`, UPSERT a logical `catalogue_entries` row (`ON CONFLICT
-  (content_hash) DO NOTHING`, `execution_id`/`id` NULL, `category='legacy'`); then UPSERT the
+  (content_hash) DO NOTHING`, `execution_id`/`id` NULL, `category='file'`); then UPSERT the
   `file_inventory` row (`ON CONFLICT (file_server_id, path) DO UPDATE SET status/last_seen/
   updated_at/content_hash`). No bytes. Returns `{inventory_upserted, catalogue_inserted}`. For
   online crawl/reconcile output, not the 4M load.

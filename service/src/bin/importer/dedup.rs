@@ -3,7 +3,7 @@
 //!
 //! One catalogue row per unique non-null `hash`. Names collide across copies of
 //! the same content, so we pick a deterministic representative (earliest
-//! `modified`). `category='legacy'` tags these as logical by-reference rows
+//! `modified`). `category='file'` tags these as logical by-reference rows
 //! (no `execution_id`/`id` — those stay NULL; `entry_id` auto-defaults).
 //!
 //! `ON CONFLICT (content_hash) DO NOTHING` makes the whole importer safely
@@ -23,7 +23,7 @@ pub const DEDUP_SQL: &str = "\
 INSERT INTO catalogue_entries (content_hash, name, category, size_bytes, created_at) \
 SELECT hash, \
        (array_agg(raw->>'name' ORDER BY modified NULLS LAST))[1], \
-       'legacy', \
+       'file', \
        max(size), \
        COALESCE(min(created), NOW()) \
 FROM legacy_file_index \

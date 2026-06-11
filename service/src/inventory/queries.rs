@@ -237,7 +237,7 @@ pub async fn upsert_inventory_copy(
 /// batch paths (caller owns the tx): one statement couples the catalogue half
 /// for EVERY hash-carrying item of a batch. `hashes`/`metadatas` ride
 /// positionally with `paths`/`sizes`; `None` hash rows (hashless
-/// observations) are filtered in SQL. `category = 'legacy'`, name = the
+/// observations) are filtered in SQL. `category = 'file'`, name = the
 /// path's final segment (empty → NULL), `mime_type`/`file_metadata` from the
 /// probing crawl's fmeta blob when present.
 ///
@@ -259,7 +259,7 @@ pub async fn upsert_catalogue_by_hash_unnest(
         INSERT INTO catalogue_entries
             (content_hash, category, name, size_bytes, mime_type, file_metadata)
         SELECT DISTINCT ON (t.hash)
-               t.hash, 'legacy',
+               t.hash, 'file',
                NULLIF(regexp_replace(t.path, '^.*/', ''), ''),
                t.size,
                t.metadata->>'mime_type',
@@ -387,7 +387,7 @@ pub async fn fold_index_batch(
 /// Every item MUST carry a `content_hash`; an item without one is rejected
 /// (`QueryError::InvalidValue`) and the whole batch rolls back, so you can never
 /// half-register. For each item, in one transaction: upsert the logical
-/// `catalogue_entries` row (keyed on hash, `category = 'legacy'`) AND the
+/// `catalogue_entries` row (keyed on hash, `category = 'file'`) AND the
 /// physical `file_inventory` row (keyed on `(file_server_id, path)`). No bytes
 /// move — this is the online crawl/reconcile path after a `probe` has supplied
 /// the hash. Hashless observation goes through [`index`].
@@ -424,7 +424,7 @@ pub async fn register(
         catalogue_inserted += upsert_catalogue_by_hash(
             &mut tx,
             hash,
-            "legacy",
+            "file",
             item.name.as_deref(),
             item.size_bytes,
             item.mime_type.as_deref(),

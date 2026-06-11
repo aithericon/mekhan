@@ -548,8 +548,9 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     );
 
     // Catalogue half coupled in the same tx: name from the path's final
-    // segment, category legacy, legacy owner stamped into user_metadata,
-    // fmeta blob + mime enriched from the item's metadata.
+    // segment, neutral category `file` (crawl-discovered physical content —
+    // never migration-flavored vocabulary), legacy owner stamped into
+    // user_metadata, fmeta blob + mime enriched from the item's metadata.
     let cat: (String, Option<String>, serde_json::Value, Option<String>, serde_json::Value) =
         sqlx::query_as(
             "SELECT category, name, user_metadata, mime_type, file_metadata \
@@ -559,7 +560,7 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
         .fetch_one(&pool)
         .await
         .expect("catalogue row coupled");
-    assert_eq!(cat.0, "legacy");
+    assert_eq!(cat.0, "file");
     assert_eq!(cat.1.as_deref(), Some("probed.bin"));
     assert_eq!(
         cat.2["legacy_owner_id"],

@@ -103,7 +103,7 @@
 		{ value: '-meta.completeness', label: 'Most complete' }
 	];
 
-	const fallbackCategories = ['model', 'dataset', 'plot', 'log', 'checkpoint', 'config', 'metric', 'legacy', 'other'];
+	const fallbackCategories = ['model', 'dataset', 'plot', 'log', 'checkpoint', 'config', 'metric', 'file', 'other'];
 	const categories = $derived(
 		stats && stats.by_category.length > 0 ? stats.by_category.map((c) => c.category) : fallbackCategories
 	);
