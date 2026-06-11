@@ -40,6 +40,29 @@ src = re.sub(r"<ros2_control\b.*?</ros2_control>", "", src, flags=re.S)
 assert "<ros2_control" not in src
 # Mesh refs: package://xarm_description/… → relative to the URDF file.
 src = src.replace("package://xarm_description/", "xarm_description/")
+# Lock the gripper's five mimic finger joints to FIXED. PhysX's mimic
+# constraints fight the joint limits (fingers observed 48° beyond their hard
+# stop) and the solver impulses yank the wrist — joint6 deflected 0.18+ rad
+# mid-trajectory, aborting MoveIt executions. Grasping on this stack is MoveIt
+# scene-attach, not finger physics; drive_joint stays revolute so the gripper
+# traj controller keeps its actuated joint + state feedback.
+def lock_mimics(m):
+    j = m.group(0)
+    # drive_joint too: even with the five mimics fixed, a live drive_joint
+    # DOF deterministically destabilized the wrist on all-zeros goals (j6 and
+    # drive_joint flung in coupled, limit-violating excursions). The gripper
+    # action is best-effort in motion_bridge and grasping is scene-attach, so
+    # Isaac needs no gripper DOF at all.
+    if "<mimic" not in j and 'name="drive_joint"' not in j:
+        return j
+    j = re.sub(r'type="revolute"', 'type="fixed"', j, count=1)
+    j = re.sub(r"<mimic [^/]*/>", "", j)
+    j = re.sub(r"<limit [^/]*/>", "", j)
+    j = re.sub(r"<axis [^/]*/>", "", j)
+    return j
+src, n = re.subn(r"<joint\b.*?</joint>", lock_mimics, src, flags=re.S)
+locked = len(re.findall(r'type="fixed"', src))
+print(f"checked {n} joints; {locked} fixed joints after mimic lock")
 out = os.path.join(os.environ["OUT"], "xarm6_isaac.urdf")
 open(out, "w").write(src)
 meshes = len(re.findall(r'filename="xarm_description/', src))

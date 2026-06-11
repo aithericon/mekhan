@@ -59,13 +59,25 @@ def import_xarm(urdf_path: str) -> str:
     cfg = _urdf.ImportConfig()
     cfg.fix_base = True
     cfg.merge_fixed_joints = False
-    cfg.convex_decomp = False
+    # convex_decomp=False would wrap each collision mesh in ONE convex hull —
+    # the xarm's L-shaped links get their concavities filled, and near the
+    # vertical (all-zeros) pose the wrist assembly sits inside a filled
+    # concavity of a non-adjacent link. The resulting phantom contact is a
+    # position-level constraint that shoves j4/j5/j6 ~0.1-0.2 rad off target
+    # REGARDLESS of drive stiffness (the giveaway), failing every home-pose
+    # trajectory while offset poses track exactly.
+    cfg.convex_decomp = True
     cfg.self_collision = False
     cfg.make_default_prim = True
     cfg.create_physics_scene = True
     cfg.distance_scale = 1.0
-    # PD gains for the position drives (NVIDIA's MoveIt-tutorial values; the
-    # xarm URDF carries no <dynamics> so the importer needs explicit defaults).
+    # PD gains for the position drives (xarm URDF carries no <dynamics>, so
+    # the importer needs explicit defaults). These are NVIDIA's tutorial
+    # values — proven stable here INCLUDING the gripper's five mimic joints;
+    # a blanket 1e7/1e5 crashed PhysX mid-motion (mimic constraints fighting
+    # mega-stiff drives). The six ARM joints get stiffened post-import
+    # (stiffen_arm_drives) because at these defaults gravity sag left joint2
+    # 0.015 rad short of goal (tolerance 0.01) → GOAL_TOLERANCE_VIOLATED.
     cfg.default_drive_type = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
     cfg.default_drive_strength = 1047.19751
     cfg.default_position_drive_damping = 52.35988
@@ -102,8 +114,86 @@ def find_articulation_root(base_path: str) -> str:
 art_root = find_articulation_root(robot_prim)
 print(f"[isaac_xarm_scene] articulation root: {art_root}")
 
-world = World(stage_units_in_meters=1.0, physics_dt=1.0 / SIM_HZ, rendering_dt=1.0 / SIM_HZ)
-world.scene.add_default_ground_plane()
+
+def never_sleep(path: str) -> None:
+    """Disable PhysX articulation sleeping. The vertical all-zeros pose is a
+    zero-gravity-torque equilibrium: during a home move's deceleration tail
+    the articulation's energy drops below the sleep threshold ~0.1 rad SHORT
+    of target and PhysX puts it to sleep — and the OmniGraph articulation
+    controller's tensor-API writes don't wake it, so it ignores all further
+    commands (deterministic 'parked' pose, trajectory aborts, frozen arm).
+    Offset goals never slept only because gravity torque keeps the drives
+    correcting."""
+    import omni.usd
+    from pxr import PhysxSchema
+
+    stage = omni.usd.get_context().get_stage()
+    api = PhysxSchema.PhysxArticulationAPI.Apply(stage.GetPrimAtPath(path))
+    api.CreateSleepThresholdAttr().Set(0.0)
+    api.CreateStabilizationThresholdAttr().Set(0.0)
+    print(f"[isaac_xarm_scene] sleep disabled on {path}")
+
+
+never_sleep(art_root)
+
+
+def scale_drives(base_path: str, joints: set, k_scale: float, f_scale: float) -> None:
+    """Scale position-drive stiffness + max force on selected joints, RELATIVE
+    to what the importer wrote (robust to USD's angular-drive unit
+    convention), and set damping ABSOLUTELY to k/20 — the importer writes
+    near-zero damping (1.0 arm / 0.0 gripper, ignoring the config default),
+    which at high stiffness rings hard enough to blow the trajectory
+    controller's 0.01 rad state tolerance mid-motion."""
+    import omni.usd
+    from pxr import Usd, UsdPhysics
+
+    stage = omni.usd.get_context().get_stage()
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(base_path)):
+        if prim.GetName() not in joints:
+            continue
+        drive = UsdPhysics.DriveAPI.Get(prim, "angular")
+        if not drive:
+            continue
+        k = drive.GetStiffnessAttr().Get()
+        mf = drive.GetMaxForceAttr().Get()
+        new_k = k * k_scale
+        new_d = new_k / 20.0
+        drive.GetStiffnessAttr().Set(new_k)
+        drive.GetDampingAttr().Set(new_d)
+        if mf:  # 0/inf sentinel stays as-is
+            drive.GetMaxForceAttr().Set(mf * f_scale)
+        print(f"[isaac_xarm_scene] drive {prim.GetName()}: k {k:.1f}->{new_k:.1f} "
+              f"d ->{new_d:.1f} maxF {mf}->{mf * f_scale if mf else mf}")
+
+
+# Arm: kinematic-faithful tracking is the point of the twin, torque realism is
+# not (Phase 0). ×100 stiffness shrinks gravity-sag error 100× (0.015 rad at
+# the default → ~1.5e-4, far inside the controller's 0.01 goal tolerance);
+# ×100 max force lifts the URDF effort caps (joint3's 32 N·m saturated against
+# gravity — the elbow sagged 0.1 rad at REST and stalled 0.33 rad short of a
+# -0.5 goal); ×30 damping keeps the PD well-damped without the 1e7-class
+# blow-up that crashed PhysX.
+# ×10, not ×100: ×10 already shrinks gravity sag to ~0.0015 rad (6× inside
+# the 0.01 goal tolerance) and softer drives keep the solver stable near the
+# vertical singularity.
+scale_drives(robot_prim, {f"joint{i}" for i in range(1, 7)},
+             k_scale=10.0, f_scale=100.0)
+# Gripper: NO physical DOF in Isaac at all — asset prep locks drive_joint and
+# the five mimic fingers to fixed (live gripper joints deterministically
+# destabilized the wrist on all-zeros goals); grasping is MoveIt scene-attach.
+
+# Physics at 4× the render/bridge rate: near the vertical pose the wrist axes
+# align (j1/j4/j6 gimbal) and the ill-conditioned mass matrix + stiff drives
+# go numerically unstable at 60 Hz — joints that should hold still get flung
+# 0.1-0.4 rad during home-pose approaches. The ROS graph still ticks per
+# render frame (60 Hz states/commands).
+world = World(stage_units_in_meters=1.0, physics_dt=1.0 / (4 * SIM_HZ), rendering_dt=1.0 / SIM_HZ)
+# NO ground plane: at the xArm6 zero pose the wrist/gripper hangs low enough
+# to contact a z=0 floor — the contact constraint shoved j4/j5 ~0.2 rad off
+# clean commands during every home-pose approach (overpowering the drives;
+# stiffness-independent, deterministic) while offset poses stayed clear. The
+# arm is table-mounted in the lab anyway; reintroduce scenery deliberately
+# (with clearance) when scene mirroring lands in Phase 1.
 
 # ── ROS 2 bridge graph: tick → (subscribe commands → articulation controller,
 #    publish joint states). Plain JointState both ways; TopicBasedSystem and
@@ -129,9 +219,14 @@ og.Controller.edit(
             ("Context.outputs:context", "PublishJointState.inputs:context"),
             ("ReadSimTime.outputs:simulationTime", "PublishJointState.inputs:timeStamp"),
             ("SubscribeJointState.outputs:jointNames", "ArticulationController.inputs:jointNames"),
+            # POSITION-ONLY on purpose. Wiring velocityCommand as well makes
+            # the drives diverge mid-deceleration (worst on all-zeros goals):
+            # the velocity feedforward fights the position target hard enough
+            # to fling joints 0.1-0.4 rad off a CLEAN reference (verified with
+            # controller_state capture — reference clean, feedback diverging).
+            # MoveIt's 0.01 rad goal tolerance + stiff position drives don't
+            # need feedforward.
             ("SubscribeJointState.outputs:positionCommand", "ArticulationController.inputs:positionCommand"),
-            ("SubscribeJointState.outputs:velocityCommand", "ArticulationController.inputs:velocityCommand"),
-            ("SubscribeJointState.outputs:effortCommand", "ArticulationController.inputs:effortCommand"),
         ],
         keys.SET_VALUES: [
             ("Context.inputs:domain_id", int(os.environ.get("ROS_DOMAIN_ID", "42"))),

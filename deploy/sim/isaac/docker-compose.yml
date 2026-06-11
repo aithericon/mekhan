@@ -59,15 +59,12 @@ services:
       - ./isaac:/scripts:ro
       - ./assets:/assets:ro
       - ./fastdds-udp-only.xml:/profiles/fastdds-udp-only.xml:ro
-      # Standard Isaac Sim cache set — first boot compiles shaders for ~minutes;
-      # these volumes make every later boot fast.
-      - isaac-cache-kit:/isaac-sim/kit/cache
-      - isaac-cache-ov:/root/.cache/ov
-      - isaac-cache-pip:/root/.cache/pip
-      - isaac-cache-glcache:/root/.cache/nvidia/GLCache
-      - isaac-cache-computecache:/root/.nv/ComputeCache
-      - isaac-logs:/root/.nvidia-omniverse/logs
-      - isaac-data:/root/.local/share/ov/data
+      # NO cache volumes on purpose: the 5.1 container runs as uid 1234
+      # (isaac-sim), and docker-created named volumes arrive root-owned →
+      # every cache write fails (shadercache, ogn_generated, kvdb errors) and
+      # the 4.x-era /root/.cache mount points don't even match the user's
+      # home. Caches live in the container layer instead: kept across
+      # restarts, rebuilt only on recreate (~a minute of shader compile).
 
   xarm:
     image: aithericon-xarm:jazzy
@@ -85,12 +82,3 @@ services:
       - ./fastdds-udp-only.xml:/profiles/fastdds-udp-only.xml:ro
     depends_on:
       - isaac
-
-volumes:
-  isaac-cache-kit:
-  isaac-cache-ov:
-  isaac-cache-pip:
-  isaac-cache-glcache:
-  isaac-cache-computecache:
-  isaac-logs:
-  isaac-data:
