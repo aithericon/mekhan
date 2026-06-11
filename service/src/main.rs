@@ -430,6 +430,17 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     ));
 
+    // Invite (Phase 4) delivery + identity provisioning seams. Email defaults to
+    // log-mode (offline); the provisioner is the deterministic Noop under
+    // dev_noop and the real Zitadel broker under any auth mode. The boot
+    // invariant rejects a synthetic provisioner under a real auth mode.
+    let email = mekhan_service::notify::email::build_email_sender(&config);
+    let user_provisioner = mekhan_service::auth::provisioner::build_user_provisioner(&config);
+    mekhan_service::auth::provisioner::assert_provisioner_invariant(
+        config.auth.mode,
+        &user_provisioner,
+    );
+
     let state = AppState {
         db,
         petri,
@@ -457,6 +468,8 @@ async fn main() -> anyhow::Result<()> {
         human_presence,
         fleet,
         asset_resolver,
+        email,
+        user_provisioner,
     };
 
     // Unified worker dispatch: every workspace must own its always-seeded

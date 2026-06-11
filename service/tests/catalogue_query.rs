@@ -34,6 +34,11 @@ async fn connect() -> PgPool {
         .expect("connect to dev Postgres")
 }
 
+/// Serializes the tests in this binary: cleanup wipes the WHOLE
+/// `test-catq-` namespace, so two tests running concurrently would delete
+/// each other's seeds mid-flight.
+static DB_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Tear down everything in the `test-catq-` namespace (start AND end — a
 /// crashed prior run must not poison bucket math).
 async fn cleanup(pool: &PgPool) {
@@ -68,12 +73,13 @@ async fn insert_entry(
     .expect("insert catalogue entry");
 }
 
-/// Seed 5 entries under a unique execution_id namespace; returns the exec id.
+/// Seed 6 entries under a unique execution_id namespace; returns the exec id.
 ///
 /// fmeta-shaped JSON per the serializer (fields with `skip_serializing_if`
 /// ABSENT when empty): a csv with column_names + email classification +
 /// data_quality, a second csv, a png with `format_specific.Image`, a netcdf
-/// with dimensions, and one with NO probe data (`{}`).
+/// with dimensions, one with NO probe data (`{}`), and an mp3 with
+/// `format_specific.Audio` (exercises the per-format detail specs).
 async fn seed(pool: &PgPool) -> String {
     let run = Uuid::new_v4().simple().to_string();
     let exec = format!("test-catq-{run}");
@@ -161,6 +167,25 @@ async fn seed(pool: &PgPool) -> String {
     // e5: no probe data at all.
     insert_entry(pool, &exec, "e5", "log", 42, serde_json::json!({})).await;
 
+    // e6: mp3 — format_specific Audio details (per-format detail specs).
+    insert_entry(
+        pool,
+        &exec,
+        "e6",
+        "media",
+        3333,
+        serde_json::json!({
+            "format": "mp3",
+            "mime_type": "audio/mpeg",
+            "format_specific": {"format": "Audio", "details": {
+                "duration_secs": 245.5, "sample_rate": 44100, "channels": 2,
+                "bitrate_kbps": 320, "codec": "mp3"
+            }},
+            "extracted_at": "2026-06-10T00:00:00Z"
+        }),
+    )
+    .await;
+
     exec
 }
 
@@ -197,6 +222,7 @@ async fn meta_filters_and_sort_via_list_entries() {
         );
         return;
     };
+    let _gate = DB_GATE.lock().await;
     let pool = connect().await;
     cleanup(&pool).await;
     let exec = seed(&pool).await;
@@ -252,6 +278,13 @@ async fn meta_filters_and_sort_via_list_entries() {
     .expect("meta.width + category");
     assert_eq!(ids(&page), ["e3"]);
 
+    // A per-format detail spec (Cut A) end-to-end: meta.sample_rate projects
+    // out of `format_specific.details` with the ::bigint cast.
+    let page = list_entries(&pool, &scoped(&exec, "filter[meta.sample_rate][gte]=40000"))
+        .await
+        .expect("meta.sample_rate gte");
+    assert_eq!(ids(&page), ["e6"], "only the 44.1 kHz mp3 has sample_rate");
+
     // Unknown meta field → InvalidField, no SQL executed.
     let err = list_entries(&pool, &scoped(&exec, "filter[meta.bogus][eq]=x"))
         .await
@@ -273,6 +306,7 @@ async fn facets_bucket_math_exact() {
         eprintln!("SKIP facets_bucket_math_exact: set MEKHAN__DATABASE_URL to run");
         return;
     };
+    let _gate = DB_GATE.lock().await;
     let pool = connect().await;
     cleanup(&pool).await;
     let exec = seed(&pool).await;
@@ -292,12 +326,17 @@ async fn facets_bucket_math_exact() {
     assert_eq!((nc.count, nc.bytes), (1, 7777));
     let unknown = bucket(&by_format, "unknown").expect("probe-less row");
     assert_eq!((unknown.count, unknown.bytes), (1, 42));
-    assert_eq!(by_format.buckets.len(), 4);
-    assert_eq!(by_format.total_count, 5);
-    assert_eq!(by_format.total_bytes, 5000 + 1500 + 200_000 + 7777 + 42);
+    let mp3 = bucket(&by_format, "mp3").expect("mp3 bucket");
+    assert_eq!((mp3.count, mp3.bytes), (1, 3333));
+    assert_eq!(by_format.buckets.len(), 5);
+    assert_eq!(by_format.total_count, 6);
+    assert_eq!(
+        by_format.total_bytes,
+        5000 + 1500 + 200_000 + 7777 + 42 + 3333
+    );
     // count DESC, key ASC: csv(2) first, then the count-1 keys alphabetical.
     let keys: Vec<&str> = by_format.buckets.iter().map(|b| b.key.as_str()).collect();
-    assert_eq!(keys, ["csv", "netcdf", "png", "unknown"]);
+    assert_eq!(keys, ["csv", "mp3", "netcdf", "png", "unknown"]);
 
     // --- column (lateral unnest of column_names) -------------------------------
     let by_col = facets(&pool, &params, CatalogueDimension::Column, limit)
@@ -318,7 +357,7 @@ async fn facets_bucket_math_exact() {
         3,
         "non-tabular entries add no buckets"
     );
-    assert_eq!(by_col.total_count, 5, "totals cover the whole scope");
+    assert_eq!(by_col.total_count, 6, "totals cover the whole scope");
 
     // --- classification (per-entry DISTINCT categories) ------------------------
     let by_cls = facets(&pool, &params, CatalogueDimension::Classification, limit)
@@ -356,7 +395,7 @@ async fn facets_bucket_math_exact() {
         .expect("format facets limit 1");
     assert_eq!(top1.buckets.len(), 1);
     assert_eq!(top1.buckets[0].key, "csv");
-    assert_eq!(top1.total_count, 5);
+    assert_eq!(top1.total_count, 6);
 
     cleanup(&pool).await;
 }
@@ -367,6 +406,7 @@ async fn saved_queries_crud_round_trip() {
         eprintln!("SKIP saved_queries_crud_round_trip: set MEKHAN__DATABASE_URL to run");
         return;
     };
+    let _gate = DB_GATE.lock().await;
     let pool = connect().await;
     cleanup(&pool).await;
 

@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
+	import Mail from '@lucide/svelte/icons/mail';
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import { PageShell, PageHeader } from '$lib/components/shell';
@@ -9,6 +10,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
 	import UserChip from '$lib/components/iam/UserChip.svelte';
+	import RoleSelect from '$lib/components/iam/RoleSelect.svelte';
 	import {
 		Card,
 		CardHeader,
@@ -25,8 +27,23 @@
 		type WorkspaceSummary,
 		type WorkspaceMember
 	} from '$lib/api/client';
+	import {
+		listInvites,
+		createInvite,
+		resendInvite,
+		revokeInvite,
+		type InviteSummary
+	} from '$lib/api/invites';
+	import { updateMemberRole } from '$lib/api/iam';
+	import { auth } from '$lib/auth/store.svelte';
 
 	const workspaceId = $derived($page.params.id ?? '');
+
+	const WS_ROLES = ['viewer', 'editor', 'admin', 'owner'] as const;
+
+	// Workspace Owner/Admin gates every member/invite mutation. The server is
+	// authoritative; this just hides affordances the caller can't use.
+	const canAdmin = $derived(auth.isWorkspaceAdmin);
 
 	let workspace = $state<WorkspaceSummary | null>(null);
 	let members = $state<WorkspaceMember[]>([]);
@@ -39,6 +56,13 @@
 	let addingMember = $state(false);
 	let addError = $state<string | null>(null);
 
+	// Invite form + pending-invite list
+	let invites = $state<InviteSummary[]>([]);
+	let inviteEmail = $state('');
+	let inviteRole = $state<'viewer' | 'editor' | 'admin' | 'owner'>('editor');
+	let inviting = $state(false);
+	let inviteError = $state<string | null>(null);
+
 	async function load() {
 		loading = true;
 		error = null;
@@ -47,10 +71,48 @@
 				getWorkspace(workspaceId),
 				listWorkspaceMembers(workspaceId)
 			]);
+			// Invites are Admin-only; tolerate a 403 for non-admins.
+			invites = await listInvites(workspaceId).catch(() => []);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load workspace';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function sendInvite(e: Event) {
+		e.preventDefault();
+		const email = inviteEmail.trim();
+		if (!email) return;
+		inviting = true;
+		inviteError = null;
+		try {
+			await createInvite(workspaceId, { email, role: inviteRole });
+			inviteEmail = '';
+			invites = await listInvites(workspaceId);
+		} catch (e) {
+			inviteError = e instanceof Error ? e.message : 'Failed to send invite';
+		} finally {
+			inviting = false;
+		}
+	}
+
+	async function resend(inviteId: string) {
+		try {
+			await resendInvite(workspaceId, inviteId);
+			invites = await listInvites(workspaceId);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to resend invite');
+		}
+	}
+
+	async function revoke(inviteId: string) {
+		if (!confirm('Revoke this invite?')) return;
+		try {
+			await revokeInvite(workspaceId, inviteId);
+			invites = invites.filter((i) => i.id !== inviteId);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to revoke invite');
 		}
 	}
 
@@ -89,6 +151,27 @@
 		}
 	}
 
+	// A workspace can never be left without an owner: the sole remaining owner's
+	// role select + remove are disabled (the server enforces this too — we
+	// handle a 409 from a concurrent race gracefully below).
+	const ownerCount = $derived(members.filter((m) => m.role === 'owner').length);
+	const isLastOwner = (m: WorkspaceMember) => m.role === 'owner' && ownerCount <= 1;
+
+	let roleBusy = $state<string | null>(null);
+	async function changeRole(m: WorkspaceMember, role: string) {
+		if (role === m.role || roleBusy) return;
+		roleBusy = m.user_id;
+		try {
+			const updated = await updateMemberRole(workspaceId, m.user_id, role);
+			members = members.map((x) => (x.user_id === m.user_id ? { ...x, role: updated.role } : x));
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : 'Failed to change role';
+			alert(msg.includes('409') ? 'A workspace must keep at least one owner.' : msg);
+		} finally {
+			roleBusy = null;
+		}
+	}
+
 </script>
 
 <PageShell testid="workspace-detail">
@@ -124,37 +207,38 @@
 					</CardDescription>
 				</CardHeader>
 				<CardContent class="space-y-4">
-					<form onsubmit={addMember} class="space-y-2">
-						<div class="flex gap-2">
-							<Input
-								type="email"
-								placeholder="email@corp.com"
-								bind:value={newMemberEmail}
-								data-testid="input-new-member-email"
-								class="flex-1"
-							/>
-							<select
-								bind:value={newMemberRole}
-								class="rounded-md border border-input bg-background px-2 text-sm"
-								data-testid="select-new-member-role"
-							>
-								<option value="viewer">Viewer</option>
-								<option value="editor">Editor</option>
-								<option value="admin">Admin</option>
-								<option value="owner">Owner</option>
-							</select>
-							<Button type="submit" disabled={addingMember} data-testid="btn-add-member">
-								<UserPlus class="size-4" />
-								Add
-							</Button>
-						</div>
-						{#if addError}
-							<div class="text-xs text-destructive">{addError}</div>
-						{/if}
-					</form>
+					{#if canAdmin}
+						<form onsubmit={addMember} class="space-y-2">
+							<div class="flex gap-2">
+								<Input
+									type="email"
+									placeholder="email@corp.com"
+									bind:value={newMemberEmail}
+									data-testid="input-new-member-email"
+									class="flex-1"
+								/>
+								<RoleSelect
+									value={newMemberRole}
+									roles={WS_ROLES}
+									onSelect={(r) => (newMemberRole = r as typeof newMemberRole)}
+									size="default"
+									testid="select-new-member-role"
+									ariaLabel="New member role"
+								/>
+								<Button type="submit" disabled={addingMember} data-testid="btn-add-member">
+									<UserPlus class="size-4" />
+									Add
+								</Button>
+							</div>
+							{#if addError}
+								<div class="text-xs text-destructive">{addError}</div>
+							{/if}
+						</form>
+					{/if}
 
 					<ul class="divide-y divide-border rounded-md border border-border">
 						{#each members as m (m.user_id)}
+							{@const lastOwner = isLastOwner(m)}
 							<li
 								class="flex items-center justify-between gap-3 px-3 py-2 text-sm"
 								data-testid={`member-row-${m.user_id}`}
@@ -171,19 +255,109 @@
 										showEmail
 									/>
 								</div>
-								<Badge variant="secondary">{m.role}</Badge>
-								<button
-									type="button"
-									class="text-muted-foreground hover:text-destructive"
-									onclick={() => removeMember(m.user_id)}
-									data-testid={`btn-remove-member-${m.user_id}`}
-									aria-label="Remove member"
-								>
-									<Trash2 class="size-3.5" />
-								</button>
+								{#if canAdmin}
+									<RoleSelect
+										value={m.role}
+										roles={WS_ROLES}
+										disabled={roleBusy !== null || lastOwner}
+										title={lastOwner ? 'A workspace must keep at least one owner' : undefined}
+										onSelect={(r) => changeRole(m, r)}
+										testid={`member-role-${m.user_id}`}
+										ariaLabel="Member role"
+										class="w-28"
+									/>
+									<button
+										type="button"
+										class="text-muted-foreground hover:text-destructive disabled:opacity-40"
+										onclick={() => removeMember(m.user_id)}
+										disabled={lastOwner}
+										title={lastOwner ? 'A workspace must keep at least one owner' : 'Remove member'}
+										data-testid={`btn-remove-member-${m.user_id}`}
+										aria-label="Remove member"
+									>
+										<Trash2 class="size-3.5" />
+									</button>
+								{:else}
+									<Badge variant="secondary">{m.role}</Badge>
+								{/if}
 							</li>
 						{/each}
 					</ul>
+				</CardContent>
+			</Card>
+
+			<!-- Pending invites -->
+			<Card data-testid="invites-card">
+				<CardHeader>
+					<CardTitle>Invites</CardTitle>
+					<CardDescription>
+						Invite someone by email. They get an accept link; on accept they're
+						added at the chosen role (created in the IdP if new).
+					</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-4">
+					{#if canAdmin}
+					<form onsubmit={sendInvite} class="space-y-2">
+						<div class="flex gap-2">
+							<Input
+								type="email"
+								placeholder="invitee@corp.com"
+								bind:value={inviteEmail}
+								data-testid="input-invite-email"
+								class="flex-1"
+							/>
+							<RoleSelect
+								value={inviteRole}
+								roles={WS_ROLES}
+								onSelect={(r) => (inviteRole = r as typeof inviteRole)}
+								size="default"
+								testid="select-invite-role"
+								ariaLabel="Invite role"
+							/>
+							<Button type="submit" disabled={inviting} data-testid="btn-send-invite">
+								<Mail class="size-4" />
+								Invite
+							</Button>
+						</div>
+						{#if inviteError}
+							<div class="text-xs text-destructive">{inviteError}</div>
+						{/if}
+					</form>
+					{/if}
+
+					{#if invites.length === 0}
+						<p class="text-sm text-muted-foreground">No invites yet.</p>
+					{:else}
+						<ul class="divide-y divide-border rounded-md border border-border">
+							{#each invites as inv (inv.id)}
+								<li
+									class="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+									data-testid={`invite-row-${inv.id}`}
+								>
+									<div class="min-w-0 flex-1 truncate">{inv.email}</div>
+									<Badge variant="secondary">{inv.role}</Badge>
+									<Badge
+										variant={inv.status === 'pending' ? 'outline' : 'secondary'}
+										data-testid={`invite-status-${inv.id}`}>{inv.status}</Badge
+									>
+									{#if inv.status === 'pending' && canAdmin}
+										<button
+											type="button"
+											class="text-xs text-muted-foreground hover:text-foreground"
+											onclick={() => resend(inv.id)}
+											data-testid={`btn-resend-${inv.id}`}>Resend</button
+										>
+										<button
+											type="button"
+											class="text-xs text-muted-foreground hover:text-destructive"
+											onclick={() => revoke(inv.id)}
+											data-testid={`btn-revoke-${inv.id}`}>Revoke</button
+										>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</CardContent>
 			</Card>
 

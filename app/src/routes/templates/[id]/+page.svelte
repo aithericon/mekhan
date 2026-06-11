@@ -8,6 +8,8 @@
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import { roleAtLeast } from '$lib/api/iam';
 	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 	// NodePropertyPanel is lazy-loaded — its static import drags in 17
@@ -57,6 +59,12 @@
 	let settingsPanelOpen = $state(false);
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
+	let shareOpen = $state(false);
+
+	// Object-Admins can manage sharing. `my_effective_role` rides the template
+	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
+	// (future) edit gates never show a stale role.
+	const canShare = $derived(roleAtLeast(template?.my_effective_role, 'admin'));
 
 	// Yjs session + binding — bound once for the active template; the route
 	// remounts on id change, so the initial-value read is intended.
@@ -364,6 +372,7 @@
 				onrun={handleRun}
 				ontests={() => (testsPanelOpen = true)}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
+				onshare={template && canShare ? () => (shareOpen = true) : undefined}
 				onrename={handleRename}
 			/>
 
@@ -478,3 +487,14 @@
 	templateId={template?.id ?? null}
 	oncreated={onInstanceCreated}
 />
+
+{#if template}
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="template"
+		objectId={template.id}
+		objectName={template.name}
+		myEffectiveRole={template.my_effective_role}
+		onChanged={load}
+	/>
+{/if}

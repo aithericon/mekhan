@@ -54,6 +54,73 @@ pub struct AppConfig {
     /// `MEKHAN__PROXY_S3_READS`.
     #[serde(default)]
     pub proxy_s3_reads: bool,
+    /// Invite email + accept-link configuration (Phase 4). Default `mode=log`
+    /// (the dev/offline path — the accept URL is `tracing::info!`d, no SMTP).
+    #[serde(default)]
+    pub email: EmailConfig,
+}
+
+/// Invite-email delivery + accept-link construction (Phase 4).
+#[derive(Debug, Deserialize, Clone)]
+pub struct EmailConfig {
+    /// `log` (default — emit the accept URL to the tracing log; offline-friendly)
+    /// or `smtp` (send via the configured relay).
+    #[serde(default)]
+    pub mode: EmailMode,
+    /// From-address on outgoing invite mail.
+    #[serde(default = "default_email_from")]
+    pub from_address: String,
+    /// Public origin the accept link is built against:
+    /// `{public_base_url}/invite/accept?token=...`. Defaults to the dev SPA.
+    #[serde(default = "default_public_base_url")]
+    pub public_base_url: String,
+    /// Invite lifetime in seconds (default 7 days).
+    #[serde(default = "default_invite_ttl_secs")]
+    pub invite_ttl_secs: i64,
+    /// SMTP relay host (only read when `mode = smtp`).
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: Option<u16>,
+    #[serde(default)]
+    pub smtp_username: Option<String>,
+    #[serde(default)]
+    pub smtp_password: Option<String>,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            mode: EmailMode::default(),
+            from_address: default_email_from(),
+            public_base_url: default_public_base_url(),
+            invite_ttl_secs: default_invite_ttl_secs(),
+            smtp_host: None,
+            smtp_port: None,
+            smtp_username: None,
+            smtp_password: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailMode {
+    /// Log the accept URL instead of sending (default; offline dev).
+    #[default]
+    Log,
+    /// Send via SMTP relay.
+    Smtp,
+}
+
+fn default_email_from() -> String {
+    "no-reply@aithericon.local".to_string()
+}
+fn default_public_base_url() -> String {
+    "http://localhost:15173".to_string()
+}
+fn default_invite_ttl_secs() -> i64 {
+    7 * 24 * 60 * 60
 }
 
 /// LiveKit server connection + API credentials. `url` is the WebSocket signalling

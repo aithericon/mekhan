@@ -68,6 +68,7 @@ const fn spec(name: &'static str, expr: &'static str) -> FieldSpec {
         name,
         expr,
         timestamp: false,
+        applies_to: &[],
     }
 }
 
@@ -76,8 +77,60 @@ const fn tspec(name: &'static str, expr: &'static str) -> FieldSpec {
         name,
         expr,
         timestamp: true,
+        applies_to: &[],
     }
 }
+
+/// Format-scoped spec: `applies_to` is discovery metadata for field pickers
+/// (see [`FieldSpec::applies_to`]) — it never reaches the SQL.
+const fn fspec(
+    name: &'static str,
+    expr: &'static str,
+    applies_to: &'static [&'static str],
+) -> FieldSpec {
+    FieldSpec {
+        name,
+        expr,
+        timestamp: false,
+        applies_to,
+    }
+}
+
+// Format groups for `applies_to` (snake_case fmeta `FileFormat` wire strings —
+// the values of `file_metadata->>'format'`; machine-validated against the real
+// enum by `applies_to_strings_are_known_formats`). Combined groups are spelled
+// out because const slices can't concatenate.
+const TABULAR_SPREADSHEET_FORMATS: &[&str] =
+    &["csv", "parquet", "json", "arrow", "xlsx", "xls", "ods"];
+const SPREADSHEET_FORMATS: &[&str] = &["xlsx", "xls", "ods"];
+const IMAGE_FORMATS: &[&str] = &["jpeg", "png", "tiff", "web_p", "gif", "bmp"];
+const AUDIO_FORMATS: &[&str] = &["mp3", "flac", "wav", "ogg", "aac"];
+const VIDEO_FORMATS: &[&str] = &["mp4", "mkv", "avi", "web_m"];
+const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "seven_zip", "rar"];
+const IMAGE_VIDEO_FORMATS: &[&str] = &[
+    "jpeg", "png", "tiff", "web_p", "gif", "bmp", "mp4", "mkv", "avi", "web_m",
+];
+const IMAGE_AUDIO_FORMATS: &[&str] = &[
+    "jpeg", "png", "tiff", "web_p", "gif", "bmp", "mp3", "flac", "wav", "ogg", "aac",
+];
+const AUDIO_VIDEO_FORMATS: &[&str] = &[
+    "mp3", "flac", "wav", "ogg", "aac", "mp4", "mkv", "avi", "web_m",
+];
+const COMPRESSION_FORMATS: &[&str] = &[
+    "parquet",
+    "jpeg",
+    "png",
+    "tiff",
+    "web_p",
+    "gif",
+    "bmp",
+    "zip",
+    "tar",
+    "seven_zip",
+    "rar",
+];
+const VTK_FORMATS: &[&str] = &["vtk_legacy", "vtu", "vtp", "vts", "vtr", "vti"];
+const ZARR_FORMATS: &[&str] = &["zarr_v2", "zarr_v3"];
 
 /// The catalogue query-field registry: every native filter column PLUS the
 /// virtual `meta.*` fields projected out of the `file_metadata` JSONB (the
@@ -113,32 +166,164 @@ pub const CATALOGUE_FIELD_SPECS: &[FieldSpec] = &[
     // Fields with serde `skip_serializing_if` are ABSENT when empty, so the
     // exprs yield NULL there (is_null/is_not_null work as expected).
     spec("meta.format", "(file_metadata->>'format')"),
-    spec("meta.num_rows", "((file_metadata->>'num_rows')::bigint)"),
-    spec(
+    fspec(
+        "meta.num_rows",
+        "((file_metadata->>'num_rows')::bigint)",
+        TABULAR_SPREADSHEET_FORMATS,
+    ),
+    fspec(
         "meta.num_columns",
         "((file_metadata->>'num_columns')::bigint)",
+        TABULAR_SPREADSHEET_FORMATS,
     ),
-    spec(
+    fspec(
         "meta.completeness",
         "((file_metadata->'data_quality'->>'completeness')::float8)",
+        TABULAR_SPREADSHEET_FORMATS,
     ),
-    spec(
+    fspec(
         "meta.width",
         "((file_metadata->'format_specific'->'details'->>'width')::bigint)",
+        IMAGE_VIDEO_FORMATS,
     ),
-    spec(
+    fspec(
         "meta.height",
         "((file_metadata->'format_specific'->'details'->>'height')::bigint)",
+        IMAGE_VIDEO_FORMATS,
     ),
-    spec(
+    fspec(
         "meta.duration_secs",
         "((file_metadata->'format_specific'->'details'->>'duration_secs')::float8)",
+        AUDIO_VIDEO_FORMATS,
     ),
     spec(
         "meta.schema",
         "(file_metadata->'schema_fingerprint'->>'digest')",
     ),
     spec("meta.encrypted", "((file_metadata->>'encrypted')::boolean)"),
+    // Per-format detail fields (flat `meta.<leaf>` naming — shared JSONB
+    // leaves like `compression` get ONE spec spanning every format that
+    // carries them; `applies_to` carries the per-format story).
+    fspec(
+        "meta.delimiter",
+        "(file_metadata->'format_specific'->'details'->>'delimiter')",
+        &["csv"],
+    ),
+    fspec(
+        "meta.encoding",
+        "(file_metadata->'format_specific'->'details'->>'encoding')",
+        &["csv"],
+    ),
+    fspec(
+        "meta.has_header",
+        "((file_metadata->'format_specific'->'details'->>'has_header')::boolean)",
+        &["csv"],
+    ),
+    fspec(
+        "meta.compression",
+        "(file_metadata->'format_specific'->'details'->>'compression')",
+        COMPRESSION_FORMATS,
+    ),
+    fspec(
+        "meta.num_row_groups",
+        "((file_metadata->'format_specific'->'details'->>'num_row_groups')::bigint)",
+        &["parquet"],
+    ),
+    fspec(
+        "meta.color_space",
+        "(file_metadata->'format_specific'->'details'->>'color_space')",
+        IMAGE_FORMATS,
+    ),
+    fspec(
+        "meta.bit_depth",
+        "((file_metadata->'format_specific'->'details'->>'bit_depth')::bigint)",
+        IMAGE_AUDIO_FORMATS,
+    ),
+    fspec(
+        "meta.channels",
+        "((file_metadata->'format_specific'->'details'->>'channels')::bigint)",
+        IMAGE_AUDIO_FORMATS,
+    ),
+    fspec(
+        "meta.animated",
+        "((file_metadata->'format_specific'->'details'->>'animated')::boolean)",
+        &["png", "gif", "web_p"],
+    ),
+    fspec(
+        "meta.sample_rate",
+        "((file_metadata->'format_specific'->'details'->>'sample_rate')::bigint)",
+        AUDIO_FORMATS,
+    ),
+    fspec(
+        "meta.codec",
+        "(file_metadata->'format_specific'->'details'->>'codec')",
+        AUDIO_FORMATS,
+    ),
+    fspec(
+        "meta.bitrate_kbps",
+        "((file_metadata->'format_specific'->'details'->>'bitrate_kbps')::bigint)",
+        AUDIO_VIDEO_FORMATS,
+    ),
+    fspec(
+        "meta.fps",
+        "((file_metadata->'format_specific'->'details'->>'fps')::float8)",
+        VIDEO_FORMATS,
+    ),
+    fspec(
+        "meta.video_codec",
+        "(file_metadata->'format_specific'->'details'->>'video_codec')",
+        VIDEO_FORMATS,
+    ),
+    fspec(
+        "meta.audio_codec",
+        "(file_metadata->'format_specific'->'details'->>'audio_codec')",
+        VIDEO_FORMATS,
+    ),
+    fspec(
+        "meta.num_entries",
+        "((file_metadata->'format_specific'->'details'->>'num_entries')::bigint)",
+        ARCHIVE_FORMATS,
+    ),
+    fspec(
+        "meta.num_sheets",
+        "((file_metadata->'format_specific'->'details'->>'num_sheets')::bigint)",
+        SPREADSHEET_FORMATS,
+    ),
+    fspec(
+        "meta.zarr_version",
+        "((file_metadata->'format_specific'->'details'->>'zarr_version')::bigint)",
+        ZARR_FORMATS,
+    ),
+    fspec(
+        "meta.num_arrays",
+        "((file_metadata->'format_specific'->'details'->>'num_arrays')::bigint)",
+        ZARR_FORMATS,
+    ),
+    fspec(
+        "meta.dataset_type",
+        "(file_metadata->'format_specific'->'details'->>'dataset_type')",
+        VTK_FORMATS,
+    ),
+    fspec(
+        "meta.num_points",
+        "((file_metadata->'format_specific'->'details'->>'num_points')::bigint)",
+        VTK_FORMATS,
+    ),
+    fspec(
+        "meta.num_cells",
+        "((file_metadata->'format_specific'->'details'->>'num_cells')::bigint)",
+        VTK_FORMATS,
+    ),
+    fspec(
+        "meta.conventions",
+        "(file_metadata->'format_specific'->'details'->>'conventions')",
+        &["net_cdf"],
+    ),
+    fspec(
+        "meta.num_hdus",
+        "((file_metadata->'format_specific'->'details'->>'num_hdus')::bigint)",
+        &["fits"],
+    ),
 ];
 
 /// List catalogue entries with full filter/sort/pagination support.
@@ -585,6 +770,94 @@ const CATALOGUE_FIELD_INFO: &[(&str, &str, &str)] = &[
         "boolean",
         "Whether the probe flagged the file as encrypted",
     ),
+    (
+        "meta.delimiter",
+        "text",
+        "CSV field delimiter (e.g. ',' or '\\t')",
+    ),
+    ("meta.encoding", "text", "CSV text encoding (e.g. utf-8)"),
+    (
+        "meta.has_header",
+        "boolean",
+        "Whether the CSV first row is a header",
+    ),
+    (
+        "meta.compression",
+        "text",
+        "Compression codec/method (parquet, image, archive formats)",
+    ),
+    ("meta.num_row_groups", "number", "Parquet row-group count"),
+    (
+        "meta.color_space",
+        "text",
+        "Image color space (RGB, RGBA, Grayscale, CMYK, ...)",
+    ),
+    (
+        "meta.bit_depth",
+        "number",
+        "Bits per channel/sample (image/audio formats)",
+    ),
+    (
+        "meta.channels",
+        "number",
+        "Color or audio channel count (image/audio formats)",
+    ),
+    ("meta.animated", "boolean", "Whether the image is animated"),
+    ("meta.sample_rate", "number", "Audio sample rate in Hz"),
+    (
+        "meta.codec",
+        "text",
+        "Audio codec (mp3, flac, aac, vorbis, ...)",
+    ),
+    (
+        "meta.bitrate_kbps",
+        "number",
+        "Bitrate in kbps (audio/video formats)",
+    ),
+    ("meta.fps", "number", "Video frames per second"),
+    (
+        "meta.video_codec",
+        "text",
+        "Video codec (h264, h265, vp9, av1, ...)",
+    ),
+    (
+        "meta.audio_codec",
+        "text",
+        "Codec of the primary audio track (video formats)",
+    ),
+    (
+        "meta.num_entries",
+        "number",
+        "Archive entry count (files + directories)",
+    ),
+    (
+        "meta.num_sheets",
+        "number",
+        "Spreadsheet workbook sheet count",
+    ),
+    (
+        "meta.zarr_version",
+        "number",
+        "Zarr format version (2 or 3)",
+    ),
+    (
+        "meta.num_arrays",
+        "number",
+        "Array count in the Zarr hierarchy",
+    ),
+    (
+        "meta.dataset_type",
+        "text",
+        "VTK dataset type (UnstructuredGrid, PolyData, ...)",
+    ),
+    ("meta.num_points", "number", "VTK mesh point count"),
+    ("meta.num_cells", "number", "VTK mesh cell count"),
+    (
+        "meta.conventions",
+        "text",
+        "NetCDF CF conventions string (e.g. CF-1.8)",
+    ),
+    ("meta.num_hdus", "number", "FITS Header Data Unit count"),
 ];
 
 /// One filterable field, described for the frontend field picker.
@@ -597,6 +870,10 @@ pub struct QueryFieldDesc {
     /// Whether `sort=<name>` is accepted.
     pub sortable: bool,
     pub description: String,
+    /// Probed file formats (snake_case `meta.format` values) this field is
+    /// meaningful for; empty = universal. Discovery metadata only — the
+    /// server accepts the filter regardless.
+    pub applies_to: Vec<String>,
 }
 
 /// One `file_metadata` containment idiom (the `file_metadata=` query param).
@@ -635,6 +912,7 @@ pub fn query_fields_response() -> QueryFieldsResponse {
             value_type: value_type.to_string(),
             sortable: ALLOWED_SORT_FIELDS.contains(&s.name),
             description: description.to_string(),
+            applies_to: s.applies_to.iter().map(|f| f.to_string()).collect(),
         }
     };
 
@@ -710,6 +988,190 @@ mod tests {
     use super::*;
     use crate::query::filter::{Filter, FilterOperator};
     use crate::query::pagination::Sort;
+    use aithericon_file_metadata::format::{
+        ArchiveMetadata, AudioMetadata, CsvMetadata, FileFormat, FitsMetadata, FormatMetadata,
+        ImageMetadata, NetCdfMetadata, ParquetMetadata, SpreadsheetMetadata, VideoMetadata,
+        VtkMetadata, ZarrMetadata,
+    };
+
+    /// Parse the `details` leaf key a detail spec projects, from the expr
+    /// itself (split on the final `->>'…'`) — no parallel table to drift.
+    fn details_leaf(expr: &str) -> Option<&str> {
+        let (_, rest) = expr.split_once("->'details'->>'")?;
+        rest.split_once('\'').map(|(leaf, _)| leaf)
+    }
+
+    /// Fully-populated samples of every `FormatMetadata` variant a detail
+    /// spec applies to, built from the REAL fmeta types — if a field is
+    /// renamed/retyped upstream, these tests catch the drift at compile or
+    /// serialize time.
+    fn format_metadata_samples() -> Vec<FormatMetadata> {
+        vec![
+            FormatMetadata::Csv(CsvMetadata {
+                delimiter: ';',
+                quote_char: Some('"'),
+                has_header: true,
+                encoding: "utf-8".into(),
+                comment_lines: 1,
+            }),
+            FormatMetadata::Parquet(ParquetMetadata {
+                num_row_groups: 4,
+                num_rows: 1_000,
+                compression: "SNAPPY".into(),
+                created_by: Some("parquet-rs".into()),
+                version: 2,
+                row_groups: vec![],
+            }),
+            FormatMetadata::Spreadsheet(SpreadsheetMetadata {
+                num_sheets: 2,
+                sheets: vec![],
+            }),
+            FormatMetadata::NetCdf(NetCdfMetadata {
+                conventions: Some("CF-1.8".into()),
+                unlimited_dimensions: vec![],
+                variables: vec!["time".into()],
+            }),
+            FormatMetadata::Fits(FitsMetadata {
+                num_hdus: 3,
+                primary_bitpix: Some(16),
+                header_cards: vec![],
+            }),
+            FormatMetadata::Zarr(ZarrMetadata {
+                zarr_version: 2,
+                num_arrays: 3,
+                num_groups: 1,
+                hierarchy: vec![],
+            }),
+            FormatMetadata::Vtk(VtkMetadata {
+                version: Some("4.2".into()),
+                title: Some("mesh".into()),
+                dataset_type: "PolyData".into(),
+                num_points: Some(100),
+                num_cells: Some(50),
+                point_data: vec![],
+                cell_data: vec![],
+            }),
+            FormatMetadata::Image(ImageMetadata {
+                width: 1920,
+                height: 1080,
+                color_space: Some("RGB".into()),
+                bit_depth: Some(8),
+                channels: Some(3),
+                animated: true,
+                frame_count: Some(10),
+                dpi: Some(72.0),
+                compression: Some("lossless".into()),
+            }),
+            FormatMetadata::Audio(AudioMetadata {
+                duration_secs: Some(245.5),
+                sample_rate: Some(44_100),
+                channels: Some(2),
+                bit_depth: Some(16),
+                bitrate_kbps: Some(320),
+                codec: Some("mp3".into()),
+            }),
+            FormatMetadata::Video(VideoMetadata {
+                width: Some(3840),
+                height: Some(2160),
+                duration_secs: Some(7200.0),
+                fps: Some(23.976),
+                video_codec: Some("h265".into()),
+                audio_codec: Some("aac".into()),
+                bitrate_kbps: Some(15_000),
+                audio_tracks: Some(2),
+                subtitle_tracks: Some(1),
+            }),
+            FormatMetadata::Archive(ArchiveMetadata {
+                num_entries: Some(42),
+                total_uncompressed_size: Some(1024),
+                total_compressed_size: Some(512),
+                compression: Some("deflate".into()),
+                encrypted: true,
+                comment: Some("c".into()),
+                entries: vec![],
+            }),
+        ]
+    }
+
+    /// Anti-drift: every detail-projecting spec's leaf key exists in at least
+    /// one serialized REAL `FormatMetadata` sample, with the JSON kind the
+    /// registry declares as `value_type`. Catches fmeta field renames/retypes
+    /// without a parallel leaf table.
+    #[test]
+    fn detail_spec_leaves_exist_in_real_fmeta_with_declared_kind() {
+        let samples: Vec<serde_json::Value> = format_metadata_samples()
+            .iter()
+            .map(|m| serde_json::to_value(m).expect("serialize sample"))
+            .collect();
+
+        for s in CATALOGUE_FIELD_SPECS {
+            let Some(leaf) = details_leaf(s.expr) else {
+                continue;
+            };
+            let (_, value_type, _) = CATALOGUE_FIELD_INFO
+                .iter()
+                .find(|(n, _, _)| *n == s.name)
+                .unwrap_or_else(|| panic!("CATALOGUE_FIELD_INFO missing {}", s.name));
+
+            let mut covered = false;
+            for sample in &samples {
+                let Some(leaf_val) = sample["details"].get(leaf) else {
+                    continue;
+                };
+                covered = true;
+                let kind_ok = match *value_type {
+                    "text" => leaf_val.is_string(),
+                    "number" => leaf_val.is_number(),
+                    "boolean" => leaf_val.is_boolean(),
+                    other => panic!("unexpected value_type {other} on {}", s.name),
+                };
+                assert!(
+                    kind_ok,
+                    "{}: leaf '{leaf}' serializes as {leaf_val} but registry declares {value_type} \
+                     (sample tag {})",
+                    s.name, sample["format"]
+                );
+            }
+            assert!(
+                covered,
+                "{}: leaf '{leaf}' not found in any FormatMetadata sample — \
+                 fmeta drift or missing sample",
+                s.name
+            );
+        }
+
+        // Coverage guard: every detail spec carries a non-empty applies_to
+        // (a per-format leaf with no format annotation is a registry bug).
+        for s in CATALOGUE_FIELD_SPECS {
+            if details_leaf(s.expr).is_some() {
+                assert!(
+                    !s.applies_to.is_empty(),
+                    "detail spec {} must declare applies_to",
+                    s.name
+                );
+            }
+        }
+    }
+
+    /// Every `applies_to` string must deserialize to a KNOWN snake_case
+    /// `FileFormat` (machine-validates the web_p / web_m / seven_zip /
+    /// net_cdf / zarr_v2 casing — `Unknown(_)` and typos both fail).
+    #[test]
+    fn applies_to_strings_are_known_formats() {
+        for s in CATALOGUE_FIELD_SPECS {
+            for fmt in s.applies_to {
+                let parsed: FileFormat = serde_json::from_value(serde_json::json!(fmt))
+                    .unwrap_or_else(|e| {
+                        panic!("applies_to '{fmt}' on {} is not a FileFormat: {e}", s.name)
+                    });
+                assert!(
+                    !matches!(parsed, FileFormat::Unknown(_)),
+                    "applies_to '{fmt}' on {} parsed as Unknown",
+                    s.name
+                );
+            }
+        }
+    }
 
     /// Every sortable name must resolve to a spec (otherwise the gate would
     /// pass a name the spec compiler then rejects).
@@ -770,6 +1232,29 @@ mod tests {
             .ends_with(" ORDER BY ((file_metadata->>'num_rows')::bigint) DESC NULLS LAST"));
     }
 
+    /// The client-side `datatype:` sugar compiles to
+    /// `filter[meta.schema][in]=d1,d2` — the In op must emit `= ANY(<bind>)`
+    /// over the digest expr (hex16 digests are comma-free, so the
+    /// comma-separated wire form is lossless).
+    #[test]
+    fn meta_schema_in_filter_compiles_to_any_over_digest_expr() {
+        let params = QueryParams::from_query_str(
+            "filter[meta.schema][in]=00000000aaaaaaaa,11111111bbbbbbbb",
+        )
+        .expect("parse");
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 FROM catalogue_entries");
+        append_where(&mut qb, &params).expect("append_where");
+        let sql = qb.sql().to_string();
+        assert!(
+            sql.contains("(file_metadata->'schema_fingerprint'->>'digest') = ANY("),
+            "in-op over meta.schema must be = ANY over the digest expr: {sql}"
+        );
+        assert!(
+            !sql.contains("aaaaaaaa"),
+            "digests must be bound, not inlined: {sql}"
+        );
+    }
+
     /// Unknown fields are rejected before SQL; non-sortable spec'd fields
     /// (e.g. meta.width) are rejected by the sort gate semantics.
     #[test]
@@ -802,7 +1287,23 @@ mod tests {
                 "CATALOGUE_FIELD_INFO missing {}",
                 s.name
             );
+            // applies_to is copied verbatim from the spec table.
+            let desc = all.iter().find(|d| d.name == s.name).unwrap();
+            assert_eq!(
+                desc.applies_to,
+                s.applies_to
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>(),
+                "applies_to mirrors the spec table ({})",
+                s.name
+            );
         }
+        // Native columns are format-agnostic by construction.
+        assert!(
+            resp.native.iter().all(|d| d.applies_to.is_empty()),
+            "native fields must not be format-scoped"
+        );
         for d in &all {
             assert!(
                 ["text", "number", "timestamp", "boolean"].contains(&d.value_type.as_str()),

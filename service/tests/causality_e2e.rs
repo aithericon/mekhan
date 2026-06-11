@@ -325,6 +325,8 @@ async fn causality_full_pipeline() {
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
         )),
+        email: Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     });
 
     // ── 2. Spawn Mekhan consumers ────────────────────────────────────────

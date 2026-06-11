@@ -20,11 +20,14 @@
 
 	let {
 		entries,
-		knownFields
+		knownFields,
+		datatypeNames = null
 	}: {
 		entries: EntriesQueryState;
 		/** Known filter field names for validation; null = registry not loaded yet. */
 		knownFields: Set<string> | null;
+		/** Registered data-type names; null = registry not loaded yet (skip). */
+		datatypeNames?: Set<string> | null;
 	} = $props();
 
 	// ── Debounced parse (validation display only — apply is explicit) ────────
@@ -40,7 +43,9 @@
 	// Unknown-field messages keyed by term raw (semantic layer over the parse).
 	const fieldErrors = $derived.by(() => {
 		if (!knownFields) return new Map<string, string>();
-		return new Map(validateTerms(parsed.terms, knownFields).map((e) => [e.raw, e.message]));
+		return new Map(
+			validateTerms(parsed.terms, knownFields, datatypeNames).map((e) => [e.raw, e.message])
+		);
 	});
 
 	function apply() {

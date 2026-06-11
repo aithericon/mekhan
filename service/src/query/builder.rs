@@ -37,6 +37,13 @@ pub struct FieldSpec {
     /// String values bound against this field get a `::timestamptz` cast.
     /// Replaces the `_at`-suffix heuristic of the allowlist path.
     pub timestamp: bool,
+    /// DISCOVERY METADATA ONLY: the snake_case fmeta `FileFormat` wire strings
+    /// (the values of `file_metadata->>'format'`) this field is meaningful for;
+    /// empty = universal. Never read by `build_where_conditions_specs` /
+    /// `build_order_by_specs` — the static-`'static`-expr security invariant
+    /// above is unchanged. Surfaced verbatim by registry endpoints so field
+    /// pickers can scope per-format fields.
+    pub applies_to: &'static [&'static str],
 }
 
 /// Look up a spec by (normalized) wire name. `camel_to_snake_case` passes
@@ -398,16 +405,19 @@ mod tests {
             name: "name",
             expr: "name",
             timestamp: false,
+            applies_to: &[],
         },
         FieldSpec {
             name: "meta.num_rows",
             expr: "((file_metadata->>'num_rows')::bigint)",
             timestamp: false,
+            applies_to: &[],
         },
         FieldSpec {
             name: "ingested",
             expr: "ingested",
             timestamp: true,
+            applies_to: &[],
         },
     ];
 
@@ -501,5 +511,36 @@ mod tests {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT 1");
         let err = build_order_by_specs(&mut qb, &Sort::asc("bogus"), SPECS).unwrap_err();
         assert!(matches!(err, QueryError::InvalidSortField(..)));
+    }
+
+    /// `applies_to` is discovery metadata only: two specs differing ONLY in
+    /// `applies_to` must compile to byte-identical WHERE and ORDER BY SQL.
+    #[test]
+    fn applies_to_has_no_sql_effect() {
+        const UNIVERSAL: &[FieldSpec] = &[FieldSpec {
+            name: "meta.fps",
+            expr: "((file_metadata->'format_specific'->'details'->>'fps')::float8)",
+            timestamp: false,
+            applies_to: &[],
+        }];
+        const SCOPED: &[FieldSpec] = &[FieldSpec {
+            name: "meta.fps",
+            expr: "((file_metadata->'format_specific'->'details'->>'fps')::float8)",
+            timestamp: false,
+            applies_to: &["mp4", "mkv", "avi", "web_m"],
+        }];
+
+        let compile = |specs: &[FieldSpec]| {
+            let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+            let filter = Filter::new(vec![FilterCondition {
+                field: "meta.fps".to_string(),
+                operator: FilterOperator::Gte,
+                value: FilterValue::Float(24.0),
+            }]);
+            build_where_conditions_specs(&mut qb, &filter, specs).expect("build where");
+            build_order_by_specs(&mut qb, &Sort::desc("meta.fps"), specs).expect("order by");
+            qb.sql().to_string()
+        };
+        assert_eq!(compile(UNIVERSAL), compile(SCOPED));
     }
 }

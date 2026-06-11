@@ -59,6 +59,14 @@ pub struct WorkflowInstance {
     /// iteration). NULL for top-level instances.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spawn_seq: Option<i64>,
+    /// The caller's effective object role on THIS instance (`owner|admin|
+    /// editor|viewer`), resolved by the Phase-3 ACL resolver in `get_instance`.
+    /// NOT a database column — `#[sqlx(default)]` lets the `SELECT *` row map
+    /// satisfy `FromRow`; the handler fills it in after the access check. Lets
+    /// the SPA gate edit affordances (Cancel ≥ editor) without a second call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub my_effective_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -111,6 +119,14 @@ pub struct InstanceListItem {
     pub template_name: String,
     pub mode: String,
     pub test_id: Option<Uuid>,
+    /// The caller's effective role on this instance (`owner|admin|editor|
+    /// viewer`), annotated by `list_instances` so the SPA can hide stale edit
+    /// affordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`
+    /// working; the handler fills it after the row fetch. The backend still
+    /// enforces on every mutate path regardless of this hint.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
 }
 
 // --- API request/response types ---

@@ -4,6 +4,8 @@
 	import { PageShell, PageHeader, FilterPills, type FilterPill } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import { roleAtLeast } from '$lib/api/iam';
 	import Activity from '@lucide/svelte/icons/activity';
 	import X from '@lucide/svelte/icons/x';
 
@@ -170,11 +172,16 @@
 						{/if}
 						<p class="mt-1 text-sm text-muted-foreground">
 							<span class="font-mono">{instance.net_id}</span>
-							<span class="mx-1">&middot;</span>
-							{formatDate(instance.created_at)}
 						</p>
+						<AuthorshipChips
+							class="mt-1"
+							createdBy={instance.created_by}
+							createdAt={instance.created_at}
+							updatedBy={instance.updated_by}
+							updatedAt={instance.updated_at}
+						/>
 					</div>
-					{#if instance.status === 'running' || instance.status === 'created'}
+					{#if (instance.status === 'running' || instance.status === 'created') && roleAtLeast(instance.my_effective_role, 'editor')}
 						<Button
 							variant="ghost"
 							size="sm"
