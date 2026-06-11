@@ -121,6 +121,9 @@ pub struct RosterMemberSummary {
     /// Member email from `user_profiles`; None when no profile row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_email: Option<String>,
+    /// Member profile photo URL from `user_profiles`; None when absent → initials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_avatar_url: Option<String>,
 }
 
 /// `RosterMemberRow` carries no identity columns, so a bare-row conversion can't
@@ -138,6 +141,7 @@ impl From<RosterMemberRow> for RosterMemberSummary {
             enrolled_at: r.enrolled_at,
             member_display_name: None,
             member_email: None,
+            member_avatar_url: None,
         }
     }
 }
@@ -157,6 +161,7 @@ pub struct RosterMemberSummaryRow {
     pub enrolled_at: DateTime<Utc>,
     pub display_name: Option<String>,
     pub email: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 impl From<RosterMemberSummaryRow> for RosterMemberSummary {
@@ -170,6 +175,7 @@ impl From<RosterMemberSummaryRow> for RosterMemberSummary {
             enrolled_at: r.enrolled_at,
             member_display_name: r.display_name,
             member_email: r.email,
+            member_avatar_url: r.avatar_url,
         }
     }
 }
@@ -359,10 +365,15 @@ mod tests {
             enrolled_at: Utc::now(),
             display_name: Some("Dev User".into()),
             email: Some("dev@local".into()),
+            avatar_url: Some("https://idp/pic.png".into()),
         };
         let summary = RosterMemberSummary::from(row);
         assert_eq!(summary.member_display_name.as_deref(), Some("Dev User"));
         assert_eq!(summary.member_email.as_deref(), Some("dev@local"));
+        assert_eq!(
+            summary.member_avatar_url.as_deref(),
+            Some("https://idp/pic.png")
+        );
         let v = serde_json::to_value(&summary).unwrap();
         assert_eq!(v["member_display_name"], serde_json::json!("Dev User"));
         assert_eq!(v["member_email"], serde_json::json!("dev@local"));

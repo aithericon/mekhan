@@ -8,11 +8,16 @@
  * sent (full-page) to `/api/auth/login`, which 302s to Zitadel.
  */
 import { auth } from './store.svelte';
+import { seedSelfProfile } from '$lib/stores/profiles.svelte';
 
 let initialized: Promise<void> | null = null;
 
 export function ensureAuthInitialized(): Promise<void> {
-	if (!initialized) initialized = auth.init();
+	if (!initialized) {
+		// Seed the profile cache with the caller's own identity once the session
+		// resolves, so the most common authorship UUID renders without a round trip.
+		initialized = auth.init().then(() => seedSelfProfile());
+	}
 	return initialized;
 }
 

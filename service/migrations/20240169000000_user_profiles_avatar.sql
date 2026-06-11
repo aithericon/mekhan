@@ -1,0 +1,11 @@
+-- Identity seam, avatar leg. The OIDC `picture` claim (a URL to the user's
+-- profile photo at the IdP) was being dropped by the resolver; capture it into
+-- `user_profiles` so the SPA can render a real avatar instead of initials.
+--
+-- Nullable, no default, NO backfill: existing rows (incl. the seeded dev-noop
+-- principal `3bb26085-29f3-5fbf-8a8c-a2e485a1f55b`) stay NULL → the frontend
+-- falls back to initials. Each user's avatar fills in lazily on their next
+-- authenticated request once the resolver carries `picture` (eventual
+-- consistency via the extractor upsert). `IF NOT EXISTS` so a partially-migrated
+-- dev slot can re-apply cleanly.
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;

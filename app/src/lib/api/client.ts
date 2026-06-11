@@ -159,6 +159,9 @@ export type SetActiveWorkspaceRequest =
 	components['schemas']['SetActiveWorkspaceRequest'];
 export type ResolveEmailRequest = components['schemas']['ResolveEmailRequest'];
 export type ResolveEmailResponse = components['schemas']['ResolveEmailResponse'];
+/** Resolved identity for one user UUID — the seam every authorship/grant
+ *  UUID in the UI renders through (via the `profiles` store + `UserChip`). */
+export type UserProfileDto = components['schemas']['UserProfileDto'];
 
 // ─── Live events / SSE payloads ─────────────────────────────────────────────
 export type MetricsSeriesResponse = components['schemas']['MetricsSeriesResponse'];
@@ -1340,6 +1343,14 @@ export async function clearActiveWorkspace(): Promise<void> {
 
 export async function resolveUserByEmail(email: string): Promise<ResolveEmailResponse> {
 	return unwrap(await client.POST('/api/v1/users/resolve', { body: { email } }));
+}
+
+/// Batch UUID → profile resolver (identity seam). The `profiles` store
+/// coalesces scattered authorship/grant UUIDs into one call to this. Unknown
+/// UUIDs are omitted from the response (never a per-id 404).
+export async function resolveProfiles(ids: string[]): Promise<UserProfileDto[]> {
+	if (ids.length === 0) return [];
+	return unwrap(await client.POST('/api/v1/users/profiles', { body: { ids } }));
 }
 
 /// GET /api/v1/workspaces/{ws}/folders/{id}/openapi.json — synthesized

@@ -11561,6 +11561,51 @@
         }
       }
     },
+    "/api/v1/users/profiles": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "POST /api/v1/users/profiles",
+        "description": "Batch-resolve user UUIDs to `{display_name, email, avatar_url}` in a single\nround trip — the seam the SPA's profile cache coalesces scattered\nauthorship/grant UUIDs into. Authenticated (any member), mirroring\n`resolve_user_by_email`'s posture: identity is workspace-wide-resolvable for\nv1 (filtering to co-members is a deferred product call). Unknown UUIDs are\nomitted rather than 404'd, so a partially-resolvable batch still succeeds.",
+        "operationId": "resolve_profiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchProfilesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved profiles (unknown ids omitted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserProfileDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too many ids in one batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/resolve": {
       "post": {
         "tags": [
@@ -13518,11 +13563,18 @@
       },
       "AuthUser": {
         "type": "object",
-        "description": "An authenticated principal. The domain core works in terms of this type,\nnever in terms of JWTs or provider-specific claims.",
+        "description": "An authenticated principal. The domain core works in terms of this type,\nnever in terms of JWTs or provider-specific claims.\n\n`Serialize` is hand-written (not derived) so the wire form always carries a\n`user_id` field = `subject_as_uuid()` WITHOUT it being a struct/constructor\nfield. That lets the SPA seed its profile cache by the same UUID every\n`created_by`/`author_id`/grant row uses, without duplicating the v5 namespace\nconstant in JS, and with zero risk of a `None` `user_id` leaking from some\nconstruction site (the failure mode a real `Option<Uuid>` field would invite).\n`Deserialize`/`ToSchema` stay derived; deserialize simply ignores the extra\n`user_id` key on the way back in (it is recomputed from `subject`).",
         "required": [
           "subject"
         ],
         "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "URL to the principal's profile photo, lifted from the OIDC `picture`\nclaim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that\ndoesn't assert a picture → the SPA renders initials. Real struct field\n(so `ToSchema` + the `user_profiles` mirror pick it up); set at every\nconstruction site (mostly `None`)."
+          },
           "display_name": {
             "type": [
               "string",
@@ -13860,6 +13912,22 @@
           "fixed",
           "exponential"
         ]
+      },
+      "BatchProfilesRequest": {
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "User UUIDs (`subject_as_uuid()` values, as carried on `created_by`,\n`author_id`, grant rows, etc.) to resolve to human-readable identities."
+          }
+        }
       },
       "BranchCondition": {
         "type": "object",
@@ -22288,6 +22356,13 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "member_avatar_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Member profile photo URL from `user_profiles`; None when absent → initials."
+                },
                 "member_display_name": {
                   "type": [
                     "string",
@@ -24963,6 +25038,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "member_avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Member profile photo URL from `user_profiles`; None when absent → initials."
           },
           "member_display_name": {
             "type": [
@@ -27878,6 +27960,37 @@
           }
         }
       },
+      "UserProfileDto": {
+        "type": "object",
+        "description": "A resolved `user_profiles` row. The identity seam every UUID in the UI\nrenders through. Fields are `None`/absent when the user has a row but a\nNULL column; unknown UUIDs are simply omitted from the response (never a\nper-id 404).",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "VerifyExample": {
         "type": "object",
         "description": "One offending path surfaced in a [`VerifyResult`].",
@@ -29637,6 +29750,13 @@
           "added_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`\nwhen the member has no profile row or no `picture` claim → SPA initials."
           },
           "display_name": {
             "type": [

@@ -22,10 +22,16 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
+
+/// Hard ceiling on a single batch — guards against a pathological request
+/// fanning the `WHERE user_id = ANY($1)` into an unbounded array. 256 covers
+/// the largest realistic member/grant/authorship set on one page with margin.
+const MAX_PROFILE_IDS: usize = 256;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ResolveEmailRequest {
@@ -96,4 +102,72 @@ pub async fn resolve_user_by_email(
         subject: email.to_string(),
         email: email.to_string(),
     }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchProfilesRequest {
+    /// User UUIDs (`subject_as_uuid()` values, as carried on `created_by`,
+    /// `author_id`, grant rows, etc.) to resolve to human-readable identities.
+    pub ids: Vec<Uuid>,
+}
+
+/// A resolved `user_profiles` row. The identity seam every UUID in the UI
+/// renders through. Fields are `None`/absent when the user has a row but a
+/// NULL column; unknown UUIDs are simply omitted from the response (never a
+/// per-id 404).
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+pub struct UserProfileDto {
+    pub user_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
+/// POST /api/v1/users/profiles
+///
+/// Batch-resolve user UUIDs to `{display_name, email, avatar_url}` in a single
+/// round trip — the seam the SPA's profile cache coalesces scattered
+/// authorship/grant UUIDs into. Authenticated (any member), mirroring
+/// `resolve_user_by_email`'s posture: identity is workspace-wide-resolvable for
+/// v1 (filtering to co-members is a deferred product call). Unknown UUIDs are
+/// omitted rather than 404'd, so a partially-resolvable batch still succeeds.
+#[utoipa::path(
+    post,
+    path = "/api/v1/users/profiles",
+    request_body = BatchProfilesRequest,
+    responses(
+        (status = 200, description = "Resolved profiles (unknown ids omitted)", body = Vec<UserProfileDto>),
+        (status = 400, description = "Too many ids in one batch", body = ErrorResponse),
+    ),
+    tag = "users",
+)]
+pub async fn resolve_profiles(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Json(req): Json<BatchProfilesRequest>,
+) -> Result<Json<Vec<UserProfileDto>>, ApiError> {
+    if req.ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    if req.ids.len() > MAX_PROFILE_IDS {
+        return Err(ApiError::bad_request(format!(
+            "too many ids: {} (max {MAX_PROFILE_IDS})",
+            req.ids.len()
+        )));
+    }
+
+    let rows: Vec<UserProfileDto> = sqlx::query_as(
+        "SELECT user_id, display_name, email, avatar_url \
+           FROM user_profiles \
+          WHERE user_id = ANY($1)",
+    )
+    .bind(&req.ids)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("user_profiles batch lookup: {e}")))?;
+
+    Ok(Json(rows))
 }

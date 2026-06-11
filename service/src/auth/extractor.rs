@@ -39,18 +39,21 @@ async fn upsert_user_profile(db: &sqlx::PgPool, user: &AuthUser) {
         return;
     }
     let res = sqlx::query(
-        "INSERT INTO user_profiles (user_id, email, display_name) \
-              VALUES ($1, $2, $3) \
+        "INSERT INTO user_profiles (user_id, email, display_name, avatar_url) \
+              VALUES ($1, $2, $3, $4) \
          ON CONFLICT (user_id) DO UPDATE \
             SET email = EXCLUDED.email, \
                 display_name = EXCLUDED.display_name, \
+                avatar_url = EXCLUDED.avatar_url, \
                 updated_at = now() \
           WHERE user_profiles.email IS DISTINCT FROM EXCLUDED.email \
-             OR user_profiles.display_name IS DISTINCT FROM EXCLUDED.display_name",
+             OR user_profiles.display_name IS DISTINCT FROM EXCLUDED.display_name \
+             OR user_profiles.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url",
     )
     .bind(user.subject_as_uuid())
     .bind(user.email.as_deref())
     .bind(user.display_name.as_deref())
+    .bind(user.avatar_url.as_deref())
     .execute(db)
     .await;
     if let Err(e) = res {

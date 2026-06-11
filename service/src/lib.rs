@@ -678,6 +678,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         // Email → OIDC subject resolver (Phase B) — for the member-admin UI.
         .routes(routes!(handlers::users::resolve_user_by_email))
+        // Batch UUID → profile resolver (identity seam) — the SPA's UserChip
+        // profile cache coalesces scattered authorship/grant UUIDs through this.
+        .routes(routes!(handlers::users::resolve_profiles))
 }
 
 pub fn build_router(state: AppState) -> Router {

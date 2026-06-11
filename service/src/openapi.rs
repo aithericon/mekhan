@@ -137,6 +137,11 @@ use utoipa::OpenApi;
             // route), so register the DTO explicitly for frontend codegen — the SPA
             // reads `workspace_role` off it to gate admin-only affordances client-side.
             crate::auth::AuthUser,
+            // Identity seam: batch UUID→profile resolver request/response. The
+            // response is `Vec<UserProfileDto>`, which utoipa's auto-discovery
+            // doesn't fully walk, so register both explicitly for frontend codegen.
+            crate::handlers::users::BatchProfilesRequest,
+            crate::handlers::users::UserProfileDto,
             // Phase A (Grouped + Enrolled Workers) — the worker identity plane:
             // enroll / registration-token / list-detail DTOs. The list/get bodies
             // refer to the summaries via PaginatedResponse<_>, which utoipa's

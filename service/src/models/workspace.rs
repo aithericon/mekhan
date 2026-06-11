@@ -37,6 +37,10 @@ pub struct WorkspaceMember {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    /// Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`
+    /// when the member has no profile row or no `picture` claim → SPA initials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

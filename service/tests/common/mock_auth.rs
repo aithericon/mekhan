@@ -145,6 +145,7 @@ fn user(subject: &str) -> AuthUser {
         org_id: None,
         workspace_id: None,
         workspace_role: None,
+        avatar_url: None,
     }
 }
 

@@ -172,7 +172,7 @@ pub async fn list_roster(
     // the summary row — a missing profile leaves both NULL (→ None on the DTO).
     let rows = sqlx::query_as::<_, RosterMemberSummaryRow>(
         "SELECT rm.id, rm.capacity_id, rm.member_user_id, rm.concurrency, \
-                rm.available, rm.enrolled_at, up.display_name, up.email \
+                rm.available, rm.enrolled_at, up.display_name, up.email, up.avatar_url \
            FROM roster_members rm \
            LEFT JOIN user_profiles up ON up.user_id = rm.member_user_id \
           WHERE rm.workspace_id = $1 AND rm.revoked_at IS NULL \

@@ -144,6 +144,8 @@ impl Default for NoopAuthenticator {
                 // migration 20240123; mirror that here so the SPA's admin
                 // affordances light up offline.
                 workspace_role: Some("owner".to_string()),
+                // No IdP `picture` claim in dev-noop → SPA renders "DU" initials.
+                avatar_url: None,
             },
         }
     }

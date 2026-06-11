@@ -34,6 +34,7 @@ fn test_user(subject: &str) -> AuthUser {
         org_id: Some("org-1".to_string()),
         workspace_id: None,
         workspace_role: None,
+        avatar_url: None,
     }
 }
 

@@ -1713,6 +1713,7 @@ mod tests {
             org_id: None,
             workspace_id: Some(ws),
             workspace_role: None,
+            avatar_url: None,
         }
     }
 

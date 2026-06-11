@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import UserChip from '$lib/components/iam/UserChip.svelte';
 	import {
 		Card,
 		CardHeader,
@@ -159,7 +160,16 @@
 								data-testid={`member-row-${m.user_id}`}
 							>
 								<div class="min-w-0 flex-1">
-									<div class="truncate font-mono text-xs text-muted-foreground">{m.user_id}</div>
+									<UserChip
+										userId={m.user_id}
+										profile={{
+											user_id: m.user_id,
+											display_name: m.display_name,
+											email: m.email,
+											avatar_url: m.avatar_url
+										}}
+										showEmail
+									/>
 								</div>
 								<Badge variant="secondary">{m.role}</Badge>
 								<button

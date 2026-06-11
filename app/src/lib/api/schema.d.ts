@@ -4024,6 +4024,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/users/profiles
+         * @description Batch-resolve user UUIDs to `{display_name, email, avatar_url}` in a single
+         *     round trip — the seam the SPA's profile cache coalesces scattered
+         *     authorship/grant UUIDs into. Authenticated (any member), mirroring
+         *     `resolve_user_by_email`'s posture: identity is workspace-wide-resolvable for
+         *     v1 (filtering to co-members is a deferred product call). Unknown UUIDs are
+         *     omitted rather than 404'd, so a partially-resolvable batch still succeeds.
+         */
+        post: operations["resolve_profiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/resolve": {
         parameters: {
             query?: never;
@@ -4829,8 +4854,25 @@ export interface components {
         /**
          * @description An authenticated principal. The domain core works in terms of this type,
          *     never in terms of JWTs or provider-specific claims.
+         *
+         *     `Serialize` is hand-written (not derived) so the wire form always carries a
+         *     `user_id` field = `subject_as_uuid()` WITHOUT it being a struct/constructor
+         *     field. That lets the SPA seed its profile cache by the same UUID every
+         *     `created_by`/`author_id`/grant row uses, without duplicating the v5 namespace
+         *     constant in JS, and with zero risk of a `None` `user_id` leaking from some
+         *     construction site (the failure mode a real `Option<Uuid>` field would invite).
+         *     `Deserialize`/`ToSchema` stay derived; deserialize simply ignores the extra
+         *     `user_id` key on the way back in (it is recomputed from `subject`).
          */
         AuthUser: {
+            /**
+             * @description URL to the principal's profile photo, lifted from the OIDC `picture`
+             *     claim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that
+             *     doesn't assert a picture → the SPA renders initials. Real struct field
+             *     (so `ToSchema` + the `user_profiles` mirror pick it up); set at every
+             *     construction site (mostly `None`).
+             */
+            avatar_url?: string | null;
             display_name?: string | null;
             email?: string | null;
             /**
@@ -5072,6 +5114,13 @@ export interface components {
          * @enum {string}
          */
         BackoffKind: "immediate" | "fixed" | "exponential";
+        BatchProfilesRequest: {
+            /**
+             * @description User UUIDs (`subject_as_uuid()` values, as carried on `created_by`,
+             *     `author_id`, grant rows, etc.) to resolve to human-readable identities.
+             */
+            ids: string[];
+        };
         BranchCondition: {
             edgeId: string;
             guard: string;
@@ -8797,6 +8846,8 @@ export interface components {
                 enrolled_at: string;
                 /** Format: uuid */
                 id: string;
+                /** @description Member profile photo URL from `user_profiles`; None when absent → initials. */
+                member_avatar_url?: string | null;
                 /** @description Human-readable name from `user_profiles`; None when no profile row. */
                 member_display_name?: string | null;
                 /** @description Member email from `user_profiles`; None when no profile row. */
@@ -10108,6 +10159,8 @@ export interface components {
             enrolled_at: string;
             /** Format: uuid */
             id: string;
+            /** @description Member profile photo URL from `user_profiles`; None when absent → initials. */
+            member_avatar_url?: string | null;
             /** @description Human-readable name from `user_profiles`; None when no profile row. */
             member_display_name?: string | null;
             /** @description Member email from `user_profiles`; None when no profile row. */
@@ -11506,6 +11559,19 @@ export interface components {
              */
             catalog_version?: string | null;
         };
+        /**
+         * @description A resolved `user_profiles` row. The identity seam every UUID in the UI
+         *     renders through. Fields are `None`/absent when the user has a row but a
+         *     NULL column; unknown UUIDs are simply omitted from the response (never a
+         *     per-id 404).
+         */
+        UserProfileDto: {
+            avatar_url?: string | null;
+            display_name?: string | null;
+            email?: string | null;
+            /** Format: uuid */
+            user_id: string;
+        };
         /** @description One offending path surfaced in a [`VerifyResult`]. */
         VerifyExample: {
             /**
@@ -12355,6 +12421,11 @@ export interface components {
         WorkspaceMember: {
             /** Format: date-time */
             added_at: string;
+            /**
+             * @description Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`
+             *     when the member has no profile row or no `picture` claim → SPA initials.
+             */
+            avatar_url?: string | null;
             /**
              * @description Human-readable identity, LEFT JOINed from `user_profiles` (populated by
              *     the auth extractor on each authenticated request). `None` for a member
@@ -20862,6 +20933,39 @@ export interface operations {
             };
             /** @description Trigger not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resolve_profiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchProfilesRequest"];
+            };
+        };
+        responses: {
+            /** @description Resolved profiles (unknown ids omitted) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserProfileDto"][];
+                };
+            };
+            /** @description Too many ids in one batch */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

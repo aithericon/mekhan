@@ -36,6 +36,9 @@ impl PrincipalResolver for StaticPrincipalResolver {
         let email = string_claim(&claims, "email");
         let display_name =
             string_claim(&claims, "name").or_else(|| string_claim(&claims, "preferred_username"));
+        // Standard OIDC `picture` claim — a URL to the user's profile photo.
+        // Mirrored into `user_profiles.avatar_url` by the extractor upsert.
+        let avatar_url = string_claim(&claims, "picture");
 
         let (roles, org_id) = match claims.extra.get(ZITADEL_ROLES_CLAIM) {
             Some(Value::Object(roles_obj)) => {
@@ -58,6 +61,7 @@ impl PrincipalResolver for StaticPrincipalResolver {
             org_id,
             workspace_id: None,
             workspace_role: None,
+            avatar_url,
         })
     }
 }
@@ -243,4 +247,40 @@ async fn membership_workspace(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>
     .await
     .map_err(|e| AuthError::Internal(format!("workspace membership lookup: {e}")))?;
     Ok(row.map(|(id,)| id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn claims_with(extra: BTreeMap<String, Value>) -> VerifiedClaims {
+        VerifiedClaims {
+            subject: "alice".into(),
+            issuer: "https://idp".into(),
+            audience: vec!["mekhan".into()],
+            expires_at: 0,
+            extra,
+        }
+    }
+
+    #[tokio::test]
+    async fn extracts_picture_claim_into_avatar_url() {
+        let mut extra = BTreeMap::new();
+        extra.insert("picture".into(), Value::String("https://idp/a.png".into()));
+        let user = StaticPrincipalResolver
+            .resolve(claims_with(extra))
+            .await
+            .unwrap();
+        assert_eq!(user.avatar_url.as_deref(), Some("https://idp/a.png"));
+    }
+
+    #[tokio::test]
+    async fn no_picture_claim_yields_none_avatar() {
+        let user = StaticPrincipalResolver
+            .resolve(claims_with(BTreeMap::new()))
+            .await
+            .unwrap();
+        assert_eq!(user.avatar_url, None);
+    }
 }

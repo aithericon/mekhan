@@ -15,23 +15,29 @@ import type { AuthSession, AuthUser } from './port';
 /** Wire shape of `GET /api/auth/session` — the backend's `AuthUser`. */
 interface SessionUserDto {
 	subject: string;
+	/** Always present — derived `subject_as_uuid()`, emitted by the backend's
+	 *  hand-written `Serialize`. The seam the profile cache seeds itself from. */
+	user_id?: string;
 	email?: string | null;
 	display_name?: string | null;
 	roles?: string[];
 	org_id?: string | null;
 	workspace_id?: string | null;
 	workspace_role?: string | null;
+	avatar_url?: string | null;
 }
 
 function toUser(dto: SessionUserDto): AuthUser {
 	return {
 		subject: dto.subject,
+		userId: dto.user_id ?? undefined,
 		email: dto.email ?? undefined,
 		displayName: dto.display_name ?? undefined,
 		roles: dto.roles ?? [],
 		orgId: dto.org_id ?? undefined,
 		workspaceId: dto.workspace_id ?? undefined,
-		workspaceRole: dto.workspace_role ?? undefined
+		workspaceRole: dto.workspace_role ?? undefined,
+		avatarUrl: dto.avatar_url ?? undefined
 	};
 }
 

@@ -10,8 +10,18 @@
 
 export interface AuthUser {
 	subject: string;
+	/**
+	 * Deterministic `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` — the same value
+	 * carried on every `created_by`/`author_id`/grant row. Always present on the
+	 * session DTO (the backend serializes it unconditionally) so the profile
+	 * cache can seed itself with the caller's own identity without recomputing
+	 * the v5 namespace in JS.
+	 */
+	userId?: string;
 	email?: string;
 	displayName?: string;
+	/** Profile photo URL from the OIDC `picture` claim; absent → initials. */
+	avatarUrl?: string;
 	roles: string[];
 	/** Zitadel org the principal belongs to, when the IdP asserts one. */
 	orgId?: string;
