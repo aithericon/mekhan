@@ -20,7 +20,7 @@ use std::time::Duration;
 use async_nats::jetstream;
 use async_nats::jetstream::stream;
 use async_trait::async_trait;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use aithericon_executor_backend::traits::BatchSink;
 use aithericon_executor_domain::{FoldBatch, INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
@@ -109,13 +109,51 @@ impl BatchSink for NatsBatchSink {
             ),
         );
 
-        let ack = self
-            .jetstream
-            .publish_with_headers(subject.clone(), headers, payload.into())
-            .await
-            .map_err(|e| format!("publish fold batch to {subject}: {e}"))?;
-        ack.await
-            .map_err(|e| format!("fold batch ack on {subject}: {e}"))?;
+        // Publish with in-sink retry + exponential backoff (1s..32s, ~1min
+        // total). A loaded host can stall JetStream fsyncs for tens of
+        // seconds (observed: dev Docker VM under parallel builds); without
+        // riding that out here, a single transient ack timeout burns one of
+        // the job's few retries — and the job-level retries fire seconds
+        // apart, so they all land inside the same stall and kill a campaign
+        // that walked for half an hour. Re-publishing after a lost ack is
+        // safe: `Nats-Msg-Id` dedups inside the stream's 120s duplicate
+        // window (the backoff total stays under it), and beyond that the
+        // fold consumer's upserts are idempotent on (file_server_id, path).
+        let mut delay = Duration::from_secs(1);
+        let mut last_err = String::new();
+        let mut published = false;
+        for attempt in 1..=6u32 {
+            let res = async {
+                let ack = self
+                    .jetstream
+                    .publish_with_headers(subject.clone(), headers.clone(), payload.clone().into())
+                    .await
+                    .map_err(|e| format!("publish fold batch to {subject}: {e}"))?;
+                ack.await
+                    .map_err(|e| format!("fold batch ack on {subject}: {e}"))
+            }
+            .await;
+            match res {
+                Ok(_) => {
+                    published = true;
+                    break;
+                }
+                Err(e) => {
+                    warn!(
+                        attempt,
+                        batch_idx = batch.batch_idx,
+                        error = %e,
+                        "fold batch publish failed; backing off"
+                    );
+                    last_err = e;
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+            }
+        }
+        if !published {
+            return Err(last_err);
+        }
 
         debug!(
             execution_id = %batch.execution_id,

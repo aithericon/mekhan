@@ -44,6 +44,14 @@
               "description": "Absolute directory to crawl IN PLACE of the synthetic demo NAS. When set, the prepare step seeds nothing and the campaign walks this tree where it lives (root = parent dir, prefix = basename/). Leave empty for the self-contained demo (seeds 63 files under /tmp/mekhan-campaign-demo). Point it at a real corpus — an NFS mount, a workstation home — and raise batch_size/max_batches to match."
             },
             {
+              "name": "resume_from",
+              "label": "Resume after path (cursor from a failed run)",
+              "kind": "text",
+              "required": false,
+              "default": "",
+              "description": "Manual-retry knob: seed the campaign cursor so a NEW run resumes after this path instead of walking from the start. Take the value from the failed instance's campaign state (`cursor` accumulator — visible in the instance marking / `mekhan logs <id>`), or leave empty to re-walk everything (safe either way: fold upserts are idempotent on (file_server_id, path), a from-scratch re-run only costs time). The path must still exist — a vanished cursor is a hard error by design."
+            },
+            {
               "name": "batch_size",
               "label": "Batch size (files per fold batch)",
               "kind": "number",
@@ -130,7 +138,7 @@
         "accumulators": [
           {
             "var": "cursor",
-            "init": "\"\"",
+            "init": "if start.resume_from == () { \"\" } else { start.resume_from }",
             "mergeExpr": "if crawl.last_path == () { campaign.cursor } else { crawl.last_path }"
           },
           {

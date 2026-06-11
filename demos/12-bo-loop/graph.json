@@ -51,12 +51,12 @@
         "accumulators": [
           {
             "var": "observations",
-            "init": "if type_of(input.observations) == \"array\" { input.observations } else { [] }",
+            "init": "if type_of(start.observations) == \"array\" { start.observations } else { [] }",
             "mergeExpr": "bo.observations + gather.merged"
           },
           {
             "var": "f_best",
-            "init": "if type_of(input.observations) == \"array\" && input.observations.len() > 0 { input.f_best } else { 1e18 }",
+            "init": "if type_of(start.observations) == \"array\" && start.observations.len() > 0 { start.f_best } else { 1e18 }",
             "mergeExpr": "gather.new_f_best"
           },
           {
@@ -71,7 +71,7 @@
           },
           {
             "var": "budget",
-            "init": "input.max_iterations",
+            "init": "start.max_iterations",
             "mergeExpr": "bo.budget"
           }
         ]

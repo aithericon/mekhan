@@ -7723,6 +7723,11 @@
           "cardinality": "single",
           "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
         }
       ],
       "input_schema": {
@@ -7738,10 +7743,16 @@
           "place": "p_lp_input",
           "port": "input",
           "weight": 1
+        },
+        {
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ body: input, data: #{ iteration: 0, observations: (if type_of(input.observations) == \"array\" { input.observations } else { [] }), f_best: (if type_of(input.observations) == \"array\" && input.observations.len() > 0 { input.f_best } else { 1e18 }), best_a: (0.0), best_d: (0.0), budget: (input.max_iterations) } }",
+        "source": "#{ body: input, data: #{ iteration: 0, observations: (if type_of(d_start.observations) == \"array\" { d_start.observations } else { [] }), f_best: (if type_of(d_start.observations) == \"array\" && d_start.observations.len() > 0 { d_start.f_best } else { 1e18 }), best_a: (0.0), best_d: (0.0), budget: (d_start.max_iterations) } }",
         "type": "rhai"
       },
       "name": "BO Iterations - Enter Loop",

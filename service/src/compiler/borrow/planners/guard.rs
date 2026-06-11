@@ -876,8 +876,15 @@ pub(crate) fn guard_readarc_plan(
                 // (c) read-arc pass rewrites them onto the parked envelope. The
                 // consumer node is the loop itself, so `apply_guard_borrows`
                 // walks `t_<id>_*` (incl. `t_<id>_continue`) for the rewrite.
-                // `init` is intentionally NOT scanned — v1 keeps it simple
-                // (no upstream borrows), evaluated in the enter scope.
+                // `init` exprs are scanned too: they're emitted verbatim into
+                // `t_<id>_enter`, and an init that seeds from an upstream
+                // producer (`start.resume_from` — the campaign manual-retry
+                // cursor) needs the same `<slug>.<field>` → `d_<slug>.<field>`
+                // rewrite + read-arc, or the bare slug is an unbound Rhai
+                // variable at enter time. (Start fields do NOT ride the
+                // control token past the first AutomatedStep, so `input.*`
+                // cannot reach them here — the parked-producer read-arc is
+                // the only correct route.)
                 let mut srcs: Vec<String> = Vec::new();
                 // The continue/exit guards ALWAYS reference `<slug>.iteration`
                 // (`{slug}.iteration < {max}`, independent of loop_condition), so
@@ -895,6 +902,9 @@ pub(crate) fn guard_readarc_plan(
                 for a in accumulators {
                     if !a.merge_expr.trim().is_empty() {
                         srcs.push(a.merge_expr.clone());
+                    }
+                    if !a.init.trim().is_empty() {
+                        srcs.push(a.init.clone());
                     }
                 }
                 srcs
