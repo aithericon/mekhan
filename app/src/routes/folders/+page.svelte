@@ -6,6 +6,7 @@
 	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import BookOpen from '@lucide/svelte/icons/book-open';
+	import Share2 from '@lucide/svelte/icons/share-2';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
@@ -25,6 +26,9 @@
 	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
 	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
 	import FolderSettingsPanel from '$lib/components/folders/FolderSettingsPanel.svelte';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import { roleAtLeast } from '$lib/api/iam';
 
 	// Top-level folders are scoped to the active workspace — same implicit
 	// scoping every other top-level page (Templates, Instances, …) uses.
@@ -57,6 +61,12 @@
 	let moving = $state(false);
 	let moveParentId = $state<string | null>(null);
 	let moveBusy = $state(false);
+
+	// Per-object access (Phase 5). Edit affordances follow the caller's effective
+	// role on the selected folder; the Share dialog needs object-Admin.
+	let shareOpen = $state(false);
+	const canEdit = $derived(roleAtLeast(selected?.my_effective_role, 'editor'));
+	const canShare = $derived(roleAtLeast(selected?.my_effective_role, 'admin'));
 
 	// Root uses a sentinel (bits-ui Select reserves the empty string).
 	const ROOT = '__root__';
@@ -387,23 +397,42 @@
 									<div class="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
 										<span class="font-mono text-xs">{selected.path}</span>
 									</div>
+									<AuthorshipChips
+										class="mt-1.5"
+										createdBy={selected.created_by}
+										createdAt={selected.created_at}
+										updatedBy={selected.updated_by}
+										updatedAt={selected.updated_at}
+									/>
 								</div>
 								<div class="flex shrink-0 gap-1">
-									<Button variant="outline" size="sm" onclick={startRename} data-testid="btn-rename-folder">
-										<Pencil class="size-3.5" /> Rename
-									</Button>
-									<Button variant="outline" size="sm" onclick={startMove} data-testid="btn-move-folder">
-										<FolderInput class="size-3.5" /> Move
-									</Button>
-									<Button
-										variant="outline"
-										size="sm"
-										class="text-destructive hover:text-destructive"
-										onclick={handleDelete}
-										data-testid="btn-delete-folder"
-									>
-										<Trash2 class="size-3.5" />
-									</Button>
+									{#if canShare}
+										<Button
+											variant="outline"
+											size="sm"
+											onclick={() => (shareOpen = true)}
+											data-testid="btn-share-folder"
+										>
+											<Share2 class="size-3.5" /> Share
+										</Button>
+									{/if}
+									{#if canEdit}
+										<Button variant="outline" size="sm" onclick={startRename} data-testid="btn-rename-folder">
+											<Pencil class="size-3.5" /> Rename
+										</Button>
+										<Button variant="outline" size="sm" onclick={startMove} data-testid="btn-move-folder">
+											<FolderInput class="size-3.5" /> Move
+										</Button>
+										<Button
+											variant="outline"
+											size="sm"
+											class="text-destructive hover:text-destructive"
+											onclick={handleDelete}
+											data-testid="btn-delete-folder"
+										>
+											<Trash2 class="size-3.5" />
+										</Button>
+									{/if}
 								</div>
 							</div>
 
@@ -503,3 +532,14 @@
 		</div>
 	{/if}
 </PageShell>
+
+{#if selected}
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="folder"
+		objectId={selected.id}
+		objectName={selected.display_name}
+		myEffectiveRole={selected.my_effective_role}
+		onChanged={load}
+	/>
+{/if}

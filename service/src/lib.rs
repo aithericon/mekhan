@@ -29,6 +29,7 @@ pub mod model_serving_group;
 pub mod models;
 pub mod nats;
 pub mod nodes;
+pub mod notify;
 pub mod observability;
 pub mod openapi;
 pub mod petri;
@@ -162,6 +163,12 @@ pub struct AppState {
     /// launcher never touches this — instances run against already-spliced AIR,
     /// symmetric with `resource_resolver`.
     pub asset_resolver: Arc<crate::petri::asset_resolver::AssetResolver>,
+    /// Invite-email delivery (Phase 4). `LogEmailSender` by default (offline).
+    pub email: Arc<dyn crate::notify::email::EmailSender>,
+    /// Invite-accept identity provisioner (Phase 4). `None` only when a real
+    /// auth mode lacks broker credentials → accept 503s. Under `dev_noop` it's
+    /// the deterministic Noop. Boot-checked against `auth.mode`.
+    pub user_provisioner: Option<Arc<dyn crate::auth::provisioner::UserProvisioner>>,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -185,6 +192,13 @@ fn build_public_openapi_router() -> OpenApiRouter<AppState> {
         // cookie, and this returns only the in-cluster runner base_urls/model_ids
         // the router already holds to route. No credential, no workspace leak.
         .routes(routes!(handlers::model_pool::list_model_serving_runners))
+        // Invite preview + accept — PUBLIC by design (Phase 4 auth-bootstrap
+        // exception, like /api/auth/*): an invitee has no session yet. Authed by
+        // the opaque token in the path, not the session cookie. Registered here
+        // (not a raw merged router) so the typed wrappers land in the OpenAPI
+        // spec and openapi-drift catches changes.
+        .routes(routes!(handlers::invites::preview_invite))
+        .routes(routes!(handlers::invites::accept_invite))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -658,6 +672,33 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::add_member
         ))
         .routes(routes!(handlers::workspaces::remove_member))
+        .routes(routes!(handlers::workspaces::update_member_role))
+        // Invites (Phase 4) — Admin-gated create/list, plus per-invite resend/
+        // revoke. The PUBLIC preview/accept endpoints are registered in
+        // build_public_openapi_router (auth-bootstrap exception).
+        .routes(routes!(
+            handlers::invites::create_invite,
+            handlers::invites::list_invites
+        ))
+        .routes(routes!(handlers::invites::resend_invite))
+        .routes(routes!(handlers::invites::revoke_invite))
+        // Object grants (Phase 3) — per-object ACLs for folders / templates /
+        // instances. GET = effective access list; PUT/DELETE edit direct grants.
+        .routes(routes!(handlers::object_grants::list_folder_grants))
+        .routes(routes!(
+            handlers::object_grants::put_folder_grant,
+            handlers::object_grants::delete_folder_grant
+        ))
+        .routes(routes!(handlers::object_grants::list_template_grants))
+        .routes(routes!(
+            handlers::object_grants::put_template_grant,
+            handlers::object_grants::delete_template_grant
+        ))
+        .routes(routes!(handlers::object_grants::list_instance_grants))
+        .routes(routes!(
+            handlers::object_grants::put_instance_grant,
+            handlers::object_grants::delete_instance_grant
+        ))
         // Folders — single-parent hierarchical grouping of templates within
         // a workspace (filesystem model). Not an ACL boundary.
         .routes(routes!(handlers::folders::list_workspace_tags))

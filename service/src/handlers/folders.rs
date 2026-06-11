@@ -15,7 +15,8 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{
-    can_read_template, map_to_api_error, require_role, template_workspace, AuthUser, Role,
+    can_read_template, effective_object_roles, map_to_api_error, require_object_role, require_role,
+    template_workspace, AuthUser, ObjectKind, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -104,12 +105,23 @@ pub async fn list_folders(
     require_role(&state.db, &user, workspace_id, Role::Viewer)
         .await
         .map_err(map_to_api_error)?;
-    let rows: Vec<Folder> = sqlx::query_as(&format!(
+    let mut rows: Vec<Folder> = sqlx::query_as(&format!(
         "SELECT {FOLDER_COLS} FROM folders WHERE workspace_id = $1 ORDER BY path"
     ))
     .bind(workspace_id)
     .fetch_all(&state.db)
     .await?;
+
+    // Annotate each row with the caller's effective object role (one query for
+    // the whole list) so the SPA can gate edit/Share affordances; the backend
+    // still enforces on every folder mutate path.
+    let ids: Vec<Uuid> = rows.iter().map(|f| f.id).collect();
+    let roles = effective_object_roles(&state.db, &user, ObjectKind::Folder, workspace_id, &ids)
+        .await
+        .map_err(map_to_api_error)?;
+    for f in &mut rows {
+        f.my_effective_role = roles.get(&f.id).map(|r| r.as_label().to_string());
+    }
     Ok(Json(rows))
 }
 
@@ -137,9 +149,21 @@ pub async fn create_folder(
     Path(workspace_id): Path<Uuid>,
     Json(req): Json<CreateFolderRequest>,
 ) -> Result<(StatusCode, Json<Folder>), ApiError> {
-    require_role(&state.db, &user, workspace_id, Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Creating inside a subtree requires Editor on the PARENT folder (object
+    // ACL); creating at the workspace root has no parent object, so it falls
+    // back to the workspace Editor gate.
+    match req.parent_id {
+        Some(parent_id) => {
+            require_object_role(&state.db, &user, ObjectRef::folder(parent_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        None => {
+            require_role(&state.db, &user, workspace_id, Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+    }
 
     validate_slug(&req.slug)?;
 
@@ -230,7 +254,7 @@ pub async fn update_folder(
             .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
-    require_role(&state.db, &user, current.workspace_id, Role::Editor)
+    require_object_role(&state.db, &user, ObjectRef::folder(folder_id), Role::Editor)
         .await
         .map_err(map_to_api_error)?;
 
@@ -382,7 +406,7 @@ pub async fn delete_folder(
             .await?;
     let current = current.ok_or_else(|| ApiError::not_found("folder not found"))?;
 
-    require_role(&state.db, &user, current.workspace_id, Role::Editor)
+    require_object_role(&state.db, &user, ObjectRef::folder(folder_id), Role::Editor)
         .await
         .map_err(map_to_api_error)?;
 
@@ -457,6 +481,16 @@ pub async fn delete_folder(
         }
     }
 
+    // Polymorphic object-grant cleanup (no FK on object_grants.object_id):
+    // drop grants on this folder. Children are reparented (not deleted), so
+    // only this folder's grants go.
+    sqlx::query(
+        "DELETE FROM object_grants WHERE object_type = 'folder'::object_kind AND object_id = $1",
+    )
+    .bind(folder_id)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("DELETE FROM folders WHERE id = $1")
         .bind(folder_id)
         .execute(&mut *tx)
@@ -494,9 +528,15 @@ pub async fn set_template_folder(
     let workspace_id = template_workspace(&state.db, template_id)
         .await
         .map_err(map_to_api_error)?;
-    require_role(&state.db, &user, workspace_id, Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Moving a template's home folder is a write on the TEMPLATE.
+    require_object_role(
+        &state.db,
+        &user,
+        ObjectRef::template(template_id),
+        Role::Editor,
+    )
+    .await
+    .map_err(map_to_api_error)?;
 
     let base_id = template_base_id(&state, template_id).await?;
 

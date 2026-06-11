@@ -109,6 +109,9 @@ pub fn test_config() -> AppConfig {
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.
         demos: mekhan_service::config::DemosConfig::default(),
+        // Invite email defaults to log-mode (no SMTP); accept-link base is the
+        // dev SPA origin.
+        email: mekhan_service::config::EmailConfig::default(),
     }
 }
 
@@ -203,6 +206,8 @@ pub async fn test_app_with_authenticator(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -262,6 +267,8 @@ pub async fn test_app_with_introspection(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -319,6 +326,8 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -378,6 +387,8 @@ pub async fn test_app() -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -436,6 +447,8 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -496,6 +509,8 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -566,6 +581,8 @@ pub async fn test_app_waiters(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);
@@ -636,6 +653,8 @@ pub async fn test_app_with_petri_url_and_triggers(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
+        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        user_provisioner: None,
     };
 
     let router = build_router(state);

@@ -8,7 +8,10 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth::{require_role, AuthUser, MembershipError, Role};
+use crate::auth::{
+    effective_object_roles, map_to_api_error, require_object_role, AuthUser, ObjectKind, ObjectRef,
+    Role,
+};
 use crate::compiler::{
     compile_to_air, compile_to_air_with_options, derive_child_io, generate_py_io_files,
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
@@ -69,43 +72,74 @@ fn query_err_to_api(e: QueryError) -> ApiError {
 /// Visibility-aware read gate: passes when the template is `public` OR the
 /// caller is at least a `viewer` member of the template's workspace. Maps
 /// the underlying membership errors to standard `ApiError` shapes.
-fn gate_template_read(
-    _state: &AppState,
+async fn gate_template_read(
+    state: &AppState,
     user: &AuthUser,
     template: &WorkflowTemplate,
 ) -> Result<(), ApiError> {
     if template.visibility == "public" {
         return Ok(());
     }
-    let user_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
-    if template.workspace_id == user_ws {
-        return Ok(());
-    }
-    Err(ApiError::forbidden(
-        "not a member of this template's workspace",
-    ))
+    // Object-ACL: effective role ≥ Viewer (workspace floor + folder/object
+    // grants). A folder-scoped Viewer grant now reads a template their active
+    // workspace doesn't otherwise expose.
+    require_object_role(
+        &state.db,
+        user,
+        ObjectRef::template(template.id),
+        Role::Viewer,
+    )
+    .await
+    .map_err(map_to_api_error)
+    .map(|_| ())
 }
 
-/// Write gate for mutate paths (update/delete/publish): requires the caller
-/// to be at least an `editor` member of the template's workspace. Public
-/// visibility does NOT grant write — cross-workspace reads of public
-/// templates are read-only by design.
+/// Write gate for mutate paths (update/delete/publish): requires the caller's
+/// effective role on the template (workspace floor + folder/object grants) to
+/// be at least `editor`. Public visibility does NOT grant write — cross-
+/// workspace reads of public templates are read-only by design.
 async fn gate_template_write(
     state: &AppState,
     user: &AuthUser,
     template: &WorkflowTemplate,
 ) -> Result<(), ApiError> {
-    match require_role(&state.db, user, template.workspace_id, Role::Editor).await {
-        Ok(_) => Ok(()),
-        Err(MembershipError::NotMember(_)) => Err(ApiError::forbidden(
-            "not a member of this template's workspace",
-        )),
-        Err(MembershipError::InsufficientRole { .. }) => {
-            Err(ApiError::forbidden("editor role required"))
-        }
-        Err(MembershipError::TemplateNotFound(_)) => Err(ApiError::not_found("template not found")),
-        Err(MembershipError::Db(e)) => Err(ApiError::internal(e.to_string())),
+    require_object_role(
+        &state.db,
+        user,
+        ObjectRef::template(template.id),
+        Role::Editor,
+    )
+    .await
+    .map_err(map_to_api_error)
+    .map(|_| ())
+}
+
+/// Fill `my_effective_role` on a page of templates with one role-resolution
+/// query. Keyed by the per-version row id (the resolver collapses to the chain
+/// root internally), so each row gets the caller's effective role for the
+/// SPA's edit-affordance hinting.
+async fn annotate_template_roles(
+    state: &AppState,
+    user: &AuthUser,
+    workspace_id: Uuid,
+    items: &mut [WorkflowTemplate],
+) -> Result<(), ApiError> {
+    let ids: Vec<Uuid> = items.iter().map(|t| t.id).collect();
+    let roles = effective_object_roles(&state.db, user, ObjectKind::Template, workspace_id, &ids)
+        .await
+        .map_err(map_to_api_error)?;
+    for t in items.iter_mut() {
+        t.my_effective_role = roles.get(&t.id).map(|r| {
+            match r {
+                Role::Owner => "owner",
+                Role::Admin => "admin",
+                Role::Editor => "editor",
+                Role::Viewer => "viewer",
+            }
+            .to_string()
+        });
     }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -313,7 +347,7 @@ pub async fn list_templates(
     // workspace (versions inherit it, since `new_version` keeps the same
     // workspace_id by default per the DB column DEFAULT).
     if let Some(base_id) = extras.base_template_id {
-        let items = sqlx::query_as::<_, WorkflowTemplate>(
+        let mut items = sqlx::query_as::<_, WorkflowTemplate>(
             "SELECT * FROM workflow_templates \
               WHERE base_template_id = $1 \
                 AND (workspace_id = $2 OR visibility = 'public') \
@@ -338,6 +372,7 @@ pub async fn list_templates(
         .await
         .map_err(|e| query_err_to_api(QueryError::Database(e)))?;
 
+        annotate_template_roles(&state, &user, workspace_id, &mut items).await?;
         let resp = Paginated::new(items, total.0, &params.page);
         return Ok(Json(
             serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
@@ -358,7 +393,7 @@ pub async fn list_templates(
             .0
     };
 
-    let items: Vec<WorkflowTemplate> = {
+    let mut items: Vec<WorkflowTemplate> = {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT t.* FROM workflow_templates t");
         append_template_where(&mut qb, workspace_id, &extras, &params).map_err(query_err_to_api)?;
         match params.sort {
@@ -381,6 +416,8 @@ pub async fn list_templates(
             .await
             .map_err(|e| query_err_to_api(QueryError::Database(e)))?
     };
+
+    annotate_template_roles(&state, &user, workspace_id, &mut items).await?;
 
     let resp = Paginated::new(items, count, &params.page);
     Ok(Json(
@@ -405,9 +442,11 @@ pub async fn get_template(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
-    let template = require_template(&state.db, id).await?;
+    let mut template = require_template(&state.db, id).await?;
 
-    gate_template_read(&state, &user, &template)?;
+    gate_template_read(&state, &user, &template).await?;
+    let ws = template.workspace_id;
+    annotate_template_roles(&state, &user, ws, std::slice::from_mut(&mut template)).await?;
     Ok(Json(template))
 }
 
@@ -473,7 +512,7 @@ pub async fn get_io_contract(
     .await?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
-    gate_template_read(&state, &user, &child)?;
+    gate_template_read(&state, &user, &child).await?;
 
     let graph: WorkflowGraph = serde_json::from_value(child.graph)
         .map_err(|e| ApiError::internal(format!("child graph is invalid: {e}")))?;
@@ -510,7 +549,7 @@ pub async fn get_template_bundle(
 ) -> Result<Json<TemplateBundle>, ApiError> {
     let existing = require_template(&state.db, id).await?;
 
-    gate_template_read(&state, &user, &existing)?;
+    gate_template_read(&state, &user, &existing).await?;
 
     let (graph, files) = graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
         serde_json::from_value(g).map_err(|e| ApiError::internal(format!("invalid graph: {e}")))
@@ -655,6 +694,23 @@ pub async fn delete_template(
             .bind(base_id)
             .fetch_all(&state.db)
             .await?;
+
+    // Polymorphic object-grant cleanup (object_grants.object_id has no FK):
+    // drop the template chain-root grant and any instance grants for instances
+    // of this chain before the rows vanish.
+    if let Err(e) = sqlx::query(
+        "DELETE FROM object_grants \
+          WHERE (object_type = 'template'::object_kind AND object_id = $1) \
+             OR (object_type = 'instance'::object_kind AND object_id IN \
+                 (SELECT id FROM workflow_instances \
+                   WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)))",
+    )
+    .bind(base_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!("failed to clean object_grants for template chain: {e}");
+    }
 
     // Delete all versions in the template chain
     sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
@@ -2071,6 +2127,7 @@ mod apply_mode_tests {
             workspace_id: Uuid::nil(),
             visibility: "workspace".into(),
             owner_template_id: None,
+            my_effective_role: None,
         }
     }
 

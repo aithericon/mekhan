@@ -62,6 +62,13 @@ pub struct WorkflowTemplate {
     /// only when `visibility == "private"`. A private sub-workflow may be
     /// embedded only by this family and never runs standalone.
     pub owner_template_id: Option<Uuid>,
+    /// The caller's effective role (`owner|admin|editor|viewer`) on this
+    /// template — annotated by `list_templates`/`get_template` so the SPA can
+    /// hide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps
+    /// `FromRow` working); the backend still enforces on every mutate path.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
 }
 
 impl WorkflowTemplate {

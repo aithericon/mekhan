@@ -16,7 +16,9 @@ use uuid::Uuid;
 use crate::auth::model::SUBJECT_UUID_NAMESPACE;
 use crate::auth::{map_to_api_error, require_member, require_role, AuthUser, Role};
 use crate::models::error::{ApiError, ErrorResponse};
-use crate::models::workspace::{AddMemberRequest, WorkspaceMember, WorkspaceSummary};
+use crate::models::workspace::{
+    AddMemberRequest, UpdateMemberRoleRequest, WorkspaceMember, WorkspaceSummary,
+};
 use crate::AppState;
 
 /// GET /api/v1/workspaces
@@ -227,6 +229,84 @@ pub async fn remove_member(
         .execute(&state.db)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// PATCH /api/v1/workspaces/{id}/members/{user_id}
+///
+/// Change an existing member's workspace role. Admin-gated. Refuses to demote
+/// the last `owner` (would orphan the workspace), mirroring `remove_member`.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/workspaces/{id}/members/{user_id}",
+    params(
+        ("id" = Uuid, Path, description = "Workspace id"),
+        ("user_id" = Uuid, Path, description = "Member user_id (subject_as_uuid)")
+    ),
+    request_body = UpdateMemberRoleRequest,
+    responses(
+        (status = 200, description = "Role updated", body = WorkspaceMember),
+        (status = 400, description = "Invalid role", body = ErrorResponse),
+        (status = 403, description = "Admin role required", body = ErrorResponse),
+        (status = 404, description = "Not a member", body = ErrorResponse),
+        (status = 409, description = "Would orphan workspace", body = ErrorResponse),
+    ),
+    tag = "workspaces",
+)]
+pub async fn update_member_role(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, target_user_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<UpdateMemberRoleRequest>,
+) -> Result<Json<WorkspaceMember>, ApiError> {
+    require_role(&state.db, &user, id, Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
+
+    let new_role = Role::from_db(&req.role).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "unknown role '{}', expected one of owner|admin|editor|viewer",
+            req.role
+        ))
+    })?;
+
+    let current_row: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let current_role = current_row
+        .and_then(|(r,)| Role::from_db(&r))
+        .ok_or_else(|| ApiError::not_found("member not found"))?;
+
+    // Demoting the last owner orphans the workspace.
+    if current_role == Role::Owner && new_role != Role::Owner {
+        let (owners,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*)::BIGINT FROM workspace_members \
+              WHERE workspace_id = $1 AND role = 'owner'",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+        if owners <= 1 {
+            return Err(ApiError::conflict(
+                "cannot demote the last owner of a workspace",
+            ));
+        }
+    }
+
+    let row: WorkspaceMember = sqlx::query_as(
+        "UPDATE workspace_members SET role = $3 \
+          WHERE workspace_id = $1 AND user_id = $2 \
+         RETURNING workspace_id, user_id, role, added_at",
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .bind(&req.role)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
 }
 
 #[cfg(test)]

@@ -33,12 +33,17 @@ pub struct WorkspaceMember {
     /// Human-readable identity, LEFT JOINed from `user_profiles` (populated by
     /// the auth extractor on each authenticated request). `None` for a member
     /// who was added by `subject` but has never logged into mekhan.
+    /// `#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,
+    /// which don't JOIN `user_profiles`) still satisfy `FromRow`.
+    #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     /// Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`
     /// when the member has no profile row or no `picture` claim → SPA initials.
+    #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }
@@ -49,6 +54,13 @@ pub struct AddMemberRequest {
     /// `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`. Phase B will add an
     /// email→subject resolver for the admin UI.
     pub subject: String,
+    /// One of: `owner`, `admin`, `editor`, `viewer`.
+    pub role: String,
+}
+
+/// PATCH body for changing an existing member's workspace role.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateMemberRoleRequest {
     /// One of: `owner`, `admin`, `editor`, `viewer`.
     pub role: String,
 }
@@ -74,6 +86,14 @@ pub struct Folder {
     /// Last mutator (`subject_as_uuid()`). Backfilled to `created_by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_by: Option<Uuid>,
+    /// The caller's effective object role on THIS folder (`owner|admin|editor|
+    /// viewer`), resolved by the Phase-3 ACL resolver in `list_folders`. NOT a
+    /// database column — `#[sqlx(default)]` lets the explicit-column row map
+    /// satisfy `FromRow`; the handler fills it in per row. Lets the SPA gate
+    /// edit/Share affordances without a per-row call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub my_effective_role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

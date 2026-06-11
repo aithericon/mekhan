@@ -4338,6 +4338,206 @@
         }
       }
     },
+    "/api/v1/folders/{id}/grants": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "operationId": "list_folder_grants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective access list (direct + inherited + workspace)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GrantView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/folders/{id}/grants/{user_id}": {
+      "put": {
+        "tags": [
+          "folders"
+        ],
+        "operationId": "put_folder_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required / escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grantee not a workspace member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "folders"
+        ],
+        "operationId": "delete_folder_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Grant removed"
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/human-presence": {
       "get": {
         "tags": [
@@ -4935,6 +5135,206 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{id}/grants": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "operationId": "list_instance_grants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective access list (direct + inherited + workspace)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GrantView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{id}/grants/{user_id}": {
+      "put": {
+        "tags": [
+          "instances"
+        ],
+        "operationId": "put_instance_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required / escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grantee not a workspace member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "instances"
+        ],
+        "operationId": "delete_instance_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Grant removed"
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -5665,6 +6065,100 @@
           },
           "400": {
             "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/invites/{token}/accept": {
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the\ninvitee's identity, then atomically applies membership + grants. Single-use\nvia `SELECT … FOR UPDATE` re-checking `status='pending'`.",
+        "operationId": "accept_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Opaque invite token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInviteResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No valid invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/invites/{token}/preview": {
+      "get": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "GET /api/v1/invites/{token}/preview — PUBLIC. Generic 404 for any\nunknown/expired/revoked/accepted token (single code path, no enumeration).",
+        "operationId": "preview_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Opaque invite token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invite preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No valid invite",
             "content": {
               "application/json": {
                 "schema": {
@@ -10491,6 +10985,206 @@
         }
       }
     },
+    "/api/v1/templates/{id}/grants": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "operationId": "list_template_grants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective access list (direct + inherited + workspace)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GrantView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/grants/{user_id}": {
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "operationId": "put_template_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Object-admin required / escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grantee not a workspace member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "operationId": "delete_template_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Object id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Grantee user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Grant removed"
+          },
+          "403": {
+            "description": "Object-admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/io-contract": {
       "get": {
         "tags": [
@@ -12572,6 +13266,252 @@
         }
       }
     },
+    "/api/v1/workspaces/{id}/invites": {
+      "get": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/invites — Admin-gated list.",
+        "operationId": "list_invites",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invites for the workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InviteSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/invites — Admin-gated. Creates (or rotates a\nduplicate-active) invite and sends the accept link. 201 on create, 200 on\nrotate. Never returns the raw token.",
+        "operationId": "create_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing active invite rotated + resent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role / cross-workspace grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / grant escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/invites/{invite_id}": {
+      "delete": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}/invites/{invite_id} — Admin-gated revoke.\nIdempotent (already-revoked → 204); an accepted invite → 409.",
+        "operationId": "revoke_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/invites/{invite_id}/resend": {
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/invites/{invite_id}/resend — Admin-gated.\nRotates the token + expiry (old link dies) and resends.",
+        "operationId": "resend_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated + resent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pending invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{id}/members": {
       "get": {
         "tags": [
@@ -12745,6 +13685,98 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "PATCH /api/v1/workspaces/{id}/members/{user_id}",
+        "description": "Change an existing member's workspace role. Admin-gated. Refuses to demote\nthe last `owner` (would orphan the workspace), mirroring `remove_member`.",
+        "operationId": "update_member_role",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Member user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemberRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Would orphan workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/workspaces/{id}/tags": {
@@ -12881,6 +13913,24 @@
   },
   "components": {
     "schemas": {
+      "AcceptInviteResponse": {
+        "type": "object",
+        "description": "Result of accepting an invite.",
+        "required": [
+          "workspace_id",
+          "requires_login"
+        ],
+        "properties": {
+          "requires_login": {
+            "type": "boolean",
+            "description": "`true` ⇒ the invitee now has a real IdP identity and the SPA must send\nthem through `/api/auth/login` to obtain a session (mekhan does not mint\nit). `false` under `dev_noop` (every request is already the dev user)."
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "Acceptance": {
         "type": "string",
         "description": "The capacity-side half of bilateral eligibility (doc 35 §4):\n`match = work-side predicate ∧ capacity-side acceptance`.\n\nThis replaces the deleted `Dispatch` axis: pull-vs-push derives from the\nbackend (doc 35 §2), and what `offer` actually smuggled in was acceptance —\nwhat eligibility *means* when the capacity gets a say.\n\n`policy` — a capacity-side *standing predicate* evaluated by the platform\n(maintenance mode, tenant refusal) — is a documented-future third value and\nis deliberately NOT a variant here (doc 35 §4/§9).",
@@ -16313,6 +17363,34 @@
           }
         }
       },
+      "CreateInviteRequest": {
+        "type": "object",
+        "description": "Admin creates an invite. Optionally pre-seeds object grants applied on accept.",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Invitee email (normalized lower-case server-side)."
+          },
+          "object_grants": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/InviteObjectGrantSpec"
+            },
+            "description": "Object grants applied (via `apply_grant`) on accept. Each object must be\nin this workspace and the caller's effective role on it must be ≥ the\ngranted role (workspace Admin/Owner bypass)."
+          },
+          "role": {
+            "type": "string",
+            "description": "Workspace role granted on accept. One of `owner|admin|editor|viewer`."
+          }
+        }
+      },
       "CreateJobTemplateRequest": {
         "type": "object",
         "description": "Request body for `POST /api/v1/job-templates`. Lands a `job_templates` row\nat `latest_version = 1` plus the first `job_template_versions` row (v1).",
@@ -18902,6 +19980,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on THIS folder (`owner|admin|editor|\nviewer`), resolved by the Phase-3 ACL resolver in `list_folders`. NOT a\ndatabase column — `#[sqlx(default)]` lets the explicit-column row map\nsatisfy `FromRow`; the handler fills it in per row. Lets the SPA gate\nedit/Share affordances without a per-row call."
+          },
           "parent_id": {
             "type": [
               "string",
@@ -18995,6 +20080,82 @@
               "null"
             ],
             "description": "RFC3339 acquisition timestamp, when recorded."
+          }
+        }
+      },
+      "GrantView": {
+        "type": "object",
+        "description": "One row in the effective access list for an object. `source` distinguishes a\ndirect object grant (editable here) from an inherited folder grant or the\nworkspace-member floor (read-only context).",
+        "required": [
+          "user_id",
+          "role",
+          "source"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "granted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "granted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`object_grants.id` — present only for `source == \"object\"` (the editable\nrows). `null` for synthesized inherited/workspace rows."
+          },
+          "inherited_from_folder_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "For `source == \"folder\"` rows: which ancestor folder the grant lives on."
+          },
+          "inherited_from_folder_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "member_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "member_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "`\"object\"` | `\"folder\"` | `\"workspace\"`."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -19906,6 +21067,13 @@
           "mode": {
             "type": "string"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective role on this instance (`owner|admin|editor|\nviewer`), annotated by `list_instances` so the SPA can hide stale edit\naffordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`\nworking; the handler fills it after the row fetch. The backend still\nenforces on every mutate path regardless of this hint."
+          },
           "net_id": {
             "type": "string"
           },
@@ -20351,6 +21519,110 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "InviteObjectGrantSpec": {
+        "type": "object",
+        "description": "One pre-seeded object grant on an invite.",
+        "required": [
+          "object_type",
+          "object_id",
+          "role"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string",
+            "description": "`folder` | `template` | `instance`."
+          },
+          "role": {
+            "type": "string",
+            "description": "`owner|admin|editor|viewer`."
+          }
+        }
+      },
+      "InvitePreview": {
+        "type": "object",
+        "description": "Public invite preview shown on the accept page (minimal, non-enumerable).",
+        "required": [
+          "workspace_display_name",
+          "email",
+          "role",
+          "status",
+          "expires_at"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace_display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "InviteSummary": {
+        "type": "object",
+        "description": "Admin-facing invite row (never carries the token).",
+        "required": [
+          "id",
+          "workspace_id",
+          "email",
+          "role",
+          "status",
+          "invited_by",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invited_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invited_by_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending|accepted|revoked|expired`."
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -22551,6 +23823,13 @@
                 "mode": {
                   "type": "string"
                 },
+                "my_effective_role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The caller's effective role on this instance (`owner|admin|editor|\nviewer`), annotated by `list_instances` so the SPA can hide stale edit\naffordances. Not a DB column — `#[sqlx(default)]` keeps `FromRow`\nworking; the handler fills it after the row fetch. The backend still\nenforces on every mutate path regardless of this hint."
+                },
                 "net_id": {
                   "type": "string"
                 },
@@ -24043,6 +25322,13 @@
                 "is_latest": {
                   "type": "boolean"
                 },
+                "my_effective_role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The caller's effective role (`owner|admin|editor|viewer`) on this\ntemplate — annotated by `list_templates`/`get_template` so the SPA can\nhide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps\n`FromRow` working); the backend still enforces on every mutate path."
+                },
                 "name": {
                   "type": "string"
                 },
@@ -24838,6 +26124,19 @@
             "format": "int64",
             "description": "Total messages removed from PETRI_GLOBAL across all purged nets.",
             "minimum": 0
+          }
+        }
+      },
+      "PutGrantRequest": {
+        "type": "object",
+        "description": "`PUT .../grants/{user_id}` body.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "One of `owner|admin|editor|viewer`."
           }
         }
       },
@@ -28547,6 +29846,19 @@
           }
         }
       },
+      "UpdateMemberRoleRequest": {
+        "type": "object",
+        "description": "PATCH body for changing an existing member's workspace role.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "One of: `owner`, `admin`, `editor`, `viewer`."
+          }
+        }
+      },
       "UpdateResourceRequest": {
         "type": "object",
         "description": "Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or\n`config` (or both) may be set; if `config` is set the call bumps\n`latest_version` and writes a new vault_path. `display_name`-only\nupdates do **not** bump version.",
@@ -29297,6 +30609,13 @@
           "mode": {
             "type": "string",
             "description": "Categorizes the instance. `live` (default) is a production run.\n`draft` is a user-initiated experimental run hidden from default\nlist views. `test_run` is spawned by the template-test runner."
+          },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective object role on THIS instance (`owner|admin|\neditor|viewer`), resolved by the Phase-3 ACL resolver in `get_instance`.\nNOT a database column — `#[sqlx(default)]` lets the `SELECT *` row map\nsatisfy `FromRow`; the handler fills it in after the access check. Lets\nthe SPA gate edit affordances (Cancel ≥ editor) without a second call."
           },
           "net_id": {
             "type": "string"
@@ -30406,6 +31725,13 @@
           "is_latest": {
             "type": "boolean"
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective role (`owner|admin|editor|viewer`) on this\ntemplate — annotated by `list_templates`/`get_template` so the SPA can\nhide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps\n`FromRow` working); the backend still enforces on every mutate path."
+          },
           "name": {
             "type": "string"
           },
@@ -30493,7 +31819,7 @@
               "string",
               "null"
             ],
-            "description": "Human-readable identity, LEFT JOINed from `user_profiles` (populated by\nthe auth extractor on each authenticated request). `None` for a member\nwho was added by `subject` but has never logged into mekhan."
+            "description": "Human-readable identity, LEFT JOINed from `user_profiles` (populated by\nthe auth extractor on each authenticated request). `None` for a member\nwho was added by `subject` but has never logged into mekhan.\n`#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,\nwhich don't JOIN `user_profiles`) still satisfy `FromRow`."
           },
           "email": {
             "type": [

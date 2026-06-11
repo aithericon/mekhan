@@ -40,6 +40,10 @@
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import MoveToFolderDialog from '$lib/components/templates/MoveToFolderDialog.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
+	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import Share2 from '@lucide/svelte/icons/share-2';
+	import { roleAtLeast } from '$lib/api/iam';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
@@ -77,6 +81,16 @@
 	let settingsTemplate = $state<TemplateSummary | null>(null);
 	let moveOpen = $state(false);
 	let moveTemplate = $state<TemplateSummary | null>(null);
+
+	// Per-object share (Phase 5). Editing/deleting needs editor on the template;
+	// Share needs object-Admin. `my_effective_role` rides the list row (Phase 3
+	// batch resolver) so the per-row gate is N+0 calls.
+	let shareOpen = $state(false);
+	let shareTemplate = $state<TemplateSummary | null>(null);
+	function openShare(t: TemplateSummary) {
+		shareTemplate = t;
+		setTimeout(() => (shareOpen = true), 0);
+	}
 
 	// Opening a bits-ui overlay from inside a closing dropdown races the
 	// dropdown's focus-return; defer to the next tick so the sheet/dialog
@@ -402,6 +416,8 @@
 		{:else}
 			<div class="space-y-2" data-testid="template-list">
 				{#each templates as template (template.id)}
+					{@const canEdit = roleAtLeast(template.my_effective_role, 'editor')}
+					{@const canShareT = roleAtLeast(template.my_effective_role, 'admin')}
 					<a
 						href="/templates/{template.id}"
 						class="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
@@ -459,7 +475,7 @@
 										<EllipsisVertical class="size-4" />
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align="end">
-										{#if !template.published}
+										{#if canEdit && !template.published}
 											<DropdownMenuItem
 												data-testid="btn-rename-template-{template.id}"
 												onSelect={() => startRename(template)}
@@ -468,7 +484,7 @@
 												Rename
 											</DropdownMenuItem>
 											<DropdownMenuSeparator />
-										{:else}
+										{:else if canEdit}
 											<DropdownMenuItem
 												data-testid="btn-new-version-template-{template.id}"
 												disabled={versioningId === template.id}
@@ -479,6 +495,15 @@
 											</DropdownMenuItem>
 											<DropdownMenuSeparator />
 										{/if}
+										{#if canShareT}
+											<DropdownMenuItem
+												data-testid="btn-share-template-{template.id}"
+												onSelect={() => openShare(template)}
+											>
+												<Share2 class="size-4" />
+												Share
+											</DropdownMenuItem>
+										{/if}
 										<DropdownMenuItem
 											data-testid="btn-settings-template-{template.id}"
 											onSelect={() => openSettings(template)}
@@ -486,22 +511,24 @@
 											<Settings class="size-4" />
 											Settings
 										</DropdownMenuItem>
-										<DropdownMenuItem
-											data-testid="btn-move-folder-template-{template.id}"
-											onSelect={() => openMove(template)}
-										>
-											<FolderInput class="size-4" />
-											Move to folder
-										</DropdownMenuItem>
-										<DropdownMenuSeparator />
-										<DropdownMenuItem
-											variant="destructive"
-											data-testid="btn-delete-template-{template.id}"
-											onSelect={() => handleDelete(template.id)}
-										>
-											<Trash2 class="size-4" />
-											Delete
-										</DropdownMenuItem>
+										{#if canEdit}
+											<DropdownMenuItem
+												data-testid="btn-move-folder-template-{template.id}"
+												onSelect={() => openMove(template)}
+											>
+												<FolderInput class="size-4" />
+												Move to folder
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+											<DropdownMenuItem
+												variant="destructive"
+												data-testid="btn-delete-template-{template.id}"
+												onSelect={() => handleDelete(template.id)}
+											>
+												<Trash2 class="size-4" />
+												Delete
+											</DropdownMenuItem>
+										{/if}
 									</DropdownMenuContent>
 								</DropdownMenu>
 							</div>
@@ -571,6 +598,12 @@
 								<span class="underline">View runs</span>
 							</button>
 						{/if}
+						<AuthorshipChips
+							createdBy={template.author_id}
+							createdAt={template.created_at}
+							updatedBy={template.updated_by}
+							updatedAt={template.updated_at}
+						/>
 					</a>
 				{/each}
 			</div>
@@ -613,3 +646,14 @@
 	templateName={moveTemplate?.name}
 	onMoved={loadFirst}
 />
+
+{#if shareTemplate}
+	<ShareDialog
+		bind:open={shareOpen}
+		objectType="template"
+		objectId={shareTemplate.id}
+		objectName={shareTemplate.name}
+		myEffectiveRole={shareTemplate.my_effective_role}
+		onChanged={loadFirst}
+	/>
+{/if}
