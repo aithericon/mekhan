@@ -890,6 +890,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/analytics/breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/data/analytics/breakdown
+         * @description Generic group-by aggregation over `file_inventory`'s promoted analytics
+         *     columns. The `directory` dimension returns one level per call (`under` +
+         *     `depth` lazy descent, `is_leaf` marks where to stop) and doubles as the
+         *     capacity-treemap loader.
+         */
+        get: operations["breakdown"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/analytics/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/data/analytics/snapshot
+         * @description Manually capture a snapshot row-set — the SAME writer the hourly
+         *     background job uses, so a fresh point shows up on the growth charts
+         *     immediately. Duplicates within a time bucket are harmless (read-time dedup).
+         */
+        post: operations["snapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/analytics/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/data/analytics/timeseries
+         * @description Growth points over `inventory_snapshots`, `time_bucket`ed per
+         *     `(server, dim, key)` with the LATEST capture per bucket (manual-trigger
+         *     duplicates inside a bucket are deduped at read time — the table has no PK
+         *     on purpose). TimescaleDB-backed, same posture as `inference_timeseries`.
+         */
+        get: operations["timeseries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/data/entries": {
         parameters: {
             query?: never;
@@ -4928,6 +4996,47 @@ export interface components {
             guard: string;
             label: string;
         };
+        /** @description One group-by bucket of the breakdown aggregation. */
+        BreakdownBucket: {
+            /**
+             * Format: int64
+             * @description Sum of `size_bytes` in the bucket (NULL sizes contribute 0).
+             */
+            bytes: number;
+            /**
+             * Format: int64
+             * @description Files in the bucket.
+             */
+            count: number;
+            /**
+             * @description `directory` dimension only: `true` when no path under this key has
+             *     deeper components — the frontend stops drilling. `None` for every
+             *     other dimension.
+             */
+            is_leaf?: boolean | null;
+            /**
+             * @description Bucket key — semantics depend on the dimension (server id, extension,
+             *     size-class label, age-cohort label, uid, or directory prefix segment).
+             */
+            key: string;
+        };
+        /** @description Response of `GET /api/v1/data/analytics/breakdown`. */
+        BreakdownResponse: {
+            /** @description Buckets, largest `bytes` first, capped at `limit`. */
+            buckets: components["schemas"]["BreakdownBucket"][];
+            /** @description Echo of the requested dimension. */
+            group_by: string;
+            /**
+             * Format: int64
+             * @description Total bytes matching the scope.
+             */
+            total_bytes: number;
+            /**
+             * Format: int64
+             * @description Total files matching the scope (NOT just the returned buckets).
+             */
+            total_count: number;
+        };
         BridgeTarget: {
             target_net: string;
             target_place: string;
@@ -7229,9 +7338,16 @@ export interface components {
             content_hash?: string | null;
             /** Format: uuid */
             copy_of?: string | null;
+            /**
+             * @description GENERATED ALWAYS from `path` (lowercased suffix) — never written by any
+             *     inventory writer.
+             */
+            extension?: string | null;
             file_server_id: string;
             /** Format: date-time */
             first_seen: string;
+            /** Format: int32 */
+            gid?: number | null;
             /** Format: uuid */
             id: string;
             is_canonical: boolean;
@@ -7240,9 +7356,15 @@ export interface components {
             /** Format: date-time */
             last_verified?: string | null;
             migration_target?: string | null;
+            /** Format: date-time */
+            mtime?: string | null;
             path: string;
             provenance: unknown;
+            /** Format: int64 */
+            size_bytes?: number | null;
             status: string;
+            /** Format: int32 */
+            uid?: number | null;
             /** Format: date-time */
             updated_at: string;
         };
@@ -7257,10 +7379,18 @@ export interface components {
          *     field here — claiming an identity is what `register` is for.
          */
         InventoryIndexItem: {
+            /** Format: int32 */
+            gid?: number | null;
+            /** Format: date-time */
+            mtime?: string | null;
             path: string;
             provenance?: unknown;
+            /** Format: int64 */
+            size_bytes?: number | null;
             /** @description Physical-observation status — defaults to `indexed`. */
             status?: string;
+            /** Format: int32 */
+            uid?: number | null;
         };
         /** @description Batched index request body — all items share one `file_server_id`. */
         InventoryIndexRequest: {
@@ -7294,13 +7424,19 @@ export interface components {
              */
             content_hash?: string | null;
             file_server_id: string;
+            /** Format: int32 */
+            gid?: number | null;
             mime_type?: string | null;
+            /** Format: date-time */
+            mtime?: string | null;
             name?: string | null;
             path: string;
             provenance?: unknown;
             /** Format: int64 */
             size_bytes?: number | null;
             status: string;
+            /** Format: int32 */
+            uid?: number | null;
         };
         /** @description Batched register request body. */
         InventoryRegisterRequest: {
@@ -8216,10 +8352,20 @@ export interface components {
          */
         ObservedItem: {
             /**
+             * Format: int32
+             * @description Owning group id (`st_gid`), when the crawler could lstat locally.
+             */
+            gid?: number | null;
+            /**
              * @description Observed content hash (bare lowercase hex). When present it wins over
              *     the inherited legacy hash and triggers catalogue coupling.
              */
             hash?: string | null;
+            /**
+             * Format: int32
+             * @description File mode bits (`st_mode`) — provenance-only, never a column.
+             */
+            mode?: number | null;
             /**
              * Format: date-time
              * @description Observed modification time (RFC 3339). Carried through to provenance;
@@ -8232,6 +8378,11 @@ export interface components {
              * @description Observed physical size in bytes.
              */
             size: number;
+            /**
+             * Format: int32
+             * @description Owning user id (`st_uid`), when the crawler could lstat locally.
+             */
+            uid?: number | null;
         };
         OcrSettings: {
             /** @description OCR backend: "tesseract" (default) or "paddle-ocr". */
@@ -8761,9 +8912,16 @@ export interface components {
                 content_hash?: string | null;
                 /** Format: uuid */
                 copy_of?: string | null;
+                /**
+                 * @description GENERATED ALWAYS from `path` (lowercased suffix) — never written by any
+                 *     inventory writer.
+                 */
+                extension?: string | null;
                 file_server_id: string;
                 /** Format: date-time */
                 first_seen: string;
+                /** Format: int32 */
+                gid?: number | null;
                 /** Format: uuid */
                 id: string;
                 is_canonical: boolean;
@@ -8772,9 +8930,15 @@ export interface components {
                 /** Format: date-time */
                 last_verified?: string | null;
                 migration_target?: string | null;
+                /** Format: date-time */
+                mtime?: string | null;
                 path: string;
                 provenance: unknown;
+                /** Format: int64 */
+                size_bytes?: number | null;
                 status: string;
+                /** Format: int32 */
+                uid?: number | null;
                 /** Format: date-time */
                 updated_at: string;
             }[];
@@ -10224,6 +10388,34 @@ export interface components {
             vars?: {
                 [key: string]: string;
             };
+        };
+        /**
+         * @description One deduped `(bucket, server, dim, key)` growth point from
+         *     `inventory_snapshots` (last batch per time bucket wins).
+         */
+        SnapshotPoint: {
+            /** Format: date-time */
+            bucket: string;
+            dim: string;
+            /** Format: int64 */
+            file_count: number;
+            file_server_id: string;
+            key: string;
+            /** Format: int64 */
+            total_bytes: number;
+        };
+        /** @description Result of one snapshot capture (background job or manual trigger). */
+        SnapshotResult: {
+            /**
+             * Format: int64
+             * @description `inventory_snapshots` rows written across all dims/servers.
+             */
+            rows_written: number;
+            /**
+             * Format: date-time
+             * @description The single timestamp every row of this capture shares.
+             */
+            snapped_at: string;
         };
         /** @description Request body of the control-plane emit endpoint: the episode's items. */
         SourceEmitRequest: {
@@ -13915,6 +14107,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    breakdown: {
+        parameters: {
+            query: {
+                /**
+                 * @description Dimension to group by:
+                 *     `server|extension|size_class|age|mtime_age|owner|directory`.
+                 */
+                group_by: string;
+                /**
+                 * @description Directory prefix to scope to (and, for the `directory` dimension,
+                 *     descend under). Leading/trailing slashes are ignored; LIKE
+                 *     metacharacters in the prefix are escaped.
+                 */
+                under?: string | null;
+                /**
+                 * @description Path components grouped below `under` (`directory` dimension only;
+                 *     clamped 1..=8, default 1).
+                 */
+                depth?: number | null;
+                /**
+                 * @description Max buckets returned (default 100, clamped to 500). Totals always
+                 *     cover the whole scope.
+                 */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Buckets + scope totals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakdownResponse"];
+                };
+            };
+            /** @description Unknown dimension or invalid filter DSL */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    snapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capture timestamp + rows written */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotResult"];
+                };
+            };
+        };
+    };
+    timeseries: {
+        parameters: {
+            query: {
+                /** @description Snapshot dimension: `total|extension|top_dir|status`. */
+                dim: string;
+                /** @description Restrict to one bucket key within the dimension (e.g. one extension). */
+                key?: string | null;
+                /** @description Restrict to one file server. */
+                file_server_id?: string | null;
+                /** @description Bucket width in seconds (default 3600, clamped 60..=7d). */
+                bucket_secs?: number | null;
+                /** @description Look-back window in seconds (default 7 days, capped at 90 days). */
+                window_secs?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deduped growth points, oldest bucket first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotPoint"][];
                 };
             };
         };

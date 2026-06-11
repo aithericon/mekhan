@@ -90,6 +90,7 @@ pub fn test_config() -> AppConfig {
         nats_url: nats_url(),
         nats_creds: None,
         cleanup: CleanupConfig::default(),
+        analytics: Default::default(),
         wait_timeout_secs: 30,
         s3: S3Config {
             endpoint: s3_endpoint,

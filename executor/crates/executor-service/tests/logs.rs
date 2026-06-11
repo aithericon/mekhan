@@ -208,19 +208,23 @@ async fn test_ipc_logs_combined_workflow() {
     // Progress
     assert!(!detail["progress"].is_null());
 
-    // Events: at least Output + Progress + Metric + Log = 4
+    // Events: at least Output + Progress + Metric = 3. There is deliberately
+    // NO trailing LogsForwarded summary event (per-message log delivery covers
+    // it — see the comment in `executor.rs`), and per-message Log events are
+    // category-gated behind `stream_events`, which this job leaves unset.
     let events = ctx
-        .collect_events(&events_consumer, 4, Duration::from_secs(5))
+        .collect_events(&events_consumer, 3, Duration::from_secs(5))
         .await;
     assert!(
-        events.len() >= 4,
-        "expected at least 4 events (output + progress + metric + log), got: {}",
+        events.len() >= 3,
+        "expected at least 3 events (output + progress + metric), got: {}",
         events.len()
     );
 
-    // Verify we have at least one of each category
+    // Verify we have at least one of each summary category
     let categories: Vec<&str> = events.iter().map(|e| e.category.as_str()).collect();
-    assert!(categories.contains(&"log"), "should have a log event");
+    assert!(categories.contains(&"output"), "should have an output event");
+    assert!(categories.contains(&"progress"), "should have a progress event");
     assert!(categories.contains(&"metric"), "should have a metric event");
 
     worker.abort();

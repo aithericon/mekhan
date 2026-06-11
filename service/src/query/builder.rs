@@ -173,7 +173,10 @@ fn push_value(
     value: &FilterValue,
     field: &str,
 ) -> Result<(), QueryError> {
-    let is_timestamp = field.ends_with("_at");
+    // `_at` is the repo-wide timestamp suffix convention; `mtime`
+    // (file_inventory's promoted modification time) is the one column that
+    // predates it on the wire and can't be renamed.
+    let is_timestamp = field.ends_with("_at") || field == "mtime";
 
     match value {
         FilterValue::String(s) => {
@@ -248,4 +251,44 @@ pub fn push_jsonb_contains(qb: &mut QueryBuilder<'_, Postgres>, column: &str, js
     qb.push(format!("{column} @> "));
     qb.push_bind(json_str.to_string());
     qb.push("::jsonb");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sql_for(field: &str, value: FilterValue) -> String {
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+        let filter = Filter::new(vec![FilterCondition {
+            field: field.to_string(),
+            operator: FilterOperator::Gte,
+            value,
+        }]);
+        build_where_conditions(&mut qb, &filter, &[field]).expect("build where");
+        qb.sql().to_string()
+    }
+
+    /// `mtime` is a timestamptz column with no `_at` suffix — a string filter
+    /// value must still get the timestamp cast or Postgres compares text.
+    #[test]
+    fn mtime_string_value_gets_timestamptz_cast() {
+        let sql = sql_for("mtime", FilterValue::String("2026-01-01T00:00:00Z".into()));
+        assert!(
+            sql.contains("::timestamptz"),
+            "mtime filter must cast: {sql}"
+        );
+    }
+
+    #[test]
+    fn at_suffix_string_value_gets_timestamptz_cast() {
+        let sql = sql_for("updated_at", FilterValue::String("2026-01-01".into()));
+        assert!(sql.contains("::timestamptz"), "_at filter must cast: {sql}");
+    }
+
+    /// A non-timestamp field must NOT be cast (path comparisons stay textual).
+    #[test]
+    fn non_timestamp_string_value_is_not_cast() {
+        let sql = sql_for("path", FilterValue::String("/data".into()));
+        assert!(!sql.contains("::timestamptz"), "path must not cast: {sql}");
+    }
 }

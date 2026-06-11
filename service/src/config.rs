@@ -17,6 +17,10 @@ pub struct AppConfig {
     pub nats_creds: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
+    /// File-analytics growth snapshots (docs/32 Cut 2) — the periodic
+    /// `inventory_snapshots` capture job.
+    #[serde(default)]
+    pub analytics: AnalyticsConfig,
     /// Upper bound (seconds) a `?reply=wait` fire holds the HTTP connection
     /// before degrading to `202 { instance_id }`. Bounds connection/pool
     /// pressure; SSE is the path for genuinely long workflows.
@@ -240,6 +244,35 @@ fn default_s3_bucket() -> String {
 
 fn default_s3_region() -> String {
     "us-east-1".to_string()
+}
+
+/// File-analytics snapshot job controls (`MEKHAN__ANALYTICS__*`).
+#[derive(Debug, Deserialize, Clone)]
+pub struct AnalyticsConfig {
+    /// Master switch for the background snapshot job. The manual
+    /// `POST /api/v1/data/analytics/snapshot` trigger works regardless.
+    #[serde(default = "default_snapshot_enabled")]
+    pub snapshot_enabled: bool,
+    /// Minutes between captures (clamped to ≥1 at spawn).
+    #[serde(default = "default_snapshot_interval_minutes")]
+    pub snapshot_interval_minutes: u64,
+}
+
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_enabled: default_snapshot_enabled(),
+            snapshot_interval_minutes: default_snapshot_interval_minutes(),
+        }
+    }
+}
+
+fn default_snapshot_enabled() -> bool {
+    true
+}
+
+fn default_snapshot_interval_minutes() -> u64 {
+    60
 }
 
 #[derive(Debug, Deserialize, Clone)]

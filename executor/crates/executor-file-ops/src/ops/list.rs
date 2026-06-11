@@ -6,14 +6,16 @@ use opendal::Operator;
 
 use crate::config::ListConfig;
 
-use super::{resolve_path, FileOpsResult};
+use super::{local_stat, local_stat_root, resolve_path, FileOpsResult};
 
 /// List files under a storage prefix.
 ///
 /// Directory markers (paths ending with `/`) are automatically skipped.
 /// When `include_stat` is `true`, each entry in the `files` array is a JSON
-/// object with `path`, `content_length`, and optionally `last_modified`.
-/// Otherwise, entries are plain path strings.
+/// object with `path`, `content_length`, and optionally `last_modified` —
+/// plus `uid`/`gid`/`mode` on a local backend (direct lstat; ownership facts
+/// an opendal `Metadata` cannot carry). Otherwise, entries are plain path
+/// strings.
 ///
 /// Results can be capped with `limit`. When the limit is reached, the
 /// `truncated` output field is set to `true`.
@@ -28,6 +30,10 @@ pub async fn execute(config: &ListConfig, operator: &Operator, prefix: &str) -> 
     let full_prefix = resolve_path(prefix, &config.prefix);
 
     let entries = operator.list(&full_prefix).await?;
+
+    // Local backend → lstat at `<endpoint>/<storage path>` for ownership
+    // facts; any miss fail-softs to the opendal stat (see crawl).
+    let lstat_root = local_stat_root(&config.storage);
 
     let mut files = Vec::new();
     for entry in entries {
@@ -46,18 +52,34 @@ pub async fn execute(config: &ListConfig, operator: &Operator, prefix: &str) -> 
         };
 
         if config.include_stat {
-            let metadata = operator.stat(path).await?;
             let mut entry_info = serde_json::Map::new();
             entry_info.insert("path".into(), serde_json::json!(user_path));
-            entry_info.insert(
-                "content_length".into(),
-                serde_json::json!(metadata.content_length()),
-            );
-            if let Some(last_modified) = metadata.last_modified() {
-                entry_info.insert(
-                    "last_modified".into(),
-                    serde_json::json!(last_modified.to_string()),
-                );
+            match lstat_root
+                .as_deref()
+                .and_then(|root| local_stat(root, path))
+            {
+                Some(s) => {
+                    entry_info.insert("content_length".into(), serde_json::json!(s.size));
+                    if let Some(mtime) = s.mtime {
+                        entry_info.insert("last_modified".into(), serde_json::json!(mtime));
+                    }
+                    entry_info.insert("uid".into(), serde_json::json!(s.uid));
+                    entry_info.insert("gid".into(), serde_json::json!(s.gid));
+                    entry_info.insert("mode".into(), serde_json::json!(s.mode));
+                }
+                None => {
+                    let metadata = operator.stat(path).await?;
+                    entry_info.insert(
+                        "content_length".into(),
+                        serde_json::json!(metadata.content_length()),
+                    );
+                    if let Some(last_modified) = metadata.last_modified() {
+                        entry_info.insert(
+                            "last_modified".into(),
+                            serde_json::json!(last_modified.to_string()),
+                        );
+                    }
+                }
             }
             files.push(serde_json::Value::Object(entry_info));
         } else {

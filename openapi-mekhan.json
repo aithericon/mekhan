@@ -2525,6 +2525,195 @@
         }
       }
     },
+    "/api/v1/data/analytics/breakdown": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "GET /api/v1/data/analytics/breakdown",
+        "description": "Generic group-by aggregation over `file_inventory`'s promoted analytics\ncolumns. The `directory` dimension returns one level per call (`under` +\n`depth` lazy descent, `is_leaf` marks where to stop) and doubles as the\ncapacity-treemap loader.",
+        "operationId": "breakdown",
+        "parameters": [
+          {
+            "name": "group_by",
+            "in": "query",
+            "description": "Dimension to group by:\n`server|extension|size_class|age|mtime_age|owner|directory`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "description": "Directory prefix to scope to (and, for the `directory` dimension,\ndescend under). Leading/trailing slashes are ignored; LIKE\nmetacharacters in the prefix are escaped.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Path components grouped below `under` (`directory` dimension only;\nclamped 1..=8, default 1).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max buckets returned (default 100, clamped to 500). Totals always\ncover the whole scope.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Buckets + scope totals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BreakdownResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown dimension or invalid filter DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/data/analytics/snapshot": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "POST /api/v1/data/analytics/snapshot",
+        "description": "Manually capture a snapshot row-set — the SAME writer the hourly\nbackground job uses, so a fresh point shows up on the growth charts\nimmediately. Duplicates within a time bucket are harmless (read-time dedup).",
+        "operationId": "snapshot",
+        "responses": {
+          "200": {
+            "description": "Capture timestamp + rows written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/data/analytics/timeseries": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "GET /api/v1/data/analytics/timeseries",
+        "description": "Growth points over `inventory_snapshots`, `time_bucket`ed per\n`(server, dim, key)` with the LATEST capture per bucket (manual-trigger\nduplicates inside a bucket are deduped at read time — the table has no PK\non purpose). TimescaleDB-backed, same posture as `inference_timeseries`.",
+        "operationId": "timeseries",
+        "parameters": [
+          {
+            "name": "dim",
+            "in": "query",
+            "description": "Snapshot dimension: `total|extension|top_dir|status`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "Restrict to one bucket key within the dimension (e.g. one extension).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "file_server_id",
+            "in": "query",
+            "description": "Restrict to one file server.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "bucket_secs",
+            "in": "query",
+            "description": "Bucket width in seconds (default 3600, clamped 60..=7d).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "window_secs",
+            "in": "query",
+            "description": "Look-back window in seconds (default 7 days, capped at 90 days).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deduped growth points, oldest bucket first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SnapshotPoint"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/data/entries": {
       "get": {
         "tags": [
@@ -13413,6 +13602,71 @@
           }
         }
       },
+      "BreakdownBucket": {
+        "type": "object",
+        "description": "One group-by bucket of the breakdown aggregation.",
+        "required": [
+          "key",
+          "count",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of `size_bytes` in the bucket (NULL sizes contribute 0)."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Files in the bucket."
+          },
+          "is_leaf": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`directory` dimension only: `true` when no path under this key has\ndeeper components — the frontend stops drilling. `None` for every\nother dimension."
+          },
+          "key": {
+            "type": "string",
+            "description": "Bucket key — semantics depend on the dimension (server id, extension,\nsize-class label, age-cohort label, uid, or directory prefix segment)."
+          }
+        }
+      },
+      "BreakdownResponse": {
+        "type": "object",
+        "description": "Response of `GET /api/v1/data/analytics/breakdown`.",
+        "required": [
+          "group_by",
+          "buckets",
+          "total_count",
+          "total_bytes"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BreakdownBucket"
+            },
+            "description": "Buckets, largest `bytes` first, capped at `limit`."
+          },
+          "group_by": {
+            "type": "string",
+            "description": "Echo of the requested dimension."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total bytes matching the scope."
+          },
+          "total_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total files matching the scope (NOT just the returned buckets)."
+          }
+        }
+      },
       "BridgeTarget": {
         "type": "object",
         "required": [
@@ -18852,12 +19106,26 @@
             ],
             "format": "uuid"
           },
+          "extension": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GENERATED ALWAYS from `path` (lowercased suffix) — never written by any\ninventory writer."
+          },
           "file_server_id": {
             "type": "string"
           },
           "first_seen": {
             "type": "string",
             "format": "date-time"
+          },
+          "gid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           },
           "id": {
             "type": "string",
@@ -18886,12 +19154,33 @@
               "null"
             ]
           },
+          "mtime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "path": {
             "type": "string"
           },
           "provenance": {},
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "status": {
             "type": "string"
+          },
+          "uid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           },
           "updated_at": {
             "type": "string",
@@ -18906,13 +19195,41 @@
           "path"
         ],
         "properties": {
+          "gid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "mtime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "path": {
             "type": "string"
           },
           "provenance": {},
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "status": {
             "type": "string",
             "description": "Physical-observation status — defaults to `indexed`."
+          },
+          "uid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -18968,11 +19285,25 @@
           "file_server_id": {
             "type": "string"
           },
+          "gid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
           "mime_type": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "mtime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "name": {
             "type": [
@@ -18993,6 +19324,13 @@
           },
           "status": {
             "type": "string"
+          },
+          "uid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -20716,12 +21054,29 @@
           "size"
         ],
         "properties": {
+          "gid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Owning group id (`st_gid`), when the crawler could lstat locally."
+          },
           "hash": {
             "type": [
               "string",
               "null"
             ],
             "description": "Observed content hash (bare lowercase hex). When present it wins over\nthe inherited legacy hash and triggers catalogue coupling."
+          },
+          "mode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "File mode bits (`st_mode`) — provenance-only, never a column.",
+            "minimum": 0
           },
           "mtime": {
             "type": [
@@ -20738,6 +21093,14 @@
             "type": "integer",
             "format": "int64",
             "description": "Observed physical size in bytes."
+          },
+          "uid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Owning user id (`st_uid`), when the crawler could lstat locally."
           }
         }
       },
@@ -22346,12 +22709,26 @@
                   ],
                   "format": "uuid"
                 },
+                "extension": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "GENERATED ALWAYS from `path` (lowercased suffix) — never written by any\ninventory writer."
+                },
                 "file_server_id": {
                   "type": "string"
                 },
                 "first_seen": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "gid": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
                 },
                 "id": {
                   "type": "string",
@@ -22380,12 +22757,33 @@
                     "null"
                   ]
                 },
+                "mtime": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
                 "path": {
                   "type": "string"
                 },
                 "provenance": {},
+                "size_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
                 "status": {
                   "type": "string"
+                },
+                "uid": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
                 },
                 "updated_at": {
                   "type": "string",
@@ -24944,6 +25342,61 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SnapshotPoint": {
+        "type": "object",
+        "description": "One deduped `(bucket, server, dim, key)` growth point from\n`inventory_snapshots` (last batch per time bucket wins).",
+        "required": [
+          "bucket",
+          "file_server_id",
+          "dim",
+          "key",
+          "file_count",
+          "total_bytes"
+        ],
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dim": {
+            "type": "string"
+          },
+          "file_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "file_server_id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SnapshotResult": {
+        "type": "object",
+        "description": "Result of one snapshot capture (background job or manual trigger).",
+        "required": [
+          "snapped_at",
+          "rows_written"
+        ],
+        "properties": {
+          "rows_written": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`inventory_snapshots` rows written across all dims/servers."
+          },
+          "snapped_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The single timestamp every row of this capture shares."
           }
         }
       },

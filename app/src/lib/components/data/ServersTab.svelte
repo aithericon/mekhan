@@ -15,6 +15,7 @@
 		type CreateEndpointRequest
 	} from '$lib/api/fileServers';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { formatBytes } from './format';
 	import { listCapacities } from '$lib/api/capacities';
 	import { listRunners } from '$lib/api/runners';
 	import { Badge } from '$lib/components/ui/badge';
@@ -91,18 +92,6 @@
 			: status === 'offline'
 				? 'bg-red-500'
 				: 'bg-muted-foreground/40';
-	}
-
-	function fmtSize(n: number): string {
-		if (n < 1024) return `${n} B`;
-		const u = ['KB', 'MB', 'GB', 'TB'];
-		let v = n / 1024,
-			i = 0;
-		while (v >= 1024 && i < u.length - 1) {
-			v /= 1024;
-			i++;
-		}
-		return `${v.toFixed(1)} ${u[i]}`;
 	}
 
 	/** A server's resource_refs that fail to resolve (rollup is server-level only). */
@@ -431,7 +420,7 @@
 								{s.file_count.toLocaleString()} files
 							</div>
 							<div class="text-sm tabular-nums text-muted-foreground">
-								{fmtSize(s.total_size_bytes)}
+								{formatBytes(s.total_size_bytes)}
 							</div>
 						</div>
 						<div class="flex shrink-0 items-center gap-1">
@@ -538,7 +527,7 @@
 						<Server class="size-4 shrink-0 text-muted-foreground/60" />
 						<span class="min-w-0 flex-1 truncate font-mono text-sm text-foreground">{u.key}</span>
 						<span class="shrink-0 text-sm tabular-nums text-muted-foreground"
-							>{u.file_count.toLocaleString()} files · {fmtSize(u.total_size_bytes)}</span
+							>{u.file_count.toLocaleString()} files · {formatBytes(u.total_size_bytes)}</span
 						>
 						<Button variant="outline" size="sm" onclick={() => openAdopt(u)}>Adopt</Button>
 					</div>

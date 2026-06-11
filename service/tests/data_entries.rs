@@ -95,6 +95,9 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
                 name: Some("genome.fasta".into()),
                 size_bytes: Some(42),
                 mime_type: None,
+                mtime: None,
+                uid: None,
+                gid: None,
             }],
         },
     )
@@ -110,6 +113,10 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
                 path: "raw/scan.tif".into(),
                 status: "indexed".into(),
                 provenance: serde_json::json!({}),
+                size_bytes: None,
+                mtime: None,
+                uid: None,
+                gid: None,
             }],
         },
     )

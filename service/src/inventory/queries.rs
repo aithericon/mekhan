@@ -6,13 +6,20 @@ use crate::query::pagination::Paginated;
 
 use super::model::*;
 
-/// Allowed filter fields for inventory entries (whitelist).
-const ALLOWED_FILTER_FIELDS: &[&str] = &[
+/// Allowed filter fields for inventory entries (whitelist). Shared with the
+/// analytics breakdown endpoint, which scopes its aggregations with the same
+/// filter DSL.
+pub(crate) const ALLOWED_FILTER_FIELDS: &[&str] = &[
     "content_hash",
     "file_server_id",
     "path",
     "status",
     "is_canonical",
+    "size_bytes",
+    "mtime",
+    "uid",
+    "gid",
+    "extension",
 ];
 
 /// Allowed sort fields for inventory entries (whitelist).
@@ -24,6 +31,11 @@ const ALLOWED_SORT_FIELDS: &[&str] = &[
     "first_seen",
     "last_seen",
     "updated_at",
+    "size_bytes",
+    "mtime",
+    "uid",
+    "gid",
+    "extension",
 ];
 
 /// List inventory entries with filter/sort/pagination support.
@@ -172,8 +184,11 @@ pub async fn upsert_catalogue_by_hash(
 
 /// Upsert one physical-copy `file_inventory` row on `(file_server_id, path)`
 /// (caller owns the tx). `is_canonical` is set only on INSERT — re-observing an
-/// existing copy never clobbers a reconcile-assigned canonical flag. Returns
-/// rows inserted-or-updated.
+/// existing copy never clobbers a reconcile-assigned canonical flag. The
+/// promoted analytics columns are written from `facts` with a COALESCE
+/// non-clobber rule (a fact-less re-observation never NULLs what a previous
+/// stat-capable observer recorded); `extension` is GENERATED from `path` and
+/// is deliberately never named here. Returns rows inserted-or-updated.
 pub async fn upsert_inventory_copy(
     tx: &mut Transaction<'_, Postgres>,
     content_hash: Option<&str>,
@@ -182,16 +197,22 @@ pub async fn upsert_inventory_copy(
     status: &str,
     is_canonical: bool,
     provenance: &serde_json::Value,
+    facts: &ObservedFacts,
 ) -> Result<u64, sqlx::Error> {
     let r = sqlx::query(
         r#"
         INSERT INTO file_inventory
-            (content_hash, file_server_id, path, status, is_canonical, provenance, last_seen, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+            (content_hash, file_server_id, path, status, is_canonical, provenance,
+             size_bytes, mtime, uid, gid, last_seen, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
         ON CONFLICT (file_server_id, path) DO UPDATE SET
             status       = EXCLUDED.status,
             content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
             provenance   = EXCLUDED.provenance,
+            size_bytes   = COALESCE(EXCLUDED.size_bytes, file_inventory.size_bytes),
+            mtime        = COALESCE(EXCLUDED.mtime, file_inventory.mtime),
+            uid          = COALESCE(EXCLUDED.uid, file_inventory.uid),
+            gid          = COALESCE(EXCLUDED.gid, file_inventory.gid),
             last_seen    = NOW(),
             updated_at   = NOW()
         "#,
@@ -202,6 +223,10 @@ pub async fn upsert_inventory_copy(
     .bind(status)
     .bind(is_canonical)
     .bind(provenance)
+    .bind(facts.size_bytes)
+    .bind(facts.mtime)
+    .bind(facts.uid)
+    .bind(facts.gid)
     .execute(&mut **tx)
     .await?;
     Ok(r.rows_affected())
@@ -263,6 +288,7 @@ pub async fn register(
             &item.status,
             false,
             &item.provenance,
+            &item.facts(),
         )
         .await? as i64;
     }
@@ -298,6 +324,7 @@ pub async fn index(
             &item.status,
             false,
             &item.provenance,
+            &item.facts(),
         )
         .await? as i64;
     }

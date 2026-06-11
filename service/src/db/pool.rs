@@ -11,6 +11,10 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
     // Touch this line whenever a migration is added/renamed so the macro re-embeds
     // it — sccache content-hashes this file but NOT the external migrations dir, so
     // a real edit here is required to bust the cache (a bare `touch` won't).
+    // (latest: 20240167000000_inventory_snapshots.sql — file-analytics growth
+    //  snapshots (Cut 2); 20240166 promotes size/mtime/uid/gid/extension onto
+    //  file_inventory. Renumber-check `ls migrations | tail` before commit —
+    //  concurrent unpushed branches may also claim 20240166+.)
     // (latest: 20240157000000_hpi_tasks_workspace_offer.sql — P3 humans-as-capacity:
     //  hpi_tasks.workspace_id + claimed_at, for the offered→claimed lifecycle.)
     // (latest: 20240156000000_roster_members.sql — P2 humans-as-capacity: the roster.)

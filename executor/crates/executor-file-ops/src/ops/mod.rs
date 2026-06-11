@@ -277,6 +277,55 @@ fn resolve_path(prefix: &str, path: &str) -> String {
     }
 }
 
+/// One lstat's worth of file facts — what an opendal `Metadata` cannot carry
+/// (it has no uid/gid/mode), captured in a single syscall for local backends.
+pub(super) struct LocalStat {
+    pub size: u64,
+    /// RFC 3339 mtime (matches the opendal `last_modified()` rendering).
+    pub mtime: Option<String>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub mode: Option<u32>,
+}
+
+/// The local filesystem root to lstat against, when (and only when) the
+/// storage backend is the local `fs` operator — whose OpenDAL root IS
+/// `config.endpoint`, so `<endpoint>/<storage path>` is the on-disk path.
+pub(super) fn local_stat_root(config: &StorageConfig) -> Option<std::path::PathBuf> {
+    matches!(
+        config.backend,
+        aithericon_executor_storage::StorageBackend::Local
+    )
+    .then(|| std::path::PathBuf::from(&config.endpoint))
+}
+
+/// Stat `<root>/<storage_path>` via `lstat` (symlink_metadata: a dangling
+/// symlink yields the link itself rather than an error) — size, mtime, AND
+/// ownership in one syscall. `None` on any error so callers fail-soft to the
+/// opendal stat.
+#[cfg(unix)]
+pub(super) fn local_stat(root: &std::path::Path, storage_path: &str) -> Option<LocalStat> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(root.join(storage_path)).ok()?;
+    let mtime = meta.modified().ok().map(|t| {
+        chrono::DateTime::<chrono::Utc>::from(t)
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+    });
+    Some(LocalStat {
+        size: meta.len(),
+        mtime,
+        uid: Some(meta.uid()),
+        gid: Some(meta.gid()),
+        mode: Some(meta.mode()),
+    })
+}
+
+/// Non-unix: no ownership syscall available — callers fall back to opendal.
+#[cfg(not(unix))]
+pub(super) fn local_stat(_root: &std::path::Path, _storage_path: &str) -> Option<LocalStat> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

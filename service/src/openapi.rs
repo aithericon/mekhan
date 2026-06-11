@@ -337,6 +337,14 @@ use utoipa::OpenApi;
             crate::data::model::DataEntry,
             crate::data::model::UncataloguedFile,
             crate::data::model::DataEntriesResponse,
+            // File analytics (docs/32 Cuts 1+2) — breakdown buckets appear only
+            // inside `BreakdownResponse.buckets: Vec<_>` and the timeseries rows
+            // only inside `Vec<SnapshotPoint>`, which utoipa's auto-discovery
+            // doesn't fully walk, so register them explicitly for frontend codegen.
+            crate::analytics::model::BreakdownBucket,
+            crate::analytics::model::BreakdownResponse,
+            crate::analytics::model::SnapshotPoint,
+            crate::analytics::model::SnapshotResult,
             // Normalized probe (`fmeta`) metadata view — reached only through the
             // `CatalogueEntry.metadata_view` field; register the tree explicitly
             // so frontend codegen emits matching TS types (see catalogue/metadata_view.rs).
