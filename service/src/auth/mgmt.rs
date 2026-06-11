@@ -242,6 +242,41 @@ impl ZitadelMgmt {
             .and_then(|u| u["userId"].as_str().map(str::to_string)))
     }
 
+    /// Create a Zitadel human user for an invited email. Returns the new
+    /// `userId` (the OIDC `sub`). Derives given/family name from `display_name`
+    /// (split on first space) or the email local-part when absent. The broker's
+    /// existing ORG_OWNER grant authorizes `POST /management/v1/users/human`.
+    pub async fn create_human_user(
+        &self,
+        email: &str,
+        display_name: Option<&str>,
+    ) -> Result<String, MgmtError> {
+        let local = email.split('@').next().unwrap_or(email);
+        let name = display_name.map(str::trim).filter(|s| !s.is_empty());
+        let (given, family) = match name {
+            Some(n) => match n.split_once(' ') {
+                Some((g, f)) => (g.to_string(), f.trim().to_string()),
+                None => (n.to_string(), n.to_string()),
+            },
+            None => (local.to_string(), local.to_string()),
+        };
+        let created = self
+            .call(
+                reqwest::Method::POST,
+                "/management/v1/users/human",
+                Some(json!({
+                    "userName": email,
+                    "profile": { "firstName": given, "lastName": family },
+                    "email": { "email": email, "isEmailVerified": false },
+                })),
+            )
+            .await?;
+        created["userId"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| MgmtError::Upstream("human create: missing userId".into()))
+    }
+
     /// Best-effort PAT expiry for a token's machine user. Any failure (the
     /// list endpoint shape varies across Zitadel versions) → `None`; expiry is
     /// cosmetic, never load-bearing.

@@ -5795,6 +5795,100 @@
         }
       }
     },
+    "/api/v1/invites/{token}/accept": {
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the\ninvitee's identity, then atomically applies membership + grants. Single-use\nvia `SELECT … FOR UPDATE` re-checking `status='pending'`.",
+        "operationId": "accept_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Opaque invite token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInviteResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No valid invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/invites/{token}/preview": {
+      "get": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "GET /api/v1/invites/{token}/preview — PUBLIC. Generic 404 for any\nunknown/expired/revoked/accepted token (single code path, no enumeration).",
+        "operationId": "preview_invite",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Opaque invite token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invite preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No valid invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/job-templates": {
       "get": {
         "tags": [
@@ -12891,6 +12985,252 @@
         }
       }
     },
+    "/api/v1/workspaces/{id}/invites": {
+      "get": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/invites — Admin-gated list.",
+        "operationId": "list_invites",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invites for the workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InviteSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/invites — Admin-gated. Creates (or rotates a\nduplicate-active) invite and sends the accept link. 201 on create, 200 on\nrotate. Never returns the raw token.",
+        "operationId": "create_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing active invite rotated + resent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role / cross-workspace grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / grant escalation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/invites/{invite_id}": {
+      "delete": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}/invites/{invite_id} — Admin-gated revoke.\nIdempotent (already-revoked → 204); an accepted invite → 409.",
+        "operationId": "revoke_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/invites/{invite_id}/resend": {
+      "post": {
+        "tags": [
+          "invites"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/invites/{invite_id}/resend — Admin-gated.\nRotates the token + expiry (old link dies) and resends.",
+        "operationId": "resend_invite",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invite_id",
+            "in": "path",
+            "description": "Invite id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated + resent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pending invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{id}/members": {
       "get": {
         "tags": [
@@ -13292,6 +13632,24 @@
   },
   "components": {
     "schemas": {
+      "AcceptInviteResponse": {
+        "type": "object",
+        "description": "Result of accepting an invite.",
+        "required": [
+          "workspace_id",
+          "requires_login"
+        ],
+        "properties": {
+          "requires_login": {
+            "type": "boolean",
+            "description": "`true` ⇒ the invitee now has a real IdP identity and the SPA must send\nthem through `/api/auth/login` to obtain a session (mekhan does not mint\nit). `false` under `dev_noop` (every request is already the dev user)."
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "Acceptance": {
         "type": "string",
         "description": "The capacity-side half of bilateral eligibility (doc 35 §4):\n`match = work-side predicate ∧ capacity-side acceptance`.\n\nThis replaces the deleted `Dispatch` axis: pull-vs-push derives from the\nbackend (doc 35 §2), and what `offer` actually smuggled in was acceptance —\nwhat eligibility *means* when the capacity gets a say.\n\n`policy` — a capacity-side *standing predicate* evaluated by the platform\n(maintenance mode, tenant refusal) — is a documented-future third value and\nis deliberately NOT a variant here (doc 35 §4/§9).",
@@ -16650,6 +17008,34 @@
           "template_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CreateInviteRequest": {
+        "type": "object",
+        "description": "Admin creates an invite. Optionally pre-seeds object grants applied on accept.",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Invitee email (normalized lower-case server-side)."
+          },
+          "object_grants": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/InviteObjectGrantSpec"
+            },
+            "description": "Object grants applied (via `apply_grant`) on accept. Each object must be\nin this workspace and the caller's effective role on it must be ≥ the\ngranted role (workspace Admin/Owner bypass)."
+          },
+          "role": {
+            "type": "string",
+            "description": "Workspace role granted on accept. One of `owner|admin|editor|viewer`."
           }
         }
       },
@@ -20692,6 +21078,110 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "InviteObjectGrantSpec": {
+        "type": "object",
+        "description": "One pre-seeded object grant on an invite.",
+        "required": [
+          "object_type",
+          "object_id",
+          "role"
+        ],
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string",
+            "description": "`folder` | `template` | `instance`."
+          },
+          "role": {
+            "type": "string",
+            "description": "`owner|admin|editor|viewer`."
+          }
+        }
+      },
+      "InvitePreview": {
+        "type": "object",
+        "description": "Public invite preview shown on the accept page (minimal, non-enumerable).",
+        "required": [
+          "workspace_display_name",
+          "email",
+          "role",
+          "status",
+          "expires_at"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace_display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "InviteSummary": {
+        "type": "object",
+        "description": "Admin-facing invite row (never carries the token).",
+        "required": [
+          "id",
+          "workspace_id",
+          "email",
+          "role",
+          "status",
+          "invited_by",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invited_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invited_by_display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending|accepted|revoked|expired`."
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

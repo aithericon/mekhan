@@ -1976,6 +1976,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the
+         *     invitee's identity, then atomically applies membership + grants. Single-use
+         *     via `SELECT … FOR UPDATE` re-checking `status='pending'`.
+         */
+        post: operations["accept_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invites/{token}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/invites/{token}/preview — PUBLIC. Generic 404 for any
+         *     unknown/expired/revoked/accepted token (single code path, no enumeration).
+         */
+        get: operations["preview_invite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/job-templates": {
         parameters: {
             query?: never;
@@ -4406,6 +4447,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{id}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id}/invites — Admin-gated list. */
+        get: operations["list_invites"];
+        put?: never;
+        /**
+         * POST /api/v1/workspaces/{id}/invites — Admin-gated. Creates (or rotates a
+         *     duplicate-active) invite and sends the accept link. 201 on create, 200 on
+         *     rotate. Never returns the raw token.
+         */
+        post: operations["create_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/invites/{invite_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/workspaces/{id}/invites/{invite_id} — Admin-gated revoke.
+         *     Idempotent (already-revoked → 204); an accepted invite → 409.
+         */
+        delete: operations["revoke_invite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/invites/{invite_id}/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/workspaces/{id}/invites/{invite_id}/resend — Admin-gated.
+         *     Rotates the token + expiry (old link dies) and resends.
+         */
+        post: operations["resend_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{id}/members": {
         parameters: {
             query?: never;
@@ -4530,6 +4633,17 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Result of accepting an invite. */
+        AcceptInviteResponse: {
+            /**
+             * @description `true` ⇒ the invitee now has a real IdP identity and the SPA must send
+             *     them through `/api/auth/login` to obtain a session (mekhan does not mint
+             *     it). `false` under `dev_noop` (every request is already the dev user).
+             */
+            requires_login: boolean;
+            /** Format: uuid */
+            workspace_id: string;
+        };
         /**
          * @description The capacity-side half of bilateral eligibility (doc 35 §4):
          *     `match = work-side predicate ∧ capacity-side acceptance`.
@@ -6203,6 +6317,19 @@ export interface components {
             /** Format: uuid */
             template_id: string;
         };
+        /** @description Admin creates an invite. Optionally pre-seeds object grants applied on accept. */
+        CreateInviteRequest: {
+            /** @description Invitee email (normalized lower-case server-side). */
+            email: string;
+            /**
+             * @description Object grants applied (via `apply_grant`) on accept. Each object must be
+             *     in this workspace and the caller's effective role on it must be ≥ the
+             *     granted role (workspace Admin/Owner bypass).
+             */
+            object_grants?: components["schemas"]["InviteObjectGrantSpec"][] | null;
+            /** @description Workspace role granted on accept. One of `owner|admin|editor|viewer`. */
+            role: string;
+        };
         /**
          * @description Request body for `POST /api/v1/job-templates`. Lands a `job_templates` row
          *     at `latest_version = 1` plus the first `job_template_versions` row (v1).
@@ -7844,6 +7971,42 @@ export interface components {
             by_status: components["schemas"]["InventoryCount"][];
             /** Format: int64 */
             total: number;
+        };
+        /** @description One pre-seeded object grant on an invite. */
+        InviteObjectGrantSpec: {
+            /** Format: uuid */
+            object_id: string;
+            /** @description `folder` | `template` | `instance`. */
+            object_type: string;
+            /** @description `owner|admin|editor|viewer`. */
+            role: string;
+        };
+        /** @description Public invite preview shown on the accept page (minimal, non-enumerable). */
+        InvitePreview: {
+            email: string;
+            /** Format: date-time */
+            expires_at: string;
+            role: string;
+            status: string;
+            workspace_display_name: string;
+        };
+        /** @description Admin-facing invite row (never carries the token). */
+        InviteSummary: {
+            /** Format: date-time */
+            created_at: string;
+            email: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            invited_by: string;
+            invited_by_display_name?: string | null;
+            role: string;
+            /** @description `pending|accepted|revoked|expired`. */
+            status: string;
+            /** Format: uuid */
+            workspace_id: string;
         };
         /**
          * @description Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus
@@ -17133,6 +17296,79 @@ export interface operations {
             };
         };
     };
+    accept_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque invite token */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptInviteResponse"];
+                };
+            };
+            /** @description No valid invite */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Identity provisioning unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    preview_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque invite token */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreview"];
+                };
+            };
+            /** @description No valid invite */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_job_templates: {
         parameters: {
             query?: {
@@ -22310,6 +22546,185 @@ export interface operations {
             };
             /** @description Sibling slug already exists */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_invites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invites for the workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteSummary"][];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing active invite rotated + resent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteSummary"];
+                };
+            };
+            /** @description Invite created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteSummary"];
+                };
+            };
+            /** @description Invalid role / cross-workspace grant */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required / grant escalation */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+                /** @description Invite id */
+                invite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Already accepted */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resend_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+                /** @description Invite id */
+                invite_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rotated + resent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteSummary"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No pending invite */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

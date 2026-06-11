@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
+	import Mail from '@lucide/svelte/icons/mail';
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import { PageShell, PageHeader } from '$lib/components/shell';
@@ -25,6 +26,13 @@
 		type WorkspaceSummary,
 		type WorkspaceMember
 	} from '$lib/api/client';
+	import {
+		listInvites,
+		createInvite,
+		resendInvite,
+		revokeInvite,
+		type InviteSummary
+	} from '$lib/api/invites';
 
 	const workspaceId = $derived($page.params.id ?? '');
 
@@ -39,6 +47,13 @@
 	let addingMember = $state(false);
 	let addError = $state<string | null>(null);
 
+	// Invite form + pending-invite list
+	let invites = $state<InviteSummary[]>([]);
+	let inviteEmail = $state('');
+	let inviteRole = $state<'viewer' | 'editor' | 'admin' | 'owner'>('editor');
+	let inviting = $state(false);
+	let inviteError = $state<string | null>(null);
+
 	async function load() {
 		loading = true;
 		error = null;
@@ -47,10 +62,48 @@
 				getWorkspace(workspaceId),
 				listWorkspaceMembers(workspaceId)
 			]);
+			// Invites are Admin-only; tolerate a 403 for non-admins.
+			invites = await listInvites(workspaceId).catch(() => []);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load workspace';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function sendInvite(e: Event) {
+		e.preventDefault();
+		const email = inviteEmail.trim();
+		if (!email) return;
+		inviting = true;
+		inviteError = null;
+		try {
+			await createInvite(workspaceId, { email, role: inviteRole });
+			inviteEmail = '';
+			invites = await listInvites(workspaceId);
+		} catch (e) {
+			inviteError = e instanceof Error ? e.message : 'Failed to send invite';
+		} finally {
+			inviting = false;
+		}
+	}
+
+	async function resend(inviteId: string) {
+		try {
+			await resendInvite(workspaceId, inviteId);
+			invites = await listInvites(workspaceId);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to resend invite');
+		}
+	}
+
+	async function revoke(inviteId: string) {
+		if (!confirm('Revoke this invite?')) return;
+		try {
+			await revokeInvite(workspaceId, inviteId);
+			invites = invites.filter((i) => i.id !== inviteId);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to revoke invite');
 		}
 	}
 
@@ -184,6 +237,81 @@
 							</li>
 						{/each}
 					</ul>
+				</CardContent>
+			</Card>
+
+			<!-- Pending invites -->
+			<Card data-testid="invites-card">
+				<CardHeader>
+					<CardTitle>Invites</CardTitle>
+					<CardDescription>
+						Invite someone by email. They get an accept link; on accept they're
+						added at the chosen role (created in the IdP if new).
+					</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-4">
+					<form onsubmit={sendInvite} class="space-y-2">
+						<div class="flex gap-2">
+							<Input
+								type="email"
+								placeholder="invitee@corp.com"
+								bind:value={inviteEmail}
+								data-testid="input-invite-email"
+								class="flex-1"
+							/>
+							<select
+								bind:value={inviteRole}
+								class="rounded-md border border-input bg-background px-2 text-sm"
+								data-testid="select-invite-role"
+							>
+								<option value="viewer">Viewer</option>
+								<option value="editor">Editor</option>
+								<option value="admin">Admin</option>
+								<option value="owner">Owner</option>
+							</select>
+							<Button type="submit" disabled={inviting} data-testid="btn-send-invite">
+								<Mail class="size-4" />
+								Invite
+							</Button>
+						</div>
+						{#if inviteError}
+							<div class="text-xs text-destructive">{inviteError}</div>
+						{/if}
+					</form>
+
+					{#if invites.length === 0}
+						<p class="text-sm text-muted-foreground">No invites yet.</p>
+					{:else}
+						<ul class="divide-y divide-border rounded-md border border-border">
+							{#each invites as inv (inv.id)}
+								<li
+									class="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+									data-testid={`invite-row-${inv.id}`}
+								>
+									<div class="min-w-0 flex-1 truncate">{inv.email}</div>
+									<Badge variant="secondary">{inv.role}</Badge>
+									<Badge
+										variant={inv.status === 'pending' ? 'outline' : 'secondary'}
+										data-testid={`invite-status-${inv.id}`}>{inv.status}</Badge
+									>
+									{#if inv.status === 'pending'}
+										<button
+											type="button"
+											class="text-xs text-muted-foreground hover:text-foreground"
+											onclick={() => resend(inv.id)}
+											data-testid={`btn-resend-${inv.id}`}>Resend</button
+										>
+										<button
+											type="button"
+											class="text-xs text-muted-foreground hover:text-destructive"
+											onclick={() => revoke(inv.id)}
+											data-testid={`btn-revoke-${inv.id}`}>Revoke</button
+										>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</CardContent>
 			</Card>
 

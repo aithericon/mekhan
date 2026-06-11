@@ -16,6 +16,7 @@ pub mod health;
 pub mod inference_metering;
 pub mod inference_telemetry;
 pub mod instances;
+pub mod invites;
 pub mod job_templates;
 pub mod me;
 pub mod model_catalog;
