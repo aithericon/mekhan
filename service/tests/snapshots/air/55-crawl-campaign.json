@@ -321,6 +321,12 @@
             "string",
             "null"
           ]
+        },
+        "resume_from": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -5211,6 +5217,11 @@
           "cardinality": "single",
           "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_start",
+          "schema_ref": "#/definitions/Data__start"
         }
       ],
       "input_schema": {
@@ -5226,10 +5237,16 @@
           "place": "p_campaign_input",
           "port": "input",
           "weight": 1
+        },
+        {
+          "place": "p_start_data",
+          "port": "d_start",
+          "read": true,
+          "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ body: input, data: #{ iteration: 0, cursor: (\"\"), total: (0), probe_errs: (0) } }",
+        "source": "#{ body: input, data: #{ iteration: 0, cursor: (if d_start.resume_from == () { \"\" } else { d_start.resume_from }), total: (0), probe_errs: (0) } }",
         "type": "rhai"
       },
       "name": "Crawl campaign - Enter Loop",
