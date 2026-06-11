@@ -378,13 +378,25 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(process::handlers::complete_task))
         .routes(routes!(process::handlers::cancel_task))
         .routes(routes!(process::handlers::claim_task))
-        // Catalogue
+        // Catalogue. Literal children (`facets`, `query-fields`,
+        // `saved-queries`) are registered before the
+        // `/{execution_id}/{id}` wildcard so matchit prefers them.
         .routes(routes!(catalogue::handlers::list_entries))
         .routes(routes!(catalogue::handlers::stats))
         .routes(routes!(catalogue::handlers::stats_by_net))
         .routes(routes!(catalogue::handlers::lineage))
         .routes(routes!(catalogue::handlers::distinct_values))
         .routes(routes!(catalogue::handlers::distinct_jsonb_values))
+        .routes(routes!(catalogue::handlers::facets))
+        .routes(routes!(catalogue::handlers::query_fields))
+        .routes(routes!(
+            catalogue::saved_queries::list_saved_queries,
+            catalogue::saved_queries::create_saved_query
+        ))
+        .routes(routes!(
+            catalogue::saved_queries::update_saved_query,
+            catalogue::saved_queries::delete_saved_query
+        ))
         .routes(routes!(catalogue::handlers::download_artifact))
         .routes(routes!(catalogue::handlers::get_entry))
         // Inventory (docs/32) — by-reference physical-copy registry. `register`

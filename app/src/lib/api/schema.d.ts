@@ -612,6 +612,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalogue/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/catalogue/facets
+         * @description Group-by buckets (count + bytes) over the scoped catalogue. The `column`
+         *     and `classification` dimensions unnest the probe metadata (`column_names` /
+         *     per-column `classifications`); counts there are ENTRIES having the key.
+         */
+        get: operations["facets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalogue/lineage/{process_id}": {
         parameters: {
             query?: never;
@@ -627,6 +649,65 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue/query-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/catalogue/query-fields
+         * @description The query-surface registry: filterable native + virtual `meta.*` fields
+         *     (with type + sortability), `file_metadata` containment idioms, and the
+         *     valid facet dimensions. Served FROM the same registry that compiles
+         *     WHERE/ORDER BY, so the frontend field picker cannot drift.
+         */
+        get: operations["query_fields"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue/saved-queries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/catalogue/saved-queries — list saved queries, newest first. */
+        get: operations["list_saved_queries"];
+        put?: never;
+        /** POST /api/v1/catalogue/saved-queries — create a saved query. */
+        post: operations["create_saved_query"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue/saved-queries/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/catalogue/saved-queries/{id}. */
+        delete: operations["delete_saved_query"];
+        options?: never;
+        head?: never;
+        /** PATCH /api/v1/catalogue/saved-queries/{id} — update any subset of fields. */
+        patch: operations["update_saved_query"];
         trace?: never;
     };
     "/api/v1/catalogue/stats": {
@@ -5727,6 +5808,13 @@ export interface components {
          * @enum {string}
          */
         ConstraintOp: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "exists";
+        /** @description One `file_metadata` containment idiom (the `file_metadata=` query param). */
+        ContainmentTermDesc: {
+            description: string;
+            /** @description A literal `file_metadata=` JSON value demonstrating the idiom. */
+            example: string;
+            term: string;
+        };
         /**
          * @description Context-window management strategy for an [`WorkflowNodeData::Agent`].
          *     Inert in PR 1's degenerate path; declared upfront so the type stays
@@ -6550,6 +6638,26 @@ export interface components {
         };
         /** @enum {string} */
         ExtractionMode: "single" | "batch";
+        /** @description One facet bucket: key + entry count + summed entry bytes. */
+        FacetBucket: {
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            count: number;
+            key: string;
+        };
+        /**
+         * @description Facet buckets + totals over the SAME scope (totals cover the whole scope,
+         *     not just the returned buckets).
+         */
+        FacetsResponse: {
+            buckets: components["schemas"]["FacetBucket"][];
+            group_by: string;
+            /** Format: int64 */
+            total_bytes: number;
+            /** Format: int64 */
+            total_count: number;
+        };
         FailingTestInfo: {
             name: string;
             reason: string;
@@ -9504,6 +9612,27 @@ export interface components {
             /** @description Working directory (defaults to run_dir root). */
             working_dir?: string | null;
         };
+        /** @description One filterable field, described for the frontend field picker. */
+        QueryFieldDesc: {
+            description: string;
+            /** @description Wire name: `filter[<name>][op]=` / `sort=<name>`. */
+            name: string;
+            /** @description Whether `sort=<name>` is accepted. */
+            sortable: boolean;
+            /** @description `text` | `number` | `timestamp` | `boolean`. */
+            value_type: string;
+        };
+        /** @description The full query-surface registry served by `GET /api/v1/catalogue/query-fields`. */
+        QueryFieldsResponse: {
+            /** @description JSONB containment idioms for the `file_metadata=` param. */
+            containment: components["schemas"]["ContainmentTermDesc"][];
+            /** @description Valid `group_by` values for `GET /api/v1/catalogue/facets`. */
+            facet_dimensions: string[];
+            /** @description Virtual `meta.*` fields projected from `file_metadata`. */
+            meta: components["schemas"]["QueryFieldDesc"][];
+            /** @description Native catalogue columns. */
+            native: components["schemas"]["QueryFieldDesc"][];
+        };
         /**
          * @description Body of `POST /api/v1/inventory/reconcile-batch`.
          *
@@ -10190,6 +10319,39 @@ export interface components {
             last_seen_at?: string | null;
             name: string;
             status: string;
+        };
+        /** @description A saved catalogue query. */
+        SavedQuery: {
+            /** Format: date-time */
+            created_at: string;
+            description?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Free-form UI state side-car. */
+            params: unknown;
+            /**
+             * @description The raw catalogue list query string (e.g.
+             *     `filter[meta.format][eq]=csv&sort=-meta.num_rows`).
+             */
+            q: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description Create payload for a saved query. */
+        SavedQueryCreate: {
+            description?: string | null;
+            name: string;
+            /** @description Defaults to `{}`. */
+            params?: unknown;
+            q: string;
+        };
+        /** @description Patch payload — every field optional; only provided fields are updated. */
+        SavedQueryUpdate: {
+            description?: string | null;
+            name?: string | null;
+            params?: unknown;
+            q?: string | null;
         };
         SchemaFingerprintView: {
             digest: string;
@@ -13678,6 +13840,46 @@ export interface operations {
             };
         };
     };
+    facets: {
+        parameters: {
+            query: {
+                /**
+                 * @description Dimension to group by:
+                 *     `format|category|mime_type|source_net|process_step|column|classification`.
+                 */
+                group_by: string;
+                /**
+                 * @description Max buckets returned (default 30, clamped 1..=200). Totals always
+                 *     cover the whole scope.
+                 */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facet buckets + scope totals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetsResponse"];
+                };
+            };
+            /** @description Unknown group_by or invalid query DSL */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     lineage: {
         parameters: {
             query?: never;
@@ -13697,6 +13899,190 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LineageResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    query_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Filter/sort/containment/facet registry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueryFieldsResponse"];
+                };
+            };
+        };
+    };
+    list_saved_queries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved queries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedQuery"][];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_saved_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedQueryCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedQuery"];
+                };
+            };
+            /** @description Duplicate name */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_saved_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Saved query id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_saved_query: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Saved query id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedQueryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedQuery"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Duplicate name */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Server error */

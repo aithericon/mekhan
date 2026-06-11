@@ -1027,20 +1027,6 @@ export async function getCatalogueLineage(processId: string): Promise<LineageRes
 	);
 }
 
-export async function getCatalogueDistinct(column: string): Promise<string[]> {
-	return unwrap(
-		await client.GET('/api/v1/catalogue/distinct/{column}', { params: { path: { column } } })
-	);
-}
-
-export async function getCatalogueDistinctJsonb(column: string, key: string): Promise<string[]> {
-	return unwrap(
-		await client.GET('/api/v1/catalogue/distinct-jsonb/{column}/{key}', {
-			params: { path: { column, key } }
-		})
-	);
-}
-
 export function catalogueDownloadUrl(storagePath: string): string {
 	return `${API_BASE}/catalogue/download/${storagePath}`;
 }
