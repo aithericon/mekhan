@@ -15,10 +15,13 @@
 //! node's `data_port` or `workflow_terminals`) are the outputs — no
 //! compile-time borrow-plan persistence needed.
 //!
-//! - [`projector`]: pure `(events, registry) → Vec<StepExecutionRow>` fold.
-//!   Used by tests and by the consumer.
-//! - [`consumer`]: NATS-driven background task that subscribes to
-//!   `petri.events.>`, runs the projector per instance, and upserts rows.
+//! - [`projector`]: pure `(events, registry) → Vec<StepExecutionRow>` fold (a
+//!   wrapper over the incremental per-net `State`). Used by tests and by the
+//!   consumer.
+//! - [`consumer`]: a [`crate::projections::framework::Projection`] driven by
+//!   the shared framework loop — replay-on-miss bootstrap (instance context +
+//!   interface registry + full-log fold), then one incremental absorb per
+//!   delivered (subject-filtered) event, upserting only the dirty rows.
 
 pub mod consumer;
 pub mod projector;

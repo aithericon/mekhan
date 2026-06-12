@@ -37,7 +37,7 @@
 //!   `NetFailed` / `NetCancelled`), any node without a row gets one at
 //!   `Skipped`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -127,7 +127,7 @@ pub fn project_step_executions(
 
 // ── Reverse-indexes built once from the registry ────────────────────────────
 
-struct Lookups<'a> {
+pub(crate) struct Lookups<'a> {
     /// `transition_id → node_id`. Built from each node's `owned_transitions`.
     transition_owner: HashMap<String, String>,
     /// `place_id → node_id`. Built from each node's `owned_places` plus
@@ -152,7 +152,7 @@ struct Lookups<'a> {
 }
 
 impl<'a> Lookups<'a> {
-    fn build(registry: &'a InterfaceRegistry) -> Self {
+    pub(crate) fn build(registry: &'a InterfaceRegistry) -> Self {
         let mut transition_owner = HashMap::new();
         let mut place_owner = HashMap::new();
         let mut entry_to_node = HashMap::new();
@@ -215,10 +215,18 @@ impl<'a> Lookups<'a> {
 
 // ── Per-node row state during the fold ──────────────────────────────────────
 
+/// Incremental fold state for one net. The consumer keeps it cached and feeds
+/// events one at a time via [`State::absorb`] (followed by the two
+/// terminalization passes, which self-gate on `terminated`); mutated rows are
+/// tracked by `(node_id, iteration_index)` so [`State::take_dirty_rows`]
+/// yields exactly the rows that need re-upserting.
+/// [`project_step_executions`] is the full-fold wrapper over it.
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     /// `(node_id, iteration_index) → row`. Built up as events flow in.
     rows: BTreeMap<(String, i32), StepExecutionRow>,
+    /// Rows changed since the last [`State::take_dirty_rows`].
+    dirty: BTreeSet<(String, i32)>,
     /// `node_id → next iteration index to assign`. Incremented when a fresh
     /// token lands at the node's entry place.
     next_iter: HashMap<String, i32>,
@@ -242,11 +250,11 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    fn absorb(&mut self, persisted: &PersistedEvent, lookups: &Lookups<'_>) {
+    pub(crate) fn absorb(&mut self, persisted: &PersistedEvent, lookups: &Lookups<'_>) {
         match &persisted.event {
             DomainEvent::TokenCreated {
                 token, place_id, ..
@@ -361,6 +369,7 @@ impl State {
         let assigned = *iter;
         *iter += 1;
         self.active_iter.insert(node_id.clone(), assigned);
+        self.dirty.insert((node_id.clone(), assigned));
         self.rows
             .entry((node_id.clone(), assigned))
             .or_insert_with(|| StepExecutionRow {
@@ -434,6 +443,7 @@ impl State {
         if !map.contains_key(&key) {
             map.insert(key, token_color_to_json(&token.color));
             row.inputs = Some(serde_json::Value::Object(map));
+            self.dirty.insert((row.node_id.clone(), iter));
         }
     }
 
@@ -508,6 +518,9 @@ impl State {
                 .or_insert(iter + 1);
         }
 
+        // Every owned fire bumps `last_sequence` below, so the row is dirty
+        // regardless of which of steps 3–5 actually change it.
+        self.dirty.insert((owner.clone(), iter));
         let row = self
             .rows
             .get_mut(&(owner.clone(), iter))
@@ -663,6 +676,7 @@ impl State {
         };
         let owner = owner.clone();
         let iter = self.active_iter.get(&owner).copied().unwrap_or(0);
+        self.dirty.insert((owner.clone(), iter));
         let row = self
             .rows
             .entry((owner.clone(), iter))
@@ -711,23 +725,24 @@ impl State {
     /// engine-emitted post-completion strays, which Map's racing gather/collect
     /// can produce) are still caught. Started-but-not-finished rows get a
     /// `completed_at` so duration math works.
-    fn close_open_rows(&mut self) {
+    pub(crate) fn close_open_rows(&mut self) {
         let Some((close_status, ts)) = self.close_with else {
             return;
         };
-        for row in self.rows.values_mut() {
+        for (key, row) in self.rows.iter_mut() {
             if matches!(row.status, StepStatus::Pending | StepStatus::Running) {
                 row.status = close_status;
                 if row.completed_at.is_none() {
                     row.completed_at = Some(ts);
                 }
+                self.dirty.insert(key.clone());
             }
         }
     }
 
     /// After absorbing the terminal event, any registry node that never
     /// produced a row at all is recorded as `Skipped`.
-    fn finalize_unreached(&mut self, registry: &InterfaceRegistry) {
+    pub(crate) fn finalize_unreached(&mut self, registry: &InterfaceRegistry) {
         if !self.terminated {
             return;
         }
@@ -737,6 +752,7 @@ impl State {
                 .keys()
                 .any(|(node_id, _)| node_id == &iface.node_id)
             {
+                self.dirty.insert((iface.node_id.clone(), 0));
                 self.rows.insert(
                     (iface.node_id.clone(), 0),
                     StepExecutionRow {
@@ -756,6 +772,15 @@ impl State {
                 );
             }
         }
+    }
+
+    /// Drain the dirty set and return a clone of each changed row. Empty when
+    /// the events folded since the last call touched no registry node.
+    pub(crate) fn take_dirty_rows(&mut self) -> Vec<StepExecutionRow> {
+        std::mem::take(&mut self.dirty)
+            .into_iter()
+            .filter_map(|key| self.rows.get(&key).cloned())
+            .collect()
     }
 
     fn into_rows(self) -> Vec<StepExecutionRow> {
@@ -968,8 +993,13 @@ mod tests {
         reg
     }
 
-    #[test]
-    fn projector_attributes_start_park_to_node_s() {
+    // ── Shared fixtures ──────────────────────────────────────────────────
+    //
+    // Each `fx_*` returns the (registry, events) of one focused test below;
+    // the incremental-fold equivalence test loops over ALL of them via
+    // `fixtures()`.
+
+    fn fx_start_park() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let reg = three_node_registry();
         let events = vec![
             token_created(0, 100, place("p_s_ready"), unit_token()),
@@ -987,6 +1017,12 @@ mod tests {
                 vec![],
             ),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_attributes_start_park_to_node_s() {
+        let (reg, events) = fx_start_park();
 
         let rows = project_step_executions(&events, &reg);
 
@@ -1006,41 +1042,30 @@ mod tests {
         assert_eq!(s_row.last_sequence, 1);
     }
 
+    fn fx_read_arc_inputs() -> (InterfaceRegistry, Vec<PersistedEvent>) {
+        let (reg, mut events) = fx_start_park();
+        events.push(fired(
+            2,
+            102,
+            trans("t_a_park"),
+            vec![
+                (
+                    place("p_a_data"),
+                    data_token(serde_json::json!({"greeting": "hi Alice"})),
+                ),
+                (place("p_a_main"), unit_token()),
+            ],
+            vec![(
+                place("p_s_data"),
+                data_token(serde_json::json!({"name": "Alice"})),
+            )],
+        ));
+        (reg, events)
+    }
+
     #[test]
     fn projector_captures_read_arc_inputs_grouped_by_producer() {
-        let reg = three_node_registry();
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            fired(
-                2,
-                102,
-                trans("t_a_park"),
-                vec![
-                    (
-                        place("p_a_data"),
-                        data_token(serde_json::json!({"greeting": "hi Alice"})),
-                    ),
-                    (place("p_a_main"), unit_token()),
-                ],
-                vec![(
-                    place("p_s_data"),
-                    data_token(serde_json::json!({"name": "Alice"})),
-                )],
-            ),
-        ];
+        let (reg, events) = fx_read_arc_inputs();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows
@@ -1063,8 +1088,7 @@ mod tests {
     /// control token at its entry. The projector records that token as
     /// an input from the upstream, attributed by the firing owner (the
     /// straightforward `upstream → downstream entry` path).
-    #[test]
-    fn projector_captures_inbound_control_token_when_upstream_produces_at_entry() {
+    fn fx_inbound_control_token() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let reg = three_node_registry();
         // `a`'s entry is `p_s_main` (alias-collapsed onto the producer).
         // When `t_s_park` fires producing at `p_s_main`, `a`'s row should
@@ -1089,6 +1113,12 @@ mod tests {
                 vec![],
             ),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_captures_inbound_control_token_when_upstream_produces_at_entry() {
+        let (reg, events) = fx_inbound_control_token();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows
@@ -1109,8 +1139,7 @@ mod tests {
     /// `read_tokens` flow onto the right row). The firing owner is
     /// therefore == consumer, and inbound attribution must fall back
     /// to the source place owner from `consumed_tokens`.
-    #[test]
-    fn projector_credits_wire_edge_inbound_to_source_place_owner() {
+    fn fx_wire_edge() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let mut reg: InterfaceRegistry = HashMap::new();
 
         let mut s = NodeInterface::new("s", NodeKind::Start);
@@ -1177,6 +1206,12 @@ mod tests {
                 vec![],
             ),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_credits_wire_edge_inbound_to_source_place_owner() {
+        let (reg, events) = fx_wire_edge();
 
         let rows = project_step_executions(&events, &reg);
         let h_row = rows
@@ -1190,8 +1225,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn projector_loop_body_iterations_get_distinct_rows() {
+    fn fx_loop_body() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         // Single body node `b` whose entry place receives 3 tokens (the Loop
         // body re-enters 3 times). Each entry arrival opens a new iteration
         // row. We don't model the Loop node itself here — just the body —
@@ -1236,6 +1270,12 @@ mod tests {
             ));
             seq += 1;
         }
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_loop_body_iterations_get_distinct_rows() {
+        let (reg, events) = fx_loop_body();
 
         let rows = project_step_executions(&events, &reg);
         let b_rows: Vec<&StepExecutionRow> = rows.iter().filter(|r| r.node_id == "b").collect();
@@ -1247,8 +1287,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn projector_decision_records_branch_taken_as_edge_key() {
+    fn fx_decision() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         // Decision node `d` has two output edges; the projector reports
         // `OutputKey::Edge("e_yes")` rendered as "edge:e_yes" when that
         // branch's place receives the token.
@@ -1278,6 +1317,12 @@ mod tests {
                 vec![],
             ),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_decision_records_branch_taken_as_edge_key() {
+        let (reg, events) = fx_decision();
 
         let rows = project_step_executions(&events, &reg);
         let d_row = rows
@@ -1299,8 +1344,7 @@ mod tests {
     /// `Running` until net termination (which on this workflow doesn't
     /// happen, because the Failure node + downstream End complete the net
     /// normally with `result.ok = false`).
-    #[test]
-    fn projector_error_port_deposit_marks_parking_node_failed() {
+    fn fx_error_port() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let mut reg = three_node_registry();
         // Re-register `a` with both Default + an "error" named output (the
         // same shape `lower_automated_step` publishes), and add the
@@ -1349,6 +1393,12 @@ mod tests {
                 vec![],
             ),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_error_port_deposit_marks_parking_node_failed() {
+        let (reg, events) = fx_error_port();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows
@@ -1369,26 +1419,15 @@ mod tests {
         );
     }
 
+    fn fx_effect_failed() -> (InterfaceRegistry, Vec<PersistedEvent>) {
+        let (reg, mut events) = fx_start_park();
+        events.push(effect_failed(2, 102, trans("t_a_park"), "io error"));
+        (reg, events)
+    }
+
     #[test]
     fn projector_effect_failed_marks_row_failed_with_error_payload() {
-        let reg = three_node_registry();
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            effect_failed(2, 102, trans("t_a_park"), "io error"),
-        ];
+        let (reg, events) = fx_effect_failed();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows
@@ -1404,26 +1443,15 @@ mod tests {
         );
     }
 
+    fn fx_net_failed() -> (InterfaceRegistry, Vec<PersistedEvent>) {
+        let (reg, mut events) = fx_start_park();
+        events.push(net_failed(2, 102, trans("t_a_park")));
+        (reg, events)
+    }
+
     #[test]
     fn projector_net_failed_marks_open_rows_failed_unreached_skipped() {
-        let reg = three_node_registry();
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            net_failed(2, 102, trans("t_a_park")),
-        ];
+        let (reg, events) = fx_net_failed();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows.iter().find(|r| r.node_id == "a").expect("a row");
@@ -1441,32 +1469,20 @@ mod tests {
     /// not stuck at `Running` and not falsely `Completed`. Before the fix
     /// `close_open_rows` returned early on `NetCompleted`, so the editor's
     /// node badge spun forever.
+    fn fx_net_completed_open_rows() -> (InterfaceRegistry, Vec<PersistedEvent>) {
+        let (reg, mut events) = fx_start_park();
+        // `a` fires an owned transition but never deposits to its data_port
+        // → Pending→Running, never completes (mimics a HumanTask awaiting a
+        // signal that a wrapping Timeout later drains).
+        events.push(fired(2, 102, trans("t_a_park"), vec![], vec![]));
+        // The net completes via the other (timeout) branch.
+        events.push(net_completed(3, 103));
+        (reg, events)
+    }
+
     #[test]
     fn projector_net_completed_closes_open_running_rows_skipped() {
-        let reg = three_node_registry();
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    // a.entry — opens a's row (Pending).
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            // `a` fires an owned transition but never deposits to its data_port
-            // → Pending→Running, never completes (mimics a HumanTask awaiting a
-            // signal that a wrapping Timeout later drains).
-            fired(2, 102, trans("t_a_park"), vec![], vec![]),
-            // The net completes via the other (timeout) branch.
-            net_completed(3, 103),
-        ];
+        let (reg, events) = fx_net_completed_open_rows();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows.iter().find(|r| r.node_id == "a").expect("a row");
@@ -1489,8 +1505,7 @@ mod tests {
     /// never produced. A `NetCompleted` then arrives. After the fold, EVERY
     /// row must be terminal (no `Pending`/`Running`) — the COMPLETED instance
     /// must not surface in-flight step rows.
-    #[test]
-    fn projector_net_completed_closes_open_map_iteration_rows() {
+    fn fx_map_abandoned() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let mut reg: InterfaceRegistry = HashMap::new();
 
         // Map node `mp`: entry p_mp_input, parks gathered output at p_mp_data.
@@ -1568,6 +1583,13 @@ mod tests {
         // 3: NetCompleted arrives WITHOUT the remaining body iterations or the
         //    Map node's own gather/yield completing — the run abandoned them.
         events.push(net_completed(3, 200));
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_net_completed_closes_open_map_iteration_rows() {
+        const K: usize = 3;
+        let (reg, events) = fx_map_abandoned();
 
         let rows = project_step_executions(&events, &reg);
 
@@ -1622,8 +1644,7 @@ mod tests {
     /// it. The old inline close (run at the terminal arm, before the stray
     /// event was folded) left that row stuck `Pending`/`Running`; the post-fold
     /// pass closes it.
-    #[test]
-    fn projector_closes_rows_opened_after_terminal_event() {
+    fn fx_post_terminal_stray() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let mut reg: InterfaceRegistry = HashMap::new();
         let mut mp = NodeInterface::new("mp", NodeKind::Map);
         mp.entry = Some("p_mp_input".to_string());
@@ -1663,6 +1684,12 @@ mod tests {
             token_created(3, 201, place("p_body_in"), unit_token()),
             fired(4, 202, trans("t_body_park"), vec![], vec![]),
         ];
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_closes_rows_opened_after_terminal_event() {
+        let (reg, events) = fx_post_terminal_stray();
 
         let rows = project_step_executions(&events, &reg);
         for r in &rows {
@@ -1688,49 +1715,38 @@ mod tests {
         );
     }
 
+    fn fx_full_happy_path() -> (InterfaceRegistry, Vec<PersistedEvent>) {
+        let (reg, mut events) = fx_start_park();
+        events.push(fired(
+            2,
+            102,
+            trans("t_a_park"),
+            vec![
+                (
+                    place("p_a_data"),
+                    data_token(serde_json::json!({"greeting": "hi"})),
+                ),
+                (place("p_a_main"), unit_token()),
+            ],
+            vec![],
+        ));
+        events.push(fired(
+            3,
+            103,
+            trans("t_e_complete"),
+            vec![(
+                place("p_e_result"),
+                data_token(serde_json::json!({"ok": true})),
+            )],
+            vec![],
+        ));
+        events.push(net_completed(4, 104));
+        (reg, events)
+    }
+
     #[test]
     fn projector_is_idempotent_under_replay() {
-        let reg = three_node_registry();
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            fired(
-                2,
-                102,
-                trans("t_a_park"),
-                vec![
-                    (
-                        place("p_a_data"),
-                        data_token(serde_json::json!({"greeting": "hi"})),
-                    ),
-                    (place("p_a_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            fired(
-                3,
-                103,
-                trans("t_e_complete"),
-                vec![(
-                    place("p_e_result"),
-                    data_token(serde_json::json!({"ok": true})),
-                )],
-                vec![],
-            ),
-            net_completed(4, 104),
-        ];
+        let (reg, events) = fx_full_happy_path();
 
         let first = project_step_executions(&events, &reg);
         let second = project_step_executions(&events, &reg);
@@ -1749,9 +1765,7 @@ mod tests {
     /// `step_execution.outputs` column shows the same user-payload view
     /// that downstream `<slug>.<field>` borrows read (per
     /// `compile::producer_field_access_hoist`).
-    #[test]
-    fn projector_unwraps_automated_step_executor_envelope() {
-        let reg = three_node_registry();
+    fn fx_executor_envelope() -> (InterfaceRegistry, Vec<PersistedEvent>) {
         let envelope = serde_json::json!({
             "detail": {
                 "outputs": { "result": "swept", "answer": 42 },
@@ -1762,32 +1776,23 @@ mod tests {
             "job_id": "a",
             "status": "completed",
         });
-        let events = vec![
-            token_created(0, 100, place("p_s_ready"), unit_token()),
-            fired(
-                1,
-                101,
-                trans("t_s_park"),
-                vec![
-                    (
-                        place("p_s_data"),
-                        data_token(serde_json::json!({"name": "Alice"})),
-                    ),
-                    (place("p_s_main"), unit_token()),
-                ],
-                vec![],
-            ),
-            fired(
-                2,
-                102,
-                trans("t_a_park"),
-                vec![
-                    (place("p_a_data"), data_token(envelope)),
-                    (place("p_a_main"), unit_token()),
-                ],
-                vec![],
-            ),
-        ];
+        let (reg, mut events) = fx_start_park();
+        events.push(fired(
+            2,
+            102,
+            trans("t_a_park"),
+            vec![
+                (place("p_a_data"), data_token(envelope)),
+                (place("p_a_main"), unit_token()),
+            ],
+            vec![],
+        ));
+        (reg, events)
+    }
+
+    #[test]
+    fn projector_unwraps_automated_step_executor_envelope() {
+        let (reg, events) = fx_executor_envelope();
 
         let rows = project_step_executions(&events, &reg);
         let a_row = rows.iter().find(|r| r.node_id == "a").expect("a row");
@@ -1797,5 +1802,95 @@ mod tests {
             Some(serde_json::json!({ "result": "swept", "answer": 42 })),
             "AutomatedStep outputs must be hoisted from detail.outputs"
         );
+    }
+
+    // ── Incremental-fold equivalence ────────────────────────────────────────
+
+    fn fixtures() -> Vec<(&'static str, InterfaceRegistry, Vec<PersistedEvent>)> {
+        [
+            ("start_park", fx_start_park()),
+            ("read_arc_inputs", fx_read_arc_inputs()),
+            ("inbound_control_token", fx_inbound_control_token()),
+            ("wire_edge", fx_wire_edge()),
+            ("loop_body", fx_loop_body()),
+            ("decision", fx_decision()),
+            ("error_port", fx_error_port()),
+            ("effect_failed", fx_effect_failed()),
+            ("net_failed", fx_net_failed()),
+            ("net_completed_open_rows", fx_net_completed_open_rows()),
+            ("map_abandoned", fx_map_abandoned()),
+            ("post_terminal_stray", fx_post_terminal_stray()),
+            ("full_happy_path", fx_full_happy_path()),
+            ("executor_envelope", fx_executor_envelope()),
+        ]
+        .into_iter()
+        .map(|(name, (reg, events))| (name, reg, events))
+        .collect()
+    }
+
+    /// Emulate the framework driver's per-event state machine without
+    /// NATS/DB: replay-on-miss bootstrap over the history-so-far, dup skip by
+    /// sequence, incremental absorb + terminalization passes otherwise,
+    /// terminal eviction. Accumulate every dirty row (later snapshots win) —
+    /// the union of what the consumer would have upserted.
+    fn incremental_rows(
+        events: &[PersistedEvent],
+        registry: &InterfaceRegistry,
+    ) -> Vec<StepExecutionRow> {
+        use crate::projections::framework::is_terminal;
+        let lookups = Lookups::build(registry);
+        let mut acc: BTreeMap<(String, i32), StepExecutionRow> = BTreeMap::new();
+        let mut cached: Option<(u64, State)> = None;
+        for (i, ev) in events.iter().enumerate() {
+            match cached.as_mut() {
+                None => {
+                    let mut state = State::new();
+                    for h in &events[..=i] {
+                        state.absorb(h, &lookups);
+                    }
+                    state.close_open_rows();
+                    state.finalize_unreached(registry);
+                    for row in state.take_dirty_rows() {
+                        acc.insert((row.node_id.clone(), row.iteration_index), row);
+                    }
+                    cached = Some((ev.sequence, state));
+                }
+                Some((last, state)) => {
+                    if ev.sequence <= *last {
+                        continue; // dup skip, like the driver
+                    }
+                    state.absorb(ev, &lookups);
+                    state.close_open_rows();
+                    state.finalize_unreached(registry);
+                    *last = ev.sequence;
+                    for row in state.take_dirty_rows() {
+                        acc.insert((row.node_id.clone(), row.iteration_index), row);
+                    }
+                }
+            }
+            if is_terminal(&ev.event) {
+                cached = None;
+            }
+        }
+        acc.into_values().collect()
+    }
+
+    /// The key semantic guarantee of the incremental migration: folding one
+    /// event at a time and upserting only the dirty rows yields the SAME row
+    /// set as the historical whole-buffer refold, for every fixture above —
+    /// including the terminal-gated `close_open_rows`/`finalize_unreached`
+    /// passes and post-terminal stray events (which the driver handles by
+    /// evicting on terminal and re-bootstrapping from the full log).
+    #[test]
+    fn incremental_dirty_fold_matches_full_fold() {
+        for (name, reg, events) in fixtures() {
+            let full = project_step_executions(&events, &reg);
+            let incremental = incremental_rows(&events, &reg);
+            assert_eq!(
+                serde_json::to_value(&full).unwrap(),
+                serde_json::to_value(&incremental).unwrap(),
+                "fixture `{name}`: incremental dirty-row fold diverged from the full fold"
+            );
+        }
     }
 }

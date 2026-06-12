@@ -44,7 +44,7 @@
 //! carries token IDs only) — it is taken best-effort from the accounting
 //! signal's `requested_tres` field.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -173,14 +173,20 @@ pub fn project_allocations(events: &[PersistedEvent], net_id: &str) -> Vec<Alloc
     state.into_rows()
 }
 
+/// Incremental fold state for one net. The consumer keeps it cached and feeds
+/// events one at a time via [`State::absorb`]; mutated rows are tracked by
+/// grant_id so [`State::take_dirty_rows`] yields exactly the rows that need
+/// re-upserting. [`project_allocations`] is the full-fold wrapper over it.
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     /// `grant_id → row`. One row per grant on this net.
     rows: BTreeMap<String, AllocationRow>,
+    /// Grants whose row changed since the last [`State::take_dirty_rows`].
+    dirty: BTreeSet<String>,
 }
 
 impl State {
-    fn absorb(&mut self, persisted: &PersistedEvent, net_id: &str) {
+    pub(crate) fn absorb(&mut self, persisted: &PersistedEvent, net_id: &str) {
         match &persisted.event {
             DomainEvent::EffectCompleted {
                 effect_handler_id,
@@ -252,6 +258,7 @@ impl State {
         let Some(grant_id) = lease.get("grant_id").and_then(|v| v.as_str()) else {
             return;
         };
+        self.dirty.insert(grant_id.to_string());
         let row = self.rows.entry(grant_id.to_string()).or_insert_with(|| {
             AllocationRow::new(AllocationKind::DatacenterLease, net_id, grant_id)
         });
@@ -312,6 +319,7 @@ impl State {
         let Some(grant_id) = grant_id else {
             return;
         };
+        self.dirty.insert(grant_id.clone());
         let row = self
             .rows
             .entry(grant_id.clone())
@@ -342,6 +350,7 @@ impl State {
         let Some(row) = self.rows.get_mut(signal_key) else {
             return;
         };
+        self.dirty.insert(signal_key.to_string());
 
         if let Some(v) = payload.get("exit_code").and_then(json_to_i64) {
             row.exit_code = Some(v as i32);
@@ -447,6 +456,7 @@ impl State {
                 return;
             }
         }
+        self.dirty.insert(grant_id.clone());
         let row = self.rows.entry(grant_id.clone()).or_insert_with(|| {
             AllocationRow::new(AllocationKind::ConcurrencyLimitGrant, net_id, &grant_id)
         });
@@ -467,6 +477,16 @@ impl State {
             }
         }
         row.last_sequence = sequence;
+    }
+
+    /// Drain the dirty set and return a clone of each changed row. Empty when
+    /// the events folded since the last call touched no grant (the common case
+    /// for non-pool nets).
+    pub(crate) fn take_dirty_rows(&mut self) -> Vec<AllocationRow> {
+        std::mem::take(&mut self.dirty)
+            .into_iter()
+            .filter_map(|grant_id| self.rows.get(&grant_id).cloned())
+            .collect()
     }
 
     fn into_rows(self) -> Vec<AllocationRow> {
@@ -818,5 +838,243 @@ mod tests {
         let rows = project_allocations(&[a1, a2], NET);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].acquired_at, Some(ts(100)));
+    }
+
+    // ── Incremental-fold equivalence ────────────────────────────────────────
+
+    fn net_completed(seq: u64, ts_secs: i64) -> PersistedEvent {
+        PersistedEvent {
+            sequence: seq,
+            timestamp: ts(ts_secs),
+            event: DomainEvent::NetCompleted {
+                net_id: NET.to_string(),
+                terminal_place_id: "p_end".to_string(),
+                exit_code: None,
+            },
+            hash: String::new(),
+            previous_hash: None,
+        }
+    }
+
+    fn pool_fired(seq: u64, ts_secs: i64, tid: &str, grant: &str) -> PersistedEvent {
+        PersistedEvent {
+            sequence: seq,
+            timestamp: ts(ts_secs),
+            event: DomainEvent::TransitionFired {
+                transition_id: TransitionId(tid.to_string()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![(
+                    PlaceId("p_grant".into()),
+                    Token::new(TokenColor::Data(serde_json::json!({ "grant_id": grant }))),
+                )],
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            hash: String::new(),
+            previous_hash: None,
+        }
+    }
+
+    /// Every projector unit test's event vector, shared with the equivalence
+    /// test below so the incremental fold is proven against each shape.
+    fn fixtures() -> Vec<(&'static str, &'static str, Vec<PersistedEvent>)> {
+        let lease_full = serde_json::json!({
+            "grant_id": GRANT,
+            "alloc_id": "job-42",
+            "node": "gpu-node-3",
+            "executor_namespace": "lease-mekhan-abc_lease1",
+            "expiry": "2026-06-02T12:00:00Z",
+            "scheduler": { "slurm": { "partition": "gpu" } },
+        });
+        let lease = serde_json::json!({ "grant_id": GRANT, "alloc_id": "job-42" });
+        let acquire = |seq, ts_secs, lease: &serde_json::Value| {
+            effect_completed(
+                seq,
+                ts_secs,
+                "resource_lease_acquire",
+                serde_json::json!({ "alloc_id": "job-42", "lease": lease }),
+                vec![],
+            )
+        };
+        let release_with_token = effect_completed(
+            2,
+            200,
+            "resource_lease_release",
+            serde_json::json!({ "alloc_id": "job-42", "released": true }),
+            vec![(
+                PlaceId("p_released".into()),
+                Token::new(TokenColor::Data(serde_json::json!({ "grant_id": GRANT }))),
+            )],
+        );
+        let release_bare = effect_completed(
+            2,
+            200,
+            "resource_lease_release",
+            serde_json::json!({ "alloc_id": "job-42", "released": true }),
+            vec![],
+        );
+
+        let pool_net = "pool-22222222-2222-2222-2222-222222222222";
+        let pool_grant = "mekhan-xyz:pooled1";
+
+        vec![
+            ("acquire_only", NET, vec![acquire(1, 100, &lease_full)]),
+            (
+                "acquire_release_via_token",
+                NET,
+                vec![acquire(1, 100, &lease), release_with_token.clone()],
+            ),
+            (
+                "acquire_release_via_alloc_id",
+                NET,
+                vec![acquire(1, 100, &lease), release_bare],
+            ),
+            (
+                "accounting_signal_completed",
+                NET,
+                vec![
+                    acquire(1, 100, &lease),
+                    token_created_signal(
+                        2,
+                        300,
+                        GRANT,
+                        serde_json::json!({
+                            "source": "slurm",
+                            "scheduler_job_id": GRANT,
+                            "job_status": "completed",
+                            "exit_code": 0,
+                            "node": "gpu-node-3",
+                            "queue_wait_ms": 1500,
+                            "elapsed_ms": 60000,
+                            "cpu_seconds": 119.6,
+                            "gpu_seconds": 60.0,
+                            "peak_rss_bytes": 2048,
+                            "requested_tres": { "gpu_count": 1, "cpu_count": 4 },
+                            "allocated_tres": { "cpu_count": 4, "memory_gb": 16.0 },
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "accounting_signal_failed",
+                NET,
+                vec![
+                    acquire(1, 100, &lease),
+                    token_created_signal(
+                        2,
+                        300,
+                        GRANT,
+                        serde_json::json!({
+                            "source": "nomad",
+                            "job_status": "failed",
+                            "exit_code": 137,
+                            "error": "OOM killed",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "accounting_signal_timed_out",
+                NET,
+                vec![
+                    acquire(1, 100, &lease),
+                    token_created_signal(
+                        2,
+                        300,
+                        GRANT,
+                        serde_json::json!({ "source": "slurm", "job_status": "timed_out" }),
+                    ),
+                ],
+            ),
+            (
+                "unrelated_signal_key",
+                NET,
+                vec![token_created_signal(
+                    1,
+                    100,
+                    "some-other-grant",
+                    serde_json::json!({ "job_status": "completed" }),
+                )],
+            ),
+            (
+                "concurrency_limit_grant",
+                pool_net,
+                vec![
+                    pool_fired(1, 100, "t_grant", pool_grant),
+                    pool_fired(2, 200, "t_release", pool_grant),
+                ],
+            ),
+            (
+                "replay_duplicate_sequence",
+                NET,
+                vec![acquire(1, 100, &lease), acquire(1, 100, &lease)],
+            ),
+            (
+                "acquire_release_then_net_completed",
+                NET,
+                vec![
+                    acquire(1, 100, &lease),
+                    release_with_token,
+                    net_completed(3, 300),
+                ],
+            ),
+        ]
+    }
+
+    /// Emulate the framework driver's per-event state machine without NATS/DB:
+    /// replay-on-miss bootstrap over the history-so-far, dup skip by sequence,
+    /// incremental absorb otherwise, terminal eviction. Accumulate every dirty
+    /// row (later snapshots win) — the union of what the consumer would have
+    /// upserted.
+    fn incremental_rows(events: &[PersistedEvent], net_id: &str) -> Vec<AllocationRow> {
+        use crate::projections::framework::is_terminal;
+        let mut acc: BTreeMap<String, AllocationRow> = BTreeMap::new();
+        let mut cached: Option<(u64, State)> = None;
+        for (i, ev) in events.iter().enumerate() {
+            match cached.as_mut() {
+                None => {
+                    let mut state = State::default();
+                    for h in &events[..=i] {
+                        state.absorb(h, net_id);
+                    }
+                    for row in state.take_dirty_rows() {
+                        acc.insert(row.grant_id.clone(), row);
+                    }
+                    cached = Some((ev.sequence, state));
+                }
+                Some((last, state)) => {
+                    if ev.sequence <= *last {
+                        continue; // dup skip, like the driver
+                    }
+                    state.absorb(ev, net_id);
+                    *last = ev.sequence;
+                    for row in state.take_dirty_rows() {
+                        acc.insert(row.grant_id.clone(), row);
+                    }
+                }
+            }
+            if is_terminal(&ev.event) {
+                cached = None;
+            }
+        }
+        acc.into_values().collect()
+    }
+
+    /// The key semantic guarantee of the incremental migration: folding one
+    /// event at a time and upserting only the dirty rows yields the SAME row
+    /// set as the historical whole-buffer refold.
+    #[test]
+    fn incremental_dirty_fold_matches_full_fold() {
+        for (name, net, events) in fixtures() {
+            let full = project_allocations(&events, net);
+            let incremental = incremental_rows(&events, net);
+            assert_eq!(
+                serde_json::to_value(&full).unwrap(),
+                serde_json::to_value(&incremental).unwrap(),
+                "fixture `{name}`: incremental dirty-row fold diverged from the full fold"
+            );
+        }
     }
 }

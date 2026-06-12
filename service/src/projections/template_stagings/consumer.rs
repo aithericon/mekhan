@@ -47,8 +47,8 @@ impl Projection for TemplateStagingsProjection {
                 EFFECT_FAILED_EVENTS_FILTER.into(),
             ],
             ack_wait: Some(Duration::from_secs(120)),
-            // Reap the durable if this projection is ever removed
-            // (see step_executions_consumer for the incident rationale).
+            // Reap the durable if this projection is ever removed (see the
+            // step-executions projection spec for the incident rationale).
             inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
             migrate_from: Some("mekhan-template-stagings"),
         }

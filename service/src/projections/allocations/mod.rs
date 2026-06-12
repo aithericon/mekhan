@@ -13,11 +13,13 @@
 //!   [`TransitionFired`] events.
 //!
 //! Mirrors the `step_executions` projection exactly:
-//! - [`projector`]: pure `(events, net_id) → Vec<AllocationRow>` fold. Reused by
-//!   tests (offline replay) and by the consumer (online ingest).
-//! - [`consumer`]: NATS-driven background task that subscribes to
-//!   `petri.events.>`, re-folds the per-net event buffer on each arrival, and
-//!   upserts changed rows (sequence-guarded).
+//! - [`projector`]: pure `(events, net_id) → Vec<AllocationRow>` fold (a
+//!   wrapper over the incremental per-net `State`). Reused by tests (offline
+//!   replay) and by the consumer (online ingest).
+//! - [`consumer`]: a [`crate::projections::framework::Projection`] driven by
+//!   the shared framework loop — replay-on-miss bootstrap, then one
+//!   incremental absorb per delivered (subject-filtered) event, upserting only
+//!   the dirty rows (sequence-guarded).
 //!
 //! Unlike `step_executions`, the projector needs no compiler `InterfaceRegistry`
 //! — every correlation key (grant_id, cluster_resource_id, node_id,

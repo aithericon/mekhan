@@ -36,6 +36,12 @@ pub const EFFECT_COMPLETED_EVENTS_FILTER: &str = "petri.events.*.effect.complete
 /// `petri.events.*.effect.failed` — every net's `EffectFailed` events.
 pub const EFFECT_FAILED_EVENTS_FILTER: &str = "petri.events.*.effect.failed";
 
+/// `petri.events.*.token.created` — every net's `TokenCreated` events.
+pub const TOKEN_CREATED_EVENTS_FILTER: &str = "petri.events.*.token.created";
+
+/// `petri.events.*.transition.fired` — every net's `TransitionFired` events.
+pub const TRANSITION_FIRED_EVENTS_FILTER: &str = "petri.events.*.transition.fired";
+
 /// `petri.events.{net_id}.>` — every event for one net.
 pub fn net_events_filter(net_id: &str) -> String {
     format!("{}.{net_id}.>", Subjects::EVENTS_PREFIX)
@@ -100,6 +106,22 @@ mod tests {
         assert_eq!(
             EFFECT_FAILED_EVENTS_FILTER,
             Subjects::EVENT_EFFECT_FAILED.replacen(
+                &format!("{}.", Subjects::EVENTS_PREFIX),
+                &format!("{}.*.", Subjects::EVENTS_PREFIX),
+                1
+            )
+        );
+        assert_eq!(
+            TOKEN_CREATED_EVENTS_FILTER,
+            Subjects::EVENT_TOKEN_CREATED.replacen(
+                &format!("{}.", Subjects::EVENTS_PREFIX),
+                &format!("{}.*.", Subjects::EVENTS_PREFIX),
+                1
+            )
+        );
+        assert_eq!(
+            TRANSITION_FIRED_EVENTS_FILTER,
+            Subjects::EVENT_TRANSITION_FIRED.replacen(
                 &format!("{}.", Subjects::EVENTS_PREFIX),
                 &format!("{}.*.", Subjects::EVENTS_PREFIX),
                 1

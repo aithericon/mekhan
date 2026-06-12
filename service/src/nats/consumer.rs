@@ -184,7 +184,7 @@ impl MekhanNats {
     /// not `get_or_create_stream`, whose byte-identical-config requirement
     /// would couple the two binaries' literals forever.
     ///
-    /// Consumer conventions mirror `step_executions_consumer`:
+    /// Consumer conventions mirror the step-executions projection spec:
     /// `ack_wait: 120s` (a 5000-item batch is thousands of statements today —
     /// the per-item loop; a set-based UNNEST rewrite is the flagged 4M-scale
     /// follow-up) and a 30-day `inactive_threshold`.
@@ -248,64 +248,8 @@ impl MekhanNats {
             durable_base: "mekhan-causality-ingest",
             filter_subjects: vec![Subjects::EVENTS_ALL.into(), BRIDGE_ALL.into()],
             ack_wait: None,
-            // Reap the durable if this projection is ever removed
-            // (see step_executions_consumer for the incident rationale).
-            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
-            migrate_from: None,
-        })
-        .await
-    }
-
-    /// Create or get the durable consumer for the step-executions projection.
-    /// Consumes `petri.events.>` and folds events into per-step rows via the
-    /// projector in `service/src/projections/step_executions/`.
-    ///
-    /// Two non-default knobs, both born from the 2026-06-10 prod incident
-    /// (84k-message redelivery spiral):
-    /// - `ack_wait: 120s` (default 30s) — processing an event can legitimately
-    ///   take seconds (bootstrap history fetch + whole-net refold + row
-    ///   upserts). With the default, prefetched messages expired in the client
-    ///   buffer faster than the loop could drain them: every message was
-    ///   redelivered, the ack floor froze, and the consumer made ~0 forward
-    ///   progress. The loop also caps its pull batch (see
-    ///   `start_step_executions_ingest`) so at most a couple minutes of work
-    ///   is ever buffered ahead of the acks. Both fields are JetStream
-    ///   consumer-update-safe, so existing durables pick this up on restart.
-    /// - `inactive_threshold: 30 days` — if this projection is ever removed
-    ///   (or the service decommissioned), the server reaps the durable instead
-    ///   of letting it accumulate pending forever (the fate of the orphaned
-    ///   `mekhan-{node,model}-replicas` durables). A live service pulls
-    ///   continuously, so the threshold never fires in normal operation.
-    pub async fn step_executions_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        self.pull_consumer(ConsumerSpec {
-            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
-            durable_base: "mekhan-step-executions",
-            filter_subjects: vec![Subjects::EVENTS_ALL.into()],
-            ack_wait: Some(Duration::from_secs(120)),
-            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
-            migrate_from: None,
-        })
-        .await
-    }
-
-    /// Create or get the durable consumer for the allocations projection.
-    /// Consumes `petri.events.>` and folds resource-lease acquire/release
-    /// `EffectCompleted` events (plus the accounting-signal `TokenCreated`
-    /// events the per-cluster watcher injects) into per-grant rows via the
-    /// projector in `service/src/projections/allocations/`.
-    ///
-    /// The enriched terminal accounting payload lands in the SAME PETRI_GLOBAL
-    /// log as a `TokenCreated` tagged `signal_key == grant_id`, so this single
-    /// `petri.events.>` consumer sees it — no second `petri.signal.>` consumer
-    /// is required (see the consumer module docs).
-    pub async fn allocations_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        self.pull_consumer(ConsumerSpec {
-            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
-            durable_base: "mekhan-allocations",
-            filter_subjects: vec![Subjects::EVENTS_ALL.into()],
-            ack_wait: None,
-            // Reap the durable if this projection is ever removed
-            // (see step_executions_consumer for the incident rationale).
+            // Reap the durable if this projection is ever removed (see the
+            // step-executions projection spec for the incident rationale).
             inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
             migrate_from: None,
         })
