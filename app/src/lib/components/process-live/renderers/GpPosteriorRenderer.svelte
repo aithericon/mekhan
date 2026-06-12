@@ -32,9 +32,16 @@
 		A_lin: number[];
 		D_lin: number[];
 		next_candidate?: { a: number; d: number };
+		/** Full parallel batch (constant-liar picks); the first element is
+		 *  `next_candidate`. Older artifacts omit it. */
+		batch?: { a: number; d: number }[];
 		n_observations?: number;
 		kernel_params?: Record<string, unknown>;
 		f_best_used?: number;
+		/** Optional axis labels (producer-declared); default to the original
+		 *  A/D parameter names so older gp_model.json artifacts still read. */
+		x_label?: string;
+		y_label?: string;
 	}
 
 	let meanEl: HTMLDivElement | undefined = $state();
@@ -146,8 +153,10 @@
 		return best;
 	}
 
+	/** Adaptive label formatting: unit-cube axes (0..1) keep their decimals,
+	 *  physical axes (e.g. 31 K/min) drop the trailing zeros. */
 	function fmt(x: number): string {
-		return x.toFixed(3);
+		return String(Number(x.toPrecision(4)));
 	}
 
 	function buildOption(
@@ -158,6 +167,8 @@
 	): echarts.EChartsOption {
 		const z = which === 'mean' ? m.gp_mean : which === 'std' ? m.gp_std : m.ei;
 		const { data, min, max } = grid(z);
+		const xName = m.x_label ?? 'A';
+		const yName = m.y_label ?? 'D';
 
 		// Category axes labelled with the underlying A/D values but thinned to
 		// avoid overlap. ECharts picks label interval automatically when 'auto'.
@@ -165,6 +176,34 @@
 		const yLabels = m.D_lin.map(fmt);
 
 		const markers: echarts.SeriesOption[] = [];
+		// Batch companions (picks 2..K) — open circles, drawn under the
+		// primary crosshair so the diversified batch reads at a glance.
+		const companions = (m.batch ?? []).slice(1);
+		if (companions.length > 0) {
+			markers.push({
+				name: 'Batch',
+				type: 'scatter',
+				symbol: 'circle',
+				symbolSize: 11,
+				itemStyle: {
+					color: 'rgba(0,0,0,0)',
+					borderColor: '#fbbf24',
+					borderWidth: 2
+				},
+				data: companions.map((c, i) => ({
+					value: [nearestIdx(c.a, m.A_lin), nearestIdx(c.d, m.D_lin)],
+					name: `batch pick ${i + 2}`
+				})),
+				tooltip: {
+					formatter: (p) => {
+						const i = (p as { dataIndex?: number }).dataIndex ?? 0;
+						const c = companions[i];
+						return `batch pick ${i + 2}<br/>${m.x_label ?? 'A'}=${fmt(c.a)}<br/>${m.y_label ?? 'D'}=${fmt(c.d)}`;
+					}
+				},
+				z: 9
+			});
+		}
 		if (m.next_candidate) {
 			const xi = nearestIdx(m.next_candidate.a, m.A_lin);
 			const yi = nearestIdx(m.next_candidate.d, m.D_lin);
@@ -183,7 +222,7 @@
 				],
 				tooltip: {
 					formatter: () =>
-						`next candidate<br/>A=${fmt(m.next_candidate!.a)}<br/>D=${fmt(m.next_candidate!.d)}`
+						`next candidate<br/>${xName}=${fmt(m.next_candidate!.a)}<br/>${yName}=${fmt(m.next_candidate!.d)}`
 				},
 				z: 10
 			});
@@ -206,14 +245,15 @@
 				formatter: (p) => {
 					const param = p as { seriesName?: string; value?: [number, number, number] };
 					if (param.seriesName === 'Next') return 'next candidate';
+					if (param.seriesName === 'Batch') return 'batch pick';
 					const [xi, yi, v] = param.value ?? [0, 0, 0];
-					return `A=${xLabels[xi]}<br/>D=${yLabels[yi]}<br/>${valueUnit}=${v.toPrecision(4)}`;
+					return `${xName}=${xLabels[xi]}<br/>${yName}=${yLabels[yi]}<br/>${valueUnit}=${v.toPrecision(4)}`;
 				}
 			},
 			xAxis: {
 				type: 'category',
 				data: xLabels,
-				name: 'A',
+				name: xName,
 				nameLocation: 'middle',
 				nameGap: 28,
 				nameTextStyle: { color: '#888', fontSize: 11 },
@@ -228,7 +268,7 @@
 			yAxis: {
 				type: 'category',
 				data: yLabels,
-				name: 'D',
+				name: yName,
 				nameLocation: 'middle',
 				nameGap: 40,
 				nameRotate: 90,
@@ -338,9 +378,9 @@
 			{/if}
 			{#if model.next_candidate}
 				<span>
-					next: A=<b class="tabular-nums">{model.next_candidate.a.toFixed(3)}</b>, D=<b
-						class="tabular-nums">{model.next_candidate.d.toFixed(3)}</b
-					>
+					next: {model.x_label ?? 'A'}=<b class="tabular-nums"
+						>{fmt(model.next_candidate.a)}</b
+					>, {model.y_label ?? 'D'}=<b class="tabular-nums">{fmt(model.next_candidate.d)}</b>
 				</span>
 			{/if}
 			{#if model.f_best_used !== undefined}

@@ -36,6 +36,12 @@
               "label": "Solver: auto | docker | surrogate (default auto)",
               "kind": "text",
               "required": false
+            },
+            {
+              "name": "batch_size",
+              "label": "Candidates per iteration K (1 = sequential BO, default 3)",
+              "kind": "number",
+              "required": false
             }
           ]
         }
@@ -99,6 +105,11 @@
             "var": "solver_mode",
             "init": "if type_of(start.solver_mode) == \"string\" && start.solver_mode != \"\" { start.solver_mode } else { \"auto\" }",
             "mergeExpr": "campaign.solver_mode"
+          },
+          {
+            "var": "batch_k",
+            "init": "if type_of(start.batch_size) == \"i64\" && start.batch_size >= 1 && start.batch_size <= 8 { start.batch_size } else if type_of(start.batch_size) == \"f64\" && start.batch_size >= 1.0 && start.batch_size <= 8.0 { start.batch_size } else { 3 }",
+            "mergeExpr": "campaign.batch_k"
           }
         ]
       }

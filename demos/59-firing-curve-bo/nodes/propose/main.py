@@ -13,6 +13,13 @@ for the downstream Map to scatter through the `simulate` objective. Campaign
 constants (`hold_temp`, `sigma_limit`, `solver_mode`) are threaded INTO each
 candidate so the Map body only ever touches token-resident `cand.*` fields.
 
+BATCH ACQUISITION: the K parallel candidates are chosen by Expected
+Improvement with the CONSTANT-LIAR heuristic (CL-min) — sequential EI argmax
+with hallucinated `lie = f_best` outcomes appended between picks (posterior
+updated, hyperparameters frozen). Plain top-K-by-EI degenerates to K copies
+of the same acquisition peak; the lie collapses EI around each pick so the
+batch diversifies. This is the cheap, standard q-EI stand-in.
+
 IMPORTANT (compiler contract): this Python is SCANNED at compile time for slug
 references, not executed. The literal source reads of `campaign.observations`,
 `campaign.f_best`, `campaign.iteration`, `campaign.hold_temp`,
@@ -27,6 +34,7 @@ a deterministic grid walk, so the Loop + Map + accumulator topology still runs
 end-to-end (same philosophy as demo 12).
 """
 
+import os
 import random
 
 # --- Read the borrowed campaign state (literal slug reads — DO NOT remove) ---
@@ -36,15 +44,19 @@ iteration = campaign.iteration
 hold_temp = campaign.hold_temp
 sigma_limit = campaign.sigma_limit
 solver_mode = campaign.solver_mode
+batch_k = campaign.batch_k
 
 n_seen = len(observations)
 
+# K=1 -> classic sequential BO (one simulation per iteration, EI argmax —
+# the constant-liar loop below degenerates to it with zero lies). K>1 ->
+# parallel batch dispatched data-parallel by the Map.
+K = max(1, min(8, int(batch_k)))
+
 log_info(
     f"propose: iteration={iteration} observations={n_seen} f_best={f_best} "
-    f"hold_temp={hold_temp} sigma_limit={sigma_limit} solver={solver_mode}"
+    f"K={K} hold_temp={hold_temp} sigma_limit={sigma_limit} solver={solver_mode}"
 )
-
-K = 3
 
 # Fixed space-filling points on the unit cube — bootstrap phase and ultimate
 # deterministic fallback. Deliberately spans slow/safe, fast/cracky, and
@@ -86,12 +98,14 @@ def _grid_batch(it):
 
 
 # --- Bootstrap phase --------------------------------------------------------
-if n_seen < 4 or iteration < 1:
+# Only iteration 0 needs the space-filling walk (no observations yet); the
+# GP phase starts as soon as >=2 observations exist (covers K=1 sequential).
+if n_seen < 2 or iteration < 1:
     candidates = _grid_batch(iteration)
     log_info(f"propose: bootstrap -> {candidates}")
 
 else:
-    # --- BO phase: GP fit + Expected Improvement over a sampled cube --------
+    # --- BO phase: GP fit + batch Expected Improvement (Constant Liar) ------
     candidates = None
 
     try:
@@ -128,31 +142,108 @@ else:
         # Dense random cloud over the unit cube (deterministic per iteration).
         rng = np.random.default_rng(1000 + int(iteration))
         grid = rng.random((4096, 3))
-
-        mu, sigma = gp.predict(grid, return_std=True)
-
-        # Expected Improvement for MINIMIZATION.
         xi = 0.01
-        imp = f_best - mu - xi
-        sigma = np.maximum(sigma, 1e-9)
-        Z = imp / sigma
-        ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)
 
-        # Top-K DISTINCT points by EI.
-        order = np.argsort(ei)[::-1]
-        picked = []
-        seen_pts = set()
-        for idx in order:
-            key = tuple(round(float(v), 4) for v in grid[idx])
-            if key in seen_pts:
-                continue
-            seen_pts.add(key)
-            picked.append(_denorm(grid[idx]))
-            if len(picked) >= K:
-                break
+        def _ei_over(model, pts, incumbent):
+            """Expected Improvement for MINIMIZATION."""
+            mu, sigma = model.predict(pts, return_std=True)
+            sigma = np.maximum(sigma, 1e-9)
+            imp = incumbent - mu - xi
+            Z = imp / sigma
+            return imp * norm.cdf(Z) + sigma * norm.pdf(Z)
 
-        candidates = picked
-        log_info(f"propose: GP+EI -> {candidates}")
+        # Batch selection via CONSTANT LIAR (CL-min, Ginsbourger et al.):
+        # plain top-K-by-EI puts all K picks on the SAME acquisition peak (EI
+        # is smooth — ranks 1..K are near-identical points), wasting the
+        # parallel Map budget on duplicate simulations. Instead: pick the EI
+        # argmax, append it with the hallucinated outcome `lie = f_best`
+        # (optimistic — kills the improvement potential around the pick),
+        # refit the posterior with HYPERPARAMETERS FROZEN (optimizer=None on
+        # the already-fitted kernel), and re-maximize EI for the next pick.
+        # Each lie collapses EI in a neighborhood of the pick, so the batch
+        # spreads across distinct regions of the acquisition landscape.
+        X_aug = X.copy()
+        y_aug = y.copy()
+        lie = float(np.min(y))
+        frozen = gp.kernel_
+        picked_u = []
+        model = gp
+        for _j in range(K):
+            ei = _ei_over(model, grid, f_best)
+            idx = int(np.argmax(ei))
+            picked_u.append(grid[idx].copy())
+            X_aug = np.vstack([X_aug, grid[idx]])
+            y_aug = np.append(y_aug, lie)
+            if _j < K - 1:
+                model = GaussianProcessRegressor(
+                    kernel=frozen, optimizer=None, normalize_y=True, random_state=42
+                )
+                model.fit(X_aug, y_aug)
+
+        candidates = [_denorm(u) for u in picked_u]
+        log_info(f"propose: GP + batch-EI (constant liar) -> {candidates}")
+
+        # --- Interactive posterior artifact (`gp-posterior` render hint) ----
+        # The frontend ships an echarts renderer for exactly this JSON shape
+        # (HINT_RENDERERS['gp-posterior'] -> GpPosteriorRenderer): interactive
+        # mu / sigma / EI heatmaps with tooltips. One artifact per iteration +
+        # the `iteration` metadata makes the artifact viewer group them into a
+        # single scrubbable panel that live-updates while the campaign runs.
+        # Grids are the (ramp, cool) slice at the incumbent's hold time, axes
+        # in physical units. Emission is telemetry — never fails the step.
+        try:
+            import json as _json
+
+            gn = 45
+            gside = np.linspace(0.0, 1.0, gn)
+            ggx, ggy = np.meshgrid(gside, gside)
+            inc = min(observations, key=lambda o: float(o["z"]))
+            slice_grid = np.column_stack(
+                [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc["u_hold"]))]
+            )
+            gmu, gsd = gp.predict(slice_grid, return_std=True)
+            gsd = np.maximum(gsd, 1e-9)
+            gimp = f_best - gmu - xi
+            gz = gimp / gsd
+            gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)
+
+            axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]
+            model_doc = {
+                "gp_mean": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],
+                "gp_std": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],
+                "ei": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],
+                "A_lin": axis,
+                "D_lin": axis,
+                "x_label": "ramp [K/min]",
+                "y_label": "cool [K/min]",
+                "next_candidate": {
+                    "a": candidates[0]["ramp_rate"],
+                    "d": candidates[0]["cool_rate"],
+                },
+                "batch": [
+                    {"a": c["ramp_rate"], "d": c["cool_rate"]} for c in candidates
+                ],
+                "n_observations": n_seen,
+                "f_best_used": float(f_best),
+                "slice_hold_min": round(float(inc["hold_time_s"]) / 60.0, 1),
+            }
+            _art_dir = os.environ.get("AITHERICON_ARTIFACTS_DIR", os.getcwd())
+            _doc_path = os.path.join(_art_dir, f"gp_model_iter{int(iteration):03d}.json")
+            with open(_doc_path, "w") as f:
+                _json.dump(model_doc, f)
+            log_artifact(
+                _doc_path,
+                name=f"gp_model_iter{int(iteration):03d}.json",
+                category="plot",
+                mime_type="application/json",
+                metadata={
+                    "render_hint": "gp-posterior",
+                    "iteration": str(int(iteration)),
+                    "kind": "bo_gp_posterior",
+                },
+            )
+        except Exception as exc_viz:  # noqa: BLE001 — viz is telemetry
+            log_warn(f"propose: gp-posterior artifact failed (non-fatal): {exc_viz!r}")
 
     except Exception as exc:  # noqa: BLE001 — fallback must never crash the demo
         log_warn(f"propose: GP/scipy unavailable ({exc!r}); using EI-lite fallback")

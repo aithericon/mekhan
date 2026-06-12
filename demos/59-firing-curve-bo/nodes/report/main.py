@@ -44,8 +44,11 @@ best_cool = campaign.best_cool
 best_hold = campaign.best_hold
 sigma_limit = campaign.sigma_limit
 hold_temp = campaign.hold_temp
+batch_k = campaign.batch_k
 
-K = 3  # candidates per iteration — matches propose; prefixes chunk by K
+# Candidates per iteration — matches propose; prefixes chunk by K. K=1
+# (sequential BO) animates one frame per simulation.
+K = max(1, min(8, int(batch_k)))
 
 n_obs = len(observations)
 n_iters = max(1, (n_obs + K - 1) // K)
@@ -232,6 +235,69 @@ def _render_frame(obs_prefix, it):
     buf.seek(0)
     return Image.open(buf).convert("RGB")
 
+
+# --- Closing posterior for the interactive gp-posterior panel ----------------
+# `propose` snapshots the GP BEFORE evaluating its picks (the decision state),
+# so the last interactive snapshot is always fitted on n - K observations and
+# the final simulation(s) never get a panel. Emit one closing gp_model fitted
+# on the FULL observation set — no next_candidate (the campaign is over), EI
+# shown vs the final incumbent ("where it would look next if continued") —
+# with an iteration number that sorts after every propose snapshot.
+try:
+    import json as _json
+
+    import numpy as np
+    from scipy.stats import norm
+
+    if n_obs >= 2:
+        gp_full = _fit_gp(observations)
+        inc_full = min(observations, key=lambda o: float(o["z"]))
+
+        gn = 45
+        gside = np.linspace(0.0, 1.0, gn)
+        ggx, ggy = np.meshgrid(gside, gside)
+        slice_grid = np.column_stack(
+            [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc_full["u_hold"]))]
+        )
+        gmu, gsd = gp_full.predict(slice_grid, return_std=True)
+        gsd = np.maximum(gsd, 1e-9)
+        gimp = float(inc_full["z"]) - gmu - 0.01
+        gz = gimp / gsd
+        gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)
+
+        axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]
+        model_doc = {
+            "gp_mean": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],
+            "gp_std": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],
+            "ei": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],
+            "A_lin": axis,
+            "D_lin": axis,
+            "x_label": "ramp [K/min]",
+            "y_label": "cool [K/min]",
+            "n_observations": n_obs,
+            "f_best_used": float(inc_full["z"]),
+            "slice_hold_min": round(float(inc_full["hold_time_s"]) / 60.0, 1),
+        }
+        _doc_path = os.path.join(_artifacts_dir, "gp_model_final.json")
+        with open(_doc_path, "w") as f:
+            _json.dump(model_doc, f)
+        log_artifact(
+            _doc_path,
+            name="gp_model_final.json",
+            category="plot",
+            mime_type="application/json",
+            metadata={
+                "render_hint": "gp-posterior",
+                # propose snapshots carry the loop iteration counter; +2 keeps
+                # this sorting strictly after the last one regardless of the
+                # 0/1-based counter convention.
+                "iteration": str(n_iters + 2),
+                "kind": "bo_gp_posterior_final",
+            },
+        )
+        log_info(f"report: closing posterior emitted (n={n_obs})")
+except Exception as exc:  # noqa: BLE001 — telemetry, never fails the step
+    log_warn(f"report: closing posterior failed (non-fatal): {exc!r}")
 
 frames_rendered = 0
 try:
