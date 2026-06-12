@@ -68,6 +68,39 @@ fn terminal_at_for(state: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|_| Utc::now())
 }
 
+/// Crate-private seam over the NATS signal publisher so tests can record
+/// publishes without a broker.
+#[async_trait::async_trait]
+trait SignalSink: Send + Sync {
+    async fn publish(&self, subject: &str, signal: &ExternalSignal, msg_id: &str);
+}
+
+#[async_trait::async_trait]
+impl SignalSink for SignalPublisher {
+    async fn publish(&self, subject: &str, signal: &ExternalSignal, msg_id: &str) {
+        SignalPublisher::publish(self, subject, signal, msg_id).await;
+    }
+}
+
+/// Crate-private seam over the checkpoint KV store so tests can use an
+/// in-memory map instead of NATS KV.
+#[async_trait::async_trait]
+trait CursorStore: Send + Sync {
+    async fn load(&self, key: &str) -> Option<String>;
+    async fn save(&self, key: &str, value: &str);
+}
+
+#[async_trait::async_trait]
+impl CursorStore for CheckpointStore {
+    async fn load(&self, key: &str) -> Option<String> {
+        CheckpointStore::load(self, key).await
+    }
+
+    async fn save(&self, key: &str, value: &str) {
+        CheckpointStore::save(self, key, value).await;
+    }
+}
+
 /// Slurm poll-based watcher.
 ///
 /// Polls `squeue` and `sacct` at a configurable interval, compares against
@@ -77,8 +110,8 @@ fn terminal_at_for(state: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// `run_with_reconnect`'s `FnMut` requirement.
 pub struct SlurmWatcher {
     config: SlurmConfig,
-    signal_publisher: SignalPublisher,
-    checkpoint: CheckpointStore,
+    signal_publisher: Box<dyn SignalSink>,
+    checkpoint: Box<dyn CursorStore>,
     /// Per-cluster checkpoint namespace (= the datacenter `resource_id`, or
     /// [`DEV_BOOTSTRAP_CLUSTER_KEY`] for the env-built client). Prefixes every
     /// checkpoint key so N clusters sharing the one `PETRI_WATCHER` KV bucket
@@ -116,8 +149,8 @@ impl SlurmWatcher {
 
         Ok(Self {
             config,
-            signal_publisher,
-            checkpoint,
+            signal_publisher: Box::new(signal_publisher),
+            checkpoint: Box::new(checkpoint),
             cluster_key: cluster_key.into(),
             tracked: RwLock::new(HashMap::new()),
         })
@@ -249,32 +282,49 @@ impl SlurmWatcher {
                 }
             };
 
-            // Process squeue entries (active jobs)
-            for entry in &squeue_entries {
-                self.process_squeue_entry(entry).await;
-            }
-
-            // Process sacct entries (completed/terminal jobs)
-            for entry in &sacct_entries {
-                if entry.is_main_job() {
-                    self.process_sacct_entry(entry).await;
-                }
-            }
-
-            // Update checkpoint cursor to now
-            let now = Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-            self.save_checkpoint_cursor(&now).await;
-            sacct_start = now;
-
-            // Handle jobs that disappeared from squeue (infer completion if sacct
-            // is unavailable) and purge terminal entries from the tracker.
-            self.handle_disappeared_jobs(&squeue_entries).await;
-
-            // Persist tracked jobs so a restarted watcher can resume tracking.
-            self.save_tracked_jobs().await;
+            sacct_start = self.poll_iteration(&squeue_entries, &sacct_entries).await;
 
             tokio::time::sleep(interval).await;
         }
+    }
+
+    /// Process one poll's worth of squeue/sacct entries and return the next
+    /// sacct cursor.
+    ///
+    /// The cursor is saved LAST: it only advances past work that has been
+    /// fully handled AND persisted. A crash earlier in the iteration re-polls
+    /// the same sacct window; JetStream Nats-Msg-Id dedup + the engine
+    /// DedupIndex absorb the resulting re-publishes.
+    async fn poll_iteration(
+        &self,
+        squeue_entries: &[SqueueEntry],
+        sacct_entries: &[SacctEntry],
+    ) -> String {
+        // Process squeue entries (active jobs)
+        for entry in squeue_entries {
+            self.process_squeue_entry(entry).await;
+        }
+
+        // Process sacct entries (completed/terminal jobs)
+        for entry in sacct_entries {
+            if entry.is_main_job() {
+                self.process_sacct_entry(entry).await;
+            }
+        }
+
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+
+        // Handle jobs that disappeared from squeue (infer completion if sacct
+        // is unavailable) and purge terminal entries from the tracker.
+        self.handle_disappeared_jobs(squeue_entries).await;
+
+        // Persist tracked jobs so a restarted watcher can resume tracking.
+        self.save_tracked_jobs().await;
+
+        // Cursor save LAST (see doc comment above).
+        self.save_checkpoint_cursor(&now).await;
+
+        now
     }
 
     /// Poll squeue for active jobs.
@@ -816,5 +866,179 @@ mod tests {
         let parsed: TrackedJob = serde_json::from_str(legacy).unwrap();
         assert_eq!(parsed.last_state, "RUNNING");
         assert!(parsed.terminal_at.is_none());
+    }
+
+    use std::sync::Arc;
+
+    /// One observable side-effect of a poll iteration, in occurrence order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Op {
+        Published { msg_id: String },
+        Saved { key: String },
+    }
+
+    /// Shared recording fixture: an ordered ops log plus an in-memory KV that
+    /// stands in for the NATS checkpoint bucket (shared across "watchers" to
+    /// simulate restart recovery).
+    #[derive(Default)]
+    struct Recorder {
+        ops: Vec<Op>,
+        kv: HashMap<String, String>,
+    }
+
+    struct TestSink(Arc<tokio::sync::Mutex<Recorder>>);
+
+    #[async_trait::async_trait]
+    impl SignalSink for TestSink {
+        async fn publish(&self, _subject: &str, _signal: &ExternalSignal, msg_id: &str) {
+            self.0.lock().await.ops.push(Op::Published {
+                msg_id: msg_id.to_string(),
+            });
+        }
+    }
+
+    struct TestStore(Arc<tokio::sync::Mutex<Recorder>>);
+
+    #[async_trait::async_trait]
+    impl CursorStore for TestStore {
+        async fn load(&self, key: &str) -> Option<String> {
+            self.0.lock().await.kv.get(key).cloned()
+        }
+
+        async fn save(&self, key: &str, value: &str) {
+            let mut rec = self.0.lock().await;
+            rec.kv.insert(key.to_string(), value.to_string());
+            rec.ops.push(Op::Saved {
+                key: key.to_string(),
+            });
+        }
+    }
+
+    const TEST_CLUSTER: &str = "test-cluster";
+
+    fn test_watcher(rec: Arc<tokio::sync::Mutex<Recorder>>) -> SlurmWatcher {
+        SlurmWatcher {
+            config: SlurmConfig::default(),
+            signal_publisher: Box::new(TestSink(rec.clone())),
+            checkpoint: Box::new(TestStore(rec)),
+            cluster_key: TEST_CLUSTER.to_string(),
+            tracked: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Routing-JSON comment in the exact shape pinned by
+    /// `test_extract_routing_valid`.
+    const ROUTING_COMMENT: &str =
+        r#"{"petri_net_id":"test-net","petri_place":"inbox","petri_signal_key":"job:0"}"#;
+
+    /// Build a RUNNING SqueueEntry for `job_id` through the real parser.
+    fn running_entry(job_id: &str) -> SqueueEntry {
+        let line = format!("{job_id}|{ROUTING_COMMENT}|RUNNING");
+        let mut entries = SqueueEntry::parse_all(&line);
+        assert_eq!(entries.len(), 1, "fixture line must parse");
+        entries.remove(0)
+    }
+
+    fn op_index(ops: &[Op], wanted: &Op) -> usize {
+        ops.iter()
+            .position(|op| op == wanted)
+            .unwrap_or_else(|| panic!("expected op {wanted:?} in {ops:?}"))
+    }
+
+    #[tokio::test]
+    async fn cursor_saved_after_disappeared_handling_and_tracked_persist() {
+        let rec = Arc::new(tokio::sync::Mutex::new(Recorder::default()));
+        let watcher = test_watcher(rec.clone());
+
+        // Seed a Petri-routed RUNNING job directly into the tracked map.
+        watcher.tracked.write().await.insert(
+            "101".to_string(),
+            TrackedJob {
+                last_state: "RUNNING".to_string(),
+                routing: extract_routing(ROUTING_COMMENT).unwrap(),
+                terminal_at: None,
+            },
+        );
+
+        // Empty squeue → the job disappeared → completion is inferred.
+        watcher.poll_iteration(&[], &[]).await;
+
+        let ops = rec.lock().await.ops.clone();
+        let published = op_index(
+            &ops,
+            &Op::Published {
+                msg_id: "slurm-101-completed".to_string(),
+            },
+        );
+        let tracked_saved = op_index(
+            &ops,
+            &Op::Saved {
+                key: slurm_tracked_jobs_key(TEST_CLUSTER),
+            },
+        );
+        let cursor_saved = op_index(
+            &ops,
+            &Op::Saved {
+                key: slurm_poll_cursor_key(TEST_CLUSTER),
+            },
+        );
+
+        assert!(
+            published < tracked_saved && tracked_saved < cursor_saved,
+            "expected publish < tracked-save < cursor-save, got {ops:?}"
+        );
+        assert_eq!(
+            cursor_saved,
+            ops.len() - 1,
+            "cursor save must be the LAST op, got {ops:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn disappeared_job_signal_survives_crash_restart() {
+        let rec = Arc::new(tokio::sync::Mutex::new(Recorder::default()));
+
+        // Watcher A sees the job RUNNING, persists tracked state + cursor,
+        // then "crashes" (we simply never run its next iteration).
+        let watcher_a = test_watcher(rec.clone());
+        watcher_a.poll_iteration(&[running_entry("202")], &[]).await;
+        assert!(
+            rec.lock()
+                .await
+                .kv
+                .get(&slurm_tracked_jobs_key(TEST_CLUSTER))
+                .is_some_and(|json| json.contains("\"202\"")),
+            "watcher A must persist the tracked RUNNING job"
+        );
+
+        // Watcher B restarts over the SAME kv, restores tracked jobs, and the
+        // job is gone from squeue → inferred completion must still fire.
+        let watcher_b = test_watcher(rec.clone());
+        watcher_b.restore_tracked_jobs().await;
+        let ops_before_b = rec.lock().await.ops.len();
+        watcher_b.poll_iteration(&[], &[]).await;
+
+        let rec_guard = rec.lock().await;
+        let ops_b = &rec_guard.ops[ops_before_b..];
+        assert!(
+            ops_b.contains(&Op::Published {
+                msg_id: "slurm-202-completed".to_string()
+            }),
+            "watcher B must publish the inferred completion, got {ops_b:?}"
+        );
+        let persisted = rec_guard
+            .kv
+            .get(&slurm_tracked_jobs_key(TEST_CLUSTER))
+            .expect("tracked jobs persisted");
+        let tracked: HashMap<String, TrackedJob> = serde_json::from_str(persisted).unwrap();
+        assert_eq!(tracked["202"].last_state, "COMPLETED");
+        assert!(tracked["202"].terminal_at.is_some());
+        assert_eq!(
+            ops_b.last(),
+            Some(&Op::Saved {
+                key: slurm_poll_cursor_key(TEST_CLUSTER)
+            }),
+            "cursor save must be watcher B's last op"
+        );
     }
 }
