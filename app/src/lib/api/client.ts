@@ -329,6 +329,22 @@ export class CompileApiError extends Error {
 	}
 }
 
+/// Lift the compiler's structured 400 envelope (`compile_errors: [...]`) off
+/// any error body into a `CompileApiError`, or `null` when the body carries no
+/// (non-empty) diagnostics. Shared by `publishTemplate` and `createInstance`
+/// (a draft dev-run compiles per-launch) so both surface identical canvas
+/// highlights through the editor's `CompileApiError` plumbing.
+export function compileApiErrorFromBody(body: unknown): CompileApiError | null {
+	const b = body as {
+		error?: string;
+		compile_errors?: CompileErrorView[] | null;
+	} | null;
+	if (b && Array.isArray(b.compile_errors) && b.compile_errors.length > 0) {
+		return new CompileApiError(b.error ?? 'compilation failed', b.compile_errors);
+	}
+	return null;
+}
+
 /// Thrown when the publish gate (412) blocks a publish because tests are
 /// failing or stale. The editor catches this to render the gate modal with
 /// per-test detail.
@@ -367,9 +383,8 @@ export async function publishTemplate(id: string, force = false): Promise<Templa
 				body.failing_tests
 			);
 		}
-		if (body && Array.isArray(body.compile_errors) && body.compile_errors.length > 0) {
-			throw new CompileApiError(body.error ?? 'compilation failed', body.compile_errors);
-		}
+		const compileErr = compileApiErrorFromBody(body);
+		if (compileErr) throw compileErr;
 		throw new ApiError(
 			res.response.status,
 			rawErr as Record<string, unknown> | string | undefined
@@ -601,7 +616,13 @@ export async function getInstance(id: string): Promise<WorkflowInstance> {
 }
 
 export async function createInstance(data: CreateInstanceRequest): Promise<WorkflowInstance> {
-	return unwrap(await client.POST('/api/v1/instances', { body: data }));
+	const res = await client.POST('/api/v1/instances', { body: data });
+	// A draft dev-run (mode 'draft' on an unpublished version) compiles
+	// per-launch; lift the compiler's structured envelope the same way
+	// `publishTemplate` does so the editor can highlight offending nodes.
+	const compileErr = compileApiErrorFromBody(res.error);
+	if (compileErr) throw compileErr;
+	return unwrap(res);
 }
 
 export async function getInstanceState(id: string): Promise<InstanceStateResponse> {

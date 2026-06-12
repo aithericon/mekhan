@@ -1108,7 +1108,9 @@ async fn reconstruct_graph_from_ydoc(
 /// `parse_db_graph` decodes the `Ok(None)` legacy column, letting each caller
 /// keep its own invalid-graph contract (hard `internal`/`bad_request` error vs.
 /// the new-version path's silent `default_graph()` tolerance).
-async fn graph_with_ydoc_fallback<F>(
+/// `pub(crate)`: the draft dev-run path (`create_instance`) compiles a draft
+/// per-launch from the same authored source publish reads.
+pub(crate) async fn graph_with_ydoc_fallback<F>(
     state: &AppState,
     id: Uuid,
     db_graph: serde_json::Value,

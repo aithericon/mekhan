@@ -9,7 +9,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
 	import X from '@lucide/svelte/icons/x';
-	import { getTemplate, createInstance, uploadFile } from '$lib/api/client';
+	import { getTemplate, createInstance, uploadFile, CompileApiError } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import { fromPortFieldKind } from '$lib/fields/adapters';
@@ -43,6 +43,22 @@
 		title?: string;
 		/** Sheet sub-heading override. */
 		description?: string;
+		/** Force the created instance's mode. The editor's draft dev-run passes
+		 *  'draft': the "Start as draft" checkbox is pre-checked + disabled
+		 *  (with a hint) and the POST always sends mode 'draft' — the backend
+		 *  rejects a 'live' run of an unpublished version. */
+		lockMode?: 'draft' | null;
+		/** Live graph override: the editor's draft dev-run passes its Yjs-bound
+		 *  canvas graph so the Start form reflects collaborative edits — for a
+		 *  draft the DB `graph` column is stale (Yjs edits never flush to it;
+		 *  only publish persists), and the backend compiles the dev-run from
+		 *  the Y.Doc. When set, the template fetch is skipped. */
+		graph?: WorkflowGraph | null;
+		/** Creation failed with structured compile diagnostics (a draft dev-run
+		 *  compiles per-launch). The owner closes the dialog and routes them to
+		 *  its canvas-highlight plumbing; without this handler the message is
+		 *  shown inline like any other error. */
+		oncompileerror?: (e: CompileApiError) => void;
 	};
 
 	let {
@@ -51,7 +67,10 @@
 		oncreated,
 		initialValues = null,
 		title = 'Create instance',
-		description = 'Provide initial token values for each Start block.'
+		description = 'Provide initial token values for each Start block.',
+		lockMode = null,
+		graph = null,
+		oncompileerror
 	}: Props = $props();
 
 	function close() {
@@ -66,8 +85,9 @@
 	let error = $state<string | null>(null);
 	/// When checked, the new instance is created with `mode = 'draft'` so it
 	/// stays out of production list views and can be promoted into a
-	/// template-test fixture afterward.
+	/// template-test fixture afterward. `lockMode` overrides the checkbox.
 	let asDraft = $state(false);
+	const effectiveDraft = $derived(lockMode === 'draft' || asDraft);
 
 	$effect(() => {
 		if (!open || !templateId) {
@@ -83,11 +103,10 @@
 		loadingTemplate = true;
 		error = null;
 		try {
-			const tmpl = await getTemplate(id);
-			const graph = tmpl.graph as WorkflowGraph;
+			const effectiveGraph = graph ?? ((await getTemplate(id)).graph as WorkflowGraph);
 			const startNodes: { id: string; label: string; initial: Port }[] = [];
 			const seed: Record<string, Record<string, unknown>> = {};
-			for (const node of graph.nodes ?? []) {
+			for (const node of effectiveGraph.nodes ?? []) {
 				if ((node.data as WorkflowNodeData)?.type !== 'start') continue;
 				const data = node.data as StartNodeData;
 				const initial: Port = data.initial ?? { id: 'in', label: 'Input', fields: [] };
@@ -230,11 +249,17 @@
 			const instance = await createInstance({
 				template_id: templateId,
 				start_tokens: buildStartTokens(),
-				mode: asDraft ? 'draft' : undefined
+				mode: effectiveDraft ? 'draft' : undefined
 			});
 			oncreated(instance.id);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to create instance';
+			if (e instanceof CompileApiError && oncompileerror) {
+				// Hand structured compile diagnostics to the owner (the editor
+				// closes this dialog and rings the offending canvas nodes).
+				oncompileerror(e);
+			} else {
+				error = e instanceof Error ? e.message : 'Failed to create instance';
+			}
 		} finally {
 			submitting = false;
 		}
@@ -410,16 +435,26 @@
 		</div>
 
 		<div class="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
-			<label
-				class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
-				title="Draft runs are hidden from production dashboards and can be promoted into a template test."
-			>
-				<Checkbox
-					checked={asDraft}
-					onCheckedChange={(v) => (asDraft = v === true)}
-				/>
-				Start as draft
-			</label>
+			{#if lockMode === 'draft'}
+				<label
+					class="flex items-center gap-2 text-sm text-muted-foreground"
+					data-testid="lock-mode-draft-hint"
+				>
+					<Checkbox checked disabled />
+					Unpublished version — runs as a draft instance
+				</label>
+			{:else}
+				<label
+					class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
+					title="Draft runs are hidden from production dashboards and can be promoted into a template test."
+				>
+					<Checkbox
+						checked={asDraft}
+						onCheckedChange={(v) => (asDraft = v === true)}
+					/>
+					Start as draft
+				</label>
+			{/if}
 			<div class="flex items-center gap-2">
 				{#if missingRequired.length > 0}
 					<span class="text-xs text-muted-foreground">
@@ -431,7 +466,7 @@
 					onclick={submit}
 					disabled={submitting || loadingTemplate || missingRequired.length > 0}
 				>
-					{submitting ? 'Creating…' : asDraft ? 'Create draft' : 'Create instance'}
+					{submitting ? 'Creating…' : effectiveDraft ? 'Create draft' : 'Create instance'}
 				</Button>
 			</div>
 		</div>
