@@ -301,7 +301,13 @@ async fn keep_all_surfaces_show_restricted_rows_with_null_role() {
     assert_eq!(open["my_effective_role"], "viewer");
 
     // ws owner sees real roles on both surfaces.
-    let body = get_as(&app, "alice", ws, &format!("/api/v1/workspaces/{ws}/folders")).await;
+    let body = get_as(
+        &app,
+        "alice",
+        ws,
+        &format!("/api/v1/workspaces/{ws}/folders"),
+    )
+    .await;
     let vault = find_by_id(body.as_array().unwrap(), folder_id).unwrap();
     assert_eq!(vault["my_effective_role"], "owner");
 }

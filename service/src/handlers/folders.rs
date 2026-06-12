@@ -116,9 +116,15 @@ pub async fn list_folders(
     // the whole list) so the SPA can gate edit/Share affordances; the backend
     // still enforces on every folder mutate path.
     // Keep-all on purpose: tree navigation must see the full path structure.
-    annotate_roles_keep_all(&state.db, &user, ObjectKind::Folder, workspace_id, &mut rows)
-        .await
-        .map_err(map_to_api_error)?;
+    annotate_roles_keep_all(
+        &state.db,
+        &user,
+        ObjectKind::Folder,
+        workspace_id,
+        &mut rows,
+    )
+    .await
+    .map_err(map_to_api_error)?;
     Ok(Json(rows))
 }
 

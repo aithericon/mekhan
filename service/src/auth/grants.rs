@@ -618,11 +618,7 @@ pub trait AclAnnotated {
 /// map omits get `None`.
 fn stamp_roles<T: AclAnnotated>(items: &mut [T], roles: &HashMap<Uuid, Role>) {
     for item in items.iter_mut() {
-        item.set_my_effective_role(
-            roles
-                .get(&item.acl_id())
-                .map(|r| r.as_label().to_string()),
-        );
+        item.set_my_effective_role(roles.get(&item.acl_id()).map(|r| r.as_label().to_string()));
     }
 }
 

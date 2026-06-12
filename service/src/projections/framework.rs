@@ -353,10 +353,7 @@ pub async fn run_projection<P: Projection>(projection: P, nats: MekhanNats, db: 
     {
         Ok(m) => m,
         Err(e) => {
-            tracing::error!(
-                "failed to start {} message stream: {e}",
-                projection.name()
-            );
+            tracing::error!("failed to start {} message stream: {e}", projection.name());
             return;
         }
     };
@@ -383,8 +380,7 @@ pub async fn run_projection<P: Projection>(projection: P, nats: MekhanNats, db: 
                 }
             };
             // Subject: petri.events.{net_id}.{type}.{subtype}
-            let Some(net_id) = msg.subject.as_str().split('.').nth(2).map(str::to_string)
-            else {
+            let Some(net_id) = msg.subject.as_str().split('.').nth(2).map(str::to_string) else {
                 let _ = msg.ack().await;
                 continue;
             };
