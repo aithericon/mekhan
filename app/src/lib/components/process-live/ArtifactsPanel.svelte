@@ -6,6 +6,8 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import SkipBack from '@lucide/svelte/icons/skip-back';
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
+	import Maximize from '@lucide/svelte/icons/maximize';
+	import MediaLightbox from './MediaLightbox.svelte';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import type { createProcessLiveStore } from '$lib/stores/process-live.svelte';
 	import {
@@ -105,6 +107,14 @@
 		stickyUserSelection[g.key] = false;
 	}
 
+	// Lightbox: tracks WHICH group is maximized; the selected index is the
+	// same state the inline scrubber uses, so navigating in the overlay moves
+	// the panel underneath (and vice versa) instead of forking a second cursor.
+	let lightboxKey = $state<string | null>(null);
+	const lightboxGroup = $derived(
+		lightboxKey === null ? null : (groups.find((g) => g.key === lightboxKey) ?? null)
+	);
+
 	const statusDotClass = $derived(
 		store.artifactStatus === 'streaming'
 			? 'bg-green-500'
@@ -167,8 +177,8 @@
 						{/if}
 					</div>
 
-					{#if g.entries.length > 1}
-						<div class="flex items-center gap-1">
+					<div class="flex items-center gap-1">
+						{#if g.entries.length > 1}
 							{#if !isLatest && stickyUserSelection[g.key]}
 								<Button size="sm" variant="ghost" onclick={() => jumpLatest(g)}>
 									Jump to latest ({g.entries.length})
@@ -222,8 +232,16 @@
 							<span class="ml-1 text-sm tabular-nums text-muted-foreground">
 								{idx + 1} / {g.entries.length}
 							</span>
-						</div>
-					{/if}
+						{/if}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							title="Enlarge"
+							onclick={() => (lightboxKey = g.key)}
+						>
+							<Maximize class="size-4" />
+						</Button>
+					</div>
 				</div>
 
 				{#if Renderer}
@@ -237,3 +255,13 @@
 		<p class="text-sm text-red-500">{store.error}</p>
 	{/if}
 </section>
+
+{#if lightboxGroup}
+	<MediaLightbox
+		entries={lightboxGroup.entries}
+		index={indexFor(lightboxGroup)}
+		label={lightboxGroup.label}
+		onnavigate={(i) => setIndex(lightboxGroup, i)}
+		onclose={() => (lightboxKey = null)}
+	/>
+{/if}
