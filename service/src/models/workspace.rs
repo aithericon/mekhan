@@ -96,6 +96,15 @@ pub struct Folder {
     pub my_effective_role: Option<String>,
 }
 
+impl crate::auth::AclAnnotated for Folder {
+    fn acl_id(&self) -> Uuid {
+        self.id
+    }
+    fn set_my_effective_role(&mut self, role: Option<String>) {
+        self.my_effective_role = role;
+    }
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateFolderRequest {
     /// Parent folder; `None` creates a root-level folder.

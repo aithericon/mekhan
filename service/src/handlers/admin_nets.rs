@@ -41,6 +41,7 @@ use uuid::Uuid;
 
 use crate::auth::{map_to_api_error, require_role, AuthUser, Role};
 use crate::models::error::{ApiError, ErrorResponse};
+use crate::nats::subjects::{net_events_filter, net_signals_filter, Subjects};
 use crate::AppState;
 
 /// Caller-implicit workspace — mirrors `roster::caller_workspace`.
@@ -119,10 +120,7 @@ async fn purge_net_subjects(
     net_id: &str,
 ) -> Result<u64, String> {
     let mut purged: u64 = 0;
-    for subject in [
-        format!("petri.events.{net_id}.>"),
-        format!("petri.signal.{net_id}.>"),
-    ] {
+    for subject in [net_events_filter(net_id), net_signals_filter(net_id)] {
         let resp = stream
             .purge()
             .filter(&subject)
@@ -188,14 +186,19 @@ pub struct PurgeEventsResponse {
 /// subjects map. Fail-soft: any error yields `None` and the overview renders
 /// without counts rather than 500ing the whole page.
 async fn event_counts_by_net(state: &AppState) -> Option<HashMap<String, u64>> {
-    let stream = match state.nats.jetstream().get_stream("PETRI_GLOBAL").await {
+    let stream = match state
+        .nats
+        .jetstream()
+        .get_stream(Subjects::STREAM_GLOBAL)
+        .await
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("admin-nets: PETRI_GLOBAL not available: {e}");
             return None;
         }
     };
-    let mut info = match stream.info_with_subjects("petri.events.>").await {
+    let mut info = match stream.info_with_subjects(Subjects::EVENTS_ALL).await {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!("admin-nets: subjects scan failed: {e}");
@@ -375,7 +378,7 @@ pub async fn purge_admin_net_events(
     let stream = state
         .nats
         .jetstream()
-        .get_stream("PETRI_GLOBAL")
+        .get_stream(Subjects::STREAM_GLOBAL)
         .await
         .map_err(|e| ApiError::internal(format!("PETRI_GLOBAL: {e}")))?;
 
@@ -536,7 +539,7 @@ pub async fn purge_terminal_nets(
     let stream = state
         .nats
         .jetstream()
-        .get_stream("PETRI_GLOBAL")
+        .get_stream(Subjects::STREAM_GLOBAL)
         .await
         .map_err(|e| ApiError::internal(format!("PETRI_GLOBAL: {e}")))?;
 

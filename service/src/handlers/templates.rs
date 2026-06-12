@@ -9,8 +9,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::{
-    effective_object_roles, map_to_api_error, require_object_role, AuthUser, ObjectKind, ObjectRef,
-    Role,
+    annotate_roles_keep_all, map_to_api_error, require_object_role, AuthUser, ObjectKind,
+    ObjectRef, Role,
 };
 use crate::compiler::{
     compile_to_air, compile_to_air_with_options, derive_child_io, generate_py_io_files,
@@ -124,22 +124,11 @@ async fn annotate_template_roles(
     workspace_id: Uuid,
     items: &mut [WorkflowTemplate],
 ) -> Result<(), ApiError> {
-    let ids: Vec<Uuid> = items.iter().map(|t| t.id).collect();
-    let roles = effective_object_roles(&state.db, user, ObjectKind::Template, workspace_id, &ids)
+    // Keep-all on purpose: a template only becomes restricted via an ancestor
+    // folder, and detail access is gated by `require_object_role`.
+    annotate_roles_keep_all(&state.db, user, ObjectKind::Template, workspace_id, items)
         .await
-        .map_err(map_to_api_error)?;
-    for t in items.iter_mut() {
-        t.my_effective_role = roles.get(&t.id).map(|r| {
-            match r {
-                Role::Owner => "owner",
-                Role::Admin => "admin",
-                Role::Editor => "editor",
-                Role::Viewer => "viewer",
-            }
-            .to_string()
-        });
-    }
-    Ok(())
+        .map_err(map_to_api_error)
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]

@@ -19,10 +19,8 @@
 //!   green: the published interface is byte-identical to an Llm step's.
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{
-    agent_extra_output_fields, agent_to_llm_config, default_output_port, ExecutionBackendType,
-    Port, WorkflowNodeData,
-};
+use crate::compiler::lower::agent::{agent_extra_output_fields, agent_to_llm_config};
+use crate::models::template::{default_output_port, ExecutionBackendType, Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 

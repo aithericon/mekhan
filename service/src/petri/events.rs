@@ -10,6 +10,7 @@ use async_nats::jetstream;
 use futures::StreamExt;
 use petri_domain::PersistedEvent;
 
+use crate::nats::subjects::{net_events_filter, Subjects};
 use crate::nats::MekhanNats;
 use crate::observability::record_silent_drop_with;
 
@@ -25,7 +26,7 @@ pub async fn fetch_events(
     nats: &MekhanNats,
     net_id: &str,
 ) -> Result<Vec<PersistedEvent>, anyhow::Error> {
-    let stream = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
+    let stream = match nats.jetstream().get_stream(Subjects::STREAM_GLOBAL).await {
         Ok(s) => s,
         Err(e) => {
             let err_str = e.to_string();
@@ -36,7 +37,7 @@ pub async fn fetch_events(
         }
     };
 
-    let filter_subject = format!("petri.events.{net_id}.>");
+    let filter_subject = net_events_filter(net_id);
 
     let consumer = stream
         .create_consumer(jetstream::consumer::pull::Config {

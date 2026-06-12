@@ -215,7 +215,7 @@ fn emit_resource_envelopes(
                 ..
             } => (
                 ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
+                Some(crate::compiler::lower::agent::agent_to_llm_config(
                     model,
                     system_prompt.as_deref(),
                     user_prompt,

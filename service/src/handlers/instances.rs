@@ -14,8 +14,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::{
-    effective_object_roles, map_to_api_error, require_object_role, AuthUser, ObjectKind, ObjectRef,
-    Role,
+    annotate_roles_keep_all, map_to_api_error, require_object_role, AuthUser, ObjectKind,
+    ObjectRef, Role,
 };
 use crate::handlers::require_template;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -254,13 +254,18 @@ pub async fn list_instances(
     // Annotate each row with the caller's effective role (one query for the
     // whole page) so the SPA can hide stale edit affordances; the backend still
     // enforces on every mutate path.
-    let ids: Vec<Uuid> = items.iter().map(|i| i.id).collect();
-    let roles = effective_object_roles(&state.db, &user, ObjectKind::Instance, workspace_id, &ids)
-        .await
-        .map_err(map_to_api_error)?;
-    for item in &mut items {
-        item.my_effective_role = roles.get(&item.id).map(|r| role_label(*r));
-    }
+    // Keep-all on purpose: an instance only becomes restricted via the
+    // template's ancestor folder, and detail access is gated by
+    // `require_object_role`.
+    annotate_roles_keep_all(
+        &state.db,
+        &user,
+        ObjectKind::Instance,
+        workspace_id,
+        &mut items,
+    )
+    .await
+    .map_err(map_to_api_error)?;
 
     Ok(Json(PaginatedResponse {
         items,
@@ -268,17 +273,6 @@ pub async fn list_instances(
         page: params.page,
         per_page: params.per_page,
     }))
-}
-
-/// Lowercase role label for the `my_effective_role` row annotation.
-fn role_label(role: Role) -> String {
-    match role {
-        Role::Owner => "owner",
-        Role::Admin => "admin",
-        Role::Editor => "editor",
-        Role::Viewer => "viewer",
-    }
-    .to_string()
 }
 
 /// Object-ACL gate for a single instance. Call AFTER the handler's existence
@@ -321,7 +315,7 @@ pub async fn get_instance(
             .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     let role = gate_instance(&state, &user, id, Role::Viewer).await?;
-    instance.my_effective_role = Some(role_label(role));
+    instance.my_effective_role = Some(role.as_label().to_string());
     Ok(Json(instance))
 }
 
@@ -400,7 +394,11 @@ pub(crate) fn instance_jetstream_events(
     net_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send + 'static {
     async_stream::stream! {
-        let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
+        let stream_h = match nats
+            .jetstream()
+            .get_stream(crate::nats::subjects::Subjects::STREAM_GLOBAL)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 yield Ok(Event::default().event("error").data(format!("stream: {e}")));
@@ -411,7 +409,7 @@ pub(crate) fn instance_jetstream_events(
         // client disconnects and this future is dropped.
         let consumer = match stream_h
             .create_consumer(jetstream::consumer::pull::Config {
-                filter_subject: format!("petri.events.{net_id}.>"),
+                filter_subject: crate::nats::subjects::net_events_filter(&net_id),
                 deliver_policy: jetstream::consumer::DeliverPolicy::All,
                 ack_policy: jetstream::consumer::AckPolicy::Explicit,
                 ..Default::default()

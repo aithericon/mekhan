@@ -1,3 +1,5 @@
+pub mod subjects;
+
 use std::collections::HashMap;
 
 use petri_domain::{Marking, PersistedEvent, PetriNet, PlaceId, TokenColor, TransitionId};

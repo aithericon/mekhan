@@ -1,146 +1,101 @@
 //! NATS-driven `image_materializations` consumer (docs/22 container staging).
 //!
-//! Subscribes to `petri.events.>` on PETRI_GLOBAL with the durable consumer
-//! `mekhan-image-materializations`. For each event on a `materialize-<id>` net it
-//! buffers the per-net event log, runs the pure projector, and updates the
-//! matching `image_materializations` row (`ready`/`failed`, `digest`, `sif_path`,
-//! `size_bytes`, `last_error`).
-//!
-//! Direct clone of `template_stagings::consumer` — a materialize net fires
-//! `materialize_image` exactly once, so the projector yields at most ONE terminal
-//! update per net, applied as an idempotent `UPDATE … WHERE id = $1`.
+//! A [`crate::projections::framework::Projection`] with
+//! [`BootstrapPolicy::Stateless`] — the direct sibling of
+//! `template_stagings::consumer`: a materialize net fires `materialize_image`
+//! exactly once, and each matching `EffectCompleted`/`EffectFailed` event
+//! independently yields a self-contained row update, applied as an idempotent
+//! `UPDATE … WHERE id = $1` (`ready`/`failed`, `digest`, `sif_path`,
+//! `size_bytes`, `last_error`). The durable consumer
+//! (`mekhan-image-materializations-v2`, cursor transplanted from the old
+//! firehose durable) filters server-side to the two effect-event subjects and
+//! pre-filters in-process to `materialize-*` nets.
 
-use std::collections::HashMap;
+use std::time::Duration;
 
-use futures::StreamExt;
+use async_trait::async_trait;
 use sqlx::PgPool;
 
-use petri_domain::{DomainEvent, PersistedEvent};
+use petri_domain::PersistedEvent;
 
-use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop_with;
-use crate::petri::events::fetch_events;
+use crate::nats::subjects::{
+    Subjects, EFFECT_COMPLETED_EVENTS_FILTER, EFFECT_FAILED_EVENTS_FILTER,
+};
+use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
+use crate::projections::framework::{run_projection, BootstrapPolicy, LazyHistory, Projection};
 
 use super::projector::{project_materialize, MaterializeUpdate};
 
-const MAX_BUFFERED_NETS: usize = 256;
+struct ImageMaterializationsProjection;
 
-struct NetBuffer {
-    events: Vec<PersistedEvent>,
+#[async_trait]
+impl Projection for ImageMaterializationsProjection {
+    type State = ();
+
+    fn name(&self) -> &'static str {
+        "image_materializations"
+    }
+
+    fn spec(&self, _nats: &MekhanNats) -> ConsumerSpec {
+        ConsumerSpec {
+            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
+            durable_base: "mekhan-image-materializations-v2",
+            filter_subjects: vec![
+                EFFECT_COMPLETED_EVENTS_FILTER.into(),
+                EFFECT_FAILED_EVENTS_FILTER.into(),
+            ],
+            ack_wait: Some(Duration::from_secs(120)),
+            // Reap the durable if this projection is ever removed (see the
+            // step-executions projection spec for the incident rationale).
+            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
+            migrate_from: Some("mekhan-image-materializations"),
+        }
+    }
+
+    fn wants_net(&self, net_id: &str) -> bool {
+        net_id.starts_with("materialize-")
+    }
+
+    fn bootstrap_policy(&self) -> BootstrapPolicy {
+        BootstrapPolicy::Stateless
+    }
+
+    async fn bootstrap(
+        &self,
+        _db: &PgPool,
+        _net_id: &str,
+        _history: &LazyHistory<'_>,
+    ) -> anyhow::Result<Option<()>> {
+        Ok(None)
+    }
+
+    async fn apply(
+        &self,
+        _db: &PgPool,
+        _net_id: &str,
+        _state: &mut (),
+        _ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn apply_stateless(
+        &self,
+        db: &PgPool,
+        net_id: &str,
+        ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        if let Some(update) = project_materialize(std::slice::from_ref(ev), net_id) {
+            apply_update(db, &update).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Start the image-materializations ingest consumer. Spawned alongside the other
 /// projection consumers in `main.rs`. Runs until the message stream ends.
 pub async fn start_image_materializations_ingest(nats: MekhanNats, db: PgPool) {
-    let consumer = match nats.image_materializations_consumer().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("failed to create image_materializations consumer: {e}");
-            return;
-        }
-    };
-
-    let mut messages = match consumer.messages().await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("failed to start image_materializations message stream: {e}");
-            return;
-        }
-    };
-
-    tracing::info!("image_materializations ingest started on petri.events.> (materialize-* nets)");
-
-    let mut buffers: HashMap<String, NetBuffer> = HashMap::new();
-
-    while let Some(msg_result) = messages.next().await {
-        let msg = match msg_result {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("image_materializations ingest message error: {e}");
-                continue;
-            }
-        };
-
-        let subject = msg.subject.as_str();
-        let result = process_event(&nats, &db, &mut buffers, subject, &msg.payload).await;
-
-        match result {
-            Ok(()) => {
-                let _ = msg.ack().await;
-            }
-            Err(e) => {
-                tracing::error!(subject = %subject, "image_materializations processing failed: {e}");
-                let _ = msg
-                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                        std::time::Duration::from_secs(2),
-                    )))
-                    .await;
-            }
-        }
-    }
-
-    tracing::warn!("image_materializations ingest stream ended");
-}
-
-async fn process_event(
-    nats: &MekhanNats,
-    db: &PgPool,
-    buffers: &mut HashMap<String, NetBuffer>,
-    subject: &str,
-    payload: &[u8],
-) -> anyhow::Result<()> {
-    let Some(net_id) = subject.split('.').nth(2) else {
-        return Ok(());
-    };
-    if !net_id.starts_with("materialize-") {
-        return Ok(());
-    }
-
-    let incoming: PersistedEvent = match serde_json::from_slice(payload) {
-        Ok(p) => p,
-        Err(e) => {
-            record_silent_drop_with(
-                "image_materializations_envelope",
-                &e,
-                serde_json::json!({ "subject": subject, "net_id": net_id }),
-                Some(payload),
-            );
-            return Ok(());
-        }
-    };
-
-    let is_terminal = matches!(
-        incoming.event,
-        DomainEvent::NetCompleted { .. }
-            | DomainEvent::NetCancelled { .. }
-            | DomainEvent::NetFailed { .. }
-    );
-
-    if !buffers.contains_key(net_id) {
-        let events = fetch_events(nats, net_id).await?;
-        if buffers.len() >= MAX_BUFFERED_NETS {
-            if let Some(victim) = buffers.keys().next().cloned() {
-                buffers.remove(&victim);
-            }
-        }
-        buffers.insert(net_id.to_string(), NetBuffer { events });
-    } else {
-        let buf = buffers.get_mut(net_id).expect("contains_key checked");
-        if !buf.events.iter().any(|e| e.sequence == incoming.sequence) {
-            buf.events.push(incoming);
-            buf.events.sort_by_key(|e| e.sequence);
-        }
-    }
-
-    let buf = buffers.get(net_id).expect("inserted/hit above");
-    if let Some(update) = project_materialize(&buf.events, net_id) {
-        apply_update(db, &update).await?;
-    }
-
-    if is_terminal {
-        buffers.remove(net_id);
-    }
-    Ok(())
+    run_projection(ImageMaterializationsProjection, nats, db).await;
 }
 
 /// Apply a terminal materialization outcome to its `image_materializations` row.
@@ -166,4 +121,85 @@ async fn apply_update(db: &PgPool, update: &MaterializeUpdate) -> Result<(), sql
     .execute(db)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use petri_domain::{DomainEvent, TransitionId};
+
+    use super::*;
+    use crate::projections::framework::subject_matches;
+
+    fn filters() -> Vec<String> {
+        vec![
+            EFFECT_COMPLETED_EVENTS_FILTER.into(),
+            EFFECT_FAILED_EVENTS_FILTER.into(),
+        ]
+    }
+
+    /// Every `DomainEvent` variant `project_materialize` matches must be
+    /// covered by the durable's server-side filter list, or the projection
+    /// would silently stop seeing its own input.
+    #[test]
+    fn filter_list_covers_every_projected_variant() {
+        let matched_variants = [
+            DomainEvent::EffectCompleted {
+                transition_id: TransitionId("t_materialize".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "materialize_image".into(),
+                effect_result: serde_json::json!({}),
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::EffectFailed {
+                transition_id: TransitionId("t_materialize".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "materialize_image".into(),
+                error_message: "boom".into(),
+                tokens_consumed: true,
+                input_data: None,
+                retryable: false,
+            },
+        ];
+
+        for event in matched_variants {
+            let subject = Subjects::for_event(&event, Some("materialize-x"));
+            assert!(
+                filters().iter().any(|f| subject_matches(f, &subject)),
+                "no filter matches {subject}"
+            );
+        }
+    }
+
+    /// The pure projector must actually fire on a single matching event —
+    /// the stateless path hands it `&[ev]`, never a buffered log.
+    #[test]
+    fn single_event_projects_standalone() {
+        let ev = PersistedEvent {
+            sequence: 7,
+            timestamp: Utc::now(),
+            event: DomainEvent::EffectFailed {
+                transition_id: TransitionId("t_materialize".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "materialize_image".into(),
+                error_message: "missing image_ref".into(),
+                tokens_consumed: true,
+                input_data: None,
+                retryable: false,
+            },
+            hash: String::new(),
+            previous_hash: None,
+        };
+        let net = "materialize-44444444-4444-4444-4444-444444444444";
+        let update = project_materialize(std::slice::from_ref(&ev), net).expect("update");
+        assert_eq!(update.status, "failed");
+    }
 }

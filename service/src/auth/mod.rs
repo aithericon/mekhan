@@ -36,8 +36,9 @@ pub mod zitadel;
 
 pub use authenticator::{Authenticator, SESSION_COOKIE};
 pub use grants::{
-    apply_grant, effective_object_role, effective_object_roles, grant_context, require_object_role,
-    GrantContext, ObjectKind, ObjectRef,
+    annotate_roles_keep_all, apply_grant, effective_object_role, effective_object_roles,
+    filter_and_annotate_visible, grant_context, require_object_role, AclAnnotated, GrantContext,
+    ObjectKind, ObjectRef,
 };
 pub use introspection::IntrospectionVerifier;
 pub use membership::{

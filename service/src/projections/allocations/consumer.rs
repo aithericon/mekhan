@@ -1,170 +1,119 @@
 //! NATS-driven allocations consumer.
 //!
-//! Subscribes to `petri.events.>` on PETRI_GLOBAL with the durable consumer
-//! `mekhan-allocations`. On each event, buffers the per-net event log, runs the
-//! pure projector, and upserts changed rows into `allocations`
+//! A [`crate::projections::framework::Projection`] with the default
+//! [`BootstrapPolicy::ReplayHistory`](crate::projections::framework::BootstrapPolicy):
+//! the per-net [`State`] fold is incremental (lease releases correlate by
+//! `alloc_id` against earlier acquires, so per-event state must be carried),
+//! bootstrapped from the full event log on a cache miss and then fed one
+//! event at a time. Only the rows an event actually touched
+//! ([`State::take_dirty_rows`]) are upserted into `allocations`
 //! (sequence-guarded by `(net_id, grant_id, kind)`).
 //!
-//! Modeled on `service/src/projections/step_executions/consumer.rs`. Unlike the
-//! step-executions consumer it needs NO template `InterfaceRegistry` — the
-//! projector derives every key from the engine events. It DOES resolve the
-//! owning workflow `instance_id` (UUID) from the workflow net embedded in the
-//! grant_id prefix (`<workflow_net_id>:<node_id>`), best-effort: pool-management
-//! nets / unknown grants resolve to NULL `instance_id`, which is allowed.
+//! The durable consumer (`mekhan-allocations-v2`, cursor transplanted from
+//! the old `petri.events.>` firehose durable) filters server-side to exactly
+//! the subjects the fold matches — `effect.completed`, `token.created`,
+//! `transition.fired` — plus `net.>` for the driver's terminal eviction.
+//!
+//! Unlike the step-executions projection it needs NO template
+//! `InterfaceRegistry` — the projector derives every key from the engine
+//! events. It DOES resolve the owning workflow `instance_id` (UUID) from the
+//! workflow net embedded in the grant_id prefix (`<workflow_net_id>:<node_id>`),
+//! best-effort: pool-management nets / unknown grants resolve to NULL
+//! `instance_id`, which is allowed.
 //!
 //! ## Tapping the accounting signal
 //!
 //! The enriched terminal accounting payload the per-cluster watcher publishes on
 //! `petri.signal.{net_id}.>` lands in the SAME PETRI_GLOBAL event log as a
 //! `TokenCreated` (the engine injects the signal payload as the token color,
-//! tagging `signal_key == grant_id`). So a single `petri.events.>` consumer sees
-//! it — no second `petri.signal.>` consumer is required. If a future engine
+//! tagging `signal_key == grant_id`). So the `token.created` filter sees it —
+//! no second `petri.signal.>` consumer is required. If a future engine
 //! change ever slims the persisted signal token below what the projector needs,
 //! add a second pull consumer here filtered on `petri.signal.>` and merge its
 //! `ExternalSignal.payload` into the same upsert path.
 
-use std::collections::HashMap;
+use std::time::Duration;
 
-use futures::StreamExt;
+use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use petri_domain::{DomainEvent, PersistedEvent};
+use petri_domain::PersistedEvent;
 
-use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop_with;
-use crate::petri::events::fetch_events;
+use crate::nats::subjects::{
+    Subjects, EFFECT_COMPLETED_EVENTS_FILTER, NET_LIFECYCLE_EVENTS_FILTER,
+    TOKEN_CREATED_EVENTS_FILTER, TRANSITION_FIRED_EVENTS_FILTER,
+};
+use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
+use crate::projections::framework::{run_projection, LazyHistory, Projection};
 
-use super::projector::{project_allocations, AllocationRow};
+use super::projector::{AllocationRow, State};
 
-/// Upper bound on simultaneously-buffered nets. Mirrors the step-executions
-/// consumer; terminal nets are evicted eagerly.
-const MAX_BUFFERED_NETS: usize = 512;
+struct AllocationsProjection;
 
-/// Per-net in-memory projection input: the full event log for one net. Unlike
-/// the step-executions buffer there's no registry/instance context to cache —
-/// the projector is registry-free and `instance_id` is resolved per-upsert.
-struct NetBuffer {
-    events: Vec<PersistedEvent>,
+#[async_trait]
+impl Projection for AllocationsProjection {
+    type State = State;
+
+    fn name(&self) -> &'static str {
+        "allocations"
+    }
+
+    fn spec(&self, _nats: &MekhanNats) -> ConsumerSpec {
+        ConsumerSpec {
+            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
+            durable_base: "mekhan-allocations-v2",
+            filter_subjects: vec![
+                EFFECT_COMPLETED_EVENTS_FILTER.into(),
+                TOKEN_CREATED_EVENTS_FILTER.into(),
+                TRANSITION_FIRED_EVENTS_FILTER.into(),
+                NET_LIFECYCLE_EVENTS_FILTER.into(),
+            ],
+            ack_wait: Some(Duration::from_secs(120)),
+            // Reap the durable if this projection is ever removed (see the
+            // step-executions projection spec for the incident rationale).
+            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
+            migrate_from: Some("mekhan-allocations"),
+        }
+    }
+
+    async fn bootstrap(
+        &self,
+        db: &PgPool,
+        net_id: &str,
+        history: &LazyHistory<'_>,
+    ) -> anyhow::Result<Option<State>> {
+        let mut state = State::default();
+        for ev in history.get().await? {
+            state.absorb(ev, net_id);
+        }
+        let rows = state.take_dirty_rows();
+        if !rows.is_empty() {
+            upsert_rows(db, &rows).await?;
+        }
+        Ok(Some(state))
+    }
+
+    async fn apply(
+        &self,
+        db: &PgPool,
+        net_id: &str,
+        state: &mut State,
+        ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        state.absorb(ev, net_id);
+        let rows = state.take_dirty_rows();
+        if !rows.is_empty() {
+            upsert_rows(db, &rows).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Start the allocations ingest consumer. Spawned alongside the step-executions
 /// and causality consumers in `main.rs`. Runs until the message stream ends.
 pub async fn start_allocations_ingest(nats: MekhanNats, db: PgPool) {
-    let consumer = match nats.allocations_consumer().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("failed to create allocations consumer: {e}");
-            return;
-        }
-    };
-
-    let mut messages = match consumer.messages().await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("failed to start allocations message stream: {e}");
-            return;
-        }
-    };
-
-    tracing::info!("allocations ingest started on petri.events.>");
-
-    let mut buffers: HashMap<String, NetBuffer> = HashMap::new();
-
-    while let Some(msg_result) = messages.next().await {
-        let msg = match msg_result {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("allocations ingest message error: {e}");
-                continue;
-            }
-        };
-
-        let subject = msg.subject.as_str();
-        let result = process_event(&nats, &db, &mut buffers, subject, &msg.payload).await;
-
-        match result {
-            Ok(()) => {
-                let _ = msg.ack().await;
-            }
-            Err(e) => {
-                tracing::error!(subject = %subject, "allocations processing failed: {e}");
-                let _ = msg
-                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                        std::time::Duration::from_secs(2),
-                    )))
-                    .await;
-            }
-        }
-    }
-
-    tracing::warn!("allocations ingest stream ended");
-}
-
-async fn process_event(
-    nats: &MekhanNats,
-    db: &PgPool,
-    buffers: &mut HashMap<String, NetBuffer>,
-    subject: &str,
-    payload: &[u8],
-) -> anyhow::Result<()> {
-    // Subject: petri.events.{net_id}.>
-    let Some(net_id) = subject.split('.').nth(2) else {
-        tracing::warn!("allocations: cannot extract net_id from subject: {subject}");
-        return Ok(());
-    };
-
-    let incoming: PersistedEvent = match serde_json::from_slice(payload) {
-        Ok(p) => p,
-        Err(e) => {
-            record_silent_drop_with(
-                "allocations_envelope",
-                &e,
-                serde_json::json!({ "subject": subject, "net_id": net_id }),
-                Some(payload),
-            );
-            return Ok(());
-        }
-    };
-
-    let is_terminal = matches!(
-        incoming.event,
-        DomainEvent::NetCompleted { .. }
-            | DomainEvent::NetCancelled { .. }
-            | DomainEvent::NetFailed { .. }
-    );
-
-    if !buffers.contains_key(net_id) {
-        // Cache miss: bootstrap the FULL event log once (covers events that
-        // predate this process / the durable cursor).
-        let events = fetch_events(nats, net_id).await?;
-
-        if buffers.len() >= MAX_BUFFERED_NETS {
-            if let Some(victim) = buffers.keys().next().cloned() {
-                buffers.remove(&victim);
-            }
-        }
-        buffers.insert(net_id.to_string(), NetBuffer { events });
-    } else {
-        let buf = buffers.get_mut(net_id).expect("contains_key checked");
-        if !buf.events.iter().any(|e| e.sequence == incoming.sequence) {
-            buf.events.push(incoming);
-            buf.events.sort_by_key(|e| e.sequence);
-        }
-    }
-
-    let buf = buffers.get(net_id).expect("inserted/hit above");
-    if !buf.events.is_empty() {
-        let rows = project_allocations(&buf.events, net_id);
-        if !rows.is_empty() {
-            upsert_rows(db, &rows).await?;
-        }
-    }
-
-    if is_terminal {
-        buffers.remove(net_id);
-    }
-    Ok(())
+    run_projection(AllocationsProjection, nats, db).await;
 }
 
 /// Resolve the owning workflow `instance_id` (UUID) for a grant. The grant_id is
@@ -265,4 +214,83 @@ async fn upsert_rows(db: &PgPool, rows: &[AllocationRow]) -> Result<(), sqlx::Er
         .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use petri_domain::{DomainEvent, PlaceId, Token, TokenColor, TransitionId};
+
+    use super::*;
+    use crate::projections::framework::subject_matches;
+
+    fn filters() -> Vec<String> {
+        vec![
+            EFFECT_COMPLETED_EVENTS_FILTER.into(),
+            TOKEN_CREATED_EVENTS_FILTER.into(),
+            TRANSITION_FIRED_EVENTS_FILTER.into(),
+            NET_LIFECYCLE_EVENTS_FILTER.into(),
+        ]
+    }
+
+    /// Every `DomainEvent` variant the allocations fold matches — plus the
+    /// terminal lifecycle events the driver needs for cache eviction — must
+    /// be covered by the durable's server-side filter list, or the projection
+    /// would silently stop seeing its own input.
+    #[test]
+    fn filter_list_covers_every_projected_variant() {
+        let matched_variants = [
+            DomainEvent::EffectCompleted {
+                transition_id: TransitionId("t_acquire".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "resource_lease_acquire".into(),
+                effect_result: serde_json::json!({}),
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Data(serde_json::json!({}))),
+                place_id: PlaceId("p_sig".into()),
+                place_name: None,
+                workflow_id: None,
+                signal_key: Some("grant".into()),
+                dedup_id: None,
+            },
+            DomainEvent::TransitionFired {
+                transition_id: TransitionId("t_grant".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::NetCompleted {
+                net_id: "pool-x".into(),
+                terminal_place_id: "p_end".into(),
+                exit_code: None,
+            },
+            DomainEvent::NetCancelled {
+                net_id: "pool-x".into(),
+                reason: None,
+                cancelled_by: None,
+            },
+            DomainEvent::NetFailed {
+                net_id: "pool-x".into(),
+                transition_id: TransitionId("t_x".into()),
+                reason: "boom".into(),
+                retryable: false,
+            },
+        ];
+
+        for event in matched_variants {
+            let subject = Subjects::for_event(&event, Some("pool-x"));
+            assert!(
+                filters().iter().any(|f| subject_matches(f, &subject)),
+                "no filter matches {subject}"
+            );
+        }
+    }
 }

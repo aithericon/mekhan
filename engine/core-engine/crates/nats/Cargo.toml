@@ -43,6 +43,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Internal crates
+petri-api-types = { workspace = true }
 petri-domain = { workspace = true }
 petri-application = { workspace = true }
 petri-infrastructure = { workspace = true }

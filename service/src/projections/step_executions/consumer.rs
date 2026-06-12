@@ -1,37 +1,56 @@
 //! NATS-driven step-executions consumer.
 //!
-//! Subscribes to `petri.events.>` on PETRI_GLOBAL with the durable consumer
-//! `mekhan-step-executions`. On each event, resolves the owning instance and
-//! template, re-fetches that net's full event log from JetStream, runs the
-//! pure projector, and upserts changed step rows into `step_execution`.
+//! A [`crate::projections::framework::Projection`] with the default
+//! [`BootstrapPolicy::ReplayHistory`](crate::projections::framework::BootstrapPolicy):
+//! the per-net fold carries state the DB rows can't reproduce (entry-token
+//! dedup sets, per-node iteration counters), so a cache miss bootstraps from
+//! the net's full event log and subsequent events fold incrementally. Each
+//! absorb is followed by the projector's two terminalization passes
+//! (`close_open_rows` / `finalize_unreached`, both self-gated on the
+//! terminal lifecycle event — exactly the tail of `project_step_executions`),
+//! and only the rows the event actually touched (`take_dirty_rows`) are
+//! upserted into `step_execution`.
 //!
-//! Modeled on `service/src/causality/ingest.rs`. Single-task pull loop; ACK
-//! on success, NAK on error (causality retries every 2s on failure — we
-//! match that).
+//! Bootstrap resolves the owning instance/template and decodes the compiler
+//! `InterfaceRegistry` from `interface_json`. Nets that aren't workflow
+//! instances, or whose template predates `interface_json`, return `Ok(None)`
+//! — the event is ACKed and the net deliberately NOT cached, so non-instance
+//! nets stay cheap misses rather than holding state.
 //!
-//! ## Re-fetching events per arrival
+//! ## Incident tuning (2026-06-10 prod, 84k-message redelivery spiral)
 //!
-//! The simplest correct strategy: on each event, ask JetStream for the full
-//! event log via `fetch_events` (same path used by `GET /instances/{id}/state`
-//! to project the marking on demand). The projector is pure and the upsert is
-//! by PK — duplicate work is invisible. At workflow volumes here this is
-//! cheap; if it ever isn't, the obvious optimization is an in-memory per-net
-//! buffer that backfills lazily on cache miss.
+//! Two non-default consumer knobs plus the driver's pull-batch cap, all
+//! preserved verbatim from the pre-framework consumer:
+//! - `ack_wait: 120s` (default 30s) — processing an event can legitimately
+//!   take seconds (bootstrap history fetch + fold + row upserts). With the
+//!   default, prefetched messages expired in the client buffer faster than
+//!   the loop could drain them: every message was redelivered, the ack floor
+//!   froze, and the consumer made ~0 forward progress.
+//! - batch cap 16 (the [`DriverTuning`](crate::projections::framework::DriverTuning)
+//!   default) — at most a couple minutes of work is ever buffered ahead of
+//!   the acks.
+//! - `inactive_threshold: 30 days` — if this projection is ever removed (or
+//!   the service decommissioned), the server reaps the durable instead of
+//!   letting it accumulate pending forever (the fate of the orphaned
+//!   `mekhan-{node,model}-replicas` durables).
 
-use std::collections::HashMap;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use sqlx::PgPool;
-
-use futures::StreamExt;
-use petri_domain::{DomainEvent, PersistedEvent};
 use uuid::Uuid;
 
-use crate::compiler::InterfaceRegistry;
-use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop_with;
-use crate::petri::events::fetch_events;
+use petri_domain::PersistedEvent;
 
-use super::projector::{project_step_executions, StepExecutionRow, StepStatus};
+use crate::compiler::InterfaceRegistry;
+use crate::nats::subjects::{
+    Subjects, EFFECT_COMPLETED_EVENTS_FILTER, EFFECT_FAILED_EVENTS_FILTER,
+    NET_LIFECYCLE_EVENTS_FILTER, TOKEN_CREATED_EVENTS_FILTER, TRANSITION_FIRED_EVENTS_FILTER,
+};
+use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
+use crate::projections::framework::{run_projection, LazyHistory, Projection};
+
+use super::projector::{Lookups, State as FoldState, StepExecutionRow, StepStatus};
 
 /// The bare `snake_case` wire string for the `step_execution.status` text
 /// column. `StepStatus` is now an alias for the canonical
@@ -48,136 +67,52 @@ fn step_status_str(status: StepStatus) -> &'static str {
     }
 }
 
-/// Upper bound on simultaneously-buffered nets. Terminal nets are evicted
-/// eagerly (see `process_event`); this only guards against unbounded growth
-/// from many long-lived / never-terminating nets. An evicted net re-bootstraps
-/// from `fetch_events` on its next event.
-const MAX_BUFFERED_NETS: usize = 512;
-
-/// Per-net in-memory projection input: the full event log for one net plus the
-/// (stable) instance/template context and decoded interface registry.
-///
-/// The previous design re-fetched the entire net history from NATS — a fresh
-/// ephemeral consumer with a blocking read timeout — on EVERY delivered
-/// message, which could not keep up under load. Instead we bootstrap the log
-/// once on cache miss, then append each subsequently-delivered event and
-/// re-fold from memory.
-struct NetBuffer {
+/// Per-net cached state: the (stable) instance/template context, the decoded
+/// interface registry, and the incremental fold.
+struct NetState {
     ctx: InstanceContext,
     registry: InterfaceRegistry,
-    events: Vec<PersistedEvent>,
+    fold: FoldState,
 }
 
-/// Start the step-executions ingest consumer. Spawned alongside the lifecycle
-/// and causality consumers in `main.rs`. Runs until the message stream ends or
-/// the consumer is dropped (process shutdown).
-pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
-    let consumer = match nats.step_executions_consumer().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("failed to create step-executions consumer: {e}");
-            return;
-        }
-    };
+struct StepExecutionsProjection;
 
-    // Cap the pull batch well below the default (~200): processing one event
-    // can take seconds (bootstrap fetch + whole-net refold + upserts), and
-    // anything prefetched but not acked within the consumer's `ack_wait` is
-    // redelivered. With the default batch a backlog turned into a permanent
-    // redelivery carousel (2026-06-10 prod incident: ack floor frozen,
-    // delivered_seq stuck, ~0 net progress). 16 messages × worst-case seconds
-    // each stays comfortably inside the 120s ack_wait.
-    let mut messages = match consumer
-        .stream()
-        .max_messages_per_batch(16)
-        .messages()
-        .await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("failed to start step-executions message stream: {e}");
-            return;
-        }
-    };
+#[async_trait]
+impl Projection for StepExecutionsProjection {
+    type State = NetState;
 
-    tracing::info!("step-executions ingest started on petri.events.>");
+    fn name(&self) -> &'static str {
+        "step_executions"
+    }
 
-    // Per-net event buffers, backfilled lazily on cache miss. Avoids re-reading
-    // the whole net history from NATS on every message.
-    let mut buffers: HashMap<String, NetBuffer> = HashMap::new();
-
-    while let Some(msg_result) = messages.next().await {
-        let msg = match msg_result {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("step-executions ingest message error: {e}");
-                continue;
-            }
-        };
-
-        let subject = msg.subject.as_str();
-        let result = process_event(&nats, &db, &mut buffers, subject, &msg.payload).await;
-
-        match result {
-            Ok(()) => {
-                let _ = msg.ack().await;
-            }
-            Err(e) => {
-                tracing::error!(subject = %subject, "step-executions processing failed: {e}");
-                let _ = msg
-                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                        std::time::Duration::from_secs(2),
-                    )))
-                    .await;
-            }
+    fn spec(&self, _nats: &MekhanNats) -> ConsumerSpec {
+        ConsumerSpec {
+            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
+            durable_base: "mekhan-step-executions-v2",
+            filter_subjects: vec![
+                TOKEN_CREATED_EVENTS_FILTER.into(),
+                TRANSITION_FIRED_EVENTS_FILTER.into(),
+                EFFECT_COMPLETED_EVENTS_FILTER.into(),
+                EFFECT_FAILED_EVENTS_FILTER.into(),
+                NET_LIFECYCLE_EVENTS_FILTER.into(),
+            ],
+            ack_wait: Some(Duration::from_secs(120)),
+            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
+            migrate_from: Some("mekhan-step-executions"),
         }
     }
 
-    tracing::warn!("step-executions ingest stream ended");
-}
-
-async fn process_event(
-    nats: &MekhanNats,
-    db: &PgPool,
-    buffers: &mut HashMap<String, NetBuffer>,
-    subject: &str,
-    payload: &[u8],
-) -> anyhow::Result<()> {
-    // Subject: petri.events.{net_id}.>
-    let Some(net_id) = subject.split('.').nth(2) else {
-        tracing::warn!("step-executions: cannot extract net_id from subject: {subject}");
-        return Ok(());
-    };
-
-    let incoming: PersistedEvent = match serde_json::from_slice(payload) {
-        Ok(p) => p,
-        Err(e) => {
-            record_silent_drop_with(
-                "step_executions_envelope",
-                &e,
-                serde_json::json!({ "subject": subject, "net_id": net_id }),
-                Some(payload),
-            );
-            return Ok(());
-        }
-    };
-
-    let is_terminal = matches!(
-        incoming.event,
-        DomainEvent::NetCompleted { .. }
-            | DomainEvent::NetCancelled { .. }
-            | DomainEvent::NetFailed { .. }
-    );
-
-    if !buffers.contains_key(net_id) {
-        // Cache miss: first event seen for this net since startup. Resolve the
-        // owning instance/template + bootstrap the FULL event log once (covers
-        // events that predate this process / the durable cursor). Nets that
-        // aren't workflow instances, or whose template predates interface_json,
-        // are skipped — and deliberately NOT cached, so non-instance nets stay
-        // cheap misses rather than holding state.
+    async fn bootstrap(
+        &self,
+        db: &PgPool,
+        net_id: &str,
+        history: &LazyHistory<'_>,
+    ) -> anyhow::Result<Option<NetState>> {
+        // Ownership checks BEFORE touching `history` — foreign nets (pool
+        // nets especially) hit this on every event, and the lazy handle is
+        // what keeps them from paying the JetStream replay.
         let Some(ctx) = load_instance_context(db, net_id).await? else {
-            return Ok(());
+            return Ok(None);
         };
         let registry: InterfaceRegistry = match serde_json::from_value(ctx.interface_json.clone()) {
             Ok(r) => r,
@@ -187,49 +122,60 @@ async fn process_event(
                     template_id = %ctx.template_id,
                     "step-executions: cannot decode interface_json — skipping: {e}",
                 );
-                return Ok(());
+                return Ok(None);
             }
         };
-        let events = fetch_events(nats, net_id).await?;
 
-        // Bound memory: if a flood of long-lived nets has accumulated, evict
-        // one (it re-bootstraps on its next event).
-        if buffers.len() >= MAX_BUFFERED_NETS {
-            if let Some(victim) = buffers.keys().next().cloned() {
-                buffers.remove(&victim);
+        let mut fold = FoldState::new();
+        {
+            let lookups = Lookups::build(&registry);
+            for ev in history.get().await? {
+                fold.absorb(ev, &lookups);
             }
         }
-        buffers.insert(
-            net_id.to_string(),
-            NetBuffer {
-                ctx,
-                registry,
-                events,
-            },
-        );
-    } else {
-        // Cache hit: append the freshly-delivered event. The bootstrap fetch may
-        // already include it (timing), so dedupe by sequence; keep the buffer
-        // sequence-ordered for a correct re-fold.
-        let buf = buffers.get_mut(net_id).expect("contains_key checked");
-        if !buf.events.iter().any(|e| e.sequence == incoming.sequence) {
-            buf.events.push(incoming);
-            buf.events.sort_by_key(|e| e.sequence);
+        // Same tail as `project_step_executions`: both passes self-gate on a
+        // terminal lifecycle event having been folded.
+        fold.close_open_rows();
+        fold.finalize_unreached(&registry);
+
+        let rows = fold.take_dirty_rows();
+        if !rows.is_empty() {
+            upsert_rows(db, &ctx, &rows).await?;
         }
+        Ok(Some(NetState {
+            ctx,
+            registry,
+            fold,
+        }))
     }
 
-    let buf = buffers.get(net_id).expect("inserted/hit above");
-    if !buf.events.is_empty() {
-        // Pure fold over the in-memory buffer; idempotent upsert keys on PK.
-        let rows = project_step_executions(&buf.events, &buf.registry);
-        upsert_rows(db, &buf.ctx, &rows).await?;
-    }
+    async fn apply(
+        &self,
+        db: &PgPool,
+        _net_id: &str,
+        state: &mut NetState,
+        ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        {
+            let lookups = Lookups::build(&state.registry);
+            state.fold.absorb(ev, &lookups);
+        }
+        state.fold.close_open_rows();
+        state.fold.finalize_unreached(&state.registry);
 
-    // Free the buffer once the net is done — its rows are now final.
-    if is_terminal {
-        buffers.remove(net_id);
+        let rows = state.fold.take_dirty_rows();
+        if !rows.is_empty() {
+            upsert_rows(db, &state.ctx, &rows).await?;
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+/// Start the step-executions ingest consumer. Spawned alongside the lifecycle
+/// and causality consumers in `main.rs`. Runs until the message stream ends or
+/// the consumer is dropped (process shutdown).
+pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
+    run_projection(StepExecutionsProjection, nats, db).await;
 }
 
 struct InstanceContext {
@@ -329,4 +275,94 @@ async fn upsert_rows(
         .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use petri_domain::{DomainEvent, PlaceId, Token, TokenColor, TransitionId};
+
+    use super::*;
+    use crate::projections::framework::subject_matches;
+
+    fn filters() -> Vec<String> {
+        vec![
+            TOKEN_CREATED_EVENTS_FILTER.into(),
+            TRANSITION_FIRED_EVENTS_FILTER.into(),
+            EFFECT_COMPLETED_EVENTS_FILTER.into(),
+            EFFECT_FAILED_EVENTS_FILTER.into(),
+            NET_LIFECYCLE_EVENTS_FILTER.into(),
+        ]
+    }
+
+    /// Every `DomainEvent` variant the step-executions fold matches must be
+    /// covered by the durable's server-side filter list, or the projection
+    /// would silently stop seeing its own input.
+    #[test]
+    fn filter_list_covers_every_projected_variant() {
+        let matched_variants = [
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Unit),
+                place_id: PlaceId("p_entry".into()),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            },
+            DomainEvent::TransitionFired {
+                transition_id: TransitionId("t_park".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::EffectCompleted {
+                transition_id: TransitionId("t_step".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "executor_submit".into(),
+                effect_result: serde_json::json!({}),
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::EffectFailed {
+                transition_id: TransitionId("t_step".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "executor_submit".into(),
+                error_message: "boom".into(),
+                tokens_consumed: true,
+                input_data: None,
+                retryable: false,
+            },
+            DomainEvent::NetCompleted {
+                net_id: "mekhan-x".into(),
+                terminal_place_id: "p_end".into(),
+                exit_code: None,
+            },
+            DomainEvent::NetCancelled {
+                net_id: "mekhan-x".into(),
+                reason: None,
+                cancelled_by: None,
+            },
+            DomainEvent::NetFailed {
+                net_id: "mekhan-x".into(),
+                transition_id: TransitionId("t_x".into()),
+                reason: "boom".into(),
+                retryable: false,
+            },
+        ];
+
+        for event in matched_variants {
+            let subject = Subjects::for_event(&event, Some("mekhan-x"));
+            assert!(
+                filters().iter().any(|f| subject_matches(f, &subject)),
+                "no filter matches {subject}"
+            );
+        }
+    }
 }

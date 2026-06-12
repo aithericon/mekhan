@@ -5,8 +5,11 @@
 use std::collections::BTreeMap;
 
 use crate::compiler::borrow::ctx::BorrowContext;
+use crate::compiler::borrow::resolve_core::{
+    check_borrowable_producer, producer_for_slug, UpstreamRule,
+};
 use crate::compiler::error::CompileError;
-use crate::compiler::token_shape::{is_parked_producer, SlugIndex};
+use crate::compiler::token_shape::SlugIndex;
 use crate::models::template::{FieldKind, WorkflowGraph, WorkflowNodeData};
 
 /// One Python AutomatedStep borrow into an upstream parked place.
@@ -171,7 +174,7 @@ pub(crate) fn automated_step_borrow_plan(
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
+                Some(crate::compiler::lower::agent::agent_to_llm_config(
                     model,
                     system_prompt.as_deref(),
                     user_prompt,
@@ -204,7 +207,7 @@ pub(crate) fn automated_step_borrow_plan(
         for r in refs {
             match decl.borrow_shape {
                 BorrowShape::Envelope => {
-                    let Some(prod_id) = slugs.node_for(&r.head).map(str::to_string) else {
+                    let Ok(prod_id) = producer_for_slug(&r.head, &slugs) else {
                         // Not a producer slug. It may be a bare Map item-var
                         // ref (`{{cand.field}}`) inside a Map body — token-
                         // resident, so a Tera-templated Envelope backend's
@@ -229,15 +232,18 @@ pub(crate) fn automated_step_borrow_plan(
                         }
                         continue;
                     };
-                    if prod_id == node.id {
-                        continue;
-                    }
-                    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-                    let me = pos.get(&node.id).copied().unwrap_or(0);
-                    if up >= me {
-                        continue;
-                    }
-                    if !is_parked_producer(graph, &prod_id) {
+                    // Location invariants 2–4 under `StrictTopo` — silent
+                    // skip on any violation (historical Python/SMTP
+                    // behavior; see `resolve_core` module docs).
+                    if check_borrowable_producer(
+                        &prod_id,
+                        &node.id,
+                        graph,
+                        &pos,
+                        UpstreamRule::StrictTopo,
+                    )
+                    .is_err()
+                    {
                         continue;
                     }
                     let key = (node.id.clone(), prod_id.clone());
@@ -321,9 +327,12 @@ fn is_map_item_var(graph: &WorkflowGraph, node_id: &str, head: &str) -> bool {
 /// not a parked producer, unknown field on the producer's port.
 ///
 /// Counterpart to `resolve_ref` (which resolves Rhai-source guard refs).
-/// Both run the same upstream/parked/exists checks; this one takes raw
-/// `(slug, attr)` strings (the picker emits them flat) and skips the
-/// control-token discrimination that guards need.
+/// Both enforce the location invariants via
+/// [`crate::compiler::borrow::resolve_core`] — this one under
+/// [`UpstreamRule::StrictTopo`] (no LeaseScope recovery / Loop body-child
+/// exception) — and this one takes raw `(slug, attr)` strings (the picker
+/// emits them flat) and skips the control-token discrimination that guards
+/// need.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_backend_ref(
     graph: &WorkflowGraph,
@@ -336,7 +345,7 @@ pub(crate) fn resolve_backend_ref(
     attr: &str,
 ) -> Result<(String, FieldKind), CompileError> {
     // Unknown slug → BackendRefUnresolved (kind="slug").
-    let Some(prod_id) = slugs.node_for(slug).map(str::to_string) else {
+    let Ok(prod_id) = producer_for_slug(slug, slugs) else {
         return Err(CompileError::BackendRefUnresolved {
             node_id: consumer_id.to_string(),
             backend: backend_label.to_string(),
@@ -349,31 +358,12 @@ pub(crate) fn resolve_backend_ref(
         });
     };
 
-    if prod_id == consumer_id {
-        return Err(CompileError::BackendRefNotUpstream {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            producer_node_id: prod_id,
-        });
-    }
-
-    let up = pos.get(&prod_id).copied().unwrap_or(usize::MAX);
-    let me = pos.get(consumer_id).copied().unwrap_or(0);
-    if up >= me {
-        return Err(CompileError::BackendRefNotUpstream {
-            node_id: consumer_id.to_string(),
-            backend: backend_label.to_string(),
-            site: site_label.to_string(),
-            slug: slug.to_string(),
-            field: attr.to_string(),
-            producer_node_id: prod_id,
-        });
-    }
-
-    if !is_parked_producer(graph, &prod_id) {
+    // Location invariants 2–4 under `StrictTopo` — self-ref, non-upstream
+    // and non-parked producers all surface as the same
+    // `BackendRefNotUpstream` (single-sourced in `resolve_core`).
+    if check_borrowable_producer(&prod_id, consumer_id, graph, pos, UpstreamRule::StrictTopo)
+        .is_err()
+    {
         return Err(CompileError::BackendRefNotUpstream {
             node_id: consumer_id.to_string(),
             backend: backend_label.to_string(),
@@ -520,5 +510,90 @@ impl BorrowSource for AutomatedStepSource {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `start → prev(python, output `amount`) → wait(delay, non-parked) →
+    /// step(python) → end`. Linear, so topo positions are unambiguous.
+    fn backend_fixture() -> WorkflowGraph {
+        let json = r#"{"nodes":[
+          {"id":"start","type":"start","position":{"x":0,"y":0},"data":{"type":"start","label":"Start"}},
+          {"id":"prev","type":"automated_step","slug":"prev","position":{"x":0,"y":0},
+           "data":{"type":"automated_step","label":"Prev",
+                   "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                   "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                   "deploymentModel":{"mode":"executor"},
+                   "output":{"id":"out","label":"Output","fields":[{"name":"amount","label":"Amount","kind":"number","required":false}]}}},
+          {"id":"wait","type":"delay","slug":"wait","position":{"x":0,"y":0},
+           "data":{"type":"delay","label":"Wait","durationMsExpr":"1000"}},
+          {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+           "data":{"type":"automated_step","label":"Step",
+                   "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                   "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                   "deploymentModel":{"mode":"executor"}}},
+          {"id":"end","type":"end","position":{"x":0,"y":0},"data":{"type":"end","label":"End"}}
+        ],"edges":[
+          {"id":"e1","source":"start","target":"prev","type":"sequence"},
+          {"id":"e2","source":"prev","target":"wait","type":"sequence"},
+          {"id":"e3","source":"wait","target":"step","type":"sequence"},
+          {"id":"e4","source":"step","target":"end","type":"sequence"}
+        ]}"#;
+        serde_json::from_str(json).expect("deser backend fixture")
+    }
+
+    #[test]
+    fn unknown_slug_yields_backend_ref_unresolved_kind_slug() {
+        let g = backend_fixture();
+        let BorrowContext { pos, slugs, .. } = BorrowContext::build(&g).expect("ctx");
+        match resolve_backend_ref(&g, &slugs, &pos, "step", "llm", "prompt", "nope", "x") {
+            Err(CompileError::BackendRefUnresolved { kind, name, .. }) => {
+                assert_eq!(kind, "slug");
+                assert_eq!(name, "nope");
+            }
+            other => panic!("expected BackendRefUnresolved(kind=slug), got {other:?}"),
+        }
+    }
+
+    /// The backend adapter's failure mapping: self-ref, downstream and
+    /// non-parked producers ALL surface as the same `BackendRefNotUpstream`
+    /// (the three `resolve_core` violations collapse onto one error here).
+    #[test]
+    fn self_downstream_and_non_parked_yield_backend_ref_not_upstream() {
+        let g = backend_fixture();
+        let BorrowContext { pos, slugs, .. } = BorrowContext::build(&g).expect("ctx");
+        for (consumer, slug, producer) in [
+            ("step", "step", "step"), // self-reference
+            ("prev", "step", "step"), // downstream producer
+            ("step", "wait", "wait"), // upstream but non-parked (Delay)
+        ] {
+            match resolve_backend_ref(&g, &slugs, &pos, consumer, "llm", "prompt", slug, "x") {
+                Err(CompileError::BackendRefNotUpstream {
+                    node_id,
+                    producer_node_id,
+                    ..
+                }) => {
+                    assert_eq!(node_id, consumer);
+                    assert_eq!(producer_node_id, producer);
+                }
+                other => {
+                    panic!("expected BackendRefNotUpstream for ({consumer}, {slug}), got {other:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_parked_ref_resolves_with_field_kind() {
+        let g = backend_fixture();
+        let BorrowContext { pos, slugs, .. } = BorrowContext::build(&g).expect("ctx");
+        let (prod, kind) =
+            resolve_backend_ref(&g, &slugs, &pos, "step", "llm", "prompt", "prev", "amount")
+                .expect("upstream parked ref must resolve");
+        assert_eq!(prod, "prev");
+        assert!(matches!(kind, FieldKind::Number));
     }
 }

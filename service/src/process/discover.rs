@@ -184,7 +184,7 @@ fn collect_body_field_heads(
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
+                Some(crate::compiler::lower::agent::agent_to_llm_config(
                     model,
                     system_prompt.as_deref(),
                     user_prompt,
@@ -285,7 +285,7 @@ async fn discover_resource_globals(
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
+                Some(crate::compiler::lower::agent::agent_to_llm_config(
                     model,
                     system_prompt.as_deref(),
                     user_prompt,

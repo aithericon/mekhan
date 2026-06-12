@@ -12,6 +12,12 @@
 use std::collections::BTreeMap;
 
 use crate::compiler::borrow::ctx::BorrowContext;
+// `producer_upstream_of` is re-exported here for `reachable_scope` (the
+// picker's upstream predicate must be the one `resolve_ref` checks).
+pub(crate) use crate::compiler::borrow::resolve_core::producer_upstream_of;
+use crate::compiler::borrow::resolve_core::{
+    check_borrowable_producer, producer_for_slug, UpstreamRule,
+};
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::token_shape::{
@@ -219,95 +225,17 @@ fn resolves_under_opaque(shape: &TokenShape, path: &[String]) -> bool {
 /// `{{slug.field}}` placeholder text, not Rhai expressions — they go
 /// through `resolve_backend_ref` which takes raw `(slug, attr)` strings
 /// and returns the producer node id + field kind for staging. The
-/// validation logic (upstream position, parked producer, field exists) is
-/// the same; the two entry points differ only in input shape and what they
-/// return to the caller. Don't try to unify the signatures — guard refs
-/// need the full shape context to decide control vs. borrow, while backend
-/// refs only need to verify "this exists and is upstream."
-/// Walk `node_id`'s `parent_id` chain, collecting the ids of every enclosing
-/// `LeaseScope` (innermost first).
-fn enclosing_lease_scopes(node_id: &str, graph: &WorkflowGraph) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = graph
-        .nodes
-        .iter()
-        .find(|n| n.id == node_id)
-        .and_then(|n| n.parent_id.as_deref());
-    while let Some(pid) = cur {
-        let Some(p) = graph.nodes.iter().find(|n| n.id == pid) else {
-            break;
-        };
-        if matches!(p.data, WorkflowNodeData::LeaseScope { .. }) {
-            out.push(pid.to_string());
-        }
-        cur = p.parent_id.as_deref();
-    }
-    out
-}
-
-/// True if `node_id` is `ancestor_id` itself, or nested within it via the
-/// `parent_id` chain.
-fn is_within(node_id: &str, ancestor_id: &str, graph: &WorkflowGraph) -> bool {
-    if node_id == ancestor_id {
-        return true;
-    }
-    let mut cur = graph
-        .nodes
-        .iter()
-        .find(|n| n.id == node_id)
-        .and_then(|n| n.parent_id.as_deref());
-    while let Some(pid) = cur {
-        if pid == ancestor_id {
-            return true;
-        }
-        cur = graph
-            .nodes
-            .iter()
-            .find(|n| n.id == pid)
-            .and_then(|n| n.parent_id.as_deref());
-    }
-    false
-}
-
-/// Borrow-ordering predicate: is `producer` strictly upstream of `consumer`,
-/// such that a read-arc into the producer's parked `p_<producer>_data` is sound?
-///
-/// Primary rule: strict topological position (`pos[producer] < pos[consumer]`).
-///
-/// **LeaseScope recovery.** The topo DAG drops a scope's `body_out` return arc
-/// (it would close the cycle `scope → body_in → … → body_out → scope`), so the
-/// scope collapses to ONE node whose straight-through `out` successor can sort
-/// BEFORE the body branch — even though at runtime `t_<scope>_exit` consumes the
-/// body's *final* token (every body producer has parked its output) before
-/// forwarding to the post-scope continuation. Recover the true ordering: a
-/// producer contained in a LeaseScope `S` is upstream of any consumer that is
-/// OUTSIDE `S` (not nested within it) and at-or-after `S` in topo order (the
-/// scope node is a real DAG predecessor of its post-exit successors, so
-/// `pos[S] < pos[consumer]`). A consumer *inside* the same scope falls back to
-/// the strict topo check (a body node can't borrow a later sibling's gathered
-/// output).
-fn producer_upstream_of(
-    producer: &str,
-    consumer: &WorkflowNode,
-    graph: &WorkflowGraph,
-    pos: &BTreeMap<String, usize>,
-) -> bool {
-    let up = pos.get(producer).copied().unwrap_or(usize::MAX);
-    let me = pos.get(&consumer.id).copied().unwrap_or(0);
-    if up < me {
-        return true;
-    }
-    for scope_id in enclosing_lease_scopes(producer, graph) {
-        if is_within(&consumer.id, &scope_id, graph) {
-            continue;
-        }
-        if pos.get(&scope_id).copied().unwrap_or(usize::MAX) < me {
-            return true;
-        }
-    }
-    false
-}
-
+/// **location invariants** (known slug, no self-ref, upstream, parked
+/// producer) are single-sourced in
+/// [`crate::compiler::borrow::resolve_core`] — this resolver checks them
+/// under [`UpstreamRule::GuardReachability`] (strict topo + the LeaseScope
+/// recovery + the Loop body-child exception), backend refs under
+/// [`UpstreamRule::StrictTopo`]. The resolvers stay adapters because field
+/// validation is shape-context-specific (guards resolve against the full
+/// `TokenShape` model, backend refs against the producer's flat port
+/// decls) and failure mapping differs (`Unresolved` outcome here vs.
+/// `BackendRefUnresolved`/`BackendRefNotUpstream` hard errors vs. the
+/// Envelope arm's silent skip).
 pub(crate) fn resolve_ref(
     gref: &GuardRef,
     consumer: &WorkflowNode,
@@ -350,7 +278,7 @@ pub(crate) fn resolve_ref(
                     return RefResolution::Control;
                 }
             }
-            let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
+            let Ok(prod_id) = producer_for_slug(root, slugs) else {
                 // Precedence: producer-slug > named-global > unresolved. The
                 // head isn't a slug; if it's a known named global (resource /
                 // asset), DEFER it — `GlobalNamedSource` owns its materialization
@@ -420,34 +348,21 @@ pub(crate) fn resolve_ref(
                     producer_label: prov,
                 };
             }
-            // Parked-producer borrows must reach a *strictly upstream* node
-            // and can't self-reference (a producer can't read its own future
-            // output).
-            if prod_id == consumer.id {
-                return RefResolution::Unresolved;
-            }
-            // EXCEPTION: a Loop accumulator's `merge_expr` (emitted into the
-            // loop's `t_<id>_continue` logic) borrows the CURRENT iteration's
-            // body output (`<body_slug>.<field>`). The body is the loop's child
-            // (`parent_id == loop.id`), so it sits *downstream* of the loop in
-            // topo order — the strict-upstream check below would reject it. But
-            // at continue-time the body has already produced its parked output,
-            // so the read-arc into `p_<body>_data` is sound. Allow the borrow
-            // when the consumer is a Loop and the producer is one of its body
-            // children. (Only reachable via the accumulator scan; loop_condition
-            // borrows of body output were already valid for the same reason and
-            // simply weren't expressible before.)
-            let producer_is_body_child = is_loop_node(graph, &consumer.id)
-                && graph
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == prod_id)
-                    .and_then(|n| n.parent_id.as_deref())
-                    == Some(consumer.id.as_str());
-            if !producer_is_body_child && !producer_upstream_of(&prod_id, consumer, graph, pos) {
-                return RefResolution::Unresolved;
-            }
-            if !is_parked_producer(graph, &prod_id) {
+            // Location invariants 2–4 (no self-ref, upstream, parked
+            // producer) — single-sourced in `resolve_core`.
+            // `GuardReachability` = strict topo + the LeaseScope-containment
+            // recovery + the Loop body-child exception (accumulator
+            // `merge_expr` / `loop_condition` borrowing the current
+            // iteration's parked body output).
+            if check_borrowable_producer(
+                &prod_id,
+                &consumer.id,
+                graph,
+                pos,
+                UpstreamRule::GuardReachability,
+            )
+            .is_err()
+            {
                 return RefResolution::Unresolved;
             }
             // Map producers park a gathered ARRAY at `p_<map>_data` (shaped
@@ -1130,5 +1045,93 @@ impl BorrowSource for GuardSource {
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `start → review(rev) → wait(delay) → dec(guard) → later(late) → end1`
+    /// plus `dec → end2` (default). `rev`/`late` are parked human tasks,
+    /// `wait` is a non-parked Delay — exactly the producers the
+    /// `resolve_core` invariants discriminate.
+    fn guard_fixture(guard: &str) -> WorkflowGraph {
+        let step = r#"{"id":"s","title":"S","blocks":[{"type":"input","field":{"name":"amount","label":"Amt","kind":"number","required":true}}]}"#;
+        let json = format!(
+            r#"{{"nodes":[
+              {{"id":"start","type":"start","position":{{"x":0,"y":0}},"data":{{"type":"start","label":"Start"}}}},
+              {{"id":"review","type":"human_task","slug":"rev","position":{{"x":0,"y":0}},"data":{{"type":"human_task","label":"Review","taskTitle":"Review","steps":[{step}]}}}},
+              {{"id":"wait","type":"delay","slug":"wait","position":{{"x":0,"y":0}},"data":{{"type":"delay","label":"Wait","durationMsExpr":"1000"}}}},
+              {{"id":"dec","type":"decision","slug":"dec","position":{{"x":0,"y":0}},"data":{{"type":"decision","label":"D","conditions":[{{"edgeId":"hi","label":"hi","guard":"{guard}"}}],"defaultBranch":"default"}}}},
+              {{"id":"later","type":"human_task","slug":"late","position":{{"x":0,"y":0}},"data":{{"type":"human_task","label":"Later","taskTitle":"Later","steps":[{step}]}}}},
+              {{"id":"end1","type":"end","position":{{"x":0,"y":0}},"data":{{"type":"end","label":"E1"}}}},
+              {{"id":"end2","type":"end","position":{{"x":0,"y":0}},"data":{{"type":"end","label":"E2"}}}}
+            ],"edges":[
+              {{"id":"e1","source":"start","target":"review","type":"sequence"}},
+              {{"id":"e2","source":"review","target":"wait","type":"sequence"}},
+              {{"id":"e3","source":"wait","target":"dec","type":"sequence"}},
+              {{"id":"e4","source":"dec","target":"later","sourceHandle":"hi","type":"sequence"}},
+              {{"id":"e5","source":"later","target":"end1","type":"sequence"}},
+              {{"id":"e6","source":"dec","target":"end2","sourceHandle":"default","type":"sequence"}}
+            ]}}"#
+        );
+        serde_json::from_str(&json).expect("deser guard fixture")
+    }
+
+    /// The guard adapter's failure mapping: every invariant violation
+    /// degrades to the SAME `Unresolved` outcome — `GuardUnresolved` at
+    /// publish, `UnresolvedGuardPath` in the editor diagnostics.
+    fn expect_guard_unresolved(guard: &str, ident: &str) {
+        let g = guard_fixture(guard);
+        match guard_readarc_plan(&g, &Default::default()) {
+            Err(CompileError::GuardUnresolved {
+                node_id,
+                identifier,
+                ..
+            }) => {
+                assert_eq!(node_id, "dec");
+                assert_eq!(identifier, ident);
+            }
+            other => panic!("expected GuardUnresolved for `{guard}`, got {other:?}"),
+        }
+        let report = analyze(&g, &Default::default()).expect("analyze");
+        assert!(
+            report.diagnostics.iter().any(|d| matches!(d,
+                ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
+                    if node_id == "dec" && referenced == ident)),
+            "editor must flag `{ident}` unresolved at dec"
+        );
+    }
+
+    #[test]
+    fn guard_self_ref_is_unresolved() {
+        expect_guard_unresolved("dec.x > 0", "dec.x");
+    }
+
+    #[test]
+    fn guard_downstream_producer_is_unresolved() {
+        expect_guard_unresolved("late.amount > 0", "late.amount");
+    }
+
+    #[test]
+    fn guard_non_parked_producer_is_unresolved() {
+        expect_guard_unresolved("wait.x > 0", "wait.x");
+    }
+
+    #[test]
+    fn guard_upstream_parked_producer_binds() {
+        let g = guard_fixture("rev.amount > 0");
+        let binds = guard_readarc_plan(&g, &Default::default()).expect("plan");
+        assert!(
+            binds.iter().any(|b| b.consumer_node_id == "dec"
+                && b.referenced == "rev.amount"
+                && b.producer_node == "review"),
+            "rev.amount must bind to review, got {:?}",
+            binds
+                .iter()
+                .map(|b| (&b.consumer_node_id, &b.referenced, &b.producer_node))
+                .collect::<Vec<_>>()
+        );
     }
 }

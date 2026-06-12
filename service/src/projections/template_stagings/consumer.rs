@@ -1,156 +1,103 @@
 //! NATS-driven `template_stagings` consumer (B-staging, Phase 4).
 //!
-//! Subscribes to `petri.events.>` on PETRI_GLOBAL with the durable consumer
-//! `mekhan-template-stagings`. For each event on a `staging-<id>` net it buffers
-//! the per-net event log, runs the pure projector, and updates the matching
-//! `template_stagings` row's status (`staged` / `failed`), `remote_ref`,
-//! `staged_at`, and `last_error`.
+//! A [`crate::projections::framework::Projection`] with
+//! [`BootstrapPolicy::Stateless`]: a staging net fires `stage_template`
+//! exactly once, and each matching `EffectCompleted`/`EffectFailed` event
+//! independently yields a self-contained row update — so there is no per-net
+//! buffer, no history fetch, and no terminal tracking. The durable consumer
+//! (`mekhan-template-stagings-v2`, cursor transplanted from the old
+//! firehose durable) filters server-side to the two effect-event subjects
+//! and pre-filters in-process to `staging-*` nets.
 //!
-//! Modeled on `service/src/projections/allocations/consumer.rs`, but simpler:
-//! a staging net fires `stage_template` exactly once, so the projector yields at
-//! most ONE terminal update per net. The update always sets a TERMINAL status
-//! (the projector never emits `staging`), and the net id (`staging-<row-id>`)
-//! targets exactly one row, so the `UPDATE … WHERE id = $1` is naturally
-//! idempotent under replay — no `last_sequence` guard column is needed.
-//!
-//! We cheaply pre-filter to `staging-` nets by the subject's net_id segment so
-//! the (much larger) workflow/pool-net event firehose is ignored without a
-//! buffer entry.
+//! The update always sets a TERMINAL status (the projector never emits
+//! `staging`), and the net id (`staging-<row-id>`) targets exactly one row,
+//! so the `UPDATE … WHERE id = $1` is naturally idempotent under replay.
 
-use std::collections::HashMap;
+use std::time::Duration;
 
-use futures::StreamExt;
+use async_trait::async_trait;
 use sqlx::PgPool;
 
-use petri_domain::{DomainEvent, PersistedEvent};
+use petri_domain::PersistedEvent;
 
-use crate::nats::MekhanNats;
-use crate::observability::record_silent_drop_with;
-use crate::petri::events::fetch_events;
+use crate::nats::subjects::{
+    Subjects, EFFECT_COMPLETED_EVENTS_FILTER, EFFECT_FAILED_EVENTS_FILTER,
+};
+use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
+use crate::projections::framework::{run_projection, BootstrapPolicy, LazyHistory, Projection};
 
 use super::projector::{project_staging, StagingUpdate};
 
-/// Upper bound on simultaneously-buffered staging nets. Terminal nets are
-/// evicted eagerly; staging runs are short-lived so this rarely fills.
-const MAX_BUFFERED_NETS: usize = 256;
+struct TemplateStagingsProjection;
 
-struct NetBuffer {
-    events: Vec<PersistedEvent>,
+#[async_trait]
+impl Projection for TemplateStagingsProjection {
+    type State = ();
+
+    fn name(&self) -> &'static str {
+        "template_stagings"
+    }
+
+    fn spec(&self, _nats: &MekhanNats) -> ConsumerSpec {
+        ConsumerSpec {
+            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
+            durable_base: "mekhan-template-stagings-v2",
+            filter_subjects: vec![
+                EFFECT_COMPLETED_EVENTS_FILTER.into(),
+                EFFECT_FAILED_EVENTS_FILTER.into(),
+            ],
+            ack_wait: Some(Duration::from_secs(120)),
+            // Reap the durable if this projection is ever removed (see the
+            // step-executions projection spec for the incident rationale).
+            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
+            migrate_from: Some("mekhan-template-stagings"),
+        }
+    }
+
+    fn wants_net(&self, net_id: &str) -> bool {
+        net_id.starts_with("staging-")
+    }
+
+    fn bootstrap_policy(&self) -> BootstrapPolicy {
+        BootstrapPolicy::Stateless
+    }
+
+    async fn bootstrap(
+        &self,
+        _db: &PgPool,
+        _net_id: &str,
+        _history: &LazyHistory<'_>,
+    ) -> anyhow::Result<Option<()>> {
+        Ok(None)
+    }
+
+    async fn apply(
+        &self,
+        _db: &PgPool,
+        _net_id: &str,
+        _state: &mut (),
+        _ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn apply_stateless(
+        &self,
+        db: &PgPool,
+        net_id: &str,
+        ev: &PersistedEvent,
+    ) -> anyhow::Result<()> {
+        if let Some(update) = project_staging(std::slice::from_ref(ev), net_id) {
+            apply_update(db, &update).await?;
+        }
+        Ok(())
+    }
 }
 
 /// Start the template-stagings ingest consumer. Spawned alongside the other
 /// projection consumers in `main.rs`. Runs until the message stream ends.
 pub async fn start_template_stagings_ingest(nats: MekhanNats, db: PgPool) {
-    let consumer = match nats.template_stagings_consumer().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("failed to create template_stagings consumer: {e}");
-            return;
-        }
-    };
-
-    let mut messages = match consumer.messages().await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("failed to start template_stagings message stream: {e}");
-            return;
-        }
-    };
-
-    tracing::info!("template_stagings ingest started on petri.events.> (staging-* nets)");
-
-    let mut buffers: HashMap<String, NetBuffer> = HashMap::new();
-
-    while let Some(msg_result) = messages.next().await {
-        let msg = match msg_result {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("template_stagings ingest message error: {e}");
-                continue;
-            }
-        };
-
-        let subject = msg.subject.as_str();
-        let result = process_event(&nats, &db, &mut buffers, subject, &msg.payload).await;
-
-        match result {
-            Ok(()) => {
-                let _ = msg.ack().await;
-            }
-            Err(e) => {
-                tracing::error!(subject = %subject, "template_stagings processing failed: {e}");
-                let _ = msg
-                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
-                        std::time::Duration::from_secs(2),
-                    )))
-                    .await;
-            }
-        }
-    }
-
-    tracing::warn!("template_stagings ingest stream ended");
-}
-
-async fn process_event(
-    nats: &MekhanNats,
-    db: &PgPool,
-    buffers: &mut HashMap<String, NetBuffer>,
-    subject: &str,
-    payload: &[u8],
-) -> anyhow::Result<()> {
-    // Subject: petri.events.{net_id}.> — only staging nets are our concern.
-    let Some(net_id) = subject.split('.').nth(2) else {
-        return Ok(());
-    };
-    if !net_id.starts_with("staging-") {
-        return Ok(());
-    }
-
-    let incoming: PersistedEvent = match serde_json::from_slice(payload) {
-        Ok(p) => p,
-        Err(e) => {
-            record_silent_drop_with(
-                "template_stagings_envelope",
-                &e,
-                serde_json::json!({ "subject": subject, "net_id": net_id }),
-                Some(payload),
-            );
-            return Ok(());
-        }
-    };
-
-    let is_terminal = matches!(
-        incoming.event,
-        DomainEvent::NetCompleted { .. }
-            | DomainEvent::NetCancelled { .. }
-            | DomainEvent::NetFailed { .. }
-    );
-
-    if !buffers.contains_key(net_id) {
-        let events = fetch_events(nats, net_id).await?;
-        if buffers.len() >= MAX_BUFFERED_NETS {
-            if let Some(victim) = buffers.keys().next().cloned() {
-                buffers.remove(&victim);
-            }
-        }
-        buffers.insert(net_id.to_string(), NetBuffer { events });
-    } else {
-        let buf = buffers.get_mut(net_id).expect("contains_key checked");
-        if !buf.events.iter().any(|e| e.sequence == incoming.sequence) {
-            buf.events.push(incoming);
-            buf.events.sort_by_key(|e| e.sequence);
-        }
-    }
-
-    let buf = buffers.get(net_id).expect("inserted/hit above");
-    if let Some(update) = project_staging(&buf.events, net_id) {
-        apply_update(db, &update).await?;
-    }
-
-    if is_terminal {
-        buffers.remove(net_id);
-    }
-    Ok(())
+    run_projection(TemplateStagingsProjection, nats, db).await;
 }
 
 /// Apply a terminal staging outcome to its `template_stagings` row. Sets the
@@ -175,4 +122,85 @@ async fn apply_update(db: &PgPool, update: &StagingUpdate) -> Result<(), sqlx::E
     .execute(db)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use petri_domain::{DomainEvent, TransitionId};
+
+    use super::*;
+    use crate::projections::framework::subject_matches;
+
+    fn filters() -> Vec<String> {
+        vec![
+            EFFECT_COMPLETED_EVENTS_FILTER.into(),
+            EFFECT_FAILED_EVENTS_FILTER.into(),
+        ]
+    }
+
+    /// Every `DomainEvent` variant `project_staging` matches must be covered
+    /// by the durable's server-side filter list, or the projection would
+    /// silently stop seeing its own input.
+    #[test]
+    fn filter_list_covers_every_projected_variant() {
+        let matched_variants = [
+            DomainEvent::EffectCompleted {
+                transition_id: TransitionId("t_stage".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "stage_template".into(),
+                effect_result: serde_json::json!({}),
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            DomainEvent::EffectFailed {
+                transition_id: TransitionId("t_stage".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "stage_template".into(),
+                error_message: "boom".into(),
+                tokens_consumed: true,
+                input_data: None,
+                retryable: false,
+            },
+        ];
+
+        for event in matched_variants {
+            let subject = Subjects::for_event(&event, Some("staging-x"));
+            assert!(
+                filters().iter().any(|f| subject_matches(f, &subject)),
+                "no filter matches {subject}"
+            );
+        }
+    }
+
+    /// The pure projector must actually fire on a single matching event —
+    /// the stateless path hands it `&[ev]`, never a buffered log.
+    #[test]
+    fn single_event_projects_standalone() {
+        let ev = PersistedEvent {
+            sequence: 7,
+            timestamp: Utc::now(),
+            event: DomainEvent::EffectFailed {
+                transition_id: TransitionId("t_stage".into()),
+                transition_name: None,
+                consumed_tokens: vec![],
+                produced_tokens: vec![],
+                effect_handler_id: "stage_template".into(),
+                error_message: "missing request.slug".into(),
+                tokens_consumed: true,
+                input_data: None,
+                retryable: false,
+            },
+            hash: String::new(),
+            previous_hash: None,
+        };
+        let net = "staging-33333333-3333-3333-3333-333333333333";
+        let update = project_staging(std::slice::from_ref(&ev), net).expect("update");
+        assert_eq!(update.status, "failed");
+    }
 }
