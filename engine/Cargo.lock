@@ -3503,6 +3503,7 @@ dependencies = [
  "config",
  "futures",
  "parking_lot",
+ "petri-api-types",
  "petri-application",
  "petri-domain",
  "petri-infrastructure",
