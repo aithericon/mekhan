@@ -26,20 +26,45 @@
 		getAssetUsage,
 		putAssetRecords,
 		uploadAssetFile,
+		moveAsset,
 		type AssetSummary,
 		type AssetTypeDetail,
 		type PaginatedAssetUsage,
-		type PortField
+		type PortField,
+		type ScopeContext
 	} from '$lib/api/assets';
+	import { roleAtLeast } from '$lib/api/iam';
+	import MoveLocationField from '$lib/components/iam/MoveLocationField.svelte';
 
 	type Props = {
 		open: boolean;
 		/** The asset to edit. */
 		asset: AssetSummary | null;
 		onsaved: () => void;
+		/** Refresh the underlying list after a scope move WITHOUT closing the
+		 *  sheet (unlike `onsaved`, which closes). Defaults to `onsaved`. */
+		onmoved?: () => void;
 	};
 
-	let { open = $bindable(), asset, onsaved }: Props = $props();
+	let { open = $bindable(), asset, onsaved, onmoved }: Props = $props();
+
+	// The asset's owner scope, as a ScopeContext for the move control. Seeded
+	// from the asset and updated optimistically on a successful move.
+	function scopeOf(a: AssetSummary | null): ScopeContext {
+		if (!a || a.scope_kind === 'workspace') return { kind: 'workspace' };
+		return { kind: a.scope_kind as 'folder' | 'template', id: a.scope_id };
+	}
+	// Seeded by the open-effect when an asset loads (avoids capturing only the
+	// initial prop value); updated optimistically on a successful move.
+	let currentScope = $state<ScopeContext>({ kind: 'workspace' });
+	const canMove = $derived(roleAtLeast(asset?.my_effective_role, 'editor'));
+
+	async function moveTo(next: ScopeContext) {
+		if (!asset) return;
+		await moveAsset(asset.id, next);
+		currentScope = next;
+		(onmoved ?? onsaved)();
+	}
 
 	let type = $state<AssetTypeDetail | null>(null);
 	let rows = $state<Record<string, unknown>[]>([]);
@@ -66,6 +91,7 @@
 		}
 		if (loadedFor === asset.id) return;
 		loadedFor = asset.id;
+		currentScope = scopeOf(asset);
 		void bootstrap(asset);
 	});
 
@@ -171,6 +197,12 @@
 			{#if error}
 				<div class="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
 					{error}
+				</div>
+			{/if}
+
+			{#if asset && canMove}
+				<div class="mb-4">
+					<MoveLocationField scope={currentScope} onMove={moveTo} testid="asset-move" />
 				</div>
 			{/if}
 

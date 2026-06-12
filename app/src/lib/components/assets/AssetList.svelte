@@ -95,8 +95,8 @@
 		error = null;
 		try {
 			const [t, a] = await Promise.all([
-				listAssetTypes({ scope }),
-				listAssets({ scope, type_id: typeFilter || undefined })
+				listAssetTypes({ scope, exact: true }),
+				listAssets({ scope, type_id: typeFilter || undefined, exact: true })
 			]);
 			types = t.items;
 			assets = a.items;
@@ -399,7 +399,13 @@
 	</Tabs.Root>
 </div>
 
-<AssetTypeBuilder bind:open={typeBuilderOpen} typeId={editingTypeId} {scope} onsaved={onTypeSaved} />
+<AssetTypeBuilder
+	bind:open={typeBuilderOpen}
+	typeId={editingTypeId}
+	{scope}
+	onsaved={onTypeSaved}
+	onmoved={load}
+/>
 <AssetCreateSheet
 	bind:open={createOpen}
 	{types}
@@ -407,7 +413,7 @@
 	defaultScope={scope}
 	oncreated={onAssetCreated}
 />
-<AssetEditor bind:open={editorOpen} asset={editingAsset} onsaved={onAssetSaved} />
+<AssetEditor bind:open={editorOpen} asset={editingAsset} onsaved={onAssetSaved} onmoved={load} />
 <CsvImport bind:open={csvOpen} asset={csvAsset} onsaved={onAssetSaved} />
 
 {#if shareAsset}

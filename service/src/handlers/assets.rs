@@ -41,7 +41,7 @@ use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
     AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
     CreateScopeQuery, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
-    ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
+    MoveScopeRequest, ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{PaginatedResponse, Port, PortField};
@@ -345,29 +345,37 @@ pub async fn list_asset_types(
     Query(params): Query<ListAssetTypesQuery>,
 ) -> Result<Json<PaginatedResponse<AssetTypeSummary>>, ApiError> {
     let (kind, scope_id) = parse_scope(&user, params.scope.as_deref())?;
-    let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
 
-    // Fetch every candidate owned by a visible scope, then resolve.
-    let rows = fetch_visible_asset_type_rows(&state.db, &visible).await?;
-    let items: Vec<ScopedItem<AssetTypeRow>> = rows
-        .into_iter()
-        .filter_map(|r| {
-            let scope = row_scope(&r.scope_kind, r.scope_id)?;
-            Some(ScopedItem {
-                scope,
-                ref_key: r.name.clone(),
-                item: r,
+    // Exact placement filter (management browser): only types owned by this one
+    // scope. Otherwise the downward-visible, most-specific-wins set (node picker).
+    let mut summaries: Vec<AssetTypeSummary> = if params.exact == Some(true) {
+        fetch_exact_asset_type_rows(&state.db, kind, scope_id)
+            .await?
+            .into_iter()
+            .map(AssetTypeSummary::from)
+            .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
+            .collect()
+    } else {
+        let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
+        let rows = fetch_visible_asset_type_rows(&state.db, &visible).await?;
+        let items: Vec<ScopedItem<AssetTypeRow>> = rows
+            .into_iter()
+            .filter_map(|r| {
+                let scope = row_scope(&r.scope_kind, r.scope_id)?;
+                Some(ScopedItem {
+                    scope,
+                    ref_key: r.name.clone(),
+                    item: r,
+                })
             })
-        })
-        .collect();
-
-    let resolved = scope::resolve_visible(&visible, items).map_err(clash_to_api_error)?;
-
-    let mut summaries: Vec<AssetTypeSummary> = resolved
-        .into_values()
-        .map(|si| AssetTypeSummary::from(si.item))
-        .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
-        .collect();
+            .collect();
+        let resolved = scope::resolve_visible(&visible, items).map_err(clash_to_api_error)?;
+        resolved
+            .into_values()
+            .map(|si| AssetTypeSummary::from(si.item))
+            .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
+            .collect()
+    };
     summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(Json(paginate(summaries, params.page, params.per_page)))
@@ -632,6 +640,68 @@ pub async fn delete_asset_type(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `PATCH /api/v1/asset-types/{id}/scope` — reparent a type to a different owner
+/// scope (docs/20 §2). Editor-gated on BOTH the current scope and the target,
+/// matching `create_asset_type`'s membership-floor placement gate. The type's
+/// `name` must be free in the target scope (else 409). Existing assets reference
+/// the type by id, so they are unaffected by the move.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/asset-types/{id}/scope",
+    params(("id" = Uuid, Path, description = "Asset type id")),
+    request_body = MoveScopeRequest,
+    responses(
+        (status = 200, description = "Asset type moved", body = AssetTypeDetail),
+        (status = 403, description = "Editor role required on source or target", body = ErrorResponse),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "Name already exists in target scope", body = ErrorResponse),
+    ),
+    tag = "assets",
+)]
+pub async fn move_asset_type(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<MoveScopeRequest>,
+) -> Result<Json<AssetTypeDetail>, ApiError> {
+    let row = fetch_asset_type(&state.db, id).await?;
+    let src_kind = ScopeKind::from_db(&row.scope_kind)
+        .ok_or_else(|| ApiError::internal("asset type has invalid scope_kind"))?;
+    // Source gate: Editor on the type's current scope.
+    require_editor(&state, &user, src_kind, row.scope_id).await?;
+    // Target gate: Editor on the destination (same membership floor as create).
+    let (scope_kind, scope_id) = create_scope(&user, Some(req.scope_kind), req.scope_id)?;
+    require_editor(&state, &user, scope_kind, scope_id).await?;
+
+    if (scope_kind, scope_id) != (src_kind, row.scope_id) {
+        let res = sqlx::query(
+            "UPDATE asset_types SET scope_kind = $1, scope_id = $2, updated_at = NOW(), \
+                 updated_by = $3 \
+             WHERE id = $4 AND deleted_at IS NULL",
+        )
+        .bind(scope_kind.as_db())
+        .bind(scope_id)
+        .bind(user.subject_as_uuid())
+        .bind(id)
+        .execute(&state.db)
+        .await;
+        if let Err(e) = res {
+            if let Some(db_err) = e.as_database_error() {
+                if db_err.is_unique_violation() {
+                    return Err(ApiError::conflict(format!(
+                        "asset type name '{}' already exists in the target scope",
+                        row.name
+                    )));
+                }
+            }
+            return Err(ApiError::internal(e.to_string()));
+        }
+    }
+
+    let fresh = fetch_asset_type(&state.db, id).await?;
+    Ok(Json(asset_type_detail(fresh)?))
+}
+
 // ═════════════════════════════ ASSETS ═══════════════════════════════════════
 
 /// `GET /api/v1/assets?type_id=&scope=&folder=` — scope-resolved list.
@@ -652,33 +722,42 @@ pub async fn list_assets(
     Query(params): Query<ListAssetsQuery>,
 ) -> Result<Json<PaginatedResponse<AssetSummary>>, ApiError> {
     let (kind, scope_id) = parse_scope(&user, params.scope.as_deref())?;
-    let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
 
-    let rows = fetch_visible_asset_rows(&state.db, &visible, params.type_id).await?;
-    let items: Vec<ScopedItem<AssetRow>> = rows
-        .into_iter()
-        .filter_map(|r| {
-            let scope = row_scope(&r.scope_kind, r.scope_id)?;
-            Some(ScopedItem {
-                scope,
-                ref_key: r.ref_key.clone(),
-                item: r,
+    // Exact placement filter (management browser) vs. downward-visible set.
+    let (mut summaries, workspace_id): (Vec<AssetSummary>, Uuid) = if params.exact == Some(true) {
+        let summaries = fetch_exact_asset_rows(&state.db, kind, scope_id, params.type_id)
+            .await?
+            .into_iter()
+            .map(AssetSummary::from)
+            .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
+            .collect();
+        (summaries, caller_workspace(&user))
+    } else {
+        let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
+        let rows = fetch_visible_asset_rows(&state.db, &visible, params.type_id).await?;
+        let items: Vec<ScopedItem<AssetRow>> = rows
+            .into_iter()
+            .filter_map(|r| {
+                let scope = row_scope(&r.scope_kind, r.scope_id)?;
+                Some(ScopedItem {
+                    scope,
+                    ref_key: r.ref_key.clone(),
+                    item: r,
+                })
             })
-        })
-        .collect();
-
-    let resolved = scope::resolve_visible(&visible, items).map_err(clash_to_api_error)?;
-
-    let mut summaries: Vec<AssetSummary> = resolved
-        .into_values()
-        .map(|si| AssetSummary::from(si.item))
-        .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
-        .collect();
+            .collect();
+        let resolved = scope::resolve_visible(&visible, items).map_err(clash_to_api_error)?;
+        let summaries = resolved
+            .into_values()
+            .map(|si| AssetSummary::from(si.item))
+            .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
+            .collect();
+        (summaries, visible.workspace.unwrap_or(scope_id))
+    };
     summaries.sort_by(|a, b| a.ref_key.cmp(&b.ref_key));
 
     // Object-ACL: stamp the caller's effective role and DROP assets they can't
     // reach (a restricted asset with no grant is absent from the role map).
-    let workspace_id = visible.workspace.unwrap_or(scope_id);
     let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
     let roles = effective_object_roles(&state.db, &user, ObjectKind::Asset, workspace_id, &ids)
         .await
@@ -1164,6 +1243,87 @@ pub async fn delete_asset(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `PATCH /api/v1/assets/{id}/scope` — reparent an asset to a different owner
+/// scope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the asset itself
+/// (object ACL) to move it OUT, and the `create_asset` placement gate on the
+/// target to drop it IN. The asset's own grants (incl. the creator's Owner
+/// grant) ride along — only the inheritance parent changes. `ref_key` must be
+/// free in the target scope (else 409).
+#[utoipa::path(
+    patch,
+    path = "/api/v1/assets/{id}/scope",
+    params(("id" = Uuid, Path, description = "Asset id")),
+    request_body = MoveScopeRequest,
+    responses(
+        (status = 200, description = "Asset moved", body = AssetSummary),
+        (status = 403, description = "Editor role required on source or target", body = ErrorResponse),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "ref_key already exists in target scope", body = ErrorResponse),
+    ),
+    tag = "assets",
+)]
+pub async fn move_asset(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<MoveScopeRequest>,
+) -> Result<Json<AssetSummary>, ApiError> {
+    let row = fetch_asset(&state.db, id).await?;
+    // Source gate: Editor on the asset (object ACL) to move it out.
+    require_object_role(&state.db, &user, ObjectRef::asset(id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
+    // Target gate: Editor on the destination scope (create_asset placement rule).
+    let (scope_kind, scope_id) = create_scope(&user, Some(req.scope_kind), req.scope_id)?;
+    require_asset_placement(&state, &user, scope_kind, scope_id).await?;
+
+    if (scope_kind, scope_id)
+        != (
+            ScopeKind::from_db(&row.scope_kind).unwrap_or(ScopeKind::Workspace),
+            row.scope_id,
+        )
+    {
+        let res = sqlx::query(
+            "UPDATE assets SET scope_kind = $1, scope_id = $2, updated_at = NOW(), \
+                 updated_by = $3 \
+             WHERE id = $4 AND deleted_at IS NULL",
+        )
+        .bind(scope_kind.as_db())
+        .bind(scope_id)
+        .bind(user.subject_as_uuid())
+        .bind(id)
+        .execute(&state.db)
+        .await;
+        if let Err(e) = res {
+            if let Some(db_err) = e.as_database_error() {
+                if db_err.is_unique_violation() {
+                    return Err(ApiError::conflict(format!(
+                        "asset ref_key '{}' already exists in the target scope",
+                        row.ref_key
+                    )));
+                }
+            }
+            return Err(ApiError::internal(e.to_string()));
+        }
+    }
+
+    // Re-stamp the caller's effective role at the new scope (non-fatal: a move
+    // into a restricted container the caller can't read yields None, like list).
+    let fresh = fetch_asset(&state.db, id).await?;
+    let mut summary = AssetSummary::from(fresh);
+    let roles = effective_object_roles(
+        &state.db,
+        &user,
+        ObjectKind::Asset,
+        caller_workspace(&user),
+        &[id],
+    )
+    .await
+    .map_err(map_to_api_error)?;
+    summary.my_effective_role = roles.get(&id).map(|r| r.as_label().to_string());
+    Ok(Json(summary))
+}
+
 /// Internal `FromRow` for the usage query — the instance columns plus the raw
 /// `asset_pins` map, from which we extract the matching alias + version.
 #[derive(sqlx::FromRow)]
@@ -1429,6 +1589,57 @@ async fn fetch_visible_asset_rows(
     Ok(rows)
 }
 
+/// All `asset_types` owned by EXACTLY one scope — the placement filter the
+/// management browser uses (vs. the downward-visible set). No most-specific-wins
+/// resolution: a single scope's ref-keys are unique, so the rows map straight
+/// to summaries.
+async fn fetch_exact_asset_type_rows(
+    db: &sqlx::PgPool,
+    kind: ScopeKind,
+    scope_id: Uuid,
+) -> Result<Vec<AssetTypeRow>, ApiError> {
+    let rows = sqlx::query_as::<_, AssetTypeRow>(
+        "SELECT * FROM asset_types \
+         WHERE deleted_at IS NULL AND scope_kind = $1 AND scope_id = $2",
+    )
+    .bind(kind.as_db())
+    .bind(scope_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// All `assets` owned by EXACTLY one scope, optionally type-filtered (the
+/// placement filter — see [`fetch_exact_asset_type_rows`]).
+async fn fetch_exact_asset_rows(
+    db: &sqlx::PgPool,
+    kind: ScopeKind,
+    scope_id: Uuid,
+    type_id: Option<Uuid>,
+) -> Result<Vec<AssetRow>, ApiError> {
+    let rows = if let Some(tid) = type_id {
+        sqlx::query_as::<_, AssetRow>(
+            "SELECT * FROM assets \
+             WHERE deleted_at IS NULL AND scope_kind = $1 AND scope_id = $2 AND type_id = $3",
+        )
+        .bind(kind.as_db())
+        .bind(scope_id)
+        .bind(tid)
+        .fetch_all(db)
+        .await?
+    } else {
+        sqlx::query_as::<_, AssetRow>(
+            "SELECT * FROM assets \
+             WHERE deleted_at IS NULL AND scope_kind = $1 AND scope_id = $2",
+        )
+        .bind(kind.as_db())
+        .bind(scope_id)
+        .fetch_all(db)
+        .await?
+    };
+    Ok(rows)
+}
+
 /// Flatten a [`VisibleScopes`] into parallel `(kind, id)` arrays for the
 /// `UNNEST(...)` membership filter.
 fn visible_pairs(visible: &VisibleScopes) -> (Vec<String>, Vec<Uuid>) {
@@ -1518,6 +1729,33 @@ async fn require_editor(
         // single-tenant dev stack keeps working, identical to resources.
         Err(MembershipError::NotMember(_)) => Ok(()),
         Err(other) => Err(map_to_api_error(other)),
+    }
+}
+
+/// Editor-on-the-target-scope gate for an ASSET placement (create or move),
+/// identical to the `create_asset` gate: workspace scope uses the membership
+/// floor; folder/template scopes use the object ACL so a restricted container's
+/// grants govern who can drop assets into it.
+async fn require_asset_placement(
+    state: &AppState,
+    user: &AuthUser,
+    scope_kind: ScopeKind,
+    scope_id: Uuid,
+) -> Result<(), ApiError> {
+    match scope_kind {
+        ScopeKind::Workspace => require_editor(state, user, scope_kind, scope_id).await,
+        ScopeKind::Folder => {
+            require_object_role(&state.db, user, ObjectRef::folder(scope_id), Role::Editor)
+                .await
+                .map(|_| ())
+                .map_err(map_to_api_error)
+        }
+        ScopeKind::Template => {
+            require_object_role(&state.db, user, ObjectRef::template(scope_id), Role::Editor)
+                .await
+                .map(|_| ())
+                .map_err(map_to_api_error)
+        }
     }
 }
 

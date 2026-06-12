@@ -408,6 +408,12 @@ pub struct ListAssetTypesQuery {
     pub scope: Option<String>,
     /// Optional virtual-folder prefix filter on `display_path`.
     pub folder: Option<String>,
+    /// When `true`, return only types owned by EXACTLY the `scope` (placement
+    /// filter), not the downward-visible most-specific-wins set. The management
+    /// browser uses this so a folder shows what is *placed in* it; the node
+    /// picker/compiler leaves it off to get the full visible set.
+    #[serde(default)]
+    pub exact: Option<bool>,
 }
 
 /// Query params for `GET /api/v1/assets`.
@@ -424,6 +430,22 @@ pub struct ListAssetsQuery {
     pub scope: Option<String>,
     /// Optional virtual-folder prefix filter on `display_path`.
     pub folder: Option<String>,
+    /// When `true`, return only assets owned by EXACTLY the `scope` (placement
+    /// filter) — see [`ListAssetTypesQuery::exact`].
+    #[serde(default)]
+    pub exact: Option<bool>,
+}
+
+/// Request body for the scope-move endpoints (`PATCH …/{id}/scope`). Reparents
+/// an asset / asset type / resource to a different owner scope (docs/20 §2).
+/// `scope_id` is required for `folder`/`template`; for `workspace` it defaults
+/// to the caller's workspace. Authorization re-checks editor rights on BOTH the
+/// current owner scope and the target.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct MoveScopeRequest {
+    pub scope_kind: ScopeKind,
+    #[serde(default)]
+    pub scope_id: Option<Uuid>,
 }
 
 /// Query params for `GET /api/v1/assets/{id}` record pagination.

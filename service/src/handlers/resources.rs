@@ -740,21 +740,29 @@ async fn list_resources_scoped(
 
     let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
 
-    // Gather candidates owned by any visible scope.
-    let mut kinds: Vec<String> = Vec::new();
-    let mut ids: Vec<Uuid> = Vec::new();
-    if let Some(ws) = visible.workspace {
-        kinds.push("workspace".to_string());
-        ids.push(ws);
-    }
-    for p in &visible.folders {
-        kinds.push("folder".to_string());
-        ids.push(*p);
-    }
-    if let Some(t) = visible.template {
-        kinds.push("template".to_string());
-        ids.push(t);
-    }
+    // Gather candidate owner scopes. Exact mode (the management browser) restricts
+    // to the single requested scope, so a folder shows only resources placed in it
+    // and the workspace root shows only workspace-scoped resources. Otherwise the
+    // full downward-visible chain (node picker / compiler).
+    let (kinds, ids): (Vec<String>, Vec<Uuid>) = if params.exact == Some(true) {
+        (vec![kind.as_db().to_string()], vec![scope_id])
+    } else {
+        let mut kinds: Vec<String> = Vec::new();
+        let mut ids: Vec<Uuid> = Vec::new();
+        if let Some(ws) = visible.workspace {
+            kinds.push("workspace".to_string());
+            ids.push(ws);
+        }
+        for p in &visible.folders {
+            kinds.push("folder".to_string());
+            ids.push(*p);
+        }
+        if let Some(t) = visible.template {
+            kinds.push("template".to_string());
+            ids.push(t);
+        }
+        (kinds, ids)
+    };
     if kinds.is_empty() {
         return Ok(Json(PaginatedResponse {
             items: Vec::new(),
@@ -1385,6 +1393,8 @@ pub async fn get_resource(
             .collect(),
         my_effective_role: Some(role.as_label().to_string()),
         restricted: row.restricted,
+        scope_kind: row.scope_kind,
+        scope_id: row.scope_id,
     };
     Ok(Json(detail))
 }
@@ -1599,6 +1609,126 @@ pub async fn delete_resource(
     .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PATCH /api/v1/resources/{id}/scope` — reparent a resource to a different
+/// owner scope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the resource
+/// (object ACL) to move it out, and the `create_resource` placement gate on the
+/// target. The resource keeps its `workspace_id`, version history, Vault paths,
+/// and object grants — only `(scope_kind, scope_id)` (the inheritance parent)
+/// changes. `path` must be free in the target scope (else 409).
+#[utoipa::path(
+    patch,
+    path = "/api/v1/resources/{id}/scope",
+    params(("id" = Uuid, Path, description = "Resource id")),
+    request_body = crate::models::asset::MoveScopeRequest,
+    responses(
+        (status = 200, description = "Resource moved", body = ResourceSummary),
+        (status = 403, description = "Editor role required on source or target", body = ErrorResponse),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+        (status = 409, description = "path already exists in target scope", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn move_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<crate::models::asset::MoveScopeRequest>,
+) -> Result<Json<ResourceSummary>, ApiError> {
+    use crate::models::asset::ScopeKind;
+
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    // Source gate: Editor on the resource (object ACL) to move it out.
+    require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+        .await
+        .map_err(map_to_api_error)?;
+
+    // Resolve + authorize the target scope (create_resource placement rule).
+    let target_kind = req.scope_kind;
+    let target_id = match target_kind {
+        ScopeKind::Workspace => req.scope_id.unwrap_or(row.workspace_id),
+        _ => req.scope_id.ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "scope_id is required for scope_kind '{}'",
+                target_kind.as_db()
+            ))
+        })?,
+    };
+    match target_kind {
+        ScopeKind::Workspace => require_role(&state.db, &user, target_id, Role::Editor)
+            .await
+            .map_err(map_to_api_error)?,
+        ScopeKind::Folder => {
+            require_object_role(&state.db, &user, ObjectRef::folder(target_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?
+        }
+        ScopeKind::Template => {
+            require_object_role(&state.db, &user, ObjectRef::template(target_id), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?
+        }
+    };
+
+    if (target_kind.as_db(), Some(target_id)) != (row.scope_kind.as_str(), row.scope_id) {
+        let res = sqlx::query(
+            "UPDATE resources SET scope_kind = $1, scope_id = $2, updated_at = NOW(), \
+                 updated_by = $3 \
+             WHERE id = $4 AND deleted_at IS NULL",
+        )
+        .bind(target_kind.as_db())
+        .bind(target_id)
+        .bind(user.subject_as_uuid())
+        .bind(row.id)
+        .execute(&state.db)
+        .await;
+        if let Err(e) = res {
+            if let Some(db_err) = e.as_database_error() {
+                if db_err.is_unique_violation() {
+                    return Err(ApiError::conflict(format!(
+                        "resource path '{}' already exists in the target scope",
+                        row.path
+                    )));
+                }
+            }
+            return Err(ApiError::internal(e.to_string()));
+        }
+    }
+
+    // Rebuild the summary at the new scope, re-stamping the caller's role
+    // (non-fatal: None if the move lands it somewhere they can't read, like list).
+    let fresh = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    let dyn_keys = fetch_dynamic_keys(&state.db, std::slice::from_ref(&fresh)).await?;
+    let capacity_public =
+        fetch_capacity_public_config(&state.db, std::slice::from_ref(&fresh)).await?;
+    let mut summary = rows_to_summaries(vec![fresh], &dyn_keys, &capacity_public)
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("resource vanished after move"))?;
+    let roles = effective_object_roles(
+        &state.db,
+        &user,
+        ObjectKind::Resource,
+        caller_workspace(&user),
+        &[id],
+    )
+    .await
+    .map_err(map_to_api_error)?;
+    summary.my_effective_role = roles.get(&id).map(|r| r.as_label().to_string());
+    Ok(Json(summary))
 }
 
 /// `POST /api/v1/resources/{id}/rotate` — write a new version. Identical to

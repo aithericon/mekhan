@@ -18,10 +18,12 @@
 		createAssetType,
 		getAssetType,
 		updateAssetType,
+		moveAssetType,
 		type Cardinality,
 		type PortField,
 		type ScopeContext
 	} from '$lib/api/assets';
+	import MoveLocationField from '$lib/components/iam/MoveLocationField.svelte';
 
 	type Props = {
 		open: boolean;
@@ -29,9 +31,11 @@
 		typeId: string | null;
 		scope: ScopeContext;
 		onsaved: () => void;
+		/** Refresh the list after a scope move without closing. Defaults to `onsaved`. */
+		onmoved?: () => void;
 	};
 
-	let { open = $bindable(), typeId, scope, onsaved }: Props = $props();
+	let { open = $bindable(), typeId, scope, onsaved, onmoved }: Props = $props();
 
 	let mode = $state<'create' | 'edit'>('create');
 	let name = $state('');
@@ -42,6 +46,16 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let lastLoaded = $state<string | null | undefined>(undefined);
+	// The loaded type's owner scope (edit mode), for the move control. Seeded in
+	// `bootstrap` and updated optimistically on a successful move.
+	let editScope = $state<ScopeContext>({ kind: 'workspace' });
+
+	async function moveTo(next: ScopeContext) {
+		if (!typeId) return;
+		await moveAssetType(typeId, next);
+		editScope = next;
+		(onmoved ?? onsaved)();
+	}
 
 	// Mirror the server-side ref-key grammar (^[a-z][a-z0-9_]*$). The asset type
 	// name is the flat identifier referenced from bindings, like a resource path.
@@ -87,6 +101,10 @@
 			displayPath = detail.display_path ?? '';
 			cardinality = (detail.cardinality as Cardinality) ?? 'collection';
 			fields = [...detail.fields];
+			editScope =
+				detail.scope_kind === 'workspace'
+					? { kind: 'workspace' }
+					: { kind: detail.scope_kind as 'folder' | 'template', id: detail.scope_id };
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load asset type';
 		} finally {
@@ -200,6 +218,10 @@
 			{/if}
 
 			<div class="space-y-4">
+				{#if mode === 'edit'}
+					<MoveLocationField scope={editScope} onMove={moveTo} testid="asset-type-move" />
+				{/if}
+
 				<FormField label="Type name (ref-key)" for="asset-type-name">
 					<Input
 						id="asset-type-name"

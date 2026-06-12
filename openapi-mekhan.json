@@ -454,6 +454,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "exact",
+            "in": "query",
+            "description": "When `true`, return only types owned by EXACTLY the `scope` (placement\nfilter), not the downward-visible most-specific-wins set. The management\nbrowser uses this so a folder shows what is *placed in* it; the node\npicker/compiler leaves it off to get the full visible set.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -731,6 +743,79 @@
         }
       }
     },
+    "/api/v1/asset-types/{id}/scope": {
+      "patch": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "`PATCH /api/v1/asset-types/{id}/scope` — reparent a type to a different owner\nscope (docs/20 §2). Editor-gated on BOTH the current scope and the target,\nmatching `create_asset_type`'s membership-floor placement gate. The type's\n`name` must be free in the target scope (else 409). Existing assets reference\nthe type by id, so they are unaffected by the move.",
+        "operationId": "move_asset_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Asset type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Asset type moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetTypeDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required on source or target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already exists in target scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/assets": {
       "get": {
         "tags": [
@@ -790,6 +875,18 @@
             "schema": {
               "type": [
                 "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "exact",
+            "in": "query",
+            "description": "When `true`, return only assets owned by EXACTLY the `scope` (placement\nfilter) — see [`ListAssetTypesQuery::exact`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
                 "null"
               ]
             }
@@ -1462,6 +1559,79 @@
           },
           "422": {
             "description": "Record validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets/{id}/scope": {
+      "patch": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "`PATCH /api/v1/assets/{id}/scope` — reparent an asset to a different owner\nscope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the asset itself\n(object ACL) to move it OUT, and the `create_asset` placement gate on the\ntarget to drop it IN. The asset's own grants (incl. the creator's Owner\ngrant) ride along — only the inheritance parent changes. `ref_key` must be\nfree in the target scope (else 409).",
+        "operationId": "move_asset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Asset id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Asset moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required on source or target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ref_key already exists in target scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -8808,6 +8978,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "exact",
+            "in": "query",
+            "description": "When `true` (with `scope`), return only resources owned by EXACTLY that\nscope (placement filter), not the downward-visible most-specific-wins\nset. The management browser uses this so a folder shows what is *placed\nin* it and the workspace root shows only workspace-scoped resources.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -9388,6 +9570,79 @@
           },
           "502": {
             "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{id}/scope": {
+      "patch": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`PATCH /api/v1/resources/{id}/scope` — reparent a resource to a different\nowner scope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the resource\n(object ACL) to move it out, and the `create_resource` placement gate on the\ntarget. The resource keeps its `workspace_id`, version history, Vault paths,\nand object grants — only `(scope_kind, scope_id)` (the inheritance parent)\nchanges. `path` must be free in the target scope (else 409).",
+        "operationId": "move_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required on source or target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "path already exists in target scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -23573,6 +23828,25 @@
           }
         }
       },
+      "MoveScopeRequest": {
+        "type": "object",
+        "description": "Request body for the scope-move endpoints (`PATCH …/{id}/scope`). Reparents\nan asset / asset type / resource to a different owner scope (docs/20 §2).\n`scope_id` is required for `folder`/`template`; for `workspace` it defaults\nto the caller's workspace. Authorization re-checks editor rights on BOTH the\ncurrent owner scope and the target.",
+        "required": [
+          "scope_kind"
+        ],
+        "properties": {
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "scope_kind": {
+            "$ref": "#/components/schemas/ScopeKind"
+          }
+        }
+      },
       "MultipartFileUpload": {
         "type": "object",
         "description": "Multipart body wrapper for spec documentation. The runtime extractor is\n`axum::extract::Multipart`; this struct only exists so the spec shows the\nexpected field name and type.",
@@ -27054,7 +27328,8 @@
           "updated_at",
           "created_by",
           "public_config",
-          "redacted_secret_fields"
+          "redacted_secret_fields",
+          "scope_kind"
         ],
         "properties": {
           "created_at": {
@@ -27103,6 +27378,18 @@
           "restricted": {
             "type": "boolean",
             "description": "Privacy opt-out (no workspace-role floor — access via grants only)."
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owner scope id. For `workspace`, the workspace id."
+          },
+          "scope_kind": {
+            "type": "string",
+            "description": "Owner scope kind (`workspace` | `folder` | `template`) — the placement /\ninheritance parent (docs/20 §2). Drives the edit sheet's move control."
           },
           "updated_at": {
             "type": "string",

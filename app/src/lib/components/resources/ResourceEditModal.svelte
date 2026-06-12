@@ -22,10 +22,12 @@
 		listResourceTypes,
 		rotateResource,
 		updateResource,
+		moveResource,
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
 	import PlacementFields from '$lib/components/iam/PlacementFields.svelte';
-	import type { ScopeContext } from '$lib/api/assets';
+	import MoveLocationField from '$lib/components/iam/MoveLocationField.svelte';
+	import { scopeToParam, type ScopeContext } from '$lib/api/assets';
 
 	type Props = {
 		open: boolean;
@@ -43,6 +45,8 @@
 		 *  that folder so the new resource lands where the user is browsing. */
 		defaultFolderId?: string;
 		onsaved: () => void;
+		/** Refresh the list after a scope move without closing. Defaults to `onsaved`. */
+		onmoved?: () => void;
 	};
 
 	let {
@@ -52,7 +56,8 @@
 		workspace_id,
 		prefillType,
 		defaultFolderId,
-		onsaved
+		onsaved,
+		onmoved
 	}: Props = $props();
 
 	// Locally-mutable copy: when the modal opens with no parent-provided
@@ -72,6 +77,17 @@
 	// non-workspace-wide; `restricted` drops the workspace-role floor (private).
 	let scope = $state<ScopeContext>({ kind: 'workspace' });
 	let restricted = $state(false);
+
+	// The resource's owner scope (edit mode), for the move control. Seeded from
+	// the loaded detail and updated optimistically on a successful move.
+	let editScope = $state<ScopeContext>({ kind: 'workspace' });
+
+	async function moveTo(next: ScopeContext) {
+		if (!resource_id) return;
+		await moveResource(resource_id, scopeToParam(next) ?? 'workspace');
+		editScope = next;
+		(onmoved ?? onsaved)();
+	}
 
 	// Resolve descriptor from the (lazily-loaded) types list.
 	const descriptor = $derived<ResourceTypeInfo | null>(
@@ -127,6 +143,13 @@
 					selectedType = detail.resource_type;
 					path = detail.path;
 					displayName = detail.display_name;
+					editScope =
+						detail.scope_kind === 'workspace'
+							? { kind: 'workspace' }
+							: {
+									kind: detail.scope_kind as 'folder' | 'template',
+									id: detail.scope_id ?? ''
+								};
 					const values: Record<string, string> = {};
 					const config = (detail.public_config ?? {}) as Record<string, unknown>;
 					for (const [k, v] of Object.entries(config)) {
@@ -439,6 +462,8 @@
 
 					{#if mode === 'create'}
 						<PlacementFields bind:scope bind:restricted testidPrefix="resource-modal" />
+					{:else}
+						<MoveLocationField scope={editScope} onMove={moveTo} testid="resource-move" />
 					{/if}
 
 					{#if descriptor && isDynamic}

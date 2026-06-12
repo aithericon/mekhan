@@ -99,6 +99,9 @@ export interface ListAssetTypesParams {
 	perPage?: number;
 	scope?: ScopeContext;
 	folder?: string;
+	/** Placement filter: only types owned by EXACTLY `scope` (the browser),
+	 *  vs. the downward-visible most-specific-wins set (the node picker). */
+	exact?: boolean;
 }
 
 export async function listAssetTypes(
@@ -111,7 +114,8 @@ export async function listAssetTypes(
 					page: params?.page ?? 0,
 					per_page: params?.perPage ?? 200,
 					scope: scopeToParam(params?.scope),
-					folder: params?.folder
+					folder: params?.folder,
+					exact: params?.exact
 				}
 			}
 		})
@@ -155,6 +159,9 @@ export interface ListAssetsParams {
 	type_id?: string;
 	scope?: ScopeContext;
 	folder?: string;
+	/** Placement filter: only assets owned by EXACTLY `scope` — see
+	 *  {@link ListAssetTypesParams.exact}. */
+	exact?: boolean;
 }
 
 export async function listAssets(params?: ListAssetsParams): Promise<PaginatedAssets> {
@@ -166,7 +173,8 @@ export async function listAssets(params?: ListAssetsParams): Promise<PaginatedAs
 					per_page: params?.perPage ?? 200,
 					type_id: params?.type_id,
 					scope: scopeToParam(params?.scope),
-					folder: params?.folder
+					folder: params?.folder,
+					exact: params?.exact
 				}
 			}
 		})
@@ -175,6 +183,35 @@ export async function listAssets(params?: ListAssetsParams): Promise<PaginatedAs
 
 export async function createAsset(body: CreateAssetRequest): Promise<AssetSummary> {
 	return unwrap(await client.POST('/api/v1/assets', { body }));
+}
+
+/** Reparent an asset to a different owner scope (`PATCH …/{id}/scope`). */
+export async function moveAsset(id: string, scope: ScopeContext): Promise<AssetSummary> {
+	return unwrap(
+		await client.PATCH('/api/v1/assets/{id}/scope', {
+			params: { path: { id } },
+			body: moveScopeBody(scope)
+		})
+	);
+}
+
+/** Reparent an asset type to a different owner scope (`PATCH …/{id}/scope`). */
+export async function moveAssetType(id: string, scope: ScopeContext): Promise<AssetTypeDetail> {
+	return unwrap(
+		await client.PATCH('/api/v1/asset-types/{id}/scope', {
+			params: { path: { id } },
+			body: moveScopeBody(scope)
+		})
+	);
+}
+
+/** Encode a {@link ScopeContext} into the move-endpoint request body. */
+export function moveScopeBody(scope: ScopeContext): {
+	scope_kind: 'workspace' | 'folder' | 'template';
+	scope_id?: string;
+} {
+	if (scope.kind === 'workspace') return { scope_kind: 'workspace' };
+	return { scope_kind: scope.kind, scope_id: scope.id };
 }
 
 export interface GetAssetParams {

@@ -500,6 +500,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::resources::delete_resource
         ))
         .routes(routes!(handlers::resources::rotate_resource))
+        .routes(routes!(handlers::resources::move_resource))
         .routes(routes!(handlers::resources::list_resource_audit))
         // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
         // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router
@@ -616,6 +617,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::assets::update_asset_type,
             handlers::assets::delete_asset_type
         ))
+        .routes(routes!(handlers::assets::move_asset_type))
         .routes(routes!(
             handlers::assets::list_assets,
             handlers::assets::create_asset
@@ -624,6 +626,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::assets::get_asset,
             handlers::assets::delete_asset
         ))
+        .routes(routes!(handlers::assets::move_asset))
         .routes(routes!(handlers::assets::put_asset_records))
         .routes(routes!(handlers::assets::import_asset_csv))
         .routes(routes!(handlers::assets::upload_asset_file))

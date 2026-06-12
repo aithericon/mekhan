@@ -163,6 +163,12 @@ pub struct ResourceDetail {
     /// Privacy opt-out (no workspace-role floor — access via grants only).
     #[serde(default)]
     pub restricted: bool,
+    /// Owner scope kind (`workspace` | `folder` | `template`) — the placement /
+    /// inheritance parent (docs/20 §2). Drives the edit sheet's move control.
+    pub scope_kind: String,
+    /// Owner scope id. For `workspace`, the workspace id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<Uuid>,
 }
 
 /// One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
@@ -282,6 +288,12 @@ pub struct ListResourcesQuery {
     pub scope: Option<String>,
     /// Optional virtual-folder prefix filter on `display_path` (docs/20 §3).
     pub folder: Option<String>,
+    /// When `true` (with `scope`), return only resources owned by EXACTLY that
+    /// scope (placement filter), not the downward-visible most-specific-wins
+    /// set. The management browser uses this so a folder shows what is *placed
+    /// in* it and the workspace root shows only workspace-scoped resources.
+    #[serde(default)]
+    pub exact: Option<bool>,
 }
 
 /// Query params for `GET /api/v1/resources/{id}/audit`.

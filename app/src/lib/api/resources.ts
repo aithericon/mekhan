@@ -72,6 +72,9 @@ export interface ListResourcesParams {
 	 *  When set, returns the downward-visible (most-specific-wins) set for that
 	 *  context instead of the flat workspace list. */
 	scope?: string;
+	/** Placement filter: with `scope`, return only resources owned by EXACTLY
+	 *  that scope (the browser), not the downward-visible set (the node picker). */
+	exact?: boolean;
 }
 
 export async function listResources(params?: ListResourcesParams): Promise<PaginatedResources> {
@@ -83,7 +86,8 @@ export async function listResources(params?: ListResourcesParams): Promise<Pagin
 					per_page: params?.perPage ?? 20,
 					resource_type: params?.resource_type,
 					workspace_id: params?.workspace_id,
-					scope: params?.scope
+					scope: params?.scope,
+					exact: params?.exact
 				}
 			}
 		})
@@ -108,6 +112,19 @@ export async function updateResource(
 ): Promise<ResourceSummary> {
 	return unwrap(
 		await client.PUT('/api/v1/resources/{id}', { params: { path: { id } }, body })
+	);
+}
+
+/** Reparent a resource to a different owner scope (`PATCH …/{id}/scope`). The
+ *  `scope` token is `workspace`, `folder:<uuid>`, or `template:<uuid>`. */
+export async function moveResource(id: string, scope: string): Promise<ResourceSummary> {
+	const [kind, sid] = scope.split(':');
+	const body =
+		kind === 'workspace' || !sid
+			? { scope_kind: 'workspace' as const }
+			: { scope_kind: kind as 'folder' | 'template', scope_id: sid };
+	return unwrap(
+		await client.PATCH('/api/v1/resources/{id}/scope', { params: { path: { id } }, body })
 	);
 }
 

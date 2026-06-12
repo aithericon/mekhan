@@ -223,6 +223,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/asset-types/{id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * `PATCH /api/v1/asset-types/{id}/scope` — reparent a type to a different owner
+         *     scope (docs/20 §2). Editor-gated on BOTH the current scope and the target,
+         *     matching `create_asset_type`'s membership-floor placement gate. The type's
+         *     `name` must be free in the target scope (else 409). Existing assets reference
+         *     the type by id, so they are unaffected by the move.
+         */
+        patch: operations["move_asset_type"];
+        trace?: never;
+    };
     "/api/v1/assets": {
         parameters: {
             query?: never;
@@ -359,6 +382,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * `PATCH /api/v1/assets/{id}/scope` — reparent an asset to a different owner
+         *     scope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the asset itself
+         *     (object ACL) to move it OUT, and the `create_asset` placement gate on the
+         *     target to drop it IN. The asset's own grants (incl. the creator's Owner
+         *     grant) ride along — only the inheritance parent changes. `ref_key` must be
+         *     free in the target scope (else 409).
+         */
+        patch: operations["move_asset"];
         trace?: never;
     };
     "/api/v1/assets/{id}/usage": {
@@ -3039,6 +3086,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * `PATCH /api/v1/resources/{id}/scope` — reparent a resource to a different
+         *     owner scope (docs/20 §2). Re-authorizes on BOTH sides: Editor on the resource
+         *     (object ACL) to move it out, and the `create_resource` placement gate on the
+         *     target. The resource keeps its `workspace_id`, version history, Vault paths,
+         *     and object grants — only `(scope_kind, scope_id)` (the inheritance parent)
+         *     changes. `path` must be free in the target scope (else 409).
+         */
+        patch: operations["move_resource"];
         trace?: never;
     };
     "/api/v1/roster": {
@@ -9019,6 +9090,18 @@ export interface components {
             source_storage: components["schemas"]["StorageConfig"];
         };
         /**
+         * @description Request body for the scope-move endpoints (`PATCH …/{id}/scope`). Reparents
+         *     an asset / asset type / resource to a different owner scope (docs/20 §2).
+         *     `scope_id` is required for `folder`/`template`; for `workspace` it defaults
+         *     to the caller's workspace. Authorization re-checks editor rights on BOTH the
+         *     current owner scope and the target.
+         */
+        MoveScopeRequest: {
+            /** Format: uuid */
+            scope_id?: string | null;
+            scope_kind: components["schemas"]["ScopeKind"];
+        };
+        /**
          * @description Multipart body wrapper for spec documentation. The runtime extractor is
          *     `axum::extract::Multipart`; this struct only exists so the spec shows the
          *     expected field name and type.
@@ -10596,6 +10679,16 @@ export interface components {
             resource_type: string;
             /** @description Privacy opt-out (no workspace-role floor — access via grants only). */
             restricted?: boolean;
+            /**
+             * Format: uuid
+             * @description Owner scope id. For `workspace`, the workspace id.
+             */
+            scope_id?: string | null;
+            /**
+             * @description Owner scope kind (`workspace` | `folder` | `template`) — the placement /
+             *     inheritance parent (docs/20 §2). Drives the edit sheet's move control.
+             */
+            scope_kind: string;
             /** Format: date-time */
             updated_at: string;
             /**
@@ -13615,6 +13708,13 @@ export interface operations {
                 scope?: string | null;
                 /** @description Optional virtual-folder prefix filter on `display_path`. */
                 folder?: string | null;
+                /**
+                 * @description When `true`, return only types owned by EXACTLY the `scope` (placement
+                 *     filter), not the downward-visible most-specific-wins set. The management
+                 *     browser uses this so a folder shows what is *placed in* it; the node
+                 *     picker/compiler leaves it off to get the full visible set.
+                 */
+                exact?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -13842,6 +13942,60 @@ export interface operations {
             };
         };
     };
+    move_asset_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset type moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTypeDetail"];
+                };
+            };
+            /** @description Editor role required on source or target */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already exists in target scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_assets: {
         parameters: {
             query?: {
@@ -13856,6 +14010,11 @@ export interface operations {
                 scope?: string | null;
                 /** @description Optional virtual-folder prefix filter on `display_path`. */
                 folder?: string | null;
+                /**
+                 * @description When `true`, return only assets owned by EXACTLY the `scope` (placement
+                 *     filter) — see [`ListAssetTypesQuery::exact`].
+                 */
+                exact?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -14356,6 +14515,60 @@ export interface operations {
             };
             /** @description Record validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    move_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetSummary"];
+                };
+            };
+            /** @description Editor role required on source or target */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description ref_key already exists in target scope */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19658,6 +19871,13 @@ export interface operations {
                 scope?: string | null;
                 /** @description Optional virtual-folder prefix filter on `display_path` (docs/20 §3). */
                 folder?: string | null;
+                /**
+                 * @description When `true` (with `scope`), return only resources owned by EXACTLY that
+                 *     scope (placement filter), not the downward-visible most-specific-wins
+                 *     set. The management browser uses this so a folder shows what is *placed
+                 *     in* it and the workspace root shows only workspace-scoped resources.
+                 */
+                exact?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -20099,6 +20319,60 @@ export interface operations {
             };
             /** @description Secret backend write failed */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    move_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceSummary"];
+                };
+            };
+            /** @description Editor role required on source or target */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description path already exists in target scope */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -70,7 +70,10 @@
 				listResources({
 					resource_type: typeFilter || undefined,
 					workspace_id,
-					scope: folderId ? `folder:${folderId}` : undefined,
+					// Exact placement: a folder shows only resources placed in it; the
+					// root (workspace) shows only workspace-scoped resources.
+					scope: folderId ? `folder:${folderId}` : 'workspace',
+					exact: true,
 					perPage: 200
 				}),
 				types.length === 0 ? listResourceTypes() : Promise.resolve(types)
@@ -273,6 +276,7 @@
 	{workspace_id}
 	defaultFolderId={folderId}
 	onsaved={onSaved}
+	onmoved={load}
 />
 
 {#if shareResource}
