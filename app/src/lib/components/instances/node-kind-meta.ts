@@ -72,3 +72,20 @@ const DEFAULT: NodeKindMeta = {
 export function nodeKindMeta(kind: string): NodeKindMeta {
 	return KIND_META[kind] ?? DEFAULT;
 }
+
+/**
+ * Normalize the several node-kind discriminants that exist across the two
+ * inspector surfaces into a single lookup key:
+ *   - the editor binds `WorkflowNodeData.type` (the canvas-side kind),
+ *   - the instance drawer reads `StepExecution.node_kind` (the projection's
+ *     kind) and falls back to `WorkflowNode.type` (the AIR-side kind).
+ * All three are snake_case strings, but they arrive as `string | null |
+ * undefined` from different code paths. This coerces any of them to a stable
+ * meta key, defaulting to `'unknown'` (→ the DEFAULT chip) when absent. It does
+ * NOT narrow to the `NodeKind` union — runtime kinds like `scheduled` /
+ * `unknown` exist in the projection that are not editable node types — it just
+ * produces the key `nodeKindMeta()` consumes.
+ */
+export function normalizeNodeKind(kind: string | null | undefined): string {
+	return kind && kind.length > 0 ? kind : 'unknown';
+}

@@ -14,6 +14,7 @@
 	import type { NodeInterface } from '$lib/types/node-interface';
 	import type { ChannelRuntime, LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
+	import InspectorShell from '$lib/components/inspector/InspectorShell.svelte';
 	import { SmartValue } from './output-renderers';
 	import ArtifactMediaPreview from '$lib/components/catalogue/ArtifactMediaPreview.svelte';
 	import FileBox from '@lucide/svelte/icons/file-box';
@@ -395,6 +396,30 @@
 	</section>
 {/snippet}
 
+<!-- Shared header affordances, reused across every drawer branch so the chrome
+     stays identical whether or not a step row exists. -->
+{#snippet closeButton()}
+	<SheetClose>
+		<Button variant="ghost" size="icon" aria-label="Close">
+			<X class="size-4" />
+		</Button>
+	</SheetClose>
+{/snippet}
+
+{#snippet configButton()}
+	{#if node}
+		<Button
+			variant="ghost"
+			size="sm"
+			onclick={() => (configOpen = true)}
+			title="View the node's saved configuration"
+		>
+			<Settings2 class="size-4" />
+			<span class="ml-1.5 hidden sm:inline">Config</span>
+		</Button>
+	{/if}
+{/snippet}
+
 <Sheet.Root bind:open onOpenChange={(v: boolean) => { if (!v) onClose(); }}>
 	<SheetContent class="w-full sm:max-w-xl">
 		{#if step}
@@ -405,61 +430,29 @@
 				Runtime detail for step {step.node_id}{step.iteration_index > 0 ? `, iteration ${step.iteration_index}` : ''}.
 			</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<!-- Mirror the canvas card: kind-coloured icon chip + label. -->
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">
-						{nodeLabel}
-					</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-						<Badge class={statusColor[step.status] ?? ''} variant="secondary">
-							{step.status}
-						</Badge>
-						{#if step.iteration_index > 0 || iterations.length > 1}
-							<Badge variant="outline">iter {step.iteration_index}</Badge>
-						{/if}
-						{#if step.branch_taken}
-							<Badge variant="outline" class="font-mono">→ {step.branch_taken}</Badge>
-						{/if}
-					</div>
-					<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={step.node_id}>
-						id: {step.node_id}
-					</div>
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={step.node_id} description={nodeDescription}>
+				{#snippet status()}
+					<Badge class={statusColor[step.status] ?? ''} variant="secondary">
+						{step.status}
+					</Badge>
+					{#if step.iteration_index > 0 || iterations.length > 1}
+						<Badge variant="outline">iter {step.iteration_index}</Badge>
 					{/if}
-				</div>
-
-				<div class="flex shrink-0 items-center gap-1">
+					{#if step.branch_taken}
+						<Badge variant="outline" class="font-mono">→ {step.branch_taken}</Badge>
+					{/if}
+				{/snippet}
+				{#snippet actions()}
 					<CopyButton
 						getText={() => pretty(step)}
 						title="Copy the full step execution as JSON"
 					/>
-					{#if node}
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => (configOpen = true)}
-							title="View the node's saved configuration"
-						>
-							<Settings2 class="size-4" />
-							<span class="ml-1.5 hidden sm:inline">Config</span>
-						</Button>
-					{/if}
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+					{@render configButton()}
+				{/snippet}
+				{#snippet close()}
+					{@render closeButton()}
+				{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				{#if leaseRuntime}
 					{@render leasePanel(leaseRuntime)}
 				{/if}
@@ -705,7 +698,7 @@
 						executionId={stepExecutionId}
 					/>
 				{/if}
-			</div>
+			</InspectorShell>
 		{:else if leaseRuntime}
 			<!-- LeaseScope container: no step-execution row of its own. The drawer
 			     is the cluster view — the held allocation's lifecycle + placement.
@@ -713,45 +706,15 @@
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>Cluster lease held by this scope.</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-					</div>
-					{#if node}
-						<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
-							id: {node.id}
-						</div>
-					{/if}
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
-					{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-1">
-					{#if node}
-						<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
-							<Settings2 class="size-4" />
-							<span class="ml-1.5 hidden sm:inline">Config</span>
-						</Button>
-					{/if}
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={node?.id} description={nodeDescription}>
+				{#snippet actions()}{@render configButton()}{/snippet}
+				{#snippet close()}{@render closeButton()}{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				{@render leasePanel(leaseRuntime)}
 				{#if showAllocationPanel}
 					{@render allocationPanel(allocationRows)}
 				{/if}
-			</div>
+			</InspectorShell>
 		{:else if isStreamSink && node && instanceId}
 			<!-- StreamSink endpoint: no step-execution row of its own (it runs no
 			     executor job). The drawer is the egress view — the stable URL
@@ -759,41 +722,15 @@
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>Stream egress endpoint for this node.</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-					</div>
-					<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
-						id: {node.id}
-					</div>
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
-					{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-1">
-					<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
-						<Settings2 class="size-4" />
-						<span class="ml-1.5 hidden sm:inline">Config</span>
-					</Button>
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={node.id} description={nodeDescription}>
+				{#snippet actions()}{@render configButton()}{/snippet}
+				{#snippet close()}{@render closeButton()}{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				<StreamSinkPanel {instanceId} nodeId={node.id} {channels} runtime={channelRuntime} />
 				{#if channels.length > 0}
 					<ChannelsPanel {channels} runtime={channelRuntime} executionId={null} />
 				{/if}
-			</div>
+			</InspectorShell>
 		{:else if isStreamSource && node && instanceId}
 			<!-- StreamSource endpoint: no step-execution row of its own (it runs no
 			     executor job — mekhan is the virtual producer). The drawer is the
@@ -801,41 +738,15 @@
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>Stream ingress endpoint for this node.</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-					</div>
-					<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
-						id: {node.id}
-					</div>
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
-					{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-1">
-					<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
-						<Settings2 class="size-4" />
-						<span class="ml-1.5 hidden sm:inline">Config</span>
-					</Button>
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={node.id} description={nodeDescription}>
+				{#snippet actions()}{@render configButton()}{/snippet}
+				{#snippet close()}{@render closeButton()}{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				<StreamSourcePanel {instanceId} nodeId={node.id} {channels} runtime={channelRuntime} />
 				{#if channels.length > 0}
 					<ChannelsPanel {channels} runtime={channelRuntime} executionId={null} />
 				{/if}
-			</div>
+			</InspectorShell>
 		{:else if showAllocationPanel}
 			<!-- No step row and no lease-marking yet, but allocations are present
 			     (e.g. a released LeaseScope where the marking was already cleaned up).
@@ -843,42 +754,12 @@
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>Allocation detail for this node.</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-					</div>
-					{#if node}
-						<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
-							id: {node.id}
-						</div>
-					{/if}
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
-					{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-1">
-					{#if node}
-						<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
-							<Settings2 class="size-4" />
-							<span class="ml-1.5 hidden sm:inline">Config</span>
-						</Button>
-					{/if}
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={node?.id} description={nodeDescription}>
+				{#snippet actions()}{@render configButton()}{/snippet}
+				{#snippet close()}{@render closeButton()}{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				{@render allocationPanel(allocationRows)}
-			</div>
+			</InspectorShell>
 		{:else}
 			<!-- Fallback: the node has no step-execution row (it hasn't started —
 			     e.g. a pending step on a running instance) and none of the
@@ -887,41 +768,13 @@
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>This step has not started yet.</SheetDescription>
 
-			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
-				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
-					<Icon class="size-5 {meta.iconClass}" />
-				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
-						<Badge variant="outline" class="text-muted-foreground">pending</Badge>
-					</div>
-					{#if node}
-						<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
-							id: {node.id}
-						</div>
-					{/if}
-					{#if nodeDescription}
-						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
-					{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-1">
-					{#if node}
-						<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
-							<Settings2 class="size-4" />
-							<span class="ml-1.5 hidden sm:inline">Config</span>
-						</Button>
-					{/if}
-					<SheetClose>
-						<Button variant="ghost" size="icon" aria-label="Close">
-							<X class="size-4" />
-						</Button>
-					</SheetClose>
-				</div>
-			</header>
+			<InspectorShell kind={kind} label={nodeLabel} nodeId={node?.id} description={nodeDescription}>
+				{#snippet status()}
+					<Badge variant="outline" class="text-muted-foreground">pending</Badge>
+				{/snippet}
+				{#snippet actions()}{@render configButton()}{/snippet}
+				{#snippet close()}{@render closeButton()}{/snippet}
 
-			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				<p class="text-sm text-muted-foreground">
 					No runtime activity yet — this step hasn't been reached. Its configuration is
 					available via the Config button above.
@@ -929,7 +782,7 @@
 				{#if channels.length > 0}
 					<ChannelsPanel {channels} runtime={channelRuntime} executionId={null} />
 				{/if}
-			</div>
+			</InspectorShell>
 		{/if}
 	</SheetContent>
 </Sheet.Root>

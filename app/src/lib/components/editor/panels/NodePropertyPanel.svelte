@@ -23,6 +23,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
+	import InspectorShell from '$lib/components/inspector/InspectorShell.svelte';
 
 	type Props = {
 		data: WorkflowNodeData;
@@ -199,40 +200,48 @@
 	const SectionComponent = $derived(NODE_PROPERTY_SECTIONS[data.type]);
 </script>
 
-<div
-	class="flex w-[480px] shrink-0 flex-col border-l border-border bg-card"
-	data-testid="node-property-panel"
+<InspectorShell
+	kind={data.type}
+	label={(data.label ?? '').trim() || 'Untitled node'}
+	frameClass="flex w-[480px] shrink-0 flex-col border-l border-border bg-card"
+	bodyClass="flex-1 space-y-4 overflow-y-auto p-3"
+	testid="node-property-panel"
 >
-	<div class="flex items-center justify-between border-b border-border px-3 py-2.5">
-		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+	{#snippet status()}
+		<span class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
 			{readonly ? 'Inspector' : 'Properties'}
-		</h2>
-		<div class="flex items-center gap-0.5">
-			{#if !readonly && ondelete}
-				<button
-					type="button"
-					class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-					data-testid="btn-delete-node"
-					onclick={ondelete}
-					title="Delete node"
-					aria-label="Delete node"
-				>
-					<Trash2 class="size-4" />
-				</button>
-			{/if}
+		</span>
+	{/snippet}
+	{#snippet actions()}
+		{#if !readonly && ondelete}
 			<button
 				type="button"
-				class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-				data-testid="btn-close-properties"
-				onclick={onclose}
+				class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+				data-testid="btn-delete-node"
+				onclick={ondelete}
+				title="Delete node"
+				aria-label="Delete node"
 			>
-				<X class="size-4" />
+				<Trash2 class="size-4" />
 			</button>
-		</div>
-	</div>
+		{/if}
+	{/snippet}
+	{#snippet close()}
+		<button
+			type="button"
+			class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+			data-testid="btn-close-properties"
+			onclick={onclose}
+		>
+			<X class="size-4" />
+		</button>
+	{/snippet}
 
-	<div class="flex-1 space-y-4 overflow-y-auto p-3">
-		<!-- Common: Label -->
+	<!-- Identity header (icon/label/kind badge) is provided by InspectorShell —
+	     shared with the instance drawer. The EDITABLE Label/Description/Slug
+	     fields live here in the body so authors still mutate them; the header's
+	     label string mirrors the Label field live. -->
+	<!-- Common: Label -->
 		<FormField label="Label" for="node-label">
 			<Input
 				id="node-label"
@@ -340,5 +349,4 @@
 				}
 			/>
 		{/if}
-	</div>
-</div>
+</InspectorShell>
