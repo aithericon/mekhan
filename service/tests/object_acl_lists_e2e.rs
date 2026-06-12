@@ -64,7 +64,7 @@ async fn get_as(app: &axum::Router, subject: &str, ws: Uuid, uri: &str) -> Value
 }
 
 /// Find the item with the given id in a JSON array, by its `id` field.
-fn find_by_id<'a>(items: &'a [Value], id: Uuid) -> Option<&'a Value> {
+fn find_by_id(items: &[Value], id: Uuid) -> Option<&Value> {
     items
         .iter()
         .find(|v| v["id"].as_str() == Some(id.to_string().as_str()))
