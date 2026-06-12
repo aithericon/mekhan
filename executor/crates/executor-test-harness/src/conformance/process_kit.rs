@@ -114,10 +114,9 @@ impl BackendTestKit for ProcessTestKit {
             tokio::fs::create_dir_all(dir).await.unwrap();
         }
 
-        RunContext {
-            env,
-            ..RunContext::for_test(eid, spec, run_dir, timeout)
-        }
+        let mut ctx = RunContext::for_test(eid, spec, run_dir, timeout);
+        ctx.env = env;
+        ctx
     }
 
     async fn cleanup_run_context(&self, ctx: &RunContext) {

@@ -124,8 +124,9 @@ impl RunContext {
     ///
     /// Sets the four fields that actually vary across test fixtures
     /// (`execution_id`, `spec`, `run_dir`, `timeout`) and defaults every other
-    /// field to empty. Fixtures that also customize a field use struct-update
-    /// syntax, e.g. `RunContext { env, ..RunContext::for_test(id, spec, rd, t) }`.
+    /// field to empty. Fixtures that also customize a field mutate after
+    /// construction (`let mut ctx = RunContext::for_test(…); ctx.env = …;`) —
+    /// struct-update syntax is unavailable now that `RunContext` impls `Drop`.
     ///
     /// Not `#[cfg(test)]`-gated: the executor conformance kits are ordinary
     /// library code (consumed by integration-test binaries), so they need this
@@ -152,6 +153,22 @@ impl RunContext {
             expected_outputs: HashMap::new(),
             staged_events: Vec::new(),
             backend_state: serde_json::Value::Null,
+        }
+    }
+}
+
+/// Best-effort wipe of resolved plaintext secrets when the context goes away.
+///
+/// `resolved_env` is the only `resolved_*` field whose values are plain
+/// `String`s (zeroizable in place); the `serde_json::Value` side-channels
+/// have no `Zeroize` impl and stay out of scope. `RunContext` is `Clone`, so
+/// each clone wipes its own map — copies the backends make themselves (e.g.
+/// merged env maps fed to `Command::env`) are theirs to manage.
+impl Drop for RunContext {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        for (_, mut v) in self.resolved_env.drain() {
+            v.zeroize();
         }
     }
 }

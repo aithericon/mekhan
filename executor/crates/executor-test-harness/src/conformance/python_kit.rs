@@ -102,11 +102,10 @@ impl BackendTestKit for PythonTestKit {
             "runner_path": runner_path.to_string_lossy(),
         });
 
-        RunContext {
-            env,
-            backend_state,
-            ..RunContext::for_test(eid, spec, run_dir, timeout)
-        }
+        let mut ctx = RunContext::for_test(eid, spec, run_dir, timeout);
+        ctx.env = env;
+        ctx.backend_state = backend_state;
+        ctx
     }
 
     async fn cleanup_run_context(&self, ctx: &RunContext) {

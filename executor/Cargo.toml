@@ -91,6 +91,9 @@ utoipa = { version = "5.4", features = ["uuid", "chrono"] }
 thiserror = "2"
 async-trait = "0.1"
 
+# Secrets hygiene — wipe resolved plaintext from memory on drop.
+zeroize = "1.8"
+
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
