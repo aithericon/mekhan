@@ -333,9 +333,7 @@ impl MekhanNats {
     /// Durable consumer for the `image_materializations` projection (docs/22).
     /// Same `petri.events.>` firehose as staging; pre-filters to `materialize-*`
     /// nets in-process.
-    pub async fn image_materializations_consumer(
-        &self,
-    ) -> Result<PullConsumer, async_nats::Error> {
+    pub async fn image_materializations_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
         self.pull_consumer(ConsumerSpec {
             stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
             durable_base: "mekhan-image-materializations",
