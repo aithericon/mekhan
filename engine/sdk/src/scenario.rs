@@ -7,9 +7,27 @@ use petri_domain::effects::ServiceRequirement;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// The AIR format version this SDK emits. MUST match
+/// `petri_api_types::SUPPORTED_AIR_VERSION` (duplicated rather than depended
+/// on so the SDK stays free of the api-types/utoipa dependency); bump both in
+/// lockstep when AIR changes in a way a v(N) engine cannot safely interpret.
+pub const SUPPORTED_AIR_VERSION: u32 = 1;
+
+/// `air_version` serde default: a payload without the field predates
+/// versioning and is by definition v1 (a literal, NOT
+/// `SUPPORTED_AIR_VERSION` — old unversioned payloads stay v1 across bumps).
+fn default_air_version() -> u32 {
+    1
+}
+
 /// Complete scenario definition with embedded type schemas
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenarioDefinition {
+    /// AIR format version this definition was emitted for. Validated by the
+    /// engine at deploy time against its `SUPPORTED_AIR_VERSION`. Missing on
+    /// pre-versioning payloads ⇒ v1. Always serialized.
+    #[serde(default = "default_air_version")]
+    pub air_version: u32,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -389,6 +407,7 @@ impl ScenarioDefinition {
     /// Create a new empty scenario
     pub fn new(name: impl Into<String>) -> Self {
         Self {
+            air_version: SUPPORTED_AIR_VERSION,
             name: name.into(),
             description: None,
             places: vec![],

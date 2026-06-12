@@ -1,4 +1,5 @@
 {
+  "air_version": 1,
   "definitions": {
     "Ctrl__collect": {
       "additionalProperties": true,

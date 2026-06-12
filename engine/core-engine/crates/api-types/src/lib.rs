@@ -413,10 +413,35 @@ pub struct ScenarioTransition {
 /// Group definition for visual components (alias for the domain-level `Group`).
 pub type ScenarioGroup = petri_domain::Group;
 
+/// The highest AIR format version this build can interpret. Single source for
+/// BOTH sides of the contract: the service compiler stamps it into emitted AIR
+/// and the engine's deploy gate rejects `air_version > SUPPORTED_AIR_VERSION`.
+///
+/// Bump it for any change a v(N) engine cannot safely interpret — a field
+/// whose absence/old reading silently changes execution semantics, a reshaped
+/// structure, a new load-bearing logic variant. Purely additive, ignorable
+/// metadata does NOT bump it (the struct stays forward-tolerant: no
+/// `deny_unknown_fields`).
+pub const SUPPORTED_AIR_VERSION: u32 = 1;
+
+/// `air_version` serde default: a payload without the field predates
+/// versioning and is by definition v1. Deliberately a literal `1`, NOT
+/// `SUPPORTED_AIR_VERSION` — when the supported version bumps, old unversioned
+/// payloads still mean v1.
+fn default_air_version() -> u32 {
+    1
+}
+
 /// Complete scenario definition (the "AIR" format).
 /// This is what users will write in JSON to define Petri Nets.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct ScenarioDefinition {
+    /// AIR format version this definition was emitted for. Bumped only for
+    /// changes a v(N) engine cannot safely interpret (see
+    /// [`SUPPORTED_AIR_VERSION`]); validated at deploy time. Missing on
+    /// pre-versioning payloads ⇒ v1. Always serialized.
+    #[serde(default = "default_air_version")]
+    pub air_version: u32,
     /// Scenario name
     pub name: String,
     /// Optional description
@@ -750,5 +775,40 @@ mod tests {
         assert!(!err.success);
         assert_eq!(err.error.as_deref(), Some("something went wrong"));
         assert!(err.event.is_none());
+    }
+
+    /// Pre-versioning AIR payloads carry no `air_version` — they MUST
+    /// deserialize as v1, and re-serialize with the field made explicit
+    /// (no skip_serializing_if).
+    #[test]
+    fn scenario_missing_air_version_defaults_to_v1() {
+        let json = serde_json::json!({
+            "name": "legacy",
+            "places": [],
+            "transitions": []
+        });
+        let scenario: ScenarioDefinition = serde_json::from_value(json).unwrap();
+        assert_eq!(scenario.air_version, 1);
+
+        let reserialized = serde_json::to_value(&scenario).unwrap();
+        assert_eq!(reserialized["air_version"], 1);
+    }
+
+    /// A future version number survives the deserialize→serialize round trip
+    /// untouched — the deploy-time gate (not serde) is what rejects it.
+    #[test]
+    fn scenario_air_version_roundtrips() {
+        let json = serde_json::json!({
+            "name": "from-the-future",
+            "air_version": 999,
+            "places": [],
+            "transitions": []
+        });
+        let scenario: ScenarioDefinition = serde_json::from_value(json).unwrap();
+        assert_eq!(scenario.air_version, 999);
+
+        let reserialized = serde_json::to_value(&scenario).unwrap();
+        let back: ScenarioDefinition = serde_json::from_value(reserialized).unwrap();
+        assert_eq!(back.air_version, 999);
     }
 }

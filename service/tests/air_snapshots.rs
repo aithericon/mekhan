@@ -587,6 +587,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // `compile_to_air` has an empty KnownResources. Same class as the
         // runner-group demos above. Proven live via the Inbox claim flow.
         "53-human-review",
+        // 56-isaac-experiment-capture (Isaac Sim P1 capture, docs/27 arc) —
+        // same class as 33-40: ros AutomatedSteps (record_topics) target the
+        // `xarm_fleet` runner_group via `deploymentModel.capacity.alias` and
+        // carry a `ros` capability Requirement, neither resolvable by bare
+        // `compile_to_air` (empty KnownResources). Live-only. (Landed from the
+        // isaac arc merge without registering here — same as 52's history.)
+        "56-isaac-experiment-capture",
     ]
     .into_iter()
     .collect();

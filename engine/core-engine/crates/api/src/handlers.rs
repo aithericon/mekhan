@@ -402,11 +402,30 @@ where
         net_parameters,
     } = envelope;
 
+    // AIR version gate — FIRST, before any interpretation of the scenario.
+    // A definition emitted for a newer AIR format must fail loudly at deploy
+    // time, not misbehave at runtime by silently ignoring semantics this
+    // build doesn't know about.
+    if scenario.air_version > petri_api_types::SUPPORTED_AIR_VERSION {
+        let message = format!(
+            "unsupported AIR version: scenario declares air_version {}, this engine supports <= {}. \
+             Upgrade the engine, or re-compile the workflow against this engine's AIR format.",
+            scenario.air_version,
+            petri_api_types::SUPPORTED_AIR_VERSION
+        );
+        tracing::error!(
+            air_version = scenario.air_version,
+            supported = petri_api_types::SUPPORTED_AIR_VERSION,
+            "Rejected scenario load: AIR version newer than this engine supports"
+        );
+        return Err((StatusCode::BAD_REQUEST, message));
+    }
+
     if let Err((status, message)) =
         validate_dispatch_options(&scenario, &skip_mask, &stage_overrides)
     {
         tracing::error!(reason = %message, "Dispatch options validation failed");
-        return Err(status);
+        return Err((status, message));
     }
     let dispatch_options = petri_domain::DispatchOptions {
         skip_mask,
@@ -424,7 +443,13 @@ where
                         category = %req.category,
                         "Required effect handler not registered"
                     );
-                    return Err(StatusCode::PRECONDITION_FAILED);
+                    return Err((
+                        StatusCode::PRECONDITION_FAILED,
+                        format!(
+                            "required effect handler '{handler_id}' (category '{}') is not registered",
+                            req.category
+                        ),
+                    ));
                 }
             }
         }
@@ -439,7 +464,7 @@ where
         Ok(p) => p,
         Err(e) => {
             tracing::error!(error = %e, "Failed to parse scenario");
-            return Err(StatusCode::BAD_REQUEST);
+            return Err((StatusCode::BAD_REQUEST, format!("invalid scenario: {e}")));
         }
     };
 
@@ -457,7 +482,10 @@ where
     // Initialize the service with the new topology
     app_state.service.initialize(net).await.map_err(|e| {
         tracing::error!(error = %e, "Failed to initialize service");
-        StatusCode::INTERNAL_SERVER_ERROR
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to initialize net: {e}"),
+        )
     })?;
     app_state.service.set_initial_tokens(initial_tokens.clone());
 
@@ -479,7 +507,10 @@ where
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to compile schema definitions");
-                return Err(StatusCode::BAD_REQUEST);
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to compile schema definitions: {e}"),
+                ));
             }
         }
     }
@@ -2215,6 +2246,55 @@ mod tests {
         let (status, _) = post_json(router, "/api/scenario", json!({"name": "bad"})).await;
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// AIR version gate: a scenario declaring a newer `air_version` than this
+    /// build supports is rejected at deploy time with an actionable
+    /// got-vs-supported message (plain-text body — mekhan surfaces it via
+    /// `PetriError::Response`).
+    #[rstest]
+    #[tokio::test]
+    async fn test_load_scenario_rejects_newer_air_version() {
+        let app_state = test_app_state();
+        let router = test_router(app_state);
+
+        let mut body = simple_scenario_json();
+        body["scenario"]["air_version"] = json!(999);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/scenario")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            text.contains("air_version 999")
+                && text.contains(&format!(
+                    "supports <= {}",
+                    petri_api_types::SUPPORTED_AIR_VERSION
+                )),
+            "error must state got vs supported, was: {text}"
+        );
+    }
+
+    /// Pre-versioning payloads (no `air_version` field) load as v1.
+    #[rstest]
+    #[tokio::test]
+    async fn test_load_scenario_missing_air_version_is_v1() {
+        let app_state = test_app_state();
+        let router = test_router(app_state);
+
+        // simple_scenario_json carries no air_version — must load fine.
+        let (status, json) = post_json(router, "/api/scenario", simple_scenario_json()).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["success"], true);
     }
 
     // =========================================================================
