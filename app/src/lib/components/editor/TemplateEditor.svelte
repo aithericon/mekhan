@@ -12,6 +12,8 @@
 	import { roleAtLeast } from '$lib/api/iam';
 	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
 	// NodePropertyPanel is lazy-loaded — its static import drags in 17
 	// property-section files (every AutomatedStep config panel, HumanTask
 	// StepEditor, SubWorkflow, Trigger, etc.) at page-init time. On a cold
@@ -26,6 +28,7 @@
 		publishTemplate,
 		updateTemplate,
 		createNewVersion,
+		discardDraft,
 		compileGraph,
 		CompileApiError,
 		PublishGateError,
@@ -64,6 +67,8 @@
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 	let shareOpen = $state(false);
+	let discardConfirmOpen = $state(false);
+	let discarding = $state(false);
 
 	// Object-Admins can manage sharing. `my_effective_role` rides the template
 	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
@@ -180,6 +185,30 @@
 	function handleRun() {
 		if (!template?.published) return;
 		runDialogOpen = true;
+	}
+
+	// Throw away this unpublished draft (confirmed via the dialog below). The
+	// backend restores the parent version as the chain head — navigate there;
+	// a never-published v1 draft deletes the whole template → back to the list.
+	async function handleDiscardDraft() {
+		if (!template || template.published || discarding) return;
+		try {
+			discarding = true;
+			const res = await discardDraft(template.id);
+			discardConfirmOpen = false;
+			if (res.restored_head) {
+				// In-app nav: the route's `{#key}` remounts the editor on the
+				// restored head, tearing this draft's Yjs session down.
+				await goto(`/templates/${res.restored_head.id}`);
+			} else {
+				await goto('/templates');
+			}
+		} catch (e) {
+			discardConfirmOpen = false;
+			error = e instanceof Error ? e.message : 'Failed to discard draft';
+		} finally {
+			discarding = false;
+		}
 	}
 
 	function onInstanceCreated(instanceId: string) {
@@ -440,6 +469,9 @@
 				onpublishrun={template && !template.published ? handlePublishAndRun : undefined}
 				onpreview={handlePreview}
 				onnewversion={handleNewVersion}
+				ondiscard={template && !template.published
+					? () => (discardConfirmOpen = true)
+					: undefined}
 				onrun={handleRun}
 				ontests={() => (testsPanelOpen = true)}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
@@ -566,6 +598,34 @@
 	templateId={template?.id ?? null}
 	oncreated={onInstanceCreated}
 />
+
+<Dialog.Root bind:open={discardConfirmOpen}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Discard this draft?</Dialog.Title>
+			<Dialog.Description>
+				{#if template?.parent_id}
+					Draft v{template.version} and its unpublished changes are deleted permanently;
+					v{template.version - 1} becomes the latest version again.
+				{:else}
+					This draft has never been published, so discarding it deletes the whole
+					template permanently.
+				{/if}
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (discardConfirmOpen = false)}>Cancel</Button>
+			<Button
+				variant="destructive"
+				disabled={discarding}
+				data-testid="btn-confirm-discard-draft"
+				onclick={handleDiscardDraft}
+			>
+				{discarding ? 'Discarding…' : 'Discard draft'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 {#if template}
 	<ShareDialog

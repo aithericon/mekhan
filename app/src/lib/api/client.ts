@@ -55,6 +55,7 @@ export type TemplateSummary = Template;
 export type CreateTemplateRequest = components['schemas']['CreateTemplateRequest'];
 export type UpdateTemplateRequest = components['schemas']['UpdateTemplateRequest'];
 export type CompileRequest = components['schemas']['CompileRequest'];
+export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse'];
 export type PaginatedTemplateResponse =
 	components['schemas']['Paginated_WorkflowTemplate'];
 
@@ -474,6 +475,14 @@ export async function promoteInstanceToTest(
 export async function createNewVersion(id: string): Promise<Template> {
 	return unwrap(
 		await client.POST('/api/v1/templates/{id}/new-version', { params: { path: { id } } })
+	);
+}
+
+/** Discard an unpublished draft version. The parent version is restored as
+ *  the chain head; a never-published v1 draft deletes the whole template. */
+export async function discardDraft(id: string): Promise<DiscardDraftResponse> {
+	return unwrap(
+		await client.DELETE('/api/v1/templates/{id}/draft', { params: { path: { id } } })
 	);
 }
 

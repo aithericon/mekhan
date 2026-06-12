@@ -23,8 +23,8 @@ use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
     ApplyAirTemplateRequest, ApplyTemplateRequest, CompileRequest, CreateTemplateRequest,
-    ExecutionBackendType, Port, Position, TemplateListExtras, UpdateTemplateRequest, WorkflowGraph,
-    WorkflowNode, WorkflowNodeData, WorkflowTemplate,
+    DiscardDraftResponse, ExecutionBackendType, Port, Position, TemplateListExtras,
+    UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
@@ -716,6 +716,111 @@ pub async fn delete_template(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Which discard path a draft selects. Pure decision (mirrors `apply_mode`)
+/// so it can be unit-tested without a DB. `Err` carries the 409 message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiscardMode {
+    /// Never-published root draft (parent NULL): the draft IS the chain —
+    /// delete the whole template.
+    DeleteChain,
+    /// Delete the draft row and restore this parent as the chain head.
+    RestoreParent(Uuid),
+}
+
+pub(crate) fn discard_mode(draft: &WorkflowTemplate) -> Result<DiscardMode, String> {
+    if draft.published {
+        return Err("cannot discard a published version".into());
+    }
+    match draft.parent_id {
+        None => Ok(DiscardMode::DeleteChain),
+        Some(parent_id) if draft.is_latest => Ok(DiscardMode::RestoreParent(parent_id)),
+        // An unpublished non-head row shouldn't exist (drafts are only ever
+        // the chain head); refuse rather than mint a second `is_latest` row.
+        Some(_) => Err("draft is not the chain head".into()),
+    }
+}
+
+/// DELETE /api/v1/templates/{id}/draft
+///
+/// Discard a single unpublished draft version — the reverse of `new_version`.
+/// The draft row is deleted (its `yjs_documents`/`yjs_snapshots` cascade via
+/// FK) and the parent version is restored as the chain head
+/// (`is_latest = TRUE`) in one transaction. A never-published v1 root draft
+/// has no parent: the draft IS the chain, so the whole template is deleted
+/// via the same path as `DELETE /api/v1/templates/{id}` (which also owns the
+/// chain-root `object_grants` cleanup).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/templates/{id}/draft",
+    params(("id" = Uuid, Path, description = "Draft template version id")),
+    responses(
+        (status = 200, description = "Draft discarded", body = DiscardDraftResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Version is published or not the chain head", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn discard_draft(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DiscardDraftResponse>, ApiError> {
+    let existing = require_template(&state.db, id).await?;
+
+    gate_template_write(&state, &user, &existing).await?;
+
+    let parent_id = match discard_mode(&existing).map_err(ApiError::conflict)? {
+        DiscardMode::DeleteChain => {
+            // Never-published root draft (only `create_template` makes one):
+            // delegate to the chain delete — for a single-version chain it
+            // deletes exactly this row plus the chain-root grants.
+            delete_template(State(state), user, Path(id)).await?;
+            return Ok(Json(DiscardDraftResponse {
+                template_deleted: true,
+                restored_head: None,
+            }));
+        }
+        DiscardMode::RestoreParent(parent_id) => parent_id,
+    };
+
+    let mut tx = state.db.begin().await?;
+
+    sqlx::query("DELETE FROM workflow_templates WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    let restored = sqlx::query_as::<_, WorkflowTemplate>(
+        "UPDATE workflow_templates SET is_latest = TRUE WHERE id = $1 RETURNING *",
+    )
+    .bind(parent_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to restore parent version on draft discard: {e}");
+        ApiError::internal(e.to_string())
+    })?;
+
+    tx.commit().await?;
+
+    // Drafts have no registered triggers, but mirror delete_template's
+    // dispatcher hygiene in case of drift.
+    state.triggers.forget_template(id);
+
+    // `new_version` forgot the parent's triggers when it was superseded;
+    // restoring it as the head re-registers them (same gate as `hydrate`:
+    // published + latest + non-private, no backfill — nothing is new).
+    if restored.published && restored.visibility != "private" {
+        state.triggers.register_template(&restored, false).await;
+    }
+
+    Ok(Json(DiscardDraftResponse {
+        template_deleted: false,
+        restored_head: Some(restored),
+    }))
 }
 
 /// POST /api/v1/templates/{id}/publish
@@ -2093,7 +2198,7 @@ mod apply_mode_tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    fn tmpl(version: i32, published: bool, parent_id: Option<Uuid>) -> WorkflowTemplate {
+    pub(super) fn tmpl(version: i32, published: bool, parent_id: Option<Uuid>) -> WorkflowTemplate {
         WorkflowTemplate {
             id: Uuid::new_v4(),
             name: "t".into(),
@@ -2143,5 +2248,47 @@ mod apply_mode_tests {
     fn unpublished_v1_with_parent_is_not_seed() {
         // Defensive: v1 but parent set is not a fresh init → must not Seed.
         assert!(apply_mode(&tmpl(1, false, Some(Uuid::new_v4()))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod discard_mode_tests {
+    use super::apply_mode_tests::tmpl;
+    use super::{discard_mode, DiscardMode};
+    use uuid::Uuid;
+
+    #[test]
+    fn published_version_refused() {
+        let err = discard_mode(&tmpl(2, true, Some(Uuid::new_v4()))).unwrap_err();
+        assert!(err.contains("published"), "got: {err}");
+    }
+
+    #[test]
+    fn root_draft_deletes_chain() {
+        // Never-published v1 (parent NULL) — the only shape `create_template`
+        // makes; the draft IS the chain.
+        assert_eq!(
+            discard_mode(&tmpl(1, false, None)).unwrap(),
+            DiscardMode::DeleteChain
+        );
+    }
+
+    #[test]
+    fn forked_draft_restores_parent() {
+        let parent = Uuid::new_v4();
+        assert_eq!(
+            discard_mode(&tmpl(3, false, Some(parent))).unwrap(),
+            DiscardMode::RestoreParent(parent)
+        );
+    }
+
+    #[test]
+    fn non_head_draft_refused() {
+        // Defensive: an unpublished non-latest row shouldn't exist; restoring
+        // its parent would mint a second `is_latest` head.
+        let mut t = tmpl(2, false, Some(Uuid::new_v4()));
+        t.is_latest = false;
+        let err = discard_mode(&t).unwrap_err();
+        assert!(err.contains("chain head"), "got: {err}");
     }
 }

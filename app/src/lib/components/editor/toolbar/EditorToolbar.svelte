@@ -11,6 +11,7 @@
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import Settings from '@lucide/svelte/icons/settings';
 	import Share2 from '@lucide/svelte/icons/share-2';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Lock from '@lucide/svelte/icons/lock';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
@@ -46,6 +47,8 @@
 		onpreview: () => void;
 		/** Fork a published template into a fresh editable draft version. */
 		onnewversion?: () => void;
+		/** Discard this unpublished draft (drafts only; opens a confirm). */
+		ondiscard?: () => void;
 		/** Start a run of a published template (opens the instance dialog). */
 		onrun?: () => void;
 		/** Open the template-tests panel. */
@@ -80,6 +83,7 @@
 		onpublishrun,
 		onpreview,
 		onnewversion,
+		ondiscard,
 		onrun,
 		ontests,
 		onsettings,
@@ -307,6 +311,20 @@
 				New Version
 			</Button>
 		{:else}
+			{#if ondiscard}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-destructive hover:text-destructive"
+					data-testid="btn-discard-draft"
+					disabled={saving}
+					onclick={ondiscard}
+					title="Discard this draft"
+				>
+					<Trash2 class="size-3.5" />
+					Discard
+				</Button>
+			{/if}
 			{#if onpublishrun}
 				<Button
 					variant="outline"
