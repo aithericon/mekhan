@@ -154,8 +154,28 @@ async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, sta
         }
     });
 
-    // Inbound loop: WebSocket -> room
-    while let Some(result) = ws_stream.next().await {
+    // Room-closed signal: the template can be deleted while we're connected
+    // (discard draft / delete template) — keep the subscription so the loop
+    // below can kick this client instead of letting it edit a doc whose
+    // persistence is gone.
+    let mut closed = room.closed_signal();
+
+    // Inbound loop: WebSocket -> room (or room-closed -> disconnect)
+    loop {
+        let result = tokio::select! {
+            next = ws_stream.next() => match next {
+                Some(r) => r,
+                None => break,
+            },
+            _ = closed.changed() => {
+                tracing::info!(
+                    client_id,
+                    template_id = %template_id,
+                    "room closed (template deleted); disconnecting client"
+                );
+                break;
+            }
+        };
         let msg = match result {
             Ok(Message::Binary(data)) => data.to_vec(),
             Ok(Message::Close(_)) => break,

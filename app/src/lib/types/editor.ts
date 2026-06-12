@@ -16,6 +16,7 @@ import type {
 	WorkflowNodeData as SchemaWorkflowNodeData,
 	TaskBlockConfig as SchemaTaskBlockConfig
 } from '$lib/api/client';
+import { randomUuid } from '$lib/editor/ids';
 
 export type {
 	WorkflowEdge,
@@ -107,7 +108,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				taskTitle: 'New Task',
 				steps: [
 					{
-						id: crypto.randomUUID(),
+						id: randomUuid(),
 						title: 'Step 1',
 						blocks: []
 					}

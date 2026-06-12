@@ -31,6 +31,7 @@
 	} from '$lib/types/editor';
 	import type { XYPosition } from '@xyflow/svelte';
 	import { edgeLaneColor, channelForSourceHandle } from '$lib/editor/edge-lane';
+	import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
 
 	type Props = {
 		graph: WorkflowGraph;
@@ -47,6 +48,12 @@
 		 * events and won't be re-emitted by dimension churn.
 		 */
 		onselect?: (nodeId: string | null) => void;
+		/**
+		 * Full multi-selection mirror of `onselect` — fires with EVERY selected
+		 * node id (xyflow shift-click / drag-select). Read-only seam: consumers
+		 * use it to know what to copy/duplicate; it never mutates the canvas.
+		 */
+		onSelectionChange?: (nodeIds: string[]) => void;
 		/** User-click on a node. Distinct from `onselect` — see above. */
 		onNodeClick?: (nodeId: string) => void;
 		/** User-click on the empty pane (i.e. outside any node/edge). */
@@ -88,7 +95,7 @@
 		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onUpdateEdge, onResizeNodes }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onSelectionChange, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onUpdateEdge, onResizeNodes }: Props = $props();
 
 	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onUpdateEdge || onResizeNodes));
 
@@ -388,7 +395,7 @@
 
 	function onConnect(connection: Connection) {
 		if (readonly) return;
-		const edgeId = `e-${connection.source}-${connection.target}-${Date.now()}`;
+		const edgeId = mintEdgeId(connection.source!, connection.target!);
 		// Tools-handle source → agent-binding edge (not a sequence arc):
 		// the compiler discovers tools via these edges and mints the
 		// dispatch/collect transitions itself. Stamp the on-wire `type`
@@ -446,11 +453,26 @@
 	}
 
 	function handleSelectionChange({ nodes: selectedNodes }: { nodes: Node[] }) {
+		onSelectionChange?.(selectedNodes.map((n) => n.id));
 		if (selectedNodes.length === 1) {
 			onselect?.(selectedNodes[0].id);
 		} else {
 			onselect?.(null);
 		}
+	}
+
+	/**
+	 * Programmatically replace the selection — used by paste/duplicate so the
+	 * clones come out selected (immediately draggable / re-copyable). No-op on
+	 * readonly canvases. The graph-sync `$effect.pre` preserves `selected` per
+	 * node, so this survives subsequent Yjs rematerializations.
+	 */
+	export function setSelectedNodes(ids: string[]): void {
+		if (readonly) return;
+		const idSet = new Set(ids);
+		nodes = nodes.map((n) =>
+			(n.selected ?? false) === idSet.has(n.id) ? n : { ...n, selected: idSet.has(n.id) }
+		);
 	}
 
 	function handleNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
@@ -655,7 +677,7 @@
 		event.preventDefault();
 
 		const dropPos = screenToFlowPos({ x: event.clientX, y: event.clientY });
-		const nodeId = `node-${Date.now()}`;
+		const nodeId = mintNodeId();
 		const data = createDefaultNodeData(nodeType);
 
 		// Container kinds get a default initial size so they're a valid drop

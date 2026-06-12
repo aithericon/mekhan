@@ -976,3 +976,260 @@ describe('YjsGraphBinding undo/redo', () => {
 		binding.destroy();
 	});
 });
+
+describe('YjsGraphBinding copy / paste', () => {
+	let doc: Y.Doc;
+	let binding: YjsGraphBinding;
+
+	beforeEach(() => {
+		doc = new Y.Doc();
+		binding = new YjsGraphBinding(doc);
+	});
+
+	it('paste clones config + nested file text with fresh identifier-safe ids', () => {
+		binding.addNode(
+			'step1',
+			'automated_step',
+			{ x: 100, y: 50 },
+			createDefaultNodeData('automated_step')
+		);
+		const orig = binding.graph.nodes.find((n) => n.id === 'step1')!;
+		if (orig.data.type !== 'automated_step') throw new Error('unexpected type');
+		binding.updateNodeData('step1', {
+			...orig.data,
+			label: 'Crunch numbers',
+			executionSpec: { backendType: 'python', entrypoint: 'run.py', config: { cpus: 2 } }
+		} as Extract<WorkflowNodeData, { type: 'automated_step' }>);
+		binding.createFile('step1', 'helper.py', 'x = 1');
+
+		const clip = binding.copySubgraph(['step1']);
+		const newIds = binding.pasteSubgraph(clip, { x: 24, y: 24 });
+		expect(newIds).toHaveLength(1);
+		const newId = newIds[0];
+		expect(newId).not.toBe('step1');
+		// Identifier-safe by construction: the compiler derives the default
+		// slug from the id via sanitize_slug, so the minted id must already
+		// match ^[a-z][a-z0-9_]*$ (no dashes, no leading digit).
+		expect(newId).toMatch(/^node_[0-9a-f]{32}$/);
+
+		const clone = binding.graph.nodes.find((n) => n.id === newId)!;
+		expect(clone.position).toEqual({ x: 124, y: 74 });
+		expect(clone.data.label).toBe('Crunch numbers');
+		expect(clone.data.type).toBe('automated_step');
+		if (clone.data.type === 'automated_step') {
+			expect(clone.data.executionSpec.entrypoint).toBe('run.py');
+			expect(clone.data.executionSpec.config).toEqual({ cpus: 2 });
+		}
+		// Both the addNode-seeded main.py and the created helper.py travel.
+		expect(binding.getFileText(newId, 'main.py')).not.toBeNull();
+		expect(binding.getFileText(newId, 'helper.py')!.toString()).toBe('x = 1');
+
+		// Deep copy: editing the ORIGINAL's file afterwards must not leak into
+		// the clone (the clipboard snapshotted plain strings, paste minted a
+		// fresh Y.Text).
+		binding.getFileText('step1', 'helper.py')!.insert(0, '# changed\n');
+		expect(binding.getFileText(newId, 'helper.py')!.toString()).toBe('x = 1');
+	});
+
+	it('remaps only edges whose BOTH endpoints are inside the copied set', () => {
+		binding.addNode('n1', 'start', { x: 0, y: 0 }, createDefaultNodeData('start'));
+		binding.addNode(
+			'n2',
+			'automated_step',
+			{ x: 100, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.addNode('n3', 'end', { x: 200, y: 0 }, createDefaultNodeData('end'));
+		binding.addEdge({
+			id: 'e1',
+			source: 'n1',
+			target: 'n2',
+			type: 'sequence',
+			sourceHandle: 'out',
+			targetHandle: 'in',
+			join: 'gather'
+		});
+		binding.addEdge({ id: 'e2', source: 'n2', target: 'n3', type: 'sequence' });
+
+		const clip = binding.copySubgraph(['n1', 'n2']);
+		// The boundary edge n2→n3 is dropped at copy time already.
+		expect(clip.edges.map((e) => e.id)).toEqual(['e1']);
+
+		const newIds = binding.pasteSubgraph(clip);
+		const idSet = new Set(newIds);
+		const touchingClones = binding.graph.edges.filter(
+			(e) => idSet.has(e.source) || idSet.has(e.target)
+		);
+		// Exactly one cloned edge, fully inside the pasted set, freshly id'd,
+		// with handles + join discipline intact.
+		expect(touchingClones).toHaveLength(1);
+		const cloned = touchingClones[0];
+		expect(idSet.has(cloned.source)).toBe(true);
+		expect(idSet.has(cloned.target)).toBe(true);
+		expect(cloned.id).not.toBe('e1');
+		expect(cloned.sourceHandle).toBe('out');
+		expect(cloned.targetHandle).toBe('in');
+		expect(cloned.join).toBe('gather');
+		// n3 did NOT gain an inbound edge from the paste.
+		expect(binding.graph.edges.filter((e) => e.target === 'n3')).toHaveLength(1);
+	});
+
+	it('one undo reverts the whole paste (nodes + edges in one transaction)', () => {
+		binding.addNode('n1', 'start', { x: 0, y: 0 }, createDefaultNodeData('start'));
+		binding.addNode(
+			'n2',
+			'automated_step',
+			{ x: 100, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.addEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'sequence' });
+		const clip = binding.copySubgraph(['n1', 'n2']);
+
+		binding.enableUndo();
+		binding.pasteSubgraph(clip);
+		expect(binding.graph.nodes).toHaveLength(4);
+		expect(binding.graph.edges).toHaveLength(2);
+
+		binding.undo();
+		expect(binding.graph.nodes).toHaveLength(2);
+		expect(binding.graph.edges).toHaveLength(1);
+		expect(binding.canUndo).toBe(false);
+	});
+
+	it('copying a container brings its children; paste preserves containment', () => {
+		binding.addNode('s1', 'scope', { x: 10, y: 20 }, createDefaultNodeData('scope'), {
+			width: 400,
+			height: 200
+		});
+		binding.addNode(
+			'c1',
+			'automated_step',
+			{ x: 30, y: 40 },
+			createDefaultNodeData('automated_step'),
+			{ parentId: 's1' }
+		);
+
+		// Only the container is selected — the child must come along.
+		const clip = binding.copySubgraph(['s1']);
+		expect(clip.nodes).toHaveLength(2);
+
+		const newIds = binding.pasteSubgraph(clip, { x: 24, y: 24 });
+		expect(newIds).toHaveLength(2);
+		const newScope = binding.graph.nodes.find((n) => newIds.includes(n.id) && n.type === 'scope')!;
+		const newChild = binding.graph.nodes.find(
+			(n) => newIds.includes(n.id) && n.type === 'automated_step'
+		)!;
+		// Offset shifts the paste ROOT only; the child keeps its parent-relative
+		// position and rides the container's shift.
+		expect(newScope.position).toEqual({ x: 34, y: 44 });
+		expect(newScope.width).toBe(400);
+		expect(newScope.height).toBe(200);
+		expect(newChild.parentId).toBe(newScope.id);
+		expect(newChild.position).toEqual({ x: 30, y: 40 });
+	});
+
+	it('a child copied WITHOUT its container pastes top-level at its world position', () => {
+		binding.addNode('s1', 'scope', { x: 10, y: 20 }, createDefaultNodeData('scope'), {
+			width: 400,
+			height: 200
+		});
+		binding.addNode(
+			'c1',
+			'automated_step',
+			{ x: 30, y: 40 },
+			createDefaultNodeData('automated_step'),
+			{ parentId: 's1' }
+		);
+
+		const clip = binding.copySubgraph(['c1']);
+		expect(clip.nodes).toHaveLength(1);
+		const [newId] = binding.pasteSubgraph(clip, { x: 24, y: 24 });
+		const clone = binding.graph.nodes.find((n) => n.id === newId)!;
+		// World position (10+30, 20+40) + offset — no dangling parentId.
+		expect(clone.parentId).toBeUndefined();
+		expect(clone.position).toEqual({ x: 64, y: 84 });
+	});
+
+	it('explicit slugs are not cloned (a duplicate explicit slug is a compile error)', () => {
+		binding.addNode(
+			'n1',
+			'automated_step',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.updateNodeSlug('n1', 'my_step');
+
+		const clip = binding.copySubgraph(['n1']);
+		const [newId] = binding.pasteSubgraph(clip);
+		const clone = binding.graph.nodes.find((n) => n.id === newId)!;
+		expect(clone.slug).toBeUndefined();
+		// Original keeps its slug.
+		expect(binding.graph.nodes.find((n) => n.id === 'n1')!.slug).toBe('my_step');
+	});
+
+	it('remaps in-set `<slug>.<field>` refs in config onto the clones', () => {
+		binding.addNode(
+			'prod_a',
+			'automated_step',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.addNode('dec_b', 'decision', { x: 100, y: 0 }, createDefaultNodeData('decision'));
+		const dec = binding.graph.nodes.find((n) => n.id === 'dec_b')!;
+		if (dec.data.type !== 'decision') throw new Error('unexpected type');
+		binding.updateNodeData('dec_b', {
+			...dec.data,
+			// One ref to the in-set producer's DEFAULT (id-derived) slug, one to
+			// an out-of-set producer — only the former must be rewritten.
+			conditions: [
+				{ edgeId: 'e1', label: 'hot', guard: 'prod_a.temp > 5 && outside.flag' }
+			]
+		} as Extract<WorkflowNodeData, { type: 'decision' }>);
+
+		const clip = binding.copySubgraph(['prod_a', 'dec_b']);
+		const newIds = binding.pasteSubgraph(clip);
+		const newProdId = newIds[clip.nodes.findIndex((n) => n.id === 'prod_a')];
+		const newDecId = newIds[clip.nodes.findIndex((n) => n.id === 'dec_b')];
+		const cloneDec = binding.graph.nodes.find((n) => n.id === newDecId)!;
+		if (cloneDec.data.type !== 'decision') throw new Error('unexpected type');
+		expect(cloneDec.data.conditions[0].guard).toBe(`${newProdId}.temp > 5 && outside.flag`);
+		// The original decision still references the original producer.
+		const origDec = binding.graph.nodes.find((n) => n.id === 'dec_b')!;
+		if (origDec.data.type !== 'decision') throw new Error('unexpected type');
+		expect(origDec.data.conditions[0].guard).toBe('prod_a.temp > 5 && outside.flag');
+	});
+
+	it('remaps refs to an in-set EXPLICIT slug, including inside file text', () => {
+		binding.addNode(
+			'prod_a',
+			'automated_step',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.updateNodeSlug('prod_a', 'my_producer');
+		binding.addNode(
+			'cons_b',
+			'automated_step',
+			{ x: 100, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		// `my_producer_extra` must NOT match — `_` is a word char, so the
+		// boundary regex can't hit a partial slug.
+		binding.createFile('cons_b', 'main.py', 'x = my_producer.value + my_producer_extra.y\n');
+
+		const clip = binding.copySubgraph(['prod_a', 'cons_b']);
+		const newIds = binding.pasteSubgraph(clip);
+		const newProdId = newIds[clip.nodes.findIndex((n) => n.id === 'prod_a')];
+		const newConsId = newIds[clip.nodes.findIndex((n) => n.id === 'cons_b')];
+		expect(binding.getFileText(newConsId, 'main.py')!.toString()).toBe(
+			`x = ${newProdId}.value + my_producer_extra.y\n`
+		);
+		// Clone still gets NO explicit slug (default = its minted id).
+		expect(binding.graph.nodes.find((n) => n.id === newProdId)!.slug).toBeUndefined();
+	});
+
+	it('pasting an empty clipboard is a no-op', () => {
+		expect(binding.pasteSubgraph({ nodes: [], edges: [] })).toEqual([]);
+		expect(binding.graph.nodes).toHaveLength(0);
+	});
+});

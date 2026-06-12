@@ -12,6 +12,17 @@
 
 	const items = $derived(nodeList());
 
+	// Case-insensitive substring filter over label + wire-name (the type).
+	let query = $state('');
+	const filtered = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		if (!q) return items;
+		return items.filter(
+			(i) =>
+				i.displayLabel.toLowerCase().includes(q) || i.wireName.toLowerCase().includes(q)
+		);
+	});
+
 	function onDragStart(event: DragEvent, nodeType: WorkflowNodeType) {
 		if (!event.dataTransfer) return;
 		event.dataTransfer.setData('application/mekhan-node-type', nodeType);
@@ -23,8 +34,30 @@
 	<div class="border-b border-sidebar-border px-3 py-2.5">
 		<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Blocks</h2>
 	</div>
+	<div class="border-b border-sidebar-border p-2">
+		<input
+			type="text"
+			placeholder="Filter blocks…"
+			bind:value={query}
+			data-testid="palette-search"
+			class="w-full rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+			onkeydown={(e) => {
+				if (e.key === 'Escape') {
+					query = '';
+					// Keep Escape local — don't let it bubble into canvas/page
+					// handlers (deselect, close panel) while clearing the filter.
+					e.stopPropagation();
+				}
+			}}
+		/>
+	</div>
 	<div class="flex-1 space-y-1 overflow-y-auto p-2">
-		{#each items as item (item.wireName)}
+		{#if filtered.length === 0}
+			<p class="px-2.5 py-3 text-sm text-muted-foreground" data-testid="palette-empty">
+				No blocks match “{query.trim()}”.
+			</p>
+		{/if}
+		{#each filtered as item (item.wireName)}
 			{@const meta = nodePaletteMeta(item.wireName)}
 			{@const Icon = meta.icon}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->

@@ -608,7 +608,8 @@ pub async fn update_template(
 }
 
 /// DELETE /api/v1/templates/{id}
-/// Per Section 11.7: cascade cleanup for published templates with finished instances.
+/// Per Section 11.7: cascade cleanup of the chain's instances (published runs
+/// AND draft test runs) before the template rows.
 #[utoipa::path(
     delete,
     path = "/api/v1/templates/{id}",
@@ -632,47 +633,51 @@ pub async fn delete_template(
 
     let base_id = existing.chain_root_id();
 
-    if existing.published {
-        // Check for running instances across all versions in this chain
-        let running_count: (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*) FROM workflow_instances
-               WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)
-               AND status = 'running'"#,
-        )
-        .bind(base_id)
-        .fetch_one(&state.db)
-        .await?;
+    // Instance cleanup is UNCONDITIONAL — never-published drafts get
+    // instances too (the publish gate runs template tests against the draft
+    // id, leaving `mode = 'test_run'` rows behind), and gating this on
+    // `existing.published` left FK-violating rows that 500'd the final
+    // template DELETE.
+    //
+    // Check for running instances across all versions in this chain.
+    let running_count: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM workflow_instances
+           WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)
+           AND status = 'running'"#,
+    )
+    .bind(base_id)
+    .fetch_one(&state.db)
+    .await?;
 
-        if running_count.0 > 0 {
-            return Err(ApiError::conflict(
-                "cannot delete template with active instances",
-            ));
-        }
+    if running_count.0 > 0 {
+        return Err(ApiError::conflict(
+            "cannot delete template with active instances",
+        ));
+    }
 
-        // Cascade cleanup: clean up all finished instances for this template chain
-        let instances: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-            r#"SELECT id, net_id FROM workflow_instances
-               WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)"#,
-        )
-        .bind(base_id)
-        .fetch_all(&state.db)
-        .await?;
+    // Cascade cleanup: clean up all finished instances for this template chain
+    let instances: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, net_id FROM workflow_instances
+           WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)"#,
+    )
+    .bind(base_id)
+    .fetch_all(&state.db)
+    .await?;
 
-        let purge_events = state.config.cleanup.purge_events;
-        for (_instance_id, net_id) in &instances {
-            cleanup_net(net_id, &state.nats, &state.petri, purge_events).await;
-        }
+    let purge_events = state.config.cleanup.purge_events;
+    for (_instance_id, net_id) in &instances {
+        cleanup_net(net_id, &state.nats, &state.petri, purge_events).await;
+    }
 
-        // Delete all instances for this template chain
-        if let Err(e) = sqlx::query(
-            "DELETE FROM workflow_instances WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)"
-        )
-        .bind(base_id)
-        .execute(&state.db)
-        .await
-        {
-            tracing::error!("failed to delete instances for template chain: {e}");
-        }
+    // Delete all instances for this template chain
+    if let Err(e) = sqlx::query(
+        "DELETE FROM workflow_instances WHERE template_id IN (SELECT id FROM workflow_templates WHERE base_template_id = $1)"
+    )
+    .bind(base_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!("failed to delete instances for template chain: {e}");
     }
 
     // Capture every version id in the chain before the delete so we can drop
@@ -713,6 +718,10 @@ pub async fn delete_template(
 
     for (vid,) in version_ids {
         state.triggers.forget_template(vid);
+        // Kick any collaborator still connected to a deleted version's Yjs
+        // room — their socket would otherwise keep accepting edits whose
+        // persistence INSERTs fail on the now-dangling FK.
+        state.yjs.close_room(vid).await;
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -745,9 +754,11 @@ pub(crate) fn discard_mode(draft: &WorkflowTemplate) -> Result<DiscardMode, Stri
 /// DELETE /api/v1/templates/{id}/draft
 ///
 /// Discard a single unpublished draft version — the reverse of `new_version`.
-/// The draft row is deleted (its `yjs_documents`/`yjs_snapshots` cascade via
-/// FK) and the parent version is restored as the chain head
-/// (`is_latest = TRUE`) in one transaction. A never-published v1 root draft
+/// The draft's instances (publish-gate `test_run`s bind to the draft id and
+/// their FK has no cascade) and the draft row are deleted (its
+/// `yjs_documents`/`yjs_snapshots` cascade via FK) and the parent version is
+/// restored as the chain head (`is_latest = TRUE`) in one transaction; the
+/// instances' engine nets are purged after commit. A never-published v1 root draft
 /// has no parent: the draft IS the chain, so the whole template is deleted
 /// via the same path as `DELETE /api/v1/templates/{id}` (which also owns the
 /// chain-root `object_grants` cleanup).
@@ -758,7 +769,7 @@ pub(crate) fn discard_mode(draft: &WorkflowTemplate) -> Result<DiscardMode, Stri
     responses(
         (status = 200, description = "Draft discarded", body = DiscardDraftResponse),
         (status = 404, description = "Template not found", body = ErrorResponse),
-        (status = 409, description = "Version is published or not the chain head", body = ErrorResponse),
+        (status = 409, description = "Version is published, not the chain head, or has running instances", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "templates",
@@ -788,6 +799,60 @@ pub async fn discard_draft(
 
     let mut tx = state.db.begin().await?;
 
+    // Re-check the draft state under a row lock: `discard_mode` decided from
+    // a pre-transaction snapshot, and a concurrent publish flips
+    // `published = TRUE` between its own pre-checks and `finalize_publish_row`
+    // (a seconds-long compile + test-gate window). Without this guard the
+    // DELETE below would silently destroy the freshly published version.
+    let still_draft: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM workflow_templates \
+          WHERE id = $1 AND published = FALSE AND is_latest = TRUE FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if still_draft.is_none() {
+        return Err(ApiError::conflict(
+            "version was published or superseded concurrently",
+        ));
+    }
+
+    // The publish gate runs template tests against the DRAFT id, leaving
+    // `mode = 'test_run'` workflow_instances rows behind. Their template_id
+    // FK has no ON DELETE action, so they (and their polymorphic instance
+    // grants) must go before the template row — mirroring delete_template.
+    let running: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1 AND status = 'running'",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if running.0 > 0 {
+        return Err(ApiError::conflict(
+            "cannot discard a draft with running instances",
+        ));
+    }
+
+    let instances: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT id, net_id FROM workflow_instances WHERE template_id = $1")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+
+    sqlx::query(
+        "DELETE FROM object_grants \
+          WHERE object_type = 'instance'::object_kind \
+            AND object_id IN (SELECT id FROM workflow_instances WHERE template_id = $1)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM workflow_instances WHERE template_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM workflow_templates WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -805,6 +870,19 @@ pub async fn discard_draft(
     })?;
 
     tx.commit().await?;
+
+    // Engine-side teardown AFTER commit, so a rollback never leaves DB rows
+    // pointing at already-purged nets; the gate's test-run nets would
+    // otherwise leak in the engine.
+    let purge_events = state.config.cleanup.purge_events;
+    for (_instance_id, net_id) in &instances {
+        cleanup_net(net_id, &state.nats, &state.petri, purge_events).await;
+    }
+
+    // Kick any collaborator still connected to the draft's Yjs room — their
+    // socket would otherwise keep accepting edits whose persistence INSERTs
+    // fail on the now-dangling FK, silently losing their work.
+    state.yjs.close_room(id).await;
 
     // Drafts have no registered triggers, but mirror delete_template's
     // dispatcher hygiene in case of drift.
