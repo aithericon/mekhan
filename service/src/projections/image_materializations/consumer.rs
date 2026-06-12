@@ -22,7 +22,7 @@ use crate::nats::subjects::{
     Subjects, EFFECT_COMPLETED_EVENTS_FILTER, EFFECT_FAILED_EVENTS_FILTER,
 };
 use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
-use crate::projections::framework::{run_projection, BootstrapPolicy, Projection};
+use crate::projections::framework::{run_projection, BootstrapPolicy, LazyHistory, Projection};
 
 use super::projector::{project_materialize, MaterializeUpdate};
 
@@ -64,7 +64,7 @@ impl Projection for ImageMaterializationsProjection {
         &self,
         _db: &PgPool,
         _net_id: &str,
-        _history: &[PersistedEvent],
+        _history: &LazyHistory<'_>,
     ) -> anyhow::Result<Option<()>> {
         Ok(None)
     }

@@ -45,7 +45,7 @@ use crate::nats::subjects::{
     TOKEN_CREATED_EVENTS_FILTER, TRANSITION_FIRED_EVENTS_FILTER,
 };
 use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
-use crate::projections::framework::{run_projection, Projection};
+use crate::projections::framework::{run_projection, LazyHistory, Projection};
 
 use super::projector::{AllocationRow, State};
 
@@ -81,10 +81,10 @@ impl Projection for AllocationsProjection {
         &self,
         db: &PgPool,
         net_id: &str,
-        history: &[PersistedEvent],
+        history: &LazyHistory<'_>,
     ) -> anyhow::Result<Option<State>> {
         let mut state = State::default();
-        for ev in history {
+        for ev in history.get().await? {
             state.absorb(ev, net_id);
         }
         let rows = state.take_dirty_rows();

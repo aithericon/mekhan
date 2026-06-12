@@ -103,11 +103,17 @@ pub trait Projection: Send + Sync + 'static {
     /// miss). `Ok(None)` means "this net is not mine" — the event
     /// is ACKed and the net is deliberately NOT cached, so non-matching nets
     /// stay cheap misses instead of holding state.
+    ///
+    /// `history` is LAZY: run any cheap ownership checks (e.g. an indexed
+    /// instance lookup) BEFORE awaiting `history.get()`. Foreign nets —
+    /// including high-traffic pool nets — deliver here on every event, and
+    /// the JetStream replay behind `get()` is the expensive part the
+    /// pre-framework consumers deliberately avoided for them.
     async fn bootstrap(
         &self,
         db: &PgPool,
         net_id: &str,
-        history: &[PersistedEvent],
+        history: &LazyHistory<'_>,
     ) -> anyhow::Result<Option<Self::State>>;
 
     /// Fold one freshly-delivered event into the cached state (incremental
@@ -147,6 +153,32 @@ pub struct NatsHistoryLoader {
 impl HistoryLoader for NatsHistoryLoader {
     async fn load(&self, net_id: &str) -> anyhow::Result<Vec<PersistedEvent>> {
         fetch_events(&self.nats, net_id).await
+    }
+}
+
+/// One net's full history, fetched at most once and only on first
+/// [`LazyHistory::get`]. Lets [`Projection::bootstrap`] reject foreign nets
+/// from a cheap DB lookup without paying the JetStream replay.
+pub struct LazyHistory<'a> {
+    loader: &'a dyn HistoryLoader,
+    net_id: &'a str,
+    cell: tokio::sync::OnceCell<Vec<PersistedEvent>>,
+}
+
+impl<'a> LazyHistory<'a> {
+    pub fn new(loader: &'a dyn HistoryLoader, net_id: &'a str) -> Self {
+        Self {
+            loader,
+            net_id,
+            cell: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    pub async fn get(&self) -> anyhow::Result<&[PersistedEvent]> {
+        self.cell
+            .get_or_try_init(|| self.loader.load(self.net_id))
+            .await
+            .map(Vec::as_slice)
     }
 }
 
@@ -308,9 +340,11 @@ pub(crate) async fn step_event<P: Projection>(
         }
         StepAction::Bootstrap => {
             *entry = None;
-            let history = loader.load(net_id).await?;
-            let last_applied = history.last().map(|e| e.sequence).unwrap_or(0);
+            let history = LazyHistory::new(loader, net_id);
             if let Some(state) = projection.bootstrap(db, net_id, &history).await? {
+                // A Some(state) bootstrap has folded the history, so the
+                // fetch is already cached — this get() never re-fetches.
+                let last_applied = history.get().await?.last().map(|e| e.sequence).unwrap_or(0);
                 *entry = Some(NetEntry {
                     last_applied,
                     state,
@@ -609,10 +643,16 @@ mod tests {
             &self,
             _db: &PgPool,
             _net_id: &str,
-            _history: &[PersistedEvent],
+            history: &LazyHistory<'_>,
         ) -> anyhow::Result<Option<()>> {
             self.bootstraps.fetch_add(1, Ordering::SeqCst);
-            Ok(if self.bootstrap_none { None } else { Some(()) })
+            // Mirror the real projections: reject foreign nets BEFORE the
+            // history fetch (the cost the lazy handle exists to avoid).
+            if self.bootstrap_none {
+                return Ok(None);
+            }
+            history.get().await?;
+            Ok(Some(()))
         }
 
         async fn apply(
@@ -786,11 +826,14 @@ mod tests {
         assert!(entry.is_none(), "Ok(None) bootstrap must not cache");
         assert!(p.applied.lock().unwrap().is_empty());
 
-        // Stays a cheap miss: the next event re-asks rather than caching.
+        // Stays a cheap miss: the next event re-asks rather than caching —
+        // and a foreign-net rejection must never pay the history fetch
+        // (pool nets hit this on every event).
         step_event(&p, &loader, &db, &mut entry, "net-a", &ev(2))
             .await
             .unwrap();
-        assert_eq!(loader.calls(), 2);
+        assert_eq!(p.bootstraps.load(Ordering::SeqCst), 2);
+        assert_eq!(loader.calls(), 0);
         assert!(entry.is_none());
     }
 

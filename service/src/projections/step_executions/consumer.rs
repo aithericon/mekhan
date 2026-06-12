@@ -48,7 +48,7 @@ use crate::nats::subjects::{
     NET_LIFECYCLE_EVENTS_FILTER, TOKEN_CREATED_EVENTS_FILTER, TRANSITION_FIRED_EVENTS_FILTER,
 };
 use crate::nats::{ConsumerSpec, MekhanNats, StreamSource};
-use crate::projections::framework::{run_projection, Projection};
+use crate::projections::framework::{run_projection, LazyHistory, Projection};
 
 use super::projector::{Lookups, State as FoldState, StepExecutionRow, StepStatus};
 
@@ -106,8 +106,11 @@ impl Projection for StepExecutionsProjection {
         &self,
         db: &PgPool,
         net_id: &str,
-        history: &[PersistedEvent],
+        history: &LazyHistory<'_>,
     ) -> anyhow::Result<Option<NetState>> {
+        // Ownership checks BEFORE touching `history` — foreign nets (pool
+        // nets especially) hit this on every event, and the lazy handle is
+        // what keeps them from paying the JetStream replay.
         let Some(ctx) = load_instance_context(db, net_id).await? else {
             return Ok(None);
         };
@@ -126,7 +129,7 @@ impl Projection for StepExecutionsProjection {
         let mut fold = FoldState::new();
         {
             let lookups = Lookups::build(&registry);
-            for ev in history {
+            for ev in history.get().await? {
                 fold.absorb(ev, &lookups);
             }
         }
