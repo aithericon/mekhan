@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { listInstances, cancelInstance, type InstanceListItem } from '$lib/api/client';
+	import { listInstances, cancelInstance } from '$lib/api/client';
 	import { PageShell, PageHeader, FilterPills, type FilterPill } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -8,10 +8,13 @@
 	import { roleAtLeast } from '$lib/api/iam';
 	import Activity from '@lucide/svelte/icons/activity';
 	import X from '@lucide/svelte/icons/x';
+	import { createListState } from '$lib/stores/remote.svelte';
 
-	let instances = $state<InstanceListItem[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
+	const list = createListState(
+		async (f: Parameters<typeof listInstances>[0]) => (await listInstances(f)).items,
+		{ errorFallback: 'Failed to load instances', resetOnError: true }
+	);
+	const instances = $derived(list.items);
 
 	const templateFilter = $derived(page.url.searchParams.get('template_id') ?? undefined);
 	/// Family scope: runs of ANY version of the template (the editor's
@@ -62,32 +65,13 @@
 		cancelled: 'bg-slate-100 text-slate-700'
 	};
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			const result = await listInstances({
-				templateId: templateFilter,
-				templateFamily: familyFilter,
-				status: statusFilter,
-				mode: modeFilter
-			});
-			instances = result.items;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load instances';
-			instances = [];
-		} finally {
-			loading = false;
-		}
-	}
-
 	async function handleCancel(id: string) {
 		if (!confirm('Cancel this instance?')) return;
 		try {
 			await cancelInstance(id);
-			instances = instances.map((i) => (i.id === id ? { ...i, status: 'cancelled' } : i));
+			list.items = list.items.map((i) => (i.id === id ? { ...i, status: 'cancelled' } : i));
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to cancel';
+			list.error = e instanceof Error ? e.message : 'Failed to cancel';
 		}
 	}
 
@@ -95,12 +79,13 @@
 
 	$effect(() => {
 		// Re-load when the URL filter (template_id / template_family / status /
-		// mode) changes.
-		void templateFilter;
-		void familyFilter;
-		void statusFilter;
-		void modeFilter;
-		load();
+		// mode) changes — the deriveds read here keep the effect keyed on them.
+		void list.load({
+			templateId: templateFilter,
+			templateFamily: familyFilter,
+			status: statusFilter,
+			mode: modeFilter
+		});
 	});
 </script>
 
@@ -129,13 +114,13 @@
 		</div>
 	{/if}
 
-	{#if error}
+	{#if list.error}
 		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-			{error}
+			{list.error}
 		</div>
 	{/if}
 
-	{#if loading}
+	{#if list.loading}
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 			Loading...
 		</div>

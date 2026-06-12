@@ -31,14 +31,16 @@
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
+	import { createListState } from '$lib/stores/remote.svelte';
 
 	// Top-level folders are scoped to the active workspace — same implicit
 	// scoping every other top-level page (Templates, Instances, …) uses.
 	const workspaceId = $derived(workspaces.active?.id ?? '');
 
-	let folders = $state<Folder[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
+	const folderList = createListState((wsId: string) => listFolders(wsId), {
+		errorFallback: 'Failed to load folders'
+	});
+	const folders = $derived(folderList.items);
 
 	// Selection is URL-addressable (`/folders?folder=<id>`) so a folder's
 	// contract can be deep-linked / shared without a separate detail route.
@@ -84,22 +86,9 @@
 		);
 	}
 
-	async function load() {
-		if (!workspaceId) return;
-		loading = true;
-		error = null;
-		try {
-			folders = await listFolders(workspaceId);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load folders';
-		} finally {
-			loading = false;
-		}
-	}
-
 	$effect(() => {
 		workspaces.load();
-		if (workspaceId) load();
+		if (workspaceId) void folderList.load(workspaceId);
 	});
 
 	// Keep the new-folder parent in lockstep with the tree selection.
@@ -146,7 +135,7 @@
 				description: '',
 				parent_id: newParentId ?? undefined
 			});
-			folders = [...folders, f];
+			folderList.items = [...folders, f];
 			newSlug = '';
 			newName = '';
 			createOpen = false;
@@ -172,12 +161,12 @@
 		renaming = false;
 		if (!next || next === f.display_name) return;
 		const prev = f.display_name;
-		folders = folders.map((x) => (x.id === f.id ? { ...x, display_name: next } : x)); // optimistic
+		folderList.items = folders.map((x) => (x.id === f.id ? { ...x, display_name: next } : x)); // optimistic
 		try {
 			await updateFolder(f.id, { display_name: next });
 		} catch (e) {
-			folders = folders.map((x) => (x.id === f.id ? { ...x, display_name: prev } : x));
-			error = e instanceof Error ? e.message : 'Rename failed';
+			folderList.items = folders.map((x) => (x.id === f.id ? { ...x, display_name: prev } : x));
+			folderList.error = e instanceof Error ? e.message : 'Rename failed';
 		}
 	}
 
@@ -192,13 +181,13 @@
 		const f = selected;
 		if (!f || moveBusy) return;
 		moveBusy = true;
-		error = null;
+		folderList.error = null;
 		try {
 			await updateFolder(f.id, { parent_id: moveParentId });
 			moving = false;
-			await load(); // materialized paths shift across the subtree — reload.
+			await folderList.refetch(); // materialized paths shift across the subtree — reload.
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Move failed';
+			folderList.error = e instanceof Error ? e.message : 'Move failed';
 		} finally {
 			moveBusy = false;
 		}
@@ -216,16 +205,16 @@
 		try {
 			await deleteFolder(f.id);
 			selectFolder(f.parent_id ?? null);
-			await load();
+			await folderList.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to delete folder';
+			folderList.error = e instanceof Error ? e.message : 'Failed to delete folder';
 		}
 	}
 
 	// Folder edits from the Settings tab (slug changes re-root subtree paths).
 	function handleUpdated(next: Folder) {
-		folders = folders.map((x) => (x.id === next.id ? next : x));
-		load();
+		folderList.items = folders.map((x) => (x.id === next.id ? next : x));
+		void folderList.refetch();
 	}
 
 	function bundleUrl(f: Folder): string {
@@ -359,13 +348,13 @@
 		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
 			No active workspace. Pick one from the workspace switcher first.
 		</div>
-	{:else if loading}
+	{:else if folderList.loading}
 		<p class="text-sm text-muted-foreground">Loading…</p>
 	{:else}
 		<div data-testid="folder-detail">
-			{#if error}
+			{#if folderList.error}
 				<div class="mb-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-					{error}
+					{folderList.error}
 				</div>
 			{/if}
 			{#if !selected}
@@ -554,6 +543,6 @@
 		objectId={selected.id}
 		objectName={selected.display_name}
 		myEffectiveRole={selected.my_effective_role}
-		onChanged={load}
+		onChanged={() => void folderList.refetch()}
 	/>
 {/if}

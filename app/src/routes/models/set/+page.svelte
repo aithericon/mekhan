@@ -33,8 +33,12 @@
 	} from '$lib/api/models';
 	import RunnerTargetPicker from '$lib/components/fleet/RunnerTargetPicker.svelte';
 	import { statusTone } from '$lib/components/fleet/model-pool';
+	import { createPolledState } from '$lib/stores/remote.svelte';
 
-	let models = $state<ModelSetView[]>([]);
+	const pool = createPolledState(listLoadedModels, 5000, {
+		onError: (err) => toast.error(apiErrorMessage(err))
+	});
+	const models = $derived(pool.data ?? []);
 	let busy = $state<string | null>(null);
 
 	type AutoscaleMode = 'manual' | 'scale_to_zero' | 'keep_warm';
@@ -66,20 +70,6 @@
 
 	// Delete-from-pool confirmation.
 	let deleteFor = $state<string | null>(null);
-
-	async function poll() {
-		try {
-			models = await listLoadedModels();
-		} catch (err) {
-			toast.error(apiErrorMessage(err));
-		}
-	}
-
-	$effect(() => {
-		void poll();
-		const t = setInterval(() => void poll(), 5000);
-		return () => clearInterval(t);
-	});
 
 	function openPolicy(m: ModelSetView) {
 		policyFor = m.model_id;
@@ -116,7 +106,7 @@
 		try {
 			await setModelPolicy(modelId, body);
 			policyFor = null;
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -128,7 +118,7 @@
 		busy = modelId;
 		try {
 			await clearModelPolicy(modelId);
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -141,7 +131,7 @@
 		busy = modelId;
 		try {
 			await scaleModel(modelId, desired);
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -159,7 +149,7 @@
 			newModelId = '';
 			newBase = '';
 			addOpen = false;
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -179,7 +169,7 @@
 		try {
 			await loadModel(modelId, loadRunner);
 			loadFor = null;
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -194,7 +184,7 @@
 		try {
 			await unloadModel(modelId, unloadRunner);
 			unloadFor = null;
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {
@@ -210,7 +200,7 @@
 			await deleteModel(modelId);
 			toast.success(`Removed ${modelId} from the pool`);
 			deleteFor = null;
-			await poll();
+			await pool.poll();
 		} catch (err) {
 			toast.error(apiErrorMessage(err));
 		} finally {

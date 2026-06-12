@@ -18,15 +18,34 @@
 		AdminNetsForbidden,
 		type AdminNetRow
 	} from '$lib/api/admin-nets';
+	import { createListState } from '$lib/stores/remote.svelte';
 
 	const PETRI_URL = '/petri';
 
 	/** A running net firing this many events is almost certainly a runaway. */
 	const RUNAWAY_EVENT_THRESHOLD = 5000;
 
-	let nets = $state<AdminNetRow[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
+	const netList = createListState<AdminNetRow>(
+		async () => {
+			try {
+				const rows = await listAdminNets();
+				isAdmin = true;
+				return rows;
+			} catch (e) {
+				if (e instanceof AdminNetsForbidden) {
+					// Non-admin: fall back to the read-only engine metadata listing
+					// (same data minus event counts / instance join / actions).
+					isAdmin = false;
+					const res = await fetch(`${PETRI_URL}/api/nets/metadata`);
+					if (!res.ok) throw new Error(`Engine returned ${res.status}`);
+					return await res.json();
+				}
+				throw e;
+			}
+		},
+		{ errorFallback: 'Failed to load nets', resetOnError: true }
+	);
+	const nets = $derived(netList.items);
 	let notice = $state<string | null>(null);
 	let filter = $state<'all' | 'active' | 'terminal'>('active');
 	/** Admin view (kill/purge + event counts) vs read-only engine metadata. */
@@ -78,34 +97,6 @@
 		return String(c);
 	}
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			nets = await listAdminNets();
-			isAdmin = true;
-		} catch (e) {
-			if (e instanceof AdminNetsForbidden) {
-				// Non-admin: fall back to the read-only engine metadata listing
-				// (same data minus event counts / instance join / actions).
-				isAdmin = false;
-				try {
-					const res = await fetch(`${PETRI_URL}/api/nets/metadata`);
-					if (!res.ok) throw new Error(`Engine returned ${res.status}`);
-					nets = await res.json();
-				} catch (e2) {
-					error = e2 instanceof Error ? e2.message : 'Failed to load nets';
-					nets = [];
-				}
-			} else {
-				error = e instanceof Error ? e.message : 'Failed to load nets';
-				nets = [];
-			}
-		} finally {
-			loading = false;
-		}
-	}
-
 	function setBusy(netId: string, on: boolean) {
 		const next = new Set(busy);
 		if (on) next.add(netId);
@@ -122,9 +113,9 @@
 		try {
 			await killNet(net.net_id);
 			notice = `Net ${net.net_id} terminated`;
-			await load();
+			await netList.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to kill net';
+			netList.error = e instanceof Error ? e.message : 'Failed to kill net';
 		} finally {
 			setBusy(net.net_id, false);
 		}
@@ -143,9 +134,9 @@
 		try {
 			const res = await purgeNetEvents(net.net_id);
 			notice = `Purged ${res.purged_messages} messages for ${net.net_id}`;
-			await load();
+			await netList.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to purge events';
+			netList.error = e instanceof Error ? e.message : 'Failed to purge events';
 		} finally {
 			setBusy(net.net_id, false);
 		}
@@ -178,9 +169,9 @@
 				parts.push(`skipped ${res.skipped_infrastructure.length} infra`);
 			if (res.failed.length > 0) parts.push(`${res.failed.length} failed`);
 			notice = `Bulk kill: ${parts.join(', ')}`;
-			await load();
+			await netList.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Bulk kill failed';
+			netList.error = e instanceof Error ? e.message : 'Bulk kill failed';
 		} finally {
 			bulkBusy = false;
 		}
@@ -201,16 +192,16 @@
 			const res = await purgeTerminalNets();
 			const failNote = res.failed.length > 0 ? `, ${res.failed.length} failed` : '';
 			notice = `Purged ${res.total_messages} messages across ${res.nets_purged} terminal net(s)${failNote}`;
-			await load();
+			await netList.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Purge-terminal failed';
+			netList.error = e instanceof Error ? e.message : 'Purge-terminal failed';
 		} finally {
 			bulkBusy = false;
 		}
 	}
 
 	$effect(() => {
-		load();
+		void netList.refetch();
 	});
 </script>
 
@@ -228,7 +219,7 @@
 				class="mb-0"
 			>
 				{#snippet actions()}
-					<Button variant="outline" size="sm" onclick={load}>
+					<Button variant="outline" size="sm" onclick={() => void netList.refetch()}>
 						<RefreshCw class="size-3.5" />
 						Refresh
 					</Button>
@@ -282,13 +273,13 @@
 			{#if notice}
 				<div class="px-6 pb-2 text-sm text-muted-foreground">{notice}</div>
 			{/if}
-			{#if loading}
+			{#if netList.loading}
 				<div class="flex items-center justify-center py-12 text-sm text-muted-foreground">
 					Loading nets from engine...
 				</div>
-			{:else if error}
+			{:else if netList.error}
 				<div class="px-6 py-4 text-sm text-destructive">
-					{error}
+					{netList.error}
 				</div>
 			{:else if filteredNets.length === 0}
 				<div
