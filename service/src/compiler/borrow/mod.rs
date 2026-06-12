@@ -27,6 +27,7 @@ use std::collections::HashMap;
 pub(crate) mod apply;
 pub(crate) mod ctx;
 pub(crate) mod planners;
+pub(crate) mod resolve_core;
 pub(crate) mod shape;
 pub(crate) mod source;
 
