@@ -131,6 +131,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // the sink-mode crawl step compiling with NO channels. RUNNING it is
     // live-only (publishes to INVENTORY_FOLD, folded by mekhan's consumer).
     "55-crawl-campaign",
+    // 59-firing-curve-bo: the OpenFOAM firing-curve BO campaign (demo 12's
+    // Loop+Map+gather topology over a real-physics objective). Pins the
+    // 3-param accumulator set with defensive Rhai inits (untouched-Run-form
+    // coercion) and the `campaign.*` read-arc synthesis into propose/gather.
+    // Self-contained (no resources/assets/children); RUNNING the docker path
+    // is live-only (needs the opencfd/openfoam-default image), and
+    // `solver_mode=surrogate` exercises the full topology without it.
+    "59-firing-curve-bo",
 ];
 
 fn repo_root() -> PathBuf {
@@ -404,6 +412,11 @@ fn snapshot_55_crawl_campaign() {
     run("55-crawl-campaign");
 }
 
+#[test]
+fn snapshot_59_firing_curve_bo() {
+    run("59-firing-curve-bo");
+}
+
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
 /// a snapshot test, fail loudly. Comparison against the curated list above
 /// rather than the disk so we can intentionally exclude (e.g. subworkflow
@@ -587,6 +600,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // `compile_to_air` has an empty KnownResources. Same class as the
         // runner-group demos above. Proven live via the Inbox claim flow.
         "53-human-review",
+        // 56-isaac-experiment-capture (Isaac P1 capture, docs/27) — ros
+        // AutomatedSteps inside a LeaseScope targeting the xArm/Isaac runner
+        // fleet via `deploymentModel.capacity.alias` + `ros` capability
+        // Requirements — same publish-time resolution class as 16-leased-gpu
+        // and the 28..40 ROS demos. Capture/record/mirror are live-only
+        // (Isaac Sim + ROS bridge). Pre-dated this list; added retroactively.
+        "56-isaac-experiment-capture",
     ]
     .into_iter()
     .collect();

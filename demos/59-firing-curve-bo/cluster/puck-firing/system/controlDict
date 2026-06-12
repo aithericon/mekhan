@@ -1,0 +1,58 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Transient run over the full firing curve; duration derived from caseParams. |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "caseParams"
+
+application     solidDisplacementFoam;
+
+startFrom       startTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         $tEnd;
+
+deltaT          $dt;
+
+writeControl    runTime;
+
+writeInterval   $writeInt;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+
+writePrecision  6;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable true;
+
+functions
+{
+    minMaxT
+    {
+        type            fieldMinMax;
+        libs            (fieldFunctionObjects);
+        fields          (T);
+        writeControl    timeStep;
+        writeInterval   1;
+        log             false;
+    }
+}
+
+// ************************************************************************* //

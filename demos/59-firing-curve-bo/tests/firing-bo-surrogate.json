@@ -1,0 +1,33 @@
+{
+  "name": "firing-bo-surrogate",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "max_iterations": 5,
+        "sigma_limit": 80,
+        "hold_temp": 1850,
+        "solver_mode": "surrogate"
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.iterations",
+      "op": "gte",
+      "value": 5
+    },
+    {
+      "path": "result.value.best_cost",
+      "op": "lte",
+      "value": 6.0
+    },
+    {
+      "path": "result.value.best_ramp_K_min",
+      "op": "gte",
+      "value": 2.0
+    }
+  ]
+}

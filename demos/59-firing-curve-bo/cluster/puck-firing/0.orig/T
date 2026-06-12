@@ -1,0 +1,44 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Temperature: furnace curve applied on all exposed surfaces.                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      T;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+#include "../system/caseParams"
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   uniform $T0;
+
+boundaryField
+{
+    symX
+    {
+        type            symmetryPlane;
+    }
+
+    symY
+    {
+        type            symmetryPlane;
+    }
+
+    "(outer|top|bottom)"
+    {
+        type            uniformFixedValue;
+        uniformValue    table
+        (
+            (0          $T0)
+            ($tRampEnd  $holdTemp)
+            ($tHoldEnd  $holdTemp)
+            ($tEnd      $T0)
+        );
+    }
+}
+
+// ************************************************************************* //

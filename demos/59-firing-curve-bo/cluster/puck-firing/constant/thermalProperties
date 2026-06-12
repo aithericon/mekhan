@@ -1,0 +1,33 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Zirconia (3Y-TZP) thermal properties; thermal stress coupling ON.           |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      thermalProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+C
+{
+    type        uniform;
+    value       460;
+}
+
+k
+{
+    type        uniform;
+    value       2.0;
+}
+
+alpha
+{
+    type        uniform;
+    value       1.0e-05;
+}
+
+thermalStress   yes;
+
+// ************************************************************************* //

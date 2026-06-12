@@ -1,0 +1,38 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Displacement: traction-free exposed surfaces, symmetry planes.              |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      D;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 0 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    symX
+    {
+        type            symmetryPlane;
+    }
+
+    symY
+    {
+        type            symmetryPlane;
+    }
+
+    "(outer|top|bottom)"
+    {
+        type            tractionDisplacement;
+        traction        uniform (0 0 0);
+        pressure        uniform 0;
+        value           uniform (0 0 0);
+    }
+}
+
+// ************************************************************************* //

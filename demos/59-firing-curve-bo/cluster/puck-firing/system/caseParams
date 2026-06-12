@@ -1,0 +1,31 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Campaign parameters - the ONLY file a workflow needs to template.           |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      caseParams;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// ---- campaign parameters (overridden per run) ----
+rampRate        5;      // heating rate [K/min]
+holdTemp        1850;   // sintering hold temperature [K]
+holdTime        3600;   // hold duration [s]
+coolRate        10;     // cooling rate [K/min]
+
+// ---- fixed ----
+T0              300;    // ambient / start temperature [K]
+nSteps          800;    // fixed number of time steps per run
+nWrites         20;     // output snapshots
+
+// ---- derived ----
+tRampEnd        #eval{ ($holdTemp - $T0) / ($rampRate / 60.0) };
+tHoldEnd        #eval{ $tRampEnd + $holdTime };
+tEnd            #eval{ $tHoldEnd + ($holdTemp - $T0) / ($coolRate / 60.0) };
+dt              #eval{ $tEnd / $nSteps };
+writeInt        #eval{ $tEnd / $nWrites };
+
+// ************************************************************************* //

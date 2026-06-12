@@ -1,0 +1,449 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 0, "y": 54 },
+      "data": {
+        "type": "start",
+        "label": "Seed Firing Campaign",
+        "processName": "Firing Curve Optimization",
+        "initial": {
+          "id": "in",
+          "label": "Campaign settings",
+          "fields": [
+            {
+              "name": "max_iterations",
+              "label": "Iteration budget (default 6)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "sigma_limit",
+              "label": "Crack threshold sigma_max [MPa] (default 80)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "hold_temp",
+              "label": "Sintering hold temperature [K] (default 1850)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "solver_mode",
+              "label": "Solver: auto | docker | surrogate (default auto)",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lp",
+      "type": "loop",
+      "slug": "campaign",
+      "position": { "x": 290, "y": 0 },
+      "width": 924,
+      "height": 290,
+      "data": {
+        "type": "loop",
+        "label": "Firing Curve BO",
+        "description": "Carries the campaign across iterations: accumulated `observations`, the incumbent cost `f_best`, and the best firing curve seen (`best_ramp`/`best_cool`/`best_hold`). Each iteration fits a GP surrogate, proposes K=3 candidate firing curves, simulates each in OpenFOAM (Docker), and folds the results in. Every accumulator init is defensive against an untouched Run form (empty/missing fields fall back to documented defaults).",
+        "maxIterations": 12,
+        "loopCondition": "campaign.iteration < campaign.budget",
+        "accumulators": [
+          {
+            "var": "observations",
+            "init": "[]",
+            "mergeExpr": "campaign.observations + gather.merged"
+          },
+          {
+            "var": "f_best",
+            "init": "1e18",
+            "mergeExpr": "gather.new_f_best"
+          },
+          {
+            "var": "best_ramp",
+            "init": "0.0",
+            "mergeExpr": "gather.new_best_ramp"
+          },
+          {
+            "var": "best_cool",
+            "init": "0.0",
+            "mergeExpr": "gather.new_best_cool"
+          },
+          {
+            "var": "best_hold",
+            "init": "0.0",
+            "mergeExpr": "gather.new_best_hold"
+          },
+          {
+            "var": "budget",
+            "init": "if type_of(start.max_iterations) == \"i64\" && start.max_iterations > 0 { start.max_iterations } else if type_of(start.max_iterations) == \"f64\" && start.max_iterations > 0.0 { start.max_iterations } else { 6 }",
+            "mergeExpr": "campaign.budget"
+          },
+          {
+            "var": "sigma_limit",
+            "init": "if type_of(start.sigma_limit) == \"f64\" && start.sigma_limit > 0.0 { start.sigma_limit } else if type_of(start.sigma_limit) == \"i64\" && start.sigma_limit > 0 { start.sigma_limit * 1.0 } else { 80.0 }",
+            "mergeExpr": "campaign.sigma_limit"
+          },
+          {
+            "var": "hold_temp",
+            "init": "if type_of(start.hold_temp) == \"f64\" && start.hold_temp > 400.0 { start.hold_temp } else if type_of(start.hold_temp) == \"i64\" && start.hold_temp > 400 { start.hold_temp * 1.0 } else { 1850.0 }",
+            "mergeExpr": "campaign.hold_temp"
+          },
+          {
+            "var": "solver_mode",
+            "init": "if type_of(start.solver_mode) == \"string\" && start.solver_mode != \"\" { start.solver_mode } else { \"auto\" }",
+            "mergeExpr": "campaign.solver_mode"
+          }
+        ]
+      }
+    },
+    {
+      "id": "propose",
+      "type": "automated_step",
+      "slug": "propose",
+      "parentId": "lp",
+      "position": { "x": 16, "y": 73 },
+      "data": {
+        "type": "automated_step",
+        "label": "Fit GP + propose K firing curves",
+        "description": "Reads the accumulated `campaign.observations`, the incumbent `campaign.f_best`, and `campaign.iteration`, fits a Matern-5/2 GP over the unit cube (ramp, cool, hold normalized), and proposes K=3 candidate firing curves by Expected Improvement. Bootstrap iterations walk a fixed space-filling grid. Threads `hold_temp`, `sigma_limit`, and `solver_mode` into each candidate so the Map body stays token-resident (no cross-scope read-arcs).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [
+              "numpy",
+              "scipy",
+              "scikit-learn"
+            ],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Proposals",
+          "fields": [
+            {
+              "name": "candidates",
+              "label": "Candidate firing curves",
+              "kind": "json",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mp",
+      "type": "map",
+      "slug": "evals",
+      "parentId": "lp",
+      "position": { "x": 326, "y": 49 },
+      "width": 272,
+      "height": 189,
+      "data": {
+        "type": "map",
+        "label": "Simulate K firing curves",
+        "description": "Scatters `propose.candidates` into one body token per firing curve and runs the OpenFOAM evaluation once per element (data-parallel across the executor pool). Gathers the per-candidate observations into the `evals` collection consumed by `gather`.",
+        "itemsRef": "propose.candidates",
+        "itemVar": "cand",
+        "resultVar": "obs",
+        "output": {
+          "id": "out",
+          "label": "Eval",
+          "fields": [
+            {
+              "name": "ramp_rate",
+              "label": "Ramp rate [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "cool_rate",
+              "label": "Cool rate [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "hold_time_s",
+              "label": "Hold time [s]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "sigma_max_mpa",
+              "label": "Peak von-Mises stress [MPa]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "soak_min_k",
+              "label": "Min core T during hold [K]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "cycle_h",
+              "label": "Cycle time [h]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "z",
+              "label": "Cost",
+              "kind": "number",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "simulate",
+      "type": "automated_step",
+      "slug": "simulate",
+      "parentId": "mp",
+      "position": { "x": 16, "y": 32 },
+      "data": {
+        "type": "automated_step",
+        "label": "OpenFOAM firing simulation",
+        "description": "Map body. Reads the per-candidate firing curve (token-resident `cand.*` — no read-arc), generates the complete solidDisplacementFoam case (zirconia puck, quarter symmetry, kiln-curve table BC), runs it in the opencfd/openfoam-default:2506 Docker image, and extracts peak von-Mises stress, soak completeness, and cycle time into the observation. Emits a firing-curve/stress PNG via log_artifact (media card). `solver_mode=surrogate` (or Docker unavailable in `auto`) evaluates a closed-form surrogate calibrated against three cluster-validated runs instead, flagged `source: surrogate`.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [
+              "matplotlib"
+            ],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Observation",
+          "fields": [
+            {
+              "name": "obs",
+              "label": "Observation",
+              "kind": "json",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gather",
+      "type": "automated_step",
+      "slug": "gather",
+      "parentId": "lp",
+      "position": { "x": 668, "y": 32 },
+      "data": {
+        "type": "automated_step",
+        "label": "Fold evals + update incumbent",
+        "description": "Reads the gathered Map collection (`evals.output`) plus the prior incumbent (`campaign.f_best`, `campaign.best_ramp`, `campaign.best_cool`, `campaign.best_hold`), folds the new observations into the set, and updates the incumbent firing curve. Its outputs drive the loop accumulator mergeExprs.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Folded",
+          "fields": [
+            {
+              "name": "merged",
+              "label": "New observations",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "new_f_best",
+              "label": "Updated incumbent cost",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "new_best_ramp",
+              "label": "Updated best ramp [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "new_best_cool",
+              "label": "Updated best cool [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "new_best_hold",
+              "label": "Updated best hold [s]",
+              "kind": "number",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report",
+      "type": "automated_step",
+      "slug": "report",
+      "position": { "x": 1284, "y": 30 },
+      "data": {
+        "type": "automated_step",
+        "label": "Animate GP surrogate",
+        "description": "Post-loop reporter: re-fits the proposer's GP on each iteration's observation prefix and renders the surrogate learning the landscape — posterior mean / uncertainty / Expected Improvement heatmap slices with the verdict-colored evaluation trail, plus a convergence curve — as an animated GIF (`gp_evolution.gif`) and a final-state PNG via log_artifact (media cards). Read-arcs into the loop accumulators (`campaign.observations`, incumbent fields). Best-effort: rendering failures never fail the campaign.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [
+              "numpy",
+              "scipy",
+              "scikit-learn",
+              "matplotlib",
+              "pillow"
+            ],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Campaign report",
+          "fields": [
+            {
+              "name": "summary",
+              "label": "Campaign summary",
+              "kind": "json",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1560, "y": 41 },
+      "data": {
+        "type": "end",
+        "label": "Report best firing curve",
+        "resultMapping": [
+          {
+            "targetField": "best_ramp_K_min",
+            "expression": "campaign.best_ramp"
+          },
+          {
+            "targetField": "best_cool_K_min",
+            "expression": "campaign.best_cool"
+          },
+          {
+            "targetField": "best_hold_s",
+            "expression": "campaign.best_hold"
+          },
+          {
+            "targetField": "best_cost",
+            "expression": "campaign.f_best"
+          },
+          {
+            "targetField": "iterations",
+            "expression": "campaign.iteration"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_lp",
+      "source": "start",
+      "target": "lp",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_lp_propose",
+      "source": "lp",
+      "target": "propose",
+      "sourceHandle": "body_in",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_propose_mp",
+      "source": "propose",
+      "target": "mp",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_mp_simulate",
+      "source": "mp",
+      "target": "simulate",
+      "sourceHandle": "body_in",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_simulate_mp",
+      "source": "simulate",
+      "target": "mp",
+      "targetHandle": "body_out",
+      "type": "loop_back"
+    },
+    {
+      "id": "e_mp_gather",
+      "source": "mp",
+      "target": "gather",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_gather_lp",
+      "source": "gather",
+      "target": "lp",
+      "targetHandle": "body_out",
+      "type": "loop_back"
+    },
+    {
+      "id": "e_lp_report",
+      "source": "lp",
+      "target": "report",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_report_end",
+      "source": "report",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}
