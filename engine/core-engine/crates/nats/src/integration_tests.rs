@@ -2627,3 +2627,327 @@ async fn test_net_metadata_discovery_across_lifecycle() {
 
     ctx.cleanup().await.ok();
 }
+
+// =============================================================================
+// DLQ / Message Loop Error Semantics Integration Tests
+// =============================================================================
+
+mod dlq_tests {
+    use super::*;
+    use crate::dlq::{dlq_stream_config, DlqEntry, DlqErrorClass, DlqPublisher};
+    use crate::message_loop::{run_message_loop_cancellable, MessageHandler, ProcessError};
+    use async_nats::jetstream::consumer::pull::Config as PullConfig;
+    use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, PullConsumer};
+    use petri_api_types::subjects::Subjects;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    enum FailKind {
+        Parse,
+        Business,
+        Internal,
+    }
+
+    /// Handler that fails every message with a fixed error class.
+    struct FailingHandler {
+        name: String,
+        kind: FailKind,
+        deliveries: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl MessageHandler for FailingHandler {
+        fn listener_name(&self) -> &str {
+            &self.name
+        }
+
+        async fn process_message(
+            &self,
+            _msg: &async_nats::jetstream::Message,
+        ) -> Result<(), ProcessError> {
+            self.deliveries.fetch_add(1, Ordering::SeqCst);
+            match self.kind {
+                FailKind::Parse => Err(ProcessError::Parse("unparseable".to_string())),
+                FailKind::Business => Err(ProcessError::Business("rejected".to_string())),
+                FailKind::Internal => Err(ProcessError::Internal("boom".to_string())),
+            }
+        }
+    }
+
+    /// DeliverPolicy::New consumer on the PETRI_DLQ stream for one error class.
+    /// Created BEFORE the message loop runs so only this test's entries arrive.
+    async fn create_dlq_consumer(ctx: &NatsTestContext, class: &str) -> PullConsumer {
+        let stream = ctx
+            .jetstream
+            .get_or_create_stream(dlq_stream_config())
+            .await
+            .expect("ensure DLQ stream");
+        stream
+            .create_consumer(PullConfig {
+                durable_name: Some(format!("dlq_{}_{}", class, ctx.prefix)),
+                filter_subject: Subjects::dlq_subject(class),
+                deliver_policy: DeliverPolicy::New,
+                ack_policy: AckPolicy::Explicit,
+                ..Default::default()
+            })
+            .await
+            .expect("create DLQ consumer")
+    }
+
+    /// Read DLQ entries until one from `listener` arrives (other tests'
+    /// listeners share the stream; the class filter plus the unique
+    /// listener name isolate this test's entry).
+    async fn wait_for_dlq_entry(consumer: PullConsumer, listener: &str) -> DlqEntry {
+        let mut messages = consumer.messages().await.expect("DLQ message stream");
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(30), messages.next())
+                .await
+                .expect("timed out waiting for DLQ entry")
+                .expect("DLQ stream ended")
+                .expect("DLQ message error");
+            let entry: DlqEntry = serde_json::from_slice(&msg.payload).expect("parse DlqEntry");
+            msg.ack().await.ok();
+            if entry.listener == listener {
+                return entry;
+            }
+        }
+    }
+
+    /// Poll the loop's command consumer until everything published is ACKed.
+    async fn assert_fully_acked(ctx: &NatsTestContext, consumer_name: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let stream = ctx
+                .jetstream
+                .get_stream(&ctx.commands_stream)
+                .await
+                .expect("get commands stream");
+            let mut consumer: PullConsumer = stream
+                .get_consumer(&format!("{}_{}", ctx.prefix, consumer_name))
+                .await
+                .expect("get loop consumer");
+            let info = consumer.info().await.expect("consumer info");
+            if info.num_ack_pending == 0 && info.num_pending == 0 {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "message was never ACKed: ack_pending={} pending={}",
+                info.num_ack_pending,
+                info.num_pending
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    struct LoopUnderTest {
+        cancel: CancellationToken,
+        handle: tokio::task::JoinHandle<()>,
+        deliveries: Arc<AtomicU64>,
+        listener_name: String,
+    }
+
+    /// Spawn the message loop with a failing handler + real DLQ publisher.
+    async fn spawn_failing_loop(
+        ctx: &NatsTestContext,
+        name: &str,
+        kind: FailKind,
+    ) -> LoopUnderTest {
+        let consumer = ctx
+            .create_commands_consumer(name)
+            .await
+            .expect("create loop consumer");
+        let deliveries = Arc::new(AtomicU64::new(0));
+        let listener_name = format!("{}-{}", name, ctx.prefix);
+        let handler = FailingHandler {
+            name: listener_name.clone(),
+            kind,
+            deliveries: deliveries.clone(),
+        };
+        let cancel = CancellationToken::new();
+        let dlq = DlqPublisher::new(ctx.jetstream.clone());
+        let loop_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_message_loop_cancellable(consumer, &handler, Some(loop_cancel), Some(dlq))
+                .await;
+        });
+        LoopUnderTest {
+            cancel,
+            handle,
+            deliveries,
+            listener_name,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_error_dead_letters_and_acks() {
+        let url = shared_nats_url().await;
+        let ctx = NatsTestContext::with_url(url).await.expect("ctx");
+
+        let dlq_consumer = create_dlq_consumer(&ctx, "parse").await;
+
+        let payload = serde_json::json!({"not": "a valid request"});
+        ctx.jetstream
+            .publish(
+                ctx.inject_subject.clone(),
+                serde_json::to_vec(&payload).unwrap().into(),
+            )
+            .await
+            .expect("publish")
+            .await
+            .expect("publish ack");
+
+        let lut = spawn_failing_loop(&ctx, "dlq_parse", FailKind::Parse).await;
+
+        let entry = wait_for_dlq_entry(dlq_consumer, &lut.listener_name).await;
+        assert_eq!(entry.error_class, DlqErrorClass::Parse);
+        assert_eq!(entry.error, "unparseable");
+        assert_eq!(entry.original_subject, ctx.inject_subject);
+        assert_eq!(entry.payload, Some(payload), "original payload intact");
+        assert!(entry.payload_base64.is_none());
+
+        // ACKed after dead-lettering — no redelivery
+        assert_fully_acked(&ctx, "dlq_parse").await;
+        assert_eq!(lut.deliveries.load(Ordering::SeqCst), 1);
+
+        lut.cancel.cancel();
+        lut.handle.await.ok();
+        ctx.cleanup().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_business_error_dead_letters_and_acks() {
+        let url = shared_nats_url().await;
+        let ctx = NatsTestContext::with_url(url).await.expect("ctx");
+
+        let dlq_consumer = create_dlq_consumer(&ctx, "business").await;
+
+        let payload = serde_json::json!({"place_id": "p_missing", "color": {}});
+        ctx.jetstream
+            .publish(
+                ctx.inject_subject.clone(),
+                serde_json::to_vec(&payload).unwrap().into(),
+            )
+            .await
+            .expect("publish")
+            .await
+            .expect("publish ack");
+
+        let lut = spawn_failing_loop(&ctx, "dlq_business", FailKind::Business).await;
+
+        let entry = wait_for_dlq_entry(dlq_consumer, &lut.listener_name).await;
+        assert_eq!(entry.error_class, DlqErrorClass::Business);
+        assert_eq!(entry.error, "rejected");
+        assert_eq!(entry.payload, Some(payload));
+
+        assert_fully_acked(&ctx, "dlq_business").await;
+        assert_eq!(lut.deliveries.load(Ordering::SeqCst), 1);
+
+        lut.cancel.cancel();
+        lut.handle.await.ok();
+        ctx.cleanup().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_internal_error_retries_then_dead_letters() {
+        let url = shared_nats_url().await;
+        let ctx = NatsTestContext::with_url(url).await.expect("ctx");
+
+        let dlq_consumer = create_dlq_consumer(&ctx, "internal").await;
+
+        let payload = serde_json::json!({"work": "transiently broken"});
+        ctx.jetstream
+            .publish(
+                ctx.inject_subject.clone(),
+                serde_json::to_vec(&payload).unwrap().into(),
+            )
+            .await
+            .expect("publish")
+            .await
+            .expect("publish ack");
+
+        let lut = spawn_failing_loop(&ctx, "dlq_internal", FailKind::Internal).await;
+
+        // 4 NAKs with escalating delay (0.5+1+1.5+2 = 5s), dead-lettered on
+        // the 5th delivery.
+        let entry = wait_for_dlq_entry(dlq_consumer, &lut.listener_name).await;
+        assert_eq!(entry.error_class, DlqErrorClass::Internal);
+        assert_eq!(entry.delivered, 5, "dead-lettered on the 5th delivery");
+        assert_eq!(entry.payload, Some(payload));
+
+        assert_fully_acked(&ctx, "dlq_internal").await;
+        assert_eq!(
+            lut.deliveries.load(Ordering::SeqCst),
+            5,
+            "redelivered until the retry budget, then ACKed"
+        );
+
+        lut.cancel.cancel();
+        lut.handle.await.ok();
+        ctx.cleanup().await.ok();
+    }
+}
+
+// =============================================================================
+// Durable Idempotency Cache Integration Tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_idempotency_cache_kv_survives_restart() {
+    use crate::idempotency::{CachedResult, IdempotencyCache, IdempotencyCacheConfig};
+
+    let url = shared_nats_url().await;
+    let client = async_nats::connect(url).await.expect("connect");
+    let jetstream = async_nats::jetstream::new(client);
+
+    // Unique bucket per test run (the prod bucket name is shared engine-wide)
+    let bucket = format!("IDEMP_{}", uuid::Uuid::new_v4().simple()).to_uppercase();
+    let kv = jetstream
+        .create_key_value(async_nats::jetstream::kv::Config {
+            bucket: bucket.clone(),
+            max_age: Duration::from_secs(3600),
+            history: 1,
+            ..Default::default()
+        })
+        .await
+        .expect("create KV bucket");
+
+    let cache1 = IdempotencyCache::with_kv(IdempotencyCacheConfig::default(), kv.clone());
+    cache1
+        .insert(
+            "PETRI_GLOBAL:42".to_string(),
+            CachedResult::Success {
+                event_sequence: 42,
+                token_id: Some("token-abc".to_string()),
+            },
+        )
+        .await;
+
+    // Fresh cache over the same bucket = simulated engine restart
+    let cache2 = IdempotencyCache::with_kv(IdempotencyCacheConfig::default(), kv.clone());
+    assert!(cache2.is_empty(), "fresh cache starts with empty memory");
+
+    let got = cache2
+        .get("PETRI_GLOBAL:42")
+        .await
+        .expect("entry must survive the restart via KV");
+    match got {
+        CachedResult::Success {
+            event_sequence,
+            token_id,
+        } => {
+            assert_eq!(event_sequence, 42);
+            assert_eq!(token_id, Some("token-abc".to_string()));
+        }
+        other => panic!("expected Success, got {:?}", other),
+    }
+
+    // KV hit repopulates memory
+    assert_eq!(cache2.len(), 1);
+
+    // Unknown keys still miss through both layers
+    assert!(cache2.get("PETRI_GLOBAL:9999").await.is_none());
+
+    jetstream.delete_key_value(&bucket).await.ok();
+}

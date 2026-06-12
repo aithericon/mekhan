@@ -170,9 +170,14 @@ impl SignalListener {
             eval_notify: &eval_notify,
         };
 
-        run_message_loop_cancellable(consumer, &handler, cancel)
-            .await
-            .map_err(|e| SignalListenerError::Consumer(e.to_string()))
+        run_message_loop_cancellable(
+            consumer,
+            &handler,
+            cancel,
+            Some(crate::dlq::DlqPublisher::new(self.jetstream.clone())),
+        )
+        .await
+        .map_err(|e| SignalListenerError::Consumer(e.to_string()))
     }
 }
 

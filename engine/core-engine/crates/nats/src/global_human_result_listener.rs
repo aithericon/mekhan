@@ -119,7 +119,7 @@ impl GlobalHumanResultListener {
             activity: &self.activity,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None).await
+        run_message_loop_cancellable(consumer, &handler, None, None).await
     }
 
     async fn run_cancelled_consumer(&self) -> Result<(), MessageLoopError> {
@@ -150,7 +150,7 @@ impl GlobalHumanResultListener {
             activity: &self.activity,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None).await
+        run_message_loop_cancellable(consumer, &handler, None, None).await
     }
 
     async fn run_failed_consumer(&self) -> Result<(), MessageLoopError> {
@@ -181,7 +181,7 @@ impl GlobalHumanResultListener {
             activity: &self.activity,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None).await
+        run_message_loop_cancellable(consumer, &handler, None, None).await
     }
 }
 

@@ -110,7 +110,7 @@ impl NetMetadataProjection {
 
         let handler = MetadataHandler { kv: &self.kv };
 
-        run_message_loop_cancellable(consumer, &handler, None).await
+        run_message_loop_cancellable(consumer, &handler, None, None).await
     }
 
     /// Get metadata for a specific net from the KV bucket.

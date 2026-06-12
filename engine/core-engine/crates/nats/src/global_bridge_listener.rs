@@ -142,7 +142,13 @@ impl GlobalBridgeListener {
             activity: &self.activity,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None).await
+        run_message_loop_cancellable(
+            consumer,
+            &handler,
+            None,
+            Some(crate::dlq::DlqPublisher::new(self.jetstream.clone())),
+        )
+        .await
     }
 }
 

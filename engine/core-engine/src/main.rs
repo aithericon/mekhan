@@ -1072,6 +1072,17 @@ async fn ensure_streams(
         }
     }
 
+    // Dead-letter stream for terminally-failed listener messages
+    match jetstream
+        .get_or_create_stream(petri_nats::dlq_stream_config())
+        .await
+    {
+        Ok(_) => info!(name = %Subjects::STREAM_DLQ, "DLQ stream ready"),
+        Err(e) => {
+            tracing::warn!(error = %e, "Could not create DLQ stream");
+        }
+    }
+
     // Create human task streams (cancel, cancelled, failed)
     // HUMAN_REQUESTS and HUMAN_COMPLETED are created by the human client and UI respectively.
     {

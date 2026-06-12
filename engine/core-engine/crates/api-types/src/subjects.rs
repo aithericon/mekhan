@@ -327,6 +327,35 @@ impl Subjects {
         }
     }
 
+    // ==================== Dead-Letter Queue Subjects ====================
+    //
+    // Terminally-failed messages from the NATS message loop are wrapped in
+    // a DlqEntry envelope and published here instead of being dropped. The
+    // prefix is deliberately NOT under `petri.` — the PETRI_GLOBAL stream
+    // captures `petri.>` and JetStream rejects streams with overlapping
+    // subjects (same reason the human task subjects live under `human.`).
+
+    /// Prefix for dead-letter queue subjects
+    pub const DLQ_PREFIX: &'static str = "petri-dlq";
+
+    /// Wildcard for subscribing to all dead-lettered messages
+    pub const DLQ_ALL: &'static str = "petri-dlq.>";
+
+    /// Stream name for dead-lettered messages
+    pub const STREAM_DLQ: &'static str = "PETRI_DLQ";
+
+    /// Build a DLQ subject for an error class (`parse` | `business` | `internal`).
+    ///
+    /// # Example
+    /// ```
+    /// use petri_api_types::subjects::Subjects;
+    ///
+    /// assert_eq!(Subjects::dlq_subject("parse"), "petri-dlq.parse");
+    /// ```
+    pub fn dlq_subject(error_class: &str) -> String {
+        format!("{}.{}", Self::DLQ_PREFIX, error_class)
+    }
+
     // ==================== JetStream Streams ====================
 
     /// Single global stream for ALL petri events (single stream architecture).
