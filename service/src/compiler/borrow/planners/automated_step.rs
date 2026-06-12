@@ -174,7 +174,7 @@ pub(crate) fn automated_step_borrow_plan(
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
+                Some(crate::compiler::lower::agent::agent_to_llm_config(
                     model,
                     system_prompt.as_deref(),
                     user_prompt,

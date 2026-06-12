@@ -154,7 +154,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // hand-authored Python/LLM step (docs/20 §5).
     let asset_bindings = asset_bindings.clone();
 
-    let llm_config = crate::models::template::agent_to_llm_config(
+    let llm_config = agent_to_llm_config(
         model,
         system_prompt.as_deref(),
         user_prompt,
@@ -238,7 +238,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     super::automated_step::lower_automated_step(&mut virtual_cx)
 }
 
-// LLM config projection lives in `models::template::agent_to_llm_config`
+// LLM config projection lives in `agent_to_llm_config` (this module)
 // — single source of truth shared with the resource borrow planner, the
 // publish-time resource scan, and the `output_ports` deriver.
 
@@ -409,7 +409,7 @@ fn lower_agent_loop(
         })
         .collect();
 
-    let llm_config = crate::models::template::agent_to_llm_config(
+    let llm_config = agent_to_llm_config(
         model,
         system_prompt.as_deref(),
         user_prompt,

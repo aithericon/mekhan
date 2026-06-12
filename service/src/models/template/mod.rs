@@ -33,11 +33,7 @@ pub(crate) use agent::default_max_turns;
 pub(crate) use human_task::derive_human_task_output_port;
 
 // `Port` schema emission + token validation moved to the compiler — the
-// strict sibling `validate_token_against_port` already lived there.
-// `PortValidationError` stays re-exported here permanently.
+// strict sibling `validate_token_against_port` already lived there. The
+// validation error stays part of this model surface (its callers map it at
+// the spawn/signal boundaries), so it is re-exported here permanently.
 pub use crate::compiler::token_shape::port::PortValidationError;
-// TEMPORARY (dropped by the follow-up import-flip commit): the agent
-// lowering helpers moved to `compiler::lower::agent`; these re-exports keep
-// call sites byte-stable for the pure-motion commit.
-pub(crate) use crate::compiler::lower::agent::agent_extra_output_fields;
-pub use crate::compiler::lower::agent::agent_to_llm_config;
