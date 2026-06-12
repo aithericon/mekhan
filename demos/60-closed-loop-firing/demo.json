@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000600",
+  "folder": "optimization",
+  "name": "60 · Closed-Loop Firing (Simulate → Review → Robot)",
+  "description": "The capstone: the whole simulate → review → physically-verify arc as ONE workflow, composed from building blocks via flow-in-flow. Embeds 59-firing-curve-bo as a child (the full constrained-BO OpenFOAM campaign including its human review gate), joins the reviewer's per-curve verification picks back to the curve parameters, and — when the reviewer approved, picked at least one curve, AND the `robot` start field enables it — dispatches the 40-sample-handling child to drive the robot cell: pick the fired puck from the tray and load it for characterization at the predicted peak-stress location. The robot leg defaults to `skip` so the workflow runs everywhere; set `robot=auto` with the ROS/Isaac fleet up for the physical leg. The parent instance page shows both child instances — campaign and robot run — under one provenance trail."
+}

@@ -12,7 +12,12 @@
       }
     }
   ],
-  "human_answers": {},
+  "human_answers": {
+    "review": {
+      "decision": "approve",
+      "comment": "surrogate-mode fixture run"
+    }
+  },
   "assertions": [
     {
       "path": "result.value.iterations",

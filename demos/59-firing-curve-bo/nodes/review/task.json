@@ -1,0 +1,130 @@
+[
+  {
+    "id": "step-results",
+    "title": "Campaign results",
+    "descriptionMdsvex": "Everything below was produced by the optimization campaign that just finished — review before adopting the firing curve.",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "success",
+        "title": "Best firing curve",
+        "content": "{{ report.best_label }}"
+      },
+      {
+        "type": "mdsvex",
+        "content": "{{ report.report_md }}"
+      },
+      { "type": "divider" },
+      {
+        "type": "image",
+        "url": "/api/v1/files/{{ report.gp_final_key }}",
+        "alt": "Final surrogate state",
+        "caption": "Learned constraint landscape: predicted peak stress, model uncertainty, acquisition, soak constraint, evaluation coverage, and convergence.",
+        "display": "single"
+      },
+      {
+        "type": "image",
+        "url": "/api/v1/files/{{ report.gif_key }}",
+        "alt": "GP surrogate evolution",
+        "caption": "Watch the surrogate learn the landscape — one frame per iteration (animated).",
+        "display": "single"
+      },
+      {
+        "type": "download",
+        "downloads": [
+          {
+            "url": "/api/v1/files/{{ report.gp_final_key }}",
+            "filename": "gp_final_state.png",
+            "mime_type": "image/png",
+            "description": "Final surrogate state (PNG, slide-ready)"
+          },
+          {
+            "url": "/api/v1/files/{{ report.gif_key }}",
+            "filename": "gp_evolution.gif",
+            "mime_type": "image/gif",
+            "description": "Animated surrogate evolution across iterations"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "step-verify",
+    "title": "Physical verification queue",
+    "descriptionMdsvex": "The model can only be trusted as far as it has been verified. Pick which curves to actually fire — each selected puck goes to the robot cell for SEM characterization at the predicted peak-stress location (the outer rim, end of cool-down).",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "info",
+        "title": "Why verify near-misses too",
+        "content": "Firing one curve just **beyond** the predicted limit (and confirming it cracks) validates the boundary itself, not just the safe side of it."
+      },
+      {
+        "type": "repeater",
+        "items_ref": "report.top_curves[*]",
+        "item_label_ref": "report.top_curves[*].label",
+        "output_slug": "verify_picks",
+        "blocks": [
+          {
+            "type": "input",
+            "field": {
+              "name": "fire_and_verify",
+              "label": "Fire this curve and queue the puck for SEM verification",
+              "kind": "checkbox",
+              "required": false
+            }
+          },
+          {
+            "type": "input",
+            "field": {
+              "name": "note",
+              "label": "Note for the lab",
+              "kind": "text",
+              "required": false,
+              "placeholder": "e.g. inspect rim at 0°/90°"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "step-decision",
+    "title": "Sign-off",
+    "blocks": [
+      {
+        "type": "input",
+        "field": {
+          "name": "decision",
+          "label": "Decision",
+          "kind": "radio",
+          "required": true,
+          "options": [
+            { "value": "approve", "label": "Approve — adopt the best curve as the new recipe" },
+            { "value": "extend", "label": "Extend — run more iterations before deciding" },
+            { "value": "reject", "label": "Reject — revisit objective / constraints first" }
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "comment",
+          "label": "Review notes",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Observations, concerns, follow-ups …"
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "reviewer_signature",
+          "label": "Reviewer sign-off",
+          "kind": "signature",
+          "required": false
+        }
+      }
+    ]
+  }
+]

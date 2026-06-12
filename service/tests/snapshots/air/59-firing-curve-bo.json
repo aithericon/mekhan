@@ -21,6 +21,10 @@
       "additionalProperties": true,
       "type": "object"
     },
+    "Ctrl__review": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "Ctrl__simulate": {
       "additionalProperties": true,
       "type": "object"
@@ -354,7 +358,32 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "summary": {}
+                "best_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "gif_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "gp_final_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "report_md": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "summary": {},
+                "top_curves": {}
               },
               "type": "object"
             }
@@ -386,6 +415,177 @@
           ]
         },
         "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__review": {
+      "additionalProperties": true,
+      "properties": {
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "comment": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reviewer_signature": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "verify_picks": {
+              "items": {
+                "additionalProperties": true,
+                "properties": {
+                  "fire_and_verify": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "best_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "gif_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "gp_final_key": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "report_md": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "summary": {},
+                "top_curves": {}
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions_mdsvex": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {},
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
           "type": [
             "string",
             "null"
@@ -1535,6 +1735,698 @@
       ],
       "title": "ExecutorSubmitted",
       "type": "object"
+    },
+    "HumanTaskAssigned": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Minimal output from the `human_task` effect handler.\n\nThe handler merges all input fields into the output, so you can define a custom output type with extra fields (e.g., `invoice_number`). Use this type when you only need the `task_id` for downstream correlation.",
+      "properties": {
+        "task_id": {
+          "description": "Engine-assigned task ID for correlation with the response signal.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "HumanTaskAssigned",
+      "type": "object"
+    },
+    "HumanTaskRequest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "CalloutSeverity": {
+          "description": "Severity level for callout blocks.",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "success"
+          ],
+          "type": "string"
+        },
+        "ChartSeries": {
+          "description": "A series definition for chart rendering.",
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        },
+        "ChartType": {
+          "description": "Chart type for data visualization blocks.",
+          "enum": [
+            "area",
+            "bar",
+            "line",
+            "pie"
+          ],
+          "type": "string"
+        },
+        "DownloadItem": {
+          "description": "A downloadable file item.",
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thumbnail_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "url"
+          ],
+          "type": "object"
+        },
+        "SelectOption": {
+          "description": "One choice in a `kind = \"select\"` (or `radio`) field. `value` is what the form submits / what downstream guards compare against; `label` is what the UI renders. Authors typically write `{value, label}`; the deserializer on `TaskField::options` also accepts a bare string and stretches it to `{value: s, label: s}`. Mirror of the same type in `service/src/models/template.rs` — the engine's HumanTask effect handler validates the wire payload against `TaskField`, so the shape must match what the service compiles into AIR.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "value"
+          ],
+          "type": "object"
+        },
+        "TableAlignment": {
+          "description": "Column alignment for table blocks.",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "type": "string"
+        },
+        "TaskBlock": {
+          "description": "A render block inside a task step.",
+          "oneOf": [
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/definitions/TaskField"
+                },
+                "type": {
+                  "enum": [
+                    "input"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mdsvex"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "downloads": {
+                  "items": {
+                    "$ref": "#/definitions/DownloadItem"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "download"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "downloads",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alignments": {
+                  "items": {
+                    "$ref": "#/definitions/TableAlignment"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "headers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "items": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "table"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "headers",
+                "rows",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "severity": {
+                  "$ref": "#/definitions/CalloutSeverity"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "callout"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "severity",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "filename": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "pdf"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "chart_type": {
+                  "$ref": "#/definitions/ChartType"
+                },
+                "data": {
+                  "items": true,
+                  "type": "array"
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "series": {
+                  "items": {
+                    "$ref": "#/definitions/ChartSeries"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "chart"
+                  ],
+                  "type": "string"
+                },
+                "x": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "x_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "y_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "chart_type",
+                "data",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Feature B — array-iteration sub-task body. Renders one copy of `blocks` per element of the upstream array referenced by `items_ref` (which carries exactly one `[*]` boundary, e.g. `extract.tasks[*]`). Inner `blocks` are any TaskBlock variant except a nested Repeater — Input children declare the per-row form schema, display children render with placeholders resolved per row. The engine treats this as a pass-through — the structural shape is statically declared at compile time, the *count* of rows comes from runtime data the compiler stages into `HumanTaskRequest.payload`. Renderer-only; no engine-side semantics beyond accepting and forwarding it.",
+              "properties": {
+                "blocks": {
+                  "items": {
+                    "$ref": "#/definitions/TaskBlock"
+                  },
+                  "type": "array"
+                },
+                "item_label_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "items_ref": {
+                  "type": "string"
+                },
+                "output_slug": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "repeater"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "blocks",
+                "items_ref",
+                "output_slug",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "divider"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TaskField": {
+          "description": "Definition of a single field in a human task form.",
+          "properties": {
+            "accept": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "include_time": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/definitions/TaskFieldKind"
+            },
+            "label": {
+              "type": "string"
+            },
+            "max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "max_file_size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_files": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_rating": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "options": {
+              "description": "Choice list for `kind = \"select\"` / `\"radio\"`. Authored as `[{\"value\": \"approve\", \"label\": \"Approve\"}, …]`; the deserializer also accepts bare string shorthand (`[\"approve\", \"reject\"]`) and normalizes each entry to `{value, label}` where `label = value`. Keeps a uniform runtime representation regardless of which shape the author chose.",
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "pen_color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "signature_mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "name"
+          ],
+          "type": "object"
+        },
+        "TaskFieldKind": {
+          "description": "Types of form fields for human tasks.",
+          "enum": [
+            "text",
+            "textarea",
+            "number",
+            "select",
+            "checkbox",
+            "file",
+            "signature",
+            "radio",
+            "date",
+            "range",
+            "rating"
+          ],
+          "type": "string"
+        },
+        "TaskStep": {
+          "description": "One step in a multi-step human task.",
+          "properties": {
+            "blocks": {
+              "items": {
+                "$ref": "#/definitions/TaskBlock"
+              },
+              "type": "array"
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "blocks",
+            "id",
+            "title"
+          ],
+          "type": "object"
+        }
+      },
+      "description": "Request to create a new human task. Published to `petri.human.request.{net_id}.{place}`.",
+      "properties": {
+        "corr_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "forced_task_id": {
+          "description": "Opt-in caller-supplied task identity. Honored ONLY by the human_task effect handler when `Some` (the pooled human-task lowering sets it to the capacity grant_id so `hpi_tasks.id == task_id == grant_id`); when `None` the handler mints a UUID as before.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions_mdsvex": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "org_id": {
+          "description": "Organization ID for routing this task to the correct HPI org. Set from token data (dynamic) or engine config fallback (HUMAN_ORG_ID).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": true,
+        "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_id": {
+          "description": "Links this task to a process (set automatically from read-arc process token).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_step": {
+          "description": "Identifies which step in the process this task represents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_subject": {
+          "description": "NATS subject where the UI should publish outcome signals (ExternalSignal envelope). Set by the engine before publishing to `human.request.*`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/definitions/TaskStep"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "steps",
+        "title"
+      ],
+      "title": "HumanTaskRequest",
+      "type": "object"
     }
   },
   "description": "",
@@ -1668,7 +2560,7 @@
     },
     {
       "id": "group_8",
-      "name": "Fit GP + propose K firing curves"
+      "name": "Constrained BO: propose K firing curves"
     },
     {
       "id": "group_9",
@@ -1682,6 +2574,10 @@
     {
       "id": "grp_mp",
       "name": "Simulate K firing curves"
+    },
+    {
+      "id": "grp_review",
+      "name": "Review campaign"
     }
   ],
   "name": "59 · Firing Curve Optimization (OpenFOAM)",
@@ -2039,19 +2935,19 @@
     },
     {
       "id": "p_propose_ctrl",
-      "name": "Fit GP + propose K firing curves - Control Token",
+      "name": "Constrained BO: propose K firing curves - Control Token",
       "token_schema": "#/definitions/Ctrl__propose",
       "type": "state"
     },
     {
       "id": "p_propose_data",
-      "name": "Fit GP + propose K firing curves - Parked Data (write-once)",
+      "name": "Constrained BO: propose K firing curves - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__propose",
       "type": "state"
     },
     {
       "id": "p_propose_output",
-      "name": "Fit GP + propose K firing curves - Output",
+      "name": "Constrained BO: propose K firing curves - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -2072,6 +2968,48 @@
       "name": "Animate GP surrogate - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
+    },
+    {
+      "id": "p_review_active",
+      "name": "Review campaign - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_ctrl",
+      "name": "Review campaign - Control Token",
+      "token_schema": "#/definitions/Ctrl__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_data",
+      "name": "Review campaign - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_errors",
+      "name": "Review campaign - Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "id": "p_review_input",
+      "name": "Review campaign - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_output",
+      "name": "Review campaign - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_signal",
+      "name": "Review campaign - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
     },
     {
       "id": "p_simulate_data",
@@ -2838,6 +3776,7 @@
     {
       "category": "human",
       "handler_ids": [
+        "human_task",
         "process_log_message",
         "process_log_metric"
       ]
@@ -4559,7 +5498,7 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Fit GP + propose K firing curves' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Constrained BO: propose K firing curves' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
@@ -5098,10 +6037,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"propose\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Loop body head — fit a GP surrogate and propose K candidate firing curves.\\n\\nBayesian-optimization proposer over the 3-D firing-curve space, normalized to\\nthe unit cube:\\n\\n  u_ramp -> ramp_rate  = 2 + 58 * u_ramp     [K/min]  (2 .. 60)\\n  u_cool -> cool_rate  = 2 + 58 * u_cool     [K/min]  (2 .. 60)\\n  u_hold -> hold_time  = 600 + 6600 * u_hold [s]      (10 min .. 2 h)\\n\\nEach iteration it reads the accumulated campaign state off the loop\\naccumulators and emits `candidates` — a JSON array of K=3 firing-curve dicts\\nfor the downstream Map to scatter through the `simulate` objective. Campaign\\nconstants (`hold_temp`, `sigma_limit`, `solver_mode`) are threaded INTO each\\ncandidate so the Map body only ever touches token-resident `cand.*` fields.\\n\\nBATCH ACQUISITION: the K parallel candidates are chosen by Expected\\nImprovement with the CONSTANT-LIAR heuristic (CL-min) — sequential EI argmax\\nwith hallucinated `lie = f_best` outcomes appended between picks (posterior\\nupdated, hyperparameters frozen). Plain top-K-by-EI degenerates to K copies\\nof the same acquisition peak; the lie collapses EI around each pick so the\\nbatch diversifies. This is the cheap, standard q-EI stand-in.\\n\\nIMPORTANT (compiler contract): this Python is SCANNED at compile time for slug\\nreferences, not executed. The literal source reads of `campaign.observations`,\\n`campaign.f_best`, `campaign.iteration`, `campaign.hold_temp`,\\n`campaign.sigma_limit`, and `campaign.solver_mode` below MUST remain verbatim\\nso the compiler synthesizes the read-arcs into the loop's parked accumulator\\nplace. Removing or renaming any of them breaks read-arc synthesis.\\n\\nFALLBACK: the BO phase needs scikit-learn + scipy (declared in\\nexecutionSpec.config.requirements). If importing them fails at runtime we DO\\nNOT crash the demo — we fall back to a numpy EI-lite proposer, and ultimately\\na deterministic grid walk, so the Loop + Map + accumulator topology still runs\\nend-to-end (same philosophy as demo 12).\\n\\\"\\\"\\\"\\n\\nimport os\\nimport random\\n\\n# --- Read the borrowed campaign state (literal slug reads — DO NOT remove) ---\\nobservations = campaign.observations\\nf_best = campaign.f_best\\niteration = campaign.iteration\\nhold_temp = campaign.hold_temp\\nsigma_limit = campaign.sigma_limit\\nsolver_mode = campaign.solver_mode\\nbatch_k = campaign.batch_k\\n\\nn_seen = len(observations)\\n\\n# K=1 -> classic sequential BO (one simulation per iteration, EI argmax —\\n# the constant-liar loop below degenerates to it with zero lies). K>1 ->\\n# parallel batch dispatched data-parallel by the Map.\\nK = max(1, min(8, int(batch_k)))\\n\\nlog_info(\\n    f\\\"propose: iteration={iteration} observations={n_seen} f_best={f_best} \\\"\\n    f\\\"K={K} hold_temp={hold_temp} sigma_limit={sigma_limit} solver={solver_mode}\\\"\\n)\\n\\n# Fixed space-filling points on the unit cube — bootstrap phase and ultimate\\n# deterministic fallback. Deliberately spans slow/safe, fast/cracky, and\\n# short/under-soaked corners so the GP sees the constraint structure early.\\nCANDIDATE_GRID = [\\n    [0.10, 0.15, 0.50],  # slow ramp, slow cool, medium hold  (safe, long)\\n    [0.90, 0.85, 0.50],  # fast ramp, fast cool, medium hold  (likely cracks)\\n    [0.50, 0.50, 0.10],  # medium rates, short hold           (under-soak risk)\\n    [0.30, 0.60, 0.70],\\n    [0.60, 0.30, 0.30],\\n    [0.20, 0.40, 0.90],\\n    [0.75, 0.50, 0.65],\\n    [0.45, 0.75, 0.20],\\n]\\n\\n\\ndef _denorm(u):\\n    \\\"\\\"\\\"Unit-cube point -> physical firing-curve candidate dict.\\\"\\\"\\\"\\n    u_ramp = min(max(float(u[0]), 0.0), 1.0)\\n    u_cool = min(max(float(u[1]), 0.0), 1.0)\\n    u_hold = min(max(float(u[2]), 0.0), 1.0)\\n    return {\\n        \\\"u_ramp\\\": round(u_ramp, 6),\\n        \\\"u_cool\\\": round(u_cool, 6),\\n        \\\"u_hold\\\": round(u_hold, 6),\\n        \\\"ramp_rate\\\": round(2.0 + 58.0 * u_ramp, 2),\\n        \\\"cool_rate\\\": round(2.0 + 58.0 * u_cool, 2),\\n        \\\"hold_time_s\\\": round(600.0 + 6600.0 * u_hold, 0),\\n        \\\"hold_temp\\\": float(hold_temp),\\n        \\\"sigma_limit\\\": float(sigma_limit),\\n        \\\"solver_mode\\\": str(solver_mode),\\n    }\\n\\n\\ndef _grid_batch(it):\\n    \\\"\\\"\\\"Deterministic K-point batch: cycle CANDIDATE_GRID by iteration.\\\"\\\"\\\"\\n    n = len(CANDIDATE_GRID)\\n    return [_denorm(CANDIDATE_GRID[(it * K + j) % n]) for j in range(K)]\\n\\n\\n# --- Bootstrap phase --------------------------------------------------------\\n# Only iteration 0 needs the space-filling walk (no observations yet); the\\n# GP phase starts as soon as >=2 observations exist (covers K=1 sequential).\\nif n_seen < 2 or iteration < 1:\\n    candidates = _grid_batch(iteration)\\n    log_info(f\\\"propose: bootstrap -> {candidates}\\\")\\n\\nelse:\\n    # --- BO phase: GP fit + batch Expected Improvement (Constant Liar) ------\\n    candidates = None\\n\\n    try:\\n        import numpy as np\\n        from sklearn.gaussian_process import GaussianProcessRegressor\\n        from sklearn.gaussian_process.kernels import Matern, WhiteKernel\\n        from scipy.stats import norm\\n\\n        X = np.array(\\n            [\\n                [float(o[\\\"u_ramp\\\"]), float(o[\\\"u_cool\\\"]), float(o[\\\"u_hold\\\"])]\\n                for o in observations\\n            ]\\n        )\\n        y = np.array([float(o[\\\"z\\\"]) for o in observations])\\n\\n        kernel = Matern(\\n            nu=2.5,\\n            length_scale=[0.25, 0.25, 0.25],\\n            length_scale_bounds=(0.01, 1.0),\\n        ) + WhiteKernel(\\n            noise_level=1e-3,\\n            noise_level_bounds=(1e-10, 1.0),\\n        )\\n\\n        gp = GaussianProcessRegressor(\\n            kernel=kernel,\\n            n_restarts_optimizer=5,\\n            normalize_y=True,\\n            random_state=42,\\n        )\\n        gp.fit(X, y)\\n\\n        # Dense random cloud over the unit cube (deterministic per iteration).\\n        rng = np.random.default_rng(1000 + int(iteration))\\n        grid = rng.random((4096, 3))\\n        xi = 0.01\\n\\n        def _ei_over(model, pts, incumbent):\\n            \\\"\\\"\\\"Expected Improvement for MINIMIZATION.\\\"\\\"\\\"\\n            mu, sigma = model.predict(pts, return_std=True)\\n            sigma = np.maximum(sigma, 1e-9)\\n            imp = incumbent - mu - xi\\n            Z = imp / sigma\\n            return imp * norm.cdf(Z) + sigma * norm.pdf(Z)\\n\\n        # Batch selection via CONSTANT LIAR (CL-min, Ginsbourger et al.):\\n        # plain top-K-by-EI puts all K picks on the SAME acquisition peak (EI\\n        # is smooth — ranks 1..K are near-identical points), wasting the\\n        # parallel Map budget on duplicate simulations. Instead: pick the EI\\n        # argmax, append it with the hallucinated outcome `lie = f_best`\\n        # (optimistic — kills the improvement potential around the pick),\\n        # refit the posterior with HYPERPARAMETERS FROZEN (optimizer=None on\\n        # the already-fitted kernel), and re-maximize EI for the next pick.\\n        # Each lie collapses EI in a neighborhood of the pick, so the batch\\n        # spreads across distinct regions of the acquisition landscape.\\n        X_aug = X.copy()\\n        y_aug = y.copy()\\n        lie = float(np.min(y))\\n        frozen = gp.kernel_\\n        picked_u = []\\n        model = gp\\n        for _j in range(K):\\n            ei = _ei_over(model, grid, f_best)\\n            idx = int(np.argmax(ei))\\n            picked_u.append(grid[idx].copy())\\n            X_aug = np.vstack([X_aug, grid[idx]])\\n            y_aug = np.append(y_aug, lie)\\n            if _j < K - 1:\\n                model = GaussianProcessRegressor(\\n                    kernel=frozen, optimizer=None, normalize_y=True, random_state=42\\n                )\\n                model.fit(X_aug, y_aug)\\n\\n        candidates = [_denorm(u) for u in picked_u]\\n        log_info(f\\\"propose: GP + batch-EI (constant liar) -> {candidates}\\\")\\n\\n        # --- Interactive posterior artifact (`gp-posterior` render hint) ----\\n        # The frontend ships an echarts renderer for exactly this JSON shape\\n        # (HINT_RENDERERS['gp-posterior'] -> GpPosteriorRenderer): interactive\\n        # mu / sigma / EI heatmaps with tooltips. One artifact per iteration +\\n        # the `iteration` metadata makes the artifact viewer group them into a\\n        # single scrubbable panel that live-updates while the campaign runs.\\n        # Grids are the (ramp, cool) slice at the incumbent's hold time, axes\\n        # in physical units. Emission is telemetry — never fails the step.\\n        try:\\n            import json as _json\\n\\n            gn = 45\\n            gside = np.linspace(0.0, 1.0, gn)\\n            ggx, ggy = np.meshgrid(gside, gside)\\n            inc = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n            slice_grid = np.column_stack(\\n                [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc[\\\"u_hold\\\"]))]\\n            )\\n            gmu, gsd = gp.predict(slice_grid, return_std=True)\\n            gsd = np.maximum(gsd, 1e-9)\\n            gimp = f_best - gmu - xi\\n            gz = gimp / gsd\\n            gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)\\n\\n            axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]\\n            model_doc = {\\n                \\\"gp_mean\\\": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],\\n                \\\"gp_std\\\": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],\\n                \\\"ei\\\": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],\\n                \\\"A_lin\\\": axis,\\n                \\\"D_lin\\\": axis,\\n                \\\"x_label\\\": \\\"ramp [K/min]\\\",\\n                \\\"y_label\\\": \\\"cool [K/min]\\\",\\n                \\\"next_candidate\\\": {\\n                    \\\"a\\\": candidates[0][\\\"ramp_rate\\\"],\\n                    \\\"d\\\": candidates[0][\\\"cool_rate\\\"],\\n                },\\n                \\\"batch\\\": [\\n                    {\\\"a\\\": c[\\\"ramp_rate\\\"], \\\"d\\\": c[\\\"cool_rate\\\"]} for c in candidates\\n                ],\\n                \\\"n_observations\\\": n_seen,\\n                \\\"f_best_used\\\": float(f_best),\\n                \\\"slice_hold_min\\\": round(float(inc[\\\"hold_time_s\\\"]) / 60.0, 1),\\n            }\\n            _art_dir = os.environ.get(\\\"AITHERICON_ARTIFACTS_DIR\\\", os.getcwd())\\n            _doc_path = os.path.join(_art_dir, f\\\"gp_model_iter{int(iteration):03d}.json\\\")\\n            with open(_doc_path, \\\"w\\\") as f:\\n                _json.dump(model_doc, f)\\n            log_artifact(\\n                _doc_path,\\n                name=f\\\"gp_model_iter{int(iteration):03d}.json\\\",\\n                category=\\\"plot\\\",\\n                mime_type=\\\"application/json\\\",\\n                metadata={\\n                    \\\"render_hint\\\": \\\"gp-posterior\\\",\\n                    \\\"iteration\\\": str(int(iteration)),\\n                    \\\"kind\\\": \\\"bo_gp_posterior\\\",\\n                },\\n            )\\n        except Exception as exc_viz:  # noqa: BLE001 — viz is telemetry\\n            log_warn(f\\\"propose: gp-posterior artifact failed (non-fatal): {exc_viz!r}\\\")\\n\\n    except Exception as exc:  # noqa: BLE001 — fallback must never crash the demo\\n        log_warn(f\\\"propose: GP/scipy unavailable ({exc!r}); using EI-lite fallback\\\")\\n        try:\\n            import numpy as np\\n\\n            rng = np.random.default_rng(42 + int(iteration))\\n\\n            best = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n            bu = np.array(\\n                [float(best[\\\"u_ramp\\\"]), float(best[\\\"u_cool\\\"]), float(best[\\\"u_hold\\\"])]\\n            )\\n\\n            n_samples = 512\\n            cand = rng.random((n_samples, 3))\\n\\n            dist = np.sqrt(((cand - bu) ** 2).sum(axis=1))\\n            explore = rng.random(n_samples)\\n            score = -dist + 0.5 * explore\\n\\n            order = np.argsort(score)[::-1]\\n            picked = []\\n            seen_pts = set()\\n            for idx in order:\\n                key = tuple(round(float(v), 4) for v in cand[idx])\\n                if key in seen_pts:\\n                    continue\\n                seen_pts.add(key)\\n                picked.append(_denorm(cand[idx]))\\n                if len(picked) >= K:\\n                    break\\n            candidates = picked\\n            log_info(f\\\"propose: EI-lite fallback -> {candidates}\\\")\\n\\n        except Exception as exc2:  # noqa: BLE001\\n            log_warn(f\\\"propose: numpy unavailable ({exc2!r}); random fallback\\\")\\n            rnd = random.Random(42 + int(iteration))\\n            candidates = [\\n                _denorm([rnd.random(), rnd.random(), rnd.random()]) for _ in range(K)\\n            ]\\n\\n    if not candidates:\\n        # Defensive: never emit an empty batch (the Map would have nothing to\\n        # scatter). Fall back to the deterministic grid walk.\\n        candidates = _grid_batch(iteration)\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"campaign.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"candidates\", \"required\": true, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/propose/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"propose\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Loop body head — constrained-BO proposer for K candidate firing curves.\\n\\nSearches the 3-D firing-curve space, normalized to the unit cube:\\n\\n  u_ramp -> ramp_rate  = 2 + 148 * u_ramp    [K/min]  (2 .. 150)\\n  u_cool -> cool_rate  = 2 + 148 * u_cool    [K/min]  (2 .. 150)\\n  u_hold -> hold_time  = 600 + 6600 * u_hold [s]      (10 min .. 2 h)\\n\\n(150 K/min reaches speed-sintering territory — wide enough that the REAL\\ncrack boundary lies inside the box, so the optimizer stops at the material\\nlimit, not at an arbitrary fence.)\\n\\nCONSTRAINED BO (Gardner/Gelbart style), not penalized-cost BO: the cycle time\\nis a KNOWN closed-form function of the parameters, so nothing needs learning\\nthere. What is unknown is the physics. Fitting one GP on a penalty-jump cost\\nsmears the discontinuity over a wide neighborhood and EI then AVOIDS the\\nwhole boundary region — exactly where the optimum lives. Instead:\\n\\n  - GP_sigma : posterior over sigma_max [MPa]  (smooth, no cliff)\\n  - GP_soak  : posterior over soak_min  [K]    (smooth, no cliff)\\n  - acquisition(x) = max(best_feasible_cycle - cycle(x), 0)\\n                     * P(sigma(x) <= limit) * P(soak(x) >= target)\\n\\nP(feasible) ~ 0.5 right at the learned boundary with a large improvement\\nfactor, so the acquisition is ATTRACTED to the constraint boundary instead of\\nrepelled. Before any feasible point exists the improvement factor is dropped\\n(pure feasibility search); if no candidate improves, fall back to\\nP(feasible) * sigma-uncertainty (probe the uncertain side of the boundary).\\n\\nBATCH: Kriging Believer on the constraint GPs (append predicted sigma/soak at\\neach pick, refit with frozen hyperparameters) PLUS a constant-liar update on\\nthe deterministic objective (assume the pick succeeds -> its cycle time\\nbecomes the incumbent), so later picks can't cluster on the same spot.\\n\\nIMPORTANT (compiler contract): this Python is SCANNED at compile time for slug\\nreferences, not executed. The literal source reads of `campaign.observations`,\\n`campaign.f_best`, `campaign.iteration`, `campaign.hold_temp`,\\n`campaign.sigma_limit`, and `campaign.solver_mode` below MUST remain verbatim\\nso the compiler synthesizes the read-arcs into the loop's parked accumulator\\nplace. Removing or renaming any of them breaks read-arc synthesis.\\n\\nFALLBACK: the BO phase needs scikit-learn + scipy (declared in\\nexecutionSpec.config.requirements). If importing them fails at runtime we DO\\nNOT crash the demo — we fall back to a numpy EI-lite proposer, and ultimately\\na deterministic grid walk, so the Loop + Map + accumulator topology still runs\\nend-to-end (same philosophy as demo 12).\\n\\\"\\\"\\\"\\n\\nimport os\\nimport random\\n\\n# --- Read the borrowed campaign state (literal slug reads — DO NOT remove) ---\\nobservations = campaign.observations\\nf_best = campaign.f_best\\niteration = campaign.iteration\\nhold_temp = campaign.hold_temp\\nsigma_limit = campaign.sigma_limit\\nsolver_mode = campaign.solver_mode\\nbatch_k = campaign.batch_k\\n\\nn_seen = len(observations)\\n\\n# K=1 -> classic sequential BO (one simulation per iteration, EI argmax —\\n# the constant-liar loop below degenerates to it with zero lies). K>1 ->\\n# parallel batch dispatched data-parallel by the Map.\\nK = max(1, min(8, int(batch_k)))\\n\\nlog_info(\\n    f\\\"propose: iteration={iteration} observations={n_seen} f_best={f_best} \\\"\\n    f\\\"K={K} hold_temp={hold_temp} sigma_limit={sigma_limit} solver={solver_mode}\\\"\\n)\\n\\n# Fixed space-filling points on the unit cube — bootstrap phase and ultimate\\n# deterministic fallback. Deliberately spans slow/safe, fast/cracky, and\\n# short/under-soaked corners so the GP sees the constraint structure early.\\nCANDIDATE_GRID = [\\n    [0.10, 0.15, 0.50],  # slow ramp, slow cool, medium hold  (safe, long)\\n    [0.90, 0.85, 0.50],  # fast ramp, fast cool, medium hold  (likely cracks)\\n    [0.50, 0.50, 0.10],  # medium rates, short hold           (under-soak risk)\\n    [0.30, 0.60, 0.70],\\n    [0.60, 0.30, 0.30],\\n    [0.20, 0.40, 0.90],\\n    [0.75, 0.50, 0.65],\\n    [0.45, 0.75, 0.20],\\n]\\n\\n\\ndef _denorm(u):\\n    \\\"\\\"\\\"Unit-cube point -> physical firing-curve candidate dict.\\\"\\\"\\\"\\n    u_ramp = min(max(float(u[0]), 0.0), 1.0)\\n    u_cool = min(max(float(u[1]), 0.0), 1.0)\\n    u_hold = min(max(float(u[2]), 0.0), 1.0)\\n    return {\\n        \\\"u_ramp\\\": round(u_ramp, 6),\\n        \\\"u_cool\\\": round(u_cool, 6),\\n        \\\"u_hold\\\": round(u_hold, 6),\\n        \\\"ramp_rate\\\": round(2.0 + 148.0 * u_ramp, 2),\\n        \\\"cool_rate\\\": round(2.0 + 148.0 * u_cool, 2),\\n        \\\"hold_time_s\\\": round(600.0 + 6600.0 * u_hold, 0),\\n        \\\"hold_temp\\\": float(hold_temp),\\n        \\\"sigma_limit\\\": float(sigma_limit),\\n        \\\"solver_mode\\\": str(solver_mode),\\n    }\\n\\n\\ndef _grid_batch(it):\\n    \\\"\\\"\\\"Deterministic K-point batch: cycle CANDIDATE_GRID by iteration.\\\"\\\"\\\"\\n    n = len(CANDIDATE_GRID)\\n    return [_denorm(CANDIDATE_GRID[(it * K + j) % n]) for j in range(K)]\\n\\n\\n# --- Bootstrap phase --------------------------------------------------------\\n# Only iteration 0 needs the space-filling walk (no observations yet); the\\n# GP phase starts as soon as >=2 observations exist (covers K=1 sequential).\\nif n_seen < 2 or iteration < 1:\\n    candidates = _grid_batch(iteration)\\n    log_info(f\\\"propose: bootstrap -> {candidates}\\\")\\n\\nelse:\\n    # --- BO phase: constraint GPs + improvement x P(feasible) acquisition ---\\n    candidates = None\\n\\n    try:\\n        import numpy as np\\n        from sklearn.gaussian_process import GaussianProcessRegressor\\n        from sklearn.gaussian_process.kernels import Matern, WhiteKernel\\n        from scipy.stats import norm\\n\\n        X = np.array(\\n            [\\n                [float(o[\\\"u_ramp\\\"]), float(o[\\\"u_cool\\\"]), float(o[\\\"u_hold\\\"])]\\n                for o in observations\\n            ]\\n        )\\n        y_sigma = np.array([float(o[\\\"sigma_max_mpa\\\"]) for o in observations])\\n        y_soak = np.array([float(o[\\\"soak_min_k\\\"]) for o in observations])\\n\\n        def _kernel():\\n            return Matern(\\n                nu=2.5,\\n                length_scale=[0.25, 0.25, 0.25],\\n                length_scale_bounds=(0.01, 1.0),\\n            ) + WhiteKernel(\\n                noise_level=1e-3,\\n                noise_level_bounds=(1e-10, 1.0),\\n            )\\n\\n        gp_sigma = GaussianProcessRegressor(\\n            kernel=_kernel(), n_restarts_optimizer=5, normalize_y=True, random_state=42\\n        ).fit(X, y_sigma)\\n        gp_soak = GaussianProcessRegressor(\\n            kernel=_kernel(), n_restarts_optimizer=5, normalize_y=True, random_state=43\\n        ).fit(X, y_soak)\\n\\n        soak_target = float(hold_temp) - 15.0\\n        xi = 0.01  # [h] minimum cycle improvement worth simulating\\n\\n        def _cycle_h_of(pts):\\n            \\\"\\\"\\\"Deterministic objective — known in closed form, no GP needed.\\\"\\\"\\\"\\n            ramp = 2.0 + 148.0 * pts[:, 0]\\n            cool = 2.0 + 148.0 * pts[:, 1]\\n            hold = 600.0 + 6600.0 * pts[:, 2]\\n            dT = float(hold_temp) - 300.0\\n            return (dT / (ramp / 60.0) + hold + dT / (cool / 60.0)) / 3600.0\\n\\n        feas = [o for o in observations if o.get(\\\"verdict\\\") == \\\"OK\\\"]\\n        best_cycle = min(float(o[\\\"cycle_h\\\"]) for o in feas) if feas else None\\n\\n        def _acquisition(gs, gk, pts, incumbent_cycle):\\n            mu_s, sd_s = gs.predict(pts, return_std=True)\\n            sd_s = np.maximum(sd_s, 1e-9)\\n            mu_k, sd_k = gk.predict(pts, return_std=True)\\n            sd_k = np.maximum(sd_k, 1e-9)\\n            pf = norm.cdf((float(sigma_limit) - mu_s) / sd_s) * norm.cdf(\\n                (mu_k - soak_target) / sd_k\\n            )\\n            cyc = _cycle_h_of(pts)\\n            if incumbent_cycle is None:\\n                # No feasible point yet: pure feasibility search.\\n                imp = np.ones_like(cyc)\\n            else:\\n                imp = np.maximum(incumbent_cycle - cyc - xi, 0.0)\\n            acq = imp * pf\\n            if not np.any(acq > 0.0):\\n                # Nothing improves the incumbent: probe the uncertain side of\\n                # the constraint boundary instead of going silent.\\n                acq = pf * sd_s\\n            return acq\\n\\n        # Dense random cloud over the unit cube (deterministic per iteration).\\n        rng = np.random.default_rng(1000 + int(iteration))\\n        grid = rng.random((4096, 3))\\n\\n        # Batch: Kriging Believer on the constraint GPs + constant liar on the\\n        # deterministic objective (see module docstring).\\n        Xs = X.copy()\\n        ys_s = y_sigma.copy()\\n        ys_k = y_soak.copy()\\n        gs, gk = gp_sigma, gp_soak\\n        frozen_s, frozen_k = gp_sigma.kernel_, gp_soak.kernel_\\n        inc_cycle = best_cycle\\n        picked_u = []\\n        for _j in range(K):\\n            acq = _acquisition(gs, gk, grid, inc_cycle)\\n            idx = int(np.argmax(acq))\\n            pick = grid[idx].copy()\\n            picked_u.append(pick)\\n            # Believe the constraint models at the pick...\\n            mu_s1 = float(gs.predict(pick.reshape(1, -1))[0])\\n            mu_k1 = float(gk.predict(pick.reshape(1, -1))[0])\\n            Xs = np.vstack([Xs, pick])\\n            ys_s = np.append(ys_s, mu_s1)\\n            ys_k = np.append(ys_k, mu_k1)\\n            # ...and lie optimistically on the objective: assume the pick\\n            # succeeds, so neighbors can't improve on it anymore.\\n            cyc_pick = float(_cycle_h_of(pick.reshape(1, -1))[0])\\n            inc_cycle = cyc_pick if inc_cycle is None else min(inc_cycle, cyc_pick)\\n            if _j < K - 1:\\n                gs = GaussianProcessRegressor(\\n                    kernel=frozen_s, optimizer=None, normalize_y=True\\n                ).fit(Xs, ys_s)\\n                gk = GaussianProcessRegressor(\\n                    kernel=frozen_k, optimizer=None, normalize_y=True\\n                ).fit(Xs, ys_k)\\n\\n        candidates = [_denorm(u) for u in picked_u]\\n        log_info(\\n            f\\\"propose: constrained BO (improvement x P(feasible)) -> {candidates}\\\"\\n        )\\n\\n        # --- Interactive posterior artifact (`gp-posterior` render hint) ----\\n        # The frontend ships an echarts renderer for exactly this JSON shape\\n        # (HINT_RENDERERS['gp-posterior'] -> GpPosteriorRenderer): interactive\\n        # heatmaps with tooltips. One artifact per iteration + the `iteration`\\n        # metadata makes the artifact viewer group them into a single\\n        # scrubbable panel that live-updates while the campaign runs.\\n        # Panels now show the LEARNED CONSTRAINT: predicted sigma_max, its\\n        # uncertainty, and the improvement x P(feasible) acquisition, on the\\n        # (ramp, cool) slice at the incumbent's hold time, axes in physical\\n        # units. Emission is telemetry — never fails the step.\\n        try:\\n            import json as _json\\n\\n            gn = 45\\n            gside = np.linspace(0.0, 1.0, gn)\\n            ggx, ggy = np.meshgrid(gside, gside)\\n            inc = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n            slice_grid = np.column_stack(\\n                [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc[\\\"u_hold\\\"]))]\\n            )\\n            gmu, gsd = gp_sigma.predict(slice_grid, return_std=True)\\n            gsd = np.maximum(gsd, 1e-9)\\n            gacq = _acquisition(gp_sigma, gp_soak, slice_grid, best_cycle)\\n\\n            axis = [round(2.0 + 148.0 * float(u), 2) for u in gside]\\n            model_doc = {\\n                \\\"gp_mean\\\": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],\\n                \\\"gp_std\\\": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],\\n                \\\"ei\\\": [[round(float(v), 6) for v in row] for row in gacq.reshape(gn, gn).tolist()],\\n                \\\"A_lin\\\": axis,\\n                \\\"D_lin\\\": axis,\\n                \\\"x_label\\\": \\\"ramp [K/min]\\\",\\n                \\\"y_label\\\": \\\"cool [K/min]\\\",\\n                \\\"titles\\\": {\\n                    \\\"mean\\\": f\\\"predicted sigma_max [MPa] (limit {float(sigma_limit):.0f})\\\",\\n                    \\\"std\\\": \\\"sigma_max uncertainty [MPa]\\\",\\n                    \\\"ei\\\": \\\"acquisition = improvement x P(feasible)\\\",\\n                },\\n                \\\"next_candidate\\\": {\\n                    \\\"a\\\": candidates[0][\\\"ramp_rate\\\"],\\n                    \\\"d\\\": candidates[0][\\\"cool_rate\\\"],\\n                },\\n                \\\"batch\\\": [\\n                    {\\\"a\\\": c[\\\"ramp_rate\\\"], \\\"d\\\": c[\\\"cool_rate\\\"]} for c in candidates\\n                ],\\n                \\\"n_observations\\\": n_seen,\\n                \\\"f_best_used\\\": float(f_best),\\n                \\\"slice_hold_min\\\": round(float(inc[\\\"hold_time_s\\\"]) / 60.0, 1),\\n            }\\n            _art_dir = os.environ.get(\\\"AITHERICON_ARTIFACTS_DIR\\\", os.getcwd())\\n            _doc_path = os.path.join(_art_dir, f\\\"gp_model_iter{int(iteration):03d}.json\\\")\\n            with open(_doc_path, \\\"w\\\") as f:\\n                _json.dump(model_doc, f)\\n            log_artifact(\\n                _doc_path,\\n                name=f\\\"gp_model_iter{int(iteration):03d}.json\\\",\\n                category=\\\"plot\\\",\\n                mime_type=\\\"application/json\\\",\\n                metadata={\\n                    \\\"render_hint\\\": \\\"gp-posterior\\\",\\n                    \\\"iteration\\\": str(int(iteration)),\\n                    \\\"kind\\\": \\\"bo_gp_posterior\\\",\\n                },\\n            )\\n        except Exception as exc_viz:  # noqa: BLE001 — viz is telemetry\\n            log_warn(f\\\"propose: gp-posterior artifact failed (non-fatal): {exc_viz!r}\\\")\\n\\n    except Exception as exc:  # noqa: BLE001 — fallback must never crash the demo\\n        log_warn(f\\\"propose: GP/scipy unavailable ({exc!r}); using EI-lite fallback\\\")\\n        try:\\n            import numpy as np\\n\\n            rng = np.random.default_rng(42 + int(iteration))\\n\\n            best = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n            bu = np.array(\\n                [float(best[\\\"u_ramp\\\"]), float(best[\\\"u_cool\\\"]), float(best[\\\"u_hold\\\"])]\\n            )\\n\\n            n_samples = 512\\n            cand = rng.random((n_samples, 3))\\n\\n            dist = np.sqrt(((cand - bu) ** 2).sum(axis=1))\\n            explore = rng.random(n_samples)\\n            score = -dist + 0.5 * explore\\n\\n            order = np.argsort(score)[::-1]\\n            picked = []\\n            seen_pts = set()\\n            for idx in order:\\n                key = tuple(round(float(v), 4) for v in cand[idx])\\n                if key in seen_pts:\\n                    continue\\n                seen_pts.add(key)\\n                picked.append(_denorm(cand[idx]))\\n                if len(picked) >= K:\\n                    break\\n            candidates = picked\\n            log_info(f\\\"propose: EI-lite fallback -> {candidates}\\\")\\n\\n        except Exception as exc2:  # noqa: BLE001\\n            log_warn(f\\\"propose: numpy unavailable ({exc2!r}); random fallback\\\")\\n            rnd = random.Random(42 + int(iteration))\\n            candidates = [\\n                _denorm([rnd.random(), rnd.random(), rnd.random()]) for _ in range(K)\\n            ]\\n\\n    if not candidates:\\n        # Defensive: never emit an empty batch (the Map would have nothing to\\n        # scatter). Fall back to the deterministic grid walk.\\n        candidates = _grid_batch(iteration)\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"campaign.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"candidates\", \"required\": true, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/propose/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K firing curves - Prepare",
+      "name": "Constrained BO: propose K firing curves - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6620,7 +7559,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"report\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Post-loop reporter — animate the Gaussian-process surrogate itself.\\n\\nRuns ONCE after the campaign loop exits. Reads the full ordered observation\\nhistory off the loop accumulators and re-fits the same GP the proposer used on\\neach iteration's observation PREFIX, rendering one frame per iteration:\\n\\n  +----------------+----------------+----------------+\\n  | posterior mean | posterior sigma| expected impr. |   (ramp, cool) slice\\n  |  mu(ramp,cool) |  (uncertainty) |  (acquisition) |   at the incumbent's\\n  +----------------+----------------+----------------+   hold time\\n  | mu(ramp,hold)  | where we looked| convergence    |\\n  | slice @ cool*  | obs scatter    | best-so-far    |\\n  +----------------+----------------+----------------+\\n\\nThe frames are stacked into an animated GIF (`gp_evolution.gif`) — the\\n\\\"watch the surrogate learn the landscape\\\" artifact — plus the final frame as\\na standalone PNG and emitted via log_artifact (image/* MIME -> renderable\\nmedia cards on the process Overview tab, same as the per-run firing plots).\\n\\nWhy slices: the search space is 3-D (ramp, cool, hold). The physics makes\\n(ramp, cool) the load-bearing plane — sigma_max is rate-driven and the soak\\nconstraint is ramp-driven — so the top row slices the cube at the incumbent's\\nhold time; the second row adds a (ramp, hold) slice at the incumbent's cool\\nrate so all three dimensions are visible.\\n\\nIMPORTANT (compiler contract): the literal reads of `campaign.observations`,\\n`campaign.f_best`, `campaign.best_ramp`, `campaign.best_cool`,\\n`campaign.best_hold`, `campaign.sigma_limit`, and `campaign.hold_temp` below\\nare the compiler's read-arc anchors into the loop's parked accumulator place\\n— keep them verbatim.\\n\\nFALLBACK LADDER (never fails the workflow): no sklearn -> scatter +\\nconvergence only (no GP panels); no matplotlib/pillow -> summary output only.\\n\\\"\\\"\\\"\\n\\nimport io\\nimport os\\n\\n# --- Borrowed campaign state (literal slug reads — DO NOT remove) ------------\\nobservations = campaign.observations\\nf_best = campaign.f_best\\nbest_ramp = campaign.best_ramp\\nbest_cool = campaign.best_cool\\nbest_hold = campaign.best_hold\\nsigma_limit = campaign.sigma_limit\\nhold_temp = campaign.hold_temp\\nbatch_k = campaign.batch_k\\n\\n# Candidates per iteration — matches propose; prefixes chunk by K. K=1\\n# (sequential BO) animates one frame per simulation.\\nK = max(1, min(8, int(batch_k)))\\n\\nn_obs = len(observations)\\nn_iters = max(1, (n_obs + K - 1) // K)\\nfeasible = [o for o in observations if o.get(\\\"verdict\\\") == \\\"OK\\\"]\\n\\nlog_info(\\n    f\\\"report: {n_obs} observations over {n_iters} iterations, \\\"\\n    f\\\"{len(feasible)} feasible, f_best={f_best}\\\"\\n)\\n\\n_artifacts_dir = os.environ.get(\\n    \\\"AITHERICON_ARTIFACTS_DIR\\\", os.environ.get(\\\"AITHERICON_RUN_DIR\\\", os.getcwd())\\n)\\n\\nVERDICT_COLOR = {\\\"OK\\\": \\\"#16a34a\\\", \\\"CRACK RISK\\\": \\\"#dc2626\\\", \\\"UNDER-SOAKED\\\": \\\"#d97706\\\"}\\n\\n\\ndef _denorm_axes():\\n    \\\"\\\"\\\"Physical-unit extents for the unit-cube axes.\\\"\\\"\\\"\\n    return (2.0, 60.0), (2.0, 60.0), (600.0, 7200.0)  # ramp, cool, hold\\n\\n\\ndef _fit_gp(obs):\\n    \\\"\\\"\\\"Same surrogate family as the proposer (Matern-5/2 + white noise).\\\"\\\"\\\"\\n    import numpy as np\\n    from sklearn.gaussian_process import GaussianProcessRegressor\\n    from sklearn.gaussian_process.kernels import Matern, WhiteKernel\\n\\n    X = np.array([[o[\\\"u_ramp\\\"], o[\\\"u_cool\\\"], o[\\\"u_hold\\\"]] for o in obs])\\n    y = np.array([float(o[\\\"z\\\"]) for o in obs])\\n    kernel = Matern(\\n        nu=2.5, length_scale=[0.25, 0.25, 0.25], length_scale_bounds=(0.01, 1.0)\\n    ) + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1.0))\\n    gp = GaussianProcessRegressor(\\n        kernel=kernel, n_restarts_optimizer=3, normalize_y=True, random_state=42\\n    )\\n    gp.fit(X, y)\\n    return gp\\n\\n\\ndef _render_frame(obs_prefix, it):\\n    \\\"\\\"\\\"Render one campaign-state frame; returns a PIL Image.\\\"\\\"\\\"\\n    import numpy as np\\n    import matplotlib\\n\\n    matplotlib.use(\\\"Agg\\\")\\n    import matplotlib.pyplot as plt\\n    from PIL import Image\\n    from scipy.stats import norm\\n\\n    (r_lo, r_hi), (c_lo, c_hi), (h_lo, h_hi) = _denorm_axes()\\n\\n    inc = min(obs_prefix, key=lambda o: float(o[\\\"z\\\"]))\\n    fb = float(inc[\\\"z\\\"])\\n    u_hold_star = float(inc[\\\"u_hold\\\"])\\n    u_cool_star = float(inc[\\\"u_cool\\\"])\\n\\n    gp = None\\n    try:\\n        if len(obs_prefix) >= 4:\\n            gp = _fit_gp(obs_prefix)\\n    except Exception as exc:  # noqa: BLE001\\n        log_warn(f\\\"report: GP fit failed for frame {it} ({exc!r})\\\")\\n\\n    n = 55\\n    side = np.linspace(0.0, 1.0, n)\\n    gx, gy = np.meshgrid(side, side)\\n\\n    fig, axes = plt.subplots(2, 3, figsize=(13.5, 8.2))\\n    ramp_ext = [r_lo, r_hi, c_lo, c_hi]\\n\\n    def scatter_obs(ax, xs_key=\\\"ramp_rate\\\", ys_key=\\\"cool_rate\\\"):\\n        for o in obs_prefix:\\n            ax.plot(\\n                o[xs_key], o[ys_key], \\\"o\\\", ms=5,\\n                color=VERDICT_COLOR.get(o.get(\\\"verdict\\\", \\\"\\\"), \\\"#64748b\\\"),\\n                mec=\\\"white\\\", mew=0.5,\\n            )\\n        ax.plot(\\n            inc[xs_key], inc[ys_key], \\\"*\\\", ms=16, color=\\\"#facc15\\\",\\n            mec=\\\"black\\\", mew=0.8, zorder=5,\\n        )\\n\\n    if gp is not None:\\n        # Top row: (ramp, cool) slice at the incumbent's hold.\\n        grid_rc = np.column_stack(\\n            [gx.ravel(), gy.ravel(), np.full(n * n, u_hold_star)]\\n        )\\n        mu, sd = gp.predict(grid_rc, return_std=True)\\n        sd = np.maximum(sd, 1e-9)\\n        imp = fb - mu - 0.01\\n        zz = imp / sd\\n        ei = imp * norm.cdf(zz) + sd * norm.pdf(zz)\\n\\n        panels = [\\n            (mu, \\\"posterior mean  $\\\\\\\\mu(ramp, cool)$  [cost]\\\", \\\"viridis\\\"),\\n            (sd, \\\"posterior $\\\\\\\\sigma$ (uncertainty)\\\", \\\"magma\\\"),\\n            (np.maximum(ei, 0.0), \\\"Expected Improvement (next look)\\\", \\\"cividis\\\"),\\n        ]\\n        for ax, (vals, title, cmap) in zip(axes[0], panels):\\n            im = ax.imshow(\\n                vals.reshape(n, n), origin=\\\"lower\\\", extent=ramp_ext,\\n                aspect=\\\"auto\\\", cmap=cmap,\\n            )\\n            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)\\n            scatter_obs(ax)\\n            ax.set_title(title, fontsize=9)\\n            ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n            ax.set_ylabel(\\\"cool [K/min]\\\", fontsize=8)\\n\\n        # Bottom-left: (ramp, hold) slice at the incumbent's cool rate.\\n        grid_rh = np.column_stack(\\n            [gx.ravel(), np.full(n * n, u_cool_star), gy.ravel()]\\n        )\\n        mu2, _ = gp.predict(grid_rh, return_std=True)\\n        ax = axes[1][0]\\n        im = ax.imshow(\\n            mu2.reshape(n, n), origin=\\\"lower\\\",\\n            extent=[r_lo, r_hi, h_lo / 60.0, h_hi / 60.0],\\n            aspect=\\\"auto\\\", cmap=\\\"viridis\\\",\\n        )\\n        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)\\n        for o in obs_prefix:\\n            ax.plot(\\n                o[\\\"ramp_rate\\\"], o[\\\"hold_time_s\\\"] / 60.0, \\\"o\\\", ms=5,\\n                color=VERDICT_COLOR.get(o.get(\\\"verdict\\\", \\\"\\\"), \\\"#64748b\\\"),\\n                mec=\\\"white\\\", mew=0.5,\\n            )\\n        ax.plot(\\n            inc[\\\"ramp_rate\\\"], inc[\\\"hold_time_s\\\"] / 60.0, \\\"*\\\", ms=16,\\n            color=\\\"#facc15\\\", mec=\\\"black\\\", mew=0.8, zorder=5,\\n        )\\n        ax.set_title(\\\"$\\\\\\\\mu(ramp, hold)$ @ incumbent cool\\\", fontsize=9)\\n        ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n        ax.set_ylabel(\\\"hold [min]\\\", fontsize=8)\\n    else:\\n        for ax in list(axes[0]) + [axes[1][0]]:\\n            ax.text(\\n                0.5, 0.5, \\\"GP pending\\\\n(bootstrap phase)\\\", ha=\\\"center\\\",\\n                va=\\\"center\\\", fontsize=10, color=\\\"#94a3b8\\\",\\n                transform=ax.transAxes,\\n            )\\n            ax.set_xticks([])\\n            ax.set_yticks([])\\n\\n    # Bottom-middle: where we looked (all observations, verdict-colored).\\n    ax = axes[1][1]\\n    scatter_obs(ax)\\n    ax.set_xlim(r_lo, r_hi)\\n    ax.set_ylim(c_lo, c_hi)\\n    ax.set_title(\\\"evaluations so far (green OK / red crack / orange soak)\\\", fontsize=9)\\n    ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n    ax.set_ylabel(\\\"cool [K/min]\\\", fontsize=8)\\n    ax.grid(alpha=0.25)\\n\\n    # Bottom-right: convergence (best-so-far cost per evaluation).\\n    ax = axes[1][2]\\n    zs = [float(o[\\\"z\\\"]) for o in obs_prefix]\\n    best_so_far, cur = [], float(\\\"inf\\\")\\n    for z in zs:\\n        cur = min(cur, z)\\n        best_so_far.append(cur)\\n    ax.plot(range(1, len(zs) + 1), zs, \\\"o\\\", ms=4, color=\\\"#94a3b8\\\", label=\\\"evaluation\\\")\\n    ax.step(\\n        range(1, len(best_so_far) + 1), best_so_far, where=\\\"post\\\",\\n        color=\\\"#2563eb\\\", lw=2, label=\\\"best so far\\\",\\n    )\\n    ax.set_title(f\\\"convergence — best cost {fb:.3f}\\\", fontsize=9)\\n    ax.set_xlabel(\\\"evaluation #\\\", fontsize=8)\\n    ax.set_ylabel(\\\"cost [h + penalties]\\\", fontsize=8)\\n    ax.legend(fontsize=7)\\n    ax.grid(alpha=0.25)\\n\\n    fig.suptitle(\\n        f\\\"Firing-curve BO — surrogate state after iteration {it + 1} \\\"\\n        f\\\"({len(obs_prefix)} simulations)\\\",\\n        fontsize=12,\\n    )\\n    fig.tight_layout(rect=(0, 0, 1, 0.95))\\n\\n    buf = io.BytesIO()\\n    fig.savefig(buf, format=\\\"png\\\", dpi=92)\\n    plt.close(fig)\\n    buf.seek(0)\\n    return Image.open(buf).convert(\\\"RGB\\\")\\n\\n\\n# --- Closing posterior for the interactive gp-posterior panel ----------------\\n# `propose` snapshots the GP BEFORE evaluating its picks (the decision state),\\n# so the last interactive snapshot is always fitted on n - K observations and\\n# the final simulation(s) never get a panel. Emit one closing gp_model fitted\\n# on the FULL observation set — no next_candidate (the campaign is over), EI\\n# shown vs the final incumbent (\\\"where it would look next if continued\\\") —\\n# with an iteration number that sorts after every propose snapshot.\\ntry:\\n    import json as _json\\n\\n    import numpy as np\\n    from scipy.stats import norm\\n\\n    if n_obs >= 2:\\n        gp_full = _fit_gp(observations)\\n        inc_full = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n\\n        gn = 45\\n        gside = np.linspace(0.0, 1.0, gn)\\n        ggx, ggy = np.meshgrid(gside, gside)\\n        slice_grid = np.column_stack(\\n            [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc_full[\\\"u_hold\\\"]))]\\n        )\\n        gmu, gsd = gp_full.predict(slice_grid, return_std=True)\\n        gsd = np.maximum(gsd, 1e-9)\\n        gimp = float(inc_full[\\\"z\\\"]) - gmu - 0.01\\n        gz = gimp / gsd\\n        gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)\\n\\n        axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]\\n        model_doc = {\\n            \\\"gp_mean\\\": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],\\n            \\\"gp_std\\\": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],\\n            \\\"ei\\\": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],\\n            \\\"A_lin\\\": axis,\\n            \\\"D_lin\\\": axis,\\n            \\\"x_label\\\": \\\"ramp [K/min]\\\",\\n            \\\"y_label\\\": \\\"cool [K/min]\\\",\\n            \\\"n_observations\\\": n_obs,\\n            \\\"f_best_used\\\": float(inc_full[\\\"z\\\"]),\\n            \\\"slice_hold_min\\\": round(float(inc_full[\\\"hold_time_s\\\"]) / 60.0, 1),\\n        }\\n        _doc_path = os.path.join(_artifacts_dir, \\\"gp_model_final.json\\\")\\n        with open(_doc_path, \\\"w\\\") as f:\\n            _json.dump(model_doc, f)\\n        log_artifact(\\n            _doc_path,\\n            name=\\\"gp_model_final.json\\\",\\n            category=\\\"plot\\\",\\n            mime_type=\\\"application/json\\\",\\n            metadata={\\n                \\\"render_hint\\\": \\\"gp-posterior\\\",\\n                # propose snapshots carry the loop iteration counter; +2 keeps\\n                # this sorting strictly after the last one regardless of the\\n                # 0/1-based counter convention.\\n                \\\"iteration\\\": str(n_iters + 2),\\n                \\\"kind\\\": \\\"bo_gp_posterior_final\\\",\\n            },\\n        )\\n        log_info(f\\\"report: closing posterior emitted (n={n_obs})\\\")\\nexcept Exception as exc:  # noqa: BLE001 — telemetry, never fails the step\\n    log_warn(f\\\"report: closing posterior failed (non-fatal): {exc!r}\\\")\\n\\nframes_rendered = 0\\ntry:\\n    frames = []\\n    for it in range(n_iters):\\n        prefix = observations[: K * (it + 1)]\\n        if not prefix:\\n            continue\\n        frames.append(_render_frame(prefix, it))\\n        log_info(f\\\"report: rendered frame {it + 1}/{n_iters}\\\")\\n\\n    if frames:\\n        # Final state as a crisp standalone PNG.\\n        final_png = os.path.join(_artifacts_dir, \\\"gp_final_state.png\\\")\\n        frames[-1].save(final_png)\\n        log_artifact(\\n            final_png, name=\\\"gp_final_state.png\\\", category=\\\"plot\\\",\\n            mime_type=\\\"image/png\\\",\\n            metadata={\\\"kind\\\": \\\"bo_surrogate_final\\\", \\\"evaluations\\\": str(n_obs)},\\n        )\\n\\n        # The animation: hold the last frame a few beats so the loop reads\\n        # (per-frame durations — Pillow dedupes appended identical frames).\\n        gif_path = os.path.join(_artifacts_dir, \\\"gp_evolution.gif\\\")\\n        frames[0].save(\\n            gif_path,\\n            save_all=True,\\n            append_images=frames[1:],\\n            duration=[1100] * (len(frames) - 1) + [4000],\\n            loop=0,\\n        )\\n        log_artifact(\\n            gif_path, name=\\\"gp_evolution.gif\\\", category=\\\"plot\\\",\\n            mime_type=\\\"image/gif\\\",\\n            metadata={\\n                \\\"kind\\\": \\\"bo_surrogate_evolution\\\",\\n                \\\"frames\\\": str(len(frames)),\\n                \\\"evaluations\\\": str(n_obs),\\n            },\\n        )\\n        frames_rendered = len(frames)\\nexcept Exception as exc:  # noqa: BLE001 — reporting is telemetry, not physics\\n    log_warn(f\\\"report: GP animation failed (non-fatal): {exc!r}\\\")\\n\\nsummary = {\\n    \\\"evaluations\\\": n_obs,\\n    \\\"iterations\\\": n_iters,\\n    \\\"feasible\\\": len(feasible),\\n    \\\"frames_rendered\\\": frames_rendered,\\n    \\\"best\\\": {\\n        \\\"ramp_K_min\\\": best_ramp,\\n        \\\"cool_K_min\\\": best_cool,\\n        \\\"hold_s\\\": best_hold,\\n        \\\"cost\\\": f_best,\\n    },\\n    \\\"sigma_limit_mpa\\\": sigma_limit,\\n    \\\"hold_temp_k\\\": hold_temp,\\n}\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"campaign.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"summary\", \"required\": true, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/report/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"report\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Post-loop reporter — animate the Gaussian-process surrogate itself.\\n\\nRuns ONCE after the campaign loop exits. Reads the full ordered observation\\nhistory off the loop accumulators and re-fits the same GP the proposer used on\\neach iteration's observation PREFIX, rendering one frame per iteration:\\n\\n  +----------------+----------------+----------------+\\n  | predicted      | sigma_max      | acquisition    |   (ramp, cool) slice\\n  | sigma_max [MPa]| uncertainty    | imp x P(feas)  |   at the incumbent's\\n  +----------------+----------------+----------------+   hold time\\n  | predicted soak | where we looked| convergence    |\\n  | min @ cool*    | obs scatter    | best-so-far    |\\n  +----------------+----------------+----------------+\\n\\nCONSTRAINT GPs, not a cost GP: fitting on the penalized cost would smear the\\npenalty cliff and distort the rendered landscape (same reason the proposer\\nswitched to constrained BO — improvement x P(feasible) acquisition).\\n\\nThe frames are stacked into an animated GIF (`gp_evolution.gif`) — the\\n\\\"watch the surrogate learn the landscape\\\" artifact — plus the final frame as\\na standalone PNG and emitted via log_artifact (image/* MIME -> renderable\\nmedia cards on the process Overview tab, same as the per-run firing plots).\\n\\nWhy slices: the search space is 3-D (ramp, cool, hold). The physics makes\\n(ramp, cool) the load-bearing plane — sigma_max is rate-driven and the soak\\nconstraint is ramp-driven — so the top row slices the cube at the incumbent's\\nhold time; the second row adds a (ramp, hold) slice at the incumbent's cool\\nrate so all three dimensions are visible.\\n\\nIMPORTANT (compiler contract): the literal reads of `campaign.observations`,\\n`campaign.f_best`, `campaign.best_ramp`, `campaign.best_cool`,\\n`campaign.best_hold`, `campaign.sigma_limit`, and `campaign.hold_temp` below\\nare the compiler's read-arc anchors into the loop's parked accumulator place\\n— keep them verbatim.\\n\\nFALLBACK LADDER (never fails the workflow): no sklearn -> scatter +\\nconvergence only (no GP panels); no matplotlib/pillow -> summary output only.\\n\\\"\\\"\\\"\\n\\nimport io\\nimport os\\n\\n# --- Borrowed campaign state (literal slug reads — DO NOT remove) ------------\\nobservations = campaign.observations\\nf_best = campaign.f_best\\nbest_ramp = campaign.best_ramp\\nbest_cool = campaign.best_cool\\nbest_hold = campaign.best_hold\\nsigma_limit = campaign.sigma_limit\\nhold_temp = campaign.hold_temp\\nbatch_k = campaign.batch_k\\n\\n# Candidates per iteration — matches propose; prefixes chunk by K. K=1\\n# (sequential BO) animates one frame per simulation.\\nK = max(1, min(8, int(batch_k)))\\n\\nn_obs = len(observations)\\nn_iters = max(1, (n_obs + K - 1) // K)\\nfeasible = [o for o in observations if o.get(\\\"verdict\\\") == \\\"OK\\\"]\\n\\nlog_info(\\n    f\\\"report: {n_obs} observations over {n_iters} iterations, \\\"\\n    f\\\"{len(feasible)} feasible, f_best={f_best}\\\"\\n)\\n\\n_artifacts_dir = os.environ.get(\\n    \\\"AITHERICON_ARTIFACTS_DIR\\\", os.environ.get(\\\"AITHERICON_RUN_DIR\\\", os.getcwd())\\n)\\n\\nVERDICT_COLOR = {\\\"OK\\\": \\\"#16a34a\\\", \\\"CRACK RISK\\\": \\\"#dc2626\\\", \\\"UNDER-SOAKED\\\": \\\"#d97706\\\"}\\n\\n\\ndef _denorm_axes():\\n    \\\"\\\"\\\"Physical-unit extents for the unit-cube axes.\\\"\\\"\\\"\\n    return (2.0, 150.0), (2.0, 150.0), (600.0, 7200.0)  # ramp, cool, hold\\n\\n\\ndef _fit_gp(obs, values):\\n    \\\"\\\"\\\"Same surrogate family as the proposer (Matern-5/2 + white noise).\\n\\n    Fits on a CONSTRAINT quantity (sigma_max / soak_min) — never on the\\n    penalized cost: the penalty jump would smear into the GP and distort\\n    the rendered landscape, the same failure the proposer avoids.\\n    \\\"\\\"\\\"\\n    import numpy as np\\n    from sklearn.gaussian_process import GaussianProcessRegressor\\n    from sklearn.gaussian_process.kernels import Matern, WhiteKernel\\n\\n    X = np.array([[o[\\\"u_ramp\\\"], o[\\\"u_cool\\\"], o[\\\"u_hold\\\"]] for o in obs])\\n    y = np.array([float(v) for v in values])\\n    kernel = Matern(\\n        nu=2.5, length_scale=[0.25, 0.25, 0.25], length_scale_bounds=(0.01, 1.0)\\n    ) + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1.0))\\n    gp = GaussianProcessRegressor(\\n        kernel=kernel, n_restarts_optimizer=3, normalize_y=True, random_state=42\\n    )\\n    gp.fit(X, y)\\n    return gp\\n\\n\\ndef _cycle_h_of(pts, ht):\\n    \\\"\\\"\\\"Deterministic cycle time [h] for unit-cube points (closed form).\\\"\\\"\\\"\\n    import numpy as np\\n\\n    ramp = 2.0 + 148.0 * pts[:, 0]\\n    cool = 2.0 + 148.0 * pts[:, 1]\\n    hold = 600.0 + 6600.0 * pts[:, 2]\\n    dT = float(ht) - 300.0\\n    return (dT / (ramp / 60.0) + hold + dT / (cool / 60.0)) / 3600.0\\n\\n\\ndef _acquisition(gs, gk, pts, incumbent_cycle, limit, target, ht):\\n    \\\"\\\"\\\"improvement x P(feasible) — mirrors the proposer's acquisition.\\\"\\\"\\\"\\n    import numpy as np\\n    from scipy.stats import norm\\n\\n    mu_s, sd_s = gs.predict(pts, return_std=True)\\n    sd_s = np.maximum(sd_s, 1e-9)\\n    mu_k, sd_k = gk.predict(pts, return_std=True)\\n    sd_k = np.maximum(sd_k, 1e-9)\\n    pf = norm.cdf((float(limit) - mu_s) / sd_s) * norm.cdf((mu_k - float(target)) / sd_k)\\n    cyc = _cycle_h_of(pts, ht)\\n    if incumbent_cycle is None:\\n        imp = np.ones_like(cyc)\\n    else:\\n        imp = np.maximum(incumbent_cycle - cyc - 0.01, 0.0)\\n    acq = imp * pf\\n    if not np.any(acq > 0.0):\\n        acq = pf * sd_s\\n    return acq\\n\\n\\ndef _render_frame(obs_prefix, it):\\n    \\\"\\\"\\\"Render one campaign-state frame; returns a PIL Image.\\\"\\\"\\\"\\n    import numpy as np\\n    import matplotlib\\n\\n    matplotlib.use(\\\"Agg\\\")\\n    import matplotlib.pyplot as plt\\n    from PIL import Image\\n\\n    (r_lo, r_hi), (c_lo, c_hi), (h_lo, h_hi) = _denorm_axes()\\n\\n    inc = min(obs_prefix, key=lambda o: float(o[\\\"z\\\"]))\\n    fb = float(inc[\\\"z\\\"])\\n    u_hold_star = float(inc[\\\"u_hold\\\"])\\n    u_cool_star = float(inc[\\\"u_cool\\\"])\\n    soak_target = float(hold_temp) - 15.0\\n    feas = [o for o in obs_prefix if o.get(\\\"verdict\\\") == \\\"OK\\\"]\\n    best_cycle = min(float(o[\\\"cycle_h\\\"]) for o in feas) if feas else None\\n\\n    gp_s, gp_k = None, None\\n    try:\\n        if len(obs_prefix) >= 2:\\n            gp_s = _fit_gp(obs_prefix, [o[\\\"sigma_max_mpa\\\"] for o in obs_prefix])\\n            gp_k = _fit_gp(obs_prefix, [o[\\\"soak_min_k\\\"] for o in obs_prefix])\\n    except Exception as exc:  # noqa: BLE001\\n        log_warn(f\\\"report: GP fit failed for frame {it} ({exc!r})\\\")\\n\\n    n = 55\\n    side = np.linspace(0.0, 1.0, n)\\n    gx, gy = np.meshgrid(side, side)\\n\\n    fig, axes = plt.subplots(2, 3, figsize=(13.5, 8.2))\\n    ramp_ext = [r_lo, r_hi, c_lo, c_hi]\\n\\n    def scatter_obs(ax, xs_key=\\\"ramp_rate\\\", ys_key=\\\"cool_rate\\\"):\\n        for o in obs_prefix:\\n            ax.plot(\\n                o[xs_key], o[ys_key], \\\"o\\\", ms=5,\\n                color=VERDICT_COLOR.get(o.get(\\\"verdict\\\", \\\"\\\"), \\\"#64748b\\\"),\\n                mec=\\\"white\\\", mew=0.5,\\n            )\\n        ax.plot(\\n            inc[xs_key], inc[ys_key], \\\"*\\\", ms=16, color=\\\"#facc15\\\",\\n            mec=\\\"black\\\", mew=0.8, zorder=5,\\n        )\\n\\n    if gp_s is not None and gp_k is not None:\\n        # Top row: the LEARNED CONSTRAINT on the (ramp, cool) slice at the\\n        # incumbent's hold — predicted sigma_max, its uncertainty, and the\\n        # improvement x P(feasible) acquisition (mirrors the proposer).\\n        grid_rc = np.column_stack(\\n            [gx.ravel(), gy.ravel(), np.full(n * n, u_hold_star)]\\n        )\\n        mu, sd = gp_s.predict(grid_rc, return_std=True)\\n        sd = np.maximum(sd, 1e-9)\\n        acq = _acquisition(\\n            gp_s, gp_k, grid_rc, best_cycle, sigma_limit, soak_target, hold_temp\\n        )\\n\\n        panels = [\\n            (mu, f\\\"predicted $\\\\\\\\sigma_{{max}}$ [MPa] (limit {float(sigma_limit):.0f})\\\", \\\"viridis\\\"),\\n            (sd, \\\"$\\\\\\\\sigma_{max}$ uncertainty [MPa]\\\", \\\"magma\\\"),\\n            (acq, \\\"acquisition = improvement $\\\\\\\\times$ P(feasible)\\\", \\\"cividis\\\"),\\n        ]\\n        for ax, (vals, title, cmap) in zip(axes[0], panels):\\n            im = ax.imshow(\\n                vals.reshape(n, n), origin=\\\"lower\\\", extent=ramp_ext,\\n                aspect=\\\"auto\\\", cmap=cmap,\\n            )\\n            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)\\n            scatter_obs(ax)\\n            ax.set_title(title, fontsize=9)\\n            ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n            ax.set_ylabel(\\\"cool [K/min]\\\", fontsize=8)\\n\\n        # Bottom-left: predicted soak_min on the (ramp, hold) slice at the\\n        # incumbent's cool rate — the OTHER learned constraint.\\n        grid_rh = np.column_stack(\\n            [gx.ravel(), np.full(n * n, u_cool_star), gy.ravel()]\\n        )\\n        mu2, _ = gp_k.predict(grid_rh, return_std=True)\\n        ax = axes[1][0]\\n        im = ax.imshow(\\n            mu2.reshape(n, n), origin=\\\"lower\\\",\\n            extent=[r_lo, r_hi, h_lo / 60.0, h_hi / 60.0],\\n            aspect=\\\"auto\\\", cmap=\\\"viridis\\\",\\n        )\\n        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)\\n        for o in obs_prefix:\\n            ax.plot(\\n                o[\\\"ramp_rate\\\"], o[\\\"hold_time_s\\\"] / 60.0, \\\"o\\\", ms=5,\\n                color=VERDICT_COLOR.get(o.get(\\\"verdict\\\", \\\"\\\"), \\\"#64748b\\\"),\\n                mec=\\\"white\\\", mew=0.5,\\n            )\\n        ax.plot(\\n            inc[\\\"ramp_rate\\\"], inc[\\\"hold_time_s\\\"] / 60.0, \\\"*\\\", ms=16,\\n            color=\\\"#facc15\\\", mec=\\\"black\\\", mew=0.8, zorder=5,\\n        )\\n        ax.set_title(\\n            f\\\"predicted soak min [K] (target {soak_target:.0f})\\\", fontsize=9\\n        )\\n        ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n        ax.set_ylabel(\\\"hold [min]\\\", fontsize=8)\\n    else:\\n        for ax in list(axes[0]) + [axes[1][0]]:\\n            ax.text(\\n                0.5, 0.5, \\\"GP pending\\\\n(bootstrap phase)\\\", ha=\\\"center\\\",\\n                va=\\\"center\\\", fontsize=10, color=\\\"#94a3b8\\\",\\n                transform=ax.transAxes,\\n            )\\n            ax.set_xticks([])\\n            ax.set_yticks([])\\n\\n    # Bottom-middle: where we looked (all observations, verdict-colored).\\n    ax = axes[1][1]\\n    scatter_obs(ax)\\n    ax.set_xlim(r_lo, r_hi)\\n    ax.set_ylim(c_lo, c_hi)\\n    ax.set_title(\\\"evaluations so far (green OK / red crack / orange soak)\\\", fontsize=9)\\n    ax.set_xlabel(\\\"ramp [K/min]\\\", fontsize=8)\\n    ax.set_ylabel(\\\"cool [K/min]\\\", fontsize=8)\\n    ax.grid(alpha=0.25)\\n\\n    # Bottom-right: convergence (best-so-far cost per evaluation).\\n    ax = axes[1][2]\\n    zs = [float(o[\\\"z\\\"]) for o in obs_prefix]\\n    best_so_far, cur = [], float(\\\"inf\\\")\\n    for z in zs:\\n        cur = min(cur, z)\\n        best_so_far.append(cur)\\n    ax.plot(range(1, len(zs) + 1), zs, \\\"o\\\", ms=4, color=\\\"#94a3b8\\\", label=\\\"evaluation\\\")\\n    ax.step(\\n        range(1, len(best_so_far) + 1), best_so_far, where=\\\"post\\\",\\n        color=\\\"#2563eb\\\", lw=2, label=\\\"best so far\\\",\\n    )\\n    ax.set_title(f\\\"convergence — best cost {fb:.3f}\\\", fontsize=9)\\n    ax.set_xlabel(\\\"evaluation #\\\", fontsize=8)\\n    ax.set_ylabel(\\\"cost [h + penalties]\\\", fontsize=8)\\n    ax.legend(fontsize=7)\\n    ax.grid(alpha=0.25)\\n\\n    fig.suptitle(\\n        f\\\"Firing-curve BO — surrogate state after iteration {it + 1} \\\"\\n        f\\\"({len(obs_prefix)} simulations)\\\",\\n        fontsize=12,\\n    )\\n    fig.tight_layout(rect=(0, 0, 1, 0.95))\\n\\n    buf = io.BytesIO()\\n    fig.savefig(buf, format=\\\"png\\\", dpi=92)\\n    plt.close(fig)\\n    buf.seek(0)\\n    return Image.open(buf).convert(\\\"RGB\\\")\\n\\n\\n# --- Closing posterior for the interactive gp-posterior panel ----------------\\n# `propose` snapshots the GP BEFORE evaluating its picks (the decision state),\\n# so the last interactive snapshot is always fitted on n - K observations and\\n# the final simulation(s) never get a panel. Emit one closing gp_model fitted\\n# on the FULL observation set — no next_candidate (the campaign is over), EI\\n# shown vs the final incumbent (\\\"where it would look next if continued\\\") —\\n# with an iteration number that sorts after every propose snapshot.\\ntry:\\n    import json as _json\\n\\n    import numpy as np\\n\\n    if n_obs >= 2:\\n        gp_s_full = _fit_gp(observations, [o[\\\"sigma_max_mpa\\\"] for o in observations])\\n        gp_k_full = _fit_gp(observations, [o[\\\"soak_min_k\\\"] for o in observations])\\n        inc_full = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n        _target = float(hold_temp) - 15.0\\n        _feas = [o for o in observations if o.get(\\\"verdict\\\") == \\\"OK\\\"]\\n        _best_cycle = min(float(o[\\\"cycle_h\\\"]) for o in _feas) if _feas else None\\n\\n        gn = 45\\n        gside = np.linspace(0.0, 1.0, gn)\\n        ggx, ggy = np.meshgrid(gside, gside)\\n        slice_grid = np.column_stack(\\n            [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc_full[\\\"u_hold\\\"]))]\\n        )\\n        gmu, gsd = gp_s_full.predict(slice_grid, return_std=True)\\n        gsd = np.maximum(gsd, 1e-9)\\n        gacq = _acquisition(\\n            gp_s_full, gp_k_full, slice_grid, _best_cycle, sigma_limit, _target, hold_temp\\n        )\\n\\n        axis = [round(2.0 + 148.0 * float(u), 2) for u in gside]\\n        model_doc = {\\n            \\\"gp_mean\\\": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],\\n            \\\"gp_std\\\": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],\\n            \\\"ei\\\": [[round(float(v), 6) for v in row] for row in gacq.reshape(gn, gn).tolist()],\\n            \\\"A_lin\\\": axis,\\n            \\\"D_lin\\\": axis,\\n            \\\"x_label\\\": \\\"ramp [K/min]\\\",\\n            \\\"y_label\\\": \\\"cool [K/min]\\\",\\n            \\\"titles\\\": {\\n                \\\"mean\\\": f\\\"predicted sigma_max [MPa] (limit {float(sigma_limit):.0f})\\\",\\n                \\\"std\\\": \\\"sigma_max uncertainty [MPa]\\\",\\n                \\\"ei\\\": \\\"acquisition = improvement x P(feasible)\\\",\\n            },\\n            \\\"n_observations\\\": n_obs,\\n            \\\"f_best_used\\\": float(inc_full[\\\"z\\\"]),\\n            \\\"slice_hold_min\\\": round(float(inc_full[\\\"hold_time_s\\\"]) / 60.0, 1),\\n        }\\n        _doc_path = os.path.join(_artifacts_dir, \\\"gp_model_final.json\\\")\\n        with open(_doc_path, \\\"w\\\") as f:\\n            _json.dump(model_doc, f)\\n        log_artifact(\\n            _doc_path,\\n            name=\\\"gp_model_final.json\\\",\\n            category=\\\"plot\\\",\\n            mime_type=\\\"application/json\\\",\\n            metadata={\\n                \\\"render_hint\\\": \\\"gp-posterior\\\",\\n                # propose snapshots carry the loop iteration counter; +2 keeps\\n                # this sorting strictly after the last one regardless of the\\n                # 0/1-based counter convention.\\n                \\\"iteration\\\": str(n_iters + 2),\\n                \\\"kind\\\": \\\"bo_gp_posterior_final\\\",\\n            },\\n        )\\n        log_info(f\\\"report: closing posterior emitted (n={n_obs})\\\")\\nexcept Exception as exc:  # noqa: BLE001 — telemetry, never fails the step\\n    log_warn(f\\\"report: closing posterior failed (non-fatal): {exc!r}\\\")\\n\\nframes_rendered = 0\\ntry:\\n    frames = []\\n    for it in range(n_iters):\\n        prefix = observations[: K * (it + 1)]\\n        if not prefix:\\n            continue\\n        frames.append(_render_frame(prefix, it))\\n        log_info(f\\\"report: rendered frame {it + 1}/{n_iters}\\\")\\n\\n    if frames:\\n        # Final state as a crisp standalone PNG.\\n        final_png = os.path.join(_artifacts_dir, \\\"gp_final_state.png\\\")\\n        frames[-1].save(final_png)\\n        log_artifact(\\n            final_png, name=\\\"gp_final_state.png\\\", category=\\\"plot\\\",\\n            mime_type=\\\"image/png\\\",\\n            metadata={\\\"kind\\\": \\\"bo_surrogate_final\\\", \\\"evaluations\\\": str(n_obs)},\\n        )\\n\\n        # The animation: hold the last frame a few beats so the loop reads\\n        # (per-frame durations — Pillow dedupes appended identical frames).\\n        gif_path = os.path.join(_artifacts_dir, \\\"gp_evolution.gif\\\")\\n        frames[0].save(\\n            gif_path,\\n            save_all=True,\\n            append_images=frames[1:],\\n            duration=[1100] * (len(frames) - 1) + [4000],\\n            loop=0,\\n        )\\n        log_artifact(\\n            gif_path, name=\\\"gp_evolution.gif\\\", category=\\\"plot\\\",\\n            mime_type=\\\"image/gif\\\",\\n            metadata={\\n                \\\"kind\\\": \\\"bo_surrogate_evolution\\\",\\n                \\\"frames\\\": str(len(frames)),\\n                \\\"evaluations\\\": str(n_obs),\\n            },\\n        )\\n        frames_rendered = len(frames)\\nexcept Exception as exc:  # noqa: BLE001 — reporting is telemetry, not physics\\n    log_warn(f\\\"report: GP animation failed (non-fatal): {exc!r}\\\")\\n\\nsummary = {\\n    \\\"evaluations\\\": n_obs,\\n    \\\"iterations\\\": n_iters,\\n    \\\"feasible\\\": len(feasible),\\n    \\\"frames_rendered\\\": frames_rendered,\\n    \\\"best\\\": {\\n        \\\"ramp_K_min\\\": best_ramp,\\n        \\\"cool_K_min\\\": best_cool,\\n        \\\"hold_s\\\": best_hold,\\n        \\\"cost\\\": f_best,\\n    },\\n    \\\"sigma_limit_mpa\\\": sigma_limit,\\n    \\\"hold_temp_k\\\": hold_temp,\\n}\\n\\n# --- Review-facing outputs (consumed by the `review` HumanTask) ---------------\\n# The HumanTask's blocks interpolate `{{ report.<field> }}` at instance time:\\n# `report_md` renders as an mdsvex block (markdown incl. the results table),\\n# the storage KEYS feed `/api/v1/files/{{ report.gp_final_key }}` image/download\\n# blocks, and `top_curves` drives a Repeater (`report.top_curves[*]`) with a\\n# per-curve \\\"queue for physical verification\\\" checkbox.\\n\\n# Artifact storage keys are deterministic: artifacts/{execution_id}/{id}/{name}\\n# (observed executor-storage layout). Empty when rendering was skipped.\\n_exec_id = os.environ.get(\\\"AITHERICON_EXECUTION_ID\\\", \\\"\\\")\\nif frames_rendered > 0 and _exec_id:\\n    gp_final_key = f\\\"artifacts/{_exec_id}/gp_final_state.png/gp_final_state.png\\\"\\n    gif_key = f\\\"artifacts/{_exec_id}/gp_evolution.gif/gp_evolution.gif\\\"\\nelse:\\n    gp_final_key = \\\"\\\"\\n    gif_key = \\\"\\\"\\n\\n_soak_target = float(hold_temp) - 15.0\\n_n_crack = sum(1 for o in observations if o.get(\\\"verdict\\\") == \\\"CRACK RISK\\\")\\n_n_soak = sum(1 for o in observations if o.get(\\\"verdict\\\") == \\\"UNDER-SOAKED\\\")\\n\\n\\ndef _curve_label(o):\\n    return (\\n        f\\\"{float(o['cycle_h']):.2f} h — ramp {float(o['ramp_rate']):.1f} / \\\"\\n        f\\\"cool {float(o['cool_rate']):.1f} K/min, hold \\\"\\n        f\\\"{float(o['hold_time_s']) / 60.0:.0f} min  \\\"\\n        f\\\"(sigma {float(o['sigma_max_mpa']):.1f} MPa, soak \\\"\\n        f\\\"{float(o['soak_min_k']):.1f} K, {o.get('verdict', '?')})\\\"\\n    )\\n\\n\\n# Top candidates: feasible curves by cycle time; pad with the nearest misses\\n# (boundary probes) so the verification queue always has material.\\n_ranked = sorted(feasible, key=lambda o: float(o[\\\"cycle_h\\\"]))[:5]\\nif len(_ranked) < 5:\\n    _misses = sorted(\\n        (o for o in observations if o.get(\\\"verdict\\\") != \\\"OK\\\"),\\n        key=lambda o: float(o[\\\"z\\\"]),\\n    )\\n    _ranked = _ranked + _misses[: 5 - len(_ranked)]\\n\\ntop_curves = [\\n    {\\n        \\\"label\\\": _curve_label(o),\\n        \\\"ramp_rate\\\": float(o[\\\"ramp_rate\\\"]),\\n        \\\"cool_rate\\\": float(o[\\\"cool_rate\\\"]),\\n        \\\"hold_min\\\": round(float(o[\\\"hold_time_s\\\"]) / 60.0, 1),\\n        \\\"sigma_max_mpa\\\": float(o[\\\"sigma_max_mpa\\\"]),\\n        \\\"soak_min_k\\\": float(o[\\\"soak_min_k\\\"]),\\n        \\\"cycle_h\\\": float(o[\\\"cycle_h\\\"]),\\n        \\\"verdict\\\": o.get(\\\"verdict\\\", \\\"?\\\"),\\n    }\\n    for o in _ranked\\n]\\n\\nif feasible:\\n    _b = min(feasible, key=lambda o: float(o[\\\"cycle_h\\\"]))\\n    best_label = _curve_label(_b)\\nelse:\\n    best_label = \\\"no feasible firing curve found — consider more iterations\\\"\\n\\n_rows = \\\"\\\\n\\\".join(\\n    f\\\"| {i + 1} | {c['cycle_h']:.2f} | {c['ramp_rate']:.1f} | {c['cool_rate']:.1f} \\\"\\n    f\\\"| {c['hold_min']:.0f} | {c['sigma_max_mpa']:.1f} | {c['soak_min_k']:.1f} \\\"\\n    f\\\"| {c['verdict']} |\\\"\\n    for i, c in enumerate(top_curves)\\n)\\n_max_feas_sigma = max((float(o[\\\"sigma_max_mpa\\\"]) for o in feasible), default=0.0)\\n_min_feas_soak = min((float(o[\\\"soak_min_k\\\"]) for o in feasible), default=0.0)\\n\\nreport_md = f\\\"\\\"\\\"### Campaign summary\\n\\n**{n_obs} simulations** across **{n_iters} iterations** — **{len(feasible)} feasible**, {_n_crack} crack-risk, {_n_soak} under-soaked. The infeasible runs are not waste: they are the boundary probes that taught the surrogate where the material limits lie.\\n\\n#### Top firing curves\\n\\n| # | cycle [h] | ramp [K/min] | cool [K/min] | hold [min] | sigma_max [MPa] | soak min [K] | verdict |\\n|---|-----------|--------------|--------------|------------|------------------|--------------|---------|\\n{_rows}\\n\\n#### How close did we get to the limits?\\n\\n- Crack threshold **{float(sigma_limit):.0f} MPa** — best feasible curve peaks at **{_max_feas_sigma:.1f} MPa** ({float(sigma_limit) - _max_feas_sigma:.1f} MPa of margin).\\n- Soak target **{_soak_target:.0f} K** (hold temp − 15) — tightest feasible soak: **{_min_feas_soak:.1f} K**.\\n\\n_Search space: ramp / cool 2–150 K/min, hold 10–120 min @ {float(hold_temp):.0f} K. Objective: minimize cycle time subject to sigma_max ≤ {float(sigma_limit):.0f} MPa and full core soak (constrained BO — improvement × P(feasible))._\\n\\\"\\\"\\\"\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"campaign.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"summary\", \"required\": true, \"kind\": \"json\"}, #{\"name\": \"report_md\", \"required\": true, \"kind\": \"textarea\"}, #{\"name\": \"best_label\", \"required\": true, \"kind\": \"text\"}, #{\"name\": \"gp_final_key\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"gif_key\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"top_curves\", \"required\": true, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/report/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
       "name": "Animate GP surrogate - Prepare",
@@ -9021,7 +9960,7 @@
         "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K firing curves -> Simulate K firing curves",
+      "name": "Constrained BO: propose K firing curves -> Simulate K firing curves",
       "output_ports": [
         {
           "cardinality": "single",
@@ -9040,6 +9979,69 @@
       "outputs": [
         {
           "place": "p_mp_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_report_review",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_report",
+          "schema_ref": "#/definitions/Data__report"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_report_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_report_data",
+          "port": "d_report",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "fn __set_path(__m, __segs, __idx, __v) { let __cur = if type_of(__m) == \"map\" { __m } else { #{} }; if __idx >= __segs.len() { return __v; } let __k = __segs[__idx]; if __idx == __segs.len() - 1 { __cur[__k] = __v; } else { let __child = if __cur.keys().contains(__k) && type_of(__cur[__k]) == \"map\" { __cur[__k] } else { #{} }; __cur[__k] = __set_path(__child, __segs, __idx + 1, __v); } __cur } fn __pluck(__r, __segs) { for __s in __segs { let __t = type_of(__r); if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } return (); } __r } let d = input; d.title = \"Firing-curve campaign review\"; d.instructions_mdsvex = (\"\" + \"The optimization campaign has finished: **\" + (__pluck(d_report, [\"detail\", \"outputs\", \"best_label\"])) + \"**\\n\\nReview the results below — the learned constraint landscape, how hard the optimizer probed the material limits, and the top candidate curves. Then pick which pucks to actually fire for physical verification, and sign off.\"); d.steps = [#{\"id\": \"step-results\", \"title\": \"Campaign results\", \"descriptionMdsvex\": \"Everything below was produced by the optimization campaign that just finished — review before adopting the firing curve.\", \"blocks\": [#{\"type\": \"callout\", \"severity\": \"success\", \"title\": \"Best firing curve\", \"content\": (\"\" + (__pluck(d_report, [\"detail\", \"outputs\", \"best_label\"])))}, #{\"type\": \"mdsvex\", \"content\": (\"\" + (__pluck(d_report, [\"detail\", \"outputs\", \"report_md\"])))}, #{\"type\": \"divider\"}, #{\"type\": \"image\", \"display\": \"single\", \"url\": (\"\" + \"/api/v1/files/\" + (__pluck(d_report, [\"detail\", \"outputs\", \"gp_final_key\"]))), \"alt\": \"Final surrogate state\", \"caption\": \"Learned constraint landscape: predicted peak stress, model uncertainty, acquisition, soak constraint, evaluation coverage, and convergence.\"}, #{\"type\": \"image\", \"display\": \"single\", \"url\": (\"\" + \"/api/v1/files/\" + (__pluck(d_report, [\"detail\", \"outputs\", \"gif_key\"]))), \"alt\": \"GP surrogate evolution\", \"caption\": \"Watch the surrogate learn the landscape — one frame per iteration (animated).\"}, #{\"type\": \"download\", \"downloads\": [#{\"url\": (\"\" + \"/api/v1/files/\" + (__pluck(d_report, [\"detail\", \"outputs\", \"gp_final_key\"]))), \"filename\": \"gp_final_state.png\", \"mime_type\": \"image/png\", \"description\": \"Final surrogate state (PNG, slide-ready)\"}, #{\"url\": (\"\" + \"/api/v1/files/\" + (__pluck(d_report, [\"detail\", \"outputs\", \"gif_key\"]))), \"filename\": \"gp_evolution.gif\", \"mime_type\": \"image/gif\", \"description\": \"Animated surrogate evolution across iterations\"}]}]}, #{\"id\": \"step-verify\", \"title\": \"Physical verification queue\", \"descriptionMdsvex\": \"The model can only be trusted as far as it has been verified. Pick which curves to actually fire — each selected puck goes to the robot cell for SEM characterization at the predicted peak-stress location (the outer rim, end of cool-down).\", \"blocks\": [#{\"type\": \"callout\", \"severity\": \"info\", \"title\": \"Why verify near-misses too\", \"content\": \"Firing one curve just **beyond** the predicted limit (and confirming it cracks) validates the boundary itself, not just the safe side of it.\"}, #{\"type\": \"repeater\", \"items_ref\": \"report.top_curves[*]\", \"item_label_ref\": \"report.top_curves[*].label\", \"blocks\": [#{\"type\": \"input\", \"field\": #{\"name\": \"fire_and_verify\", \"label\": \"Fire this curve and queue the puck for SEM verification\", \"kind\": \"checkbox\", \"required\": false}}, #{\"type\": \"input\", \"field\": #{\"name\": \"note\", \"label\": \"Note for the lab\", \"kind\": \"text\", \"required\": false, \"placeholder\": \"e.g. inspect rim at 0°/90°\"}}], \"output_slug\": \"verify_picks\"}]}, #{\"id\": \"step-decision\", \"title\": \"Sign-off\", \"blocks\": [#{\"type\": \"input\", \"field\": #{\"name\": \"decision\", \"label\": \"Decision\", \"kind\": \"radio\", \"required\": true, \"options\": [#{\"value\": \"approve\", \"label\": \"Approve — adopt the best curve as the new recipe\"}, #{\"value\": \"extend\", \"label\": \"Extend — run more iterations before deciding\"}, #{\"value\": \"reject\", \"label\": \"Reject — revisit objective / constraints first\"}]}}, #{\"type\": \"input\", \"field\": #{\"name\": \"comment\", \"label\": \"Review notes\", \"kind\": \"textarea\", \"required\": false, \"placeholder\": \"Observations, concerns, follow-ups …\"}}, #{\"type\": \"input\", \"field\": #{\"name\": \"reviewer_signature\", \"label\": \"Reviewer sign-off\", \"kind\": \"signature\", \"required\": false}}]}]; if type_of(d.payload) != \"map\" { d.payload = #{}; } d.payload = __set_path(d.payload, [\"report\", \"top_curves\"], 0, __pluck(d_report, [\"detail\", \"outputs\", \"top_curves\"])); #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Animate GP surrogate -> Review campaign",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_input",
           "port": "output",
           "weight": 1
         }
@@ -9222,6 +10224,16 @@
         },
         {
           "cardinality": "single",
+          "name": "d_review",
+          "schema_ref": "#/definitions/Data__review"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_report",
+          "schema_ref": "#/definitions/Data__report"
+        },
+        {
+          "cardinality": "single",
           "name": "d_lp",
           "schema_ref": "#/definitions/Data__lp"
         }
@@ -9236,8 +10248,20 @@
       },
       "inputs": [
         {
-          "place": "p_report_ctrl",
+          "place": "p_review_ctrl",
           "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_review_data",
+          "port": "d_review",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_report_data",
+          "port": "d_report",
+          "read": true,
           "weight": 1
         },
         {
@@ -9248,7 +10272,7 @@
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_lp.best_ramp); let __rv1 = (d_lp.best_cool); let __rv2 = (d_lp.best_hold); let __rv3 = (d_lp.f_best); let __rv4 = (d_lp.iteration); let __rv = #{ \"best_ramp_K_min\": __rv0, \"best_cool_K_min\": __rv1, \"best_hold_s\": __rv2, \"best_cost\": __rv3, \"iterations\": __rv4 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_review.data.decision); let __rv1 = (d_review.data.comment); let __rv2 = (d_review.data.verify_picks); let __rv3 = (d_report.detail.outputs.top_curves); let __rv4 = (d_lp.best_ramp); let __rv5 = (d_lp.best_cool); let __rv6 = (d_lp.best_hold); let __rv7 = (d_lp.f_best); let __rv8 = (d_lp.iteration); let __rv = #{ \"decision\": __rv0, \"review_comment\": __rv1, \"verification_queue\": __rv2, \"top_curves\": __rv3, \"best_ramp_K_min\": __rv4, \"best_cool_K_min\": __rv5, \"best_hold_s\": __rv6, \"best_cost\": __rv7, \"iterations\": __rv8 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Report best firing curve - Result",
@@ -9421,7 +10445,7 @@
     },
     {
       "guard": {
-        "source": "d_lp.iteration < 12 && (d_lp.iteration < d_lp.budget)",
+        "source": "d_lp.iteration < 999999 && (d_lp.iteration < d_lp.budget)",
         "type": "rhai"
       },
       "id": "t_lp_continue",
@@ -9581,7 +10605,7 @@
     },
     {
       "guard": {
-        "source": "d_lp.iteration >= 12 || !(d_lp.iteration < d_lp.budget)",
+        "source": "d_lp.iteration >= 999999 || !(d_lp.iteration < d_lp.budget)",
         "type": "rhai"
       },
       "id": "t_lp_exit",
@@ -10037,10 +11061,10 @@
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'Fit GP + propose K firing curves' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Constrained BO: propose K firing curves' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K firing curves - Dead-letter (no handler — crash net)"
+      "name": "Constrained BO: propose K firing curves - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_propose_to_output",
@@ -10070,7 +11094,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K firing curves - To Output",
+      "name": "Constrained BO: propose K firing curves - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -10122,7 +11146,7 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K firing curves - Yield (park data, forward control)",
+      "name": "Constrained BO: propose K firing curves - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -10295,6 +11319,208 @@
         },
         {
           "place": "p_report_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_review_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_review_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Review campaign - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_review_signal"
+      ],
+      "effect_config": {
+        "place": "p_review_signal"
+      },
+      "id": "t_review_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/HumanTaskRequest"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "HumanTaskRequest": {
+            "$ref": "#/definitions/HumanTaskRequest"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_review_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Review campaign - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/HumanTaskAssigned"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "HumanTaskAssigned": {
+            "$ref": "#/definitions/HumanTaskAssigned"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_active",
+          "port": "assigned",
+          "weight": 1
+        },
+        {
+          "place": "p_review_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_review_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Review campaign - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__review"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__review"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_review_ctrl",
           "port": "ctrl",
           "weight": 1
         }

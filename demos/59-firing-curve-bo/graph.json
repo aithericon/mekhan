@@ -58,7 +58,7 @@
         "type": "loop",
         "label": "Firing Curve BO",
         "description": "Carries the campaign across iterations: accumulated `observations`, the incumbent cost `f_best`, and the best firing curve seen (`best_ramp`/`best_cool`/`best_hold`). Each iteration fits a GP surrogate, proposes K=3 candidate firing curves, simulates each in OpenFOAM (Docker), and folds the results in. Every accumulator init is defensive against an untouched Run form (empty/missing fields fall back to documented defaults).",
-        "maxIterations": 12,
+        "maxIterations": 999999,
         "loopCondition": "campaign.iteration < campaign.budget",
         "accumulators": [
           {
@@ -122,8 +122,8 @@
       "position": { "x": 16, "y": 73 },
       "data": {
         "type": "automated_step",
-        "label": "Fit GP + propose K firing curves",
-        "description": "Reads the accumulated `campaign.observations`, the incumbent `campaign.f_best`, and `campaign.iteration`, fits a Matern-5/2 GP over the unit cube (ramp, cool, hold normalized), and proposes K=3 candidate firing curves by Expected Improvement. Bootstrap iterations walk a fixed space-filling grid. Threads `hold_temp`, `sigma_limit`, and `solver_mode` into each candidate so the Map body stays token-resident (no cross-scope read-arcs).",
+        "label": "Constrained BO: propose K firing curves",
+        "description": "Constrained Bayesian optimization (Gardner/Gelbart): cycle time is a known closed-form objective; the physics is what gets learned. Fits TWO Matern-5/2 constraint GPs over the unit cube — predicted sigma_max [MPa] and soak min [K] — and acquires by improvement x P(feasible), which is attracted to the constraint boundary instead of repelled by a penalty cliff. Batches diversify via Kriging Believer on the constraint GPs + a constant-liar incumbent update on the deterministic objective; batch_size=1 is classic sequential BO. Ranges: ramp/cool 2-150 K/min (speed-sintering territory — the real crack boundary lies inside the box), hold 10-120 min. Bootstrap iteration walks a fixed space-filling grid. Threads `hold_temp`, `sigma_limit`, and `solver_mode` into each candidate so the Map body stays token-resident (no cross-scope read-arcs).",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -353,19 +353,78 @@
               "label": "Campaign summary",
               "kind": "json",
               "required": true
+            },
+            {
+              "name": "report_md",
+              "label": "Report (markdown)",
+              "kind": "textarea",
+              "required": true
+            },
+            {
+              "name": "best_label",
+              "label": "Best curve (one-liner)",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "gp_final_key",
+              "label": "Final GP state storage key",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "gif_key",
+              "label": "GP evolution GIF storage key",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "top_curves",
+              "label": "Top firing curves",
+              "kind": "json",
+              "required": true
             }
           ]
         }
       }
     },
     {
+      "id": "review",
+      "type": "human_task",
+      "slug": "review",
+      "position": { "x": 1560, "y": 30 },
+      "data": {
+        "type": "human_task",
+        "label": "Review campaign",
+        "taskTitle": "Firing-curve campaign review",
+        "instructionsMdsvex": "The optimization campaign has finished: **{{ report.best_label }}**\n\nReview the results below — the learned constraint landscape, how hard the optimizer probed the material limits, and the top candidate curves. Then pick which pucks to actually fire for physical verification, and sign off.",
+        "steps": []
+      }
+    },
+    {
       "id": "end",
       "type": "end",
-      "position": { "x": 1560, "y": 41 },
+      "position": { "x": 1840, "y": 41 },
       "data": {
         "type": "end",
         "label": "Report best firing curve",
         "resultMapping": [
+          {
+            "targetField": "decision",
+            "expression": "review.decision"
+          },
+          {
+            "targetField": "review_comment",
+            "expression": "review.comment"
+          },
+          {
+            "targetField": "verification_queue",
+            "expression": "review.verify_picks"
+          },
+          {
+            "targetField": "top_curves",
+            "expression": "report.top_curves"
+          },
           {
             "targetField": "best_ramp_K_min",
             "expression": "campaign.best_ramp"
@@ -450,8 +509,15 @@
       "type": "sequence"
     },
     {
-      "id": "e_report_end",
+      "id": "e_report_review",
       "source": "report",
+      "target": "review",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_review_end",
+      "source": "review",
       "target": "end",
       "targetHandle": "in",
       "type": "sequence"

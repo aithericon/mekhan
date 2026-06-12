@@ -1,0 +1,414 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": {
+        "x": 0,
+        "y": 80
+      },
+      "data": {
+        "type": "start",
+        "label": "Closed-Loop Settings",
+        "processName": "Closed-Loop Firing",
+        "initial": {
+          "id": "in",
+          "label": "Settings",
+          "fields": [
+            {
+              "name": "max_iterations",
+              "label": "Iteration budget (default 6)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "sigma_limit",
+              "label": "Crack threshold sigma_max [MPa] (default 80)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "hold_temp",
+              "label": "Sintering hold temperature [K] (default 1850)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "solver_mode",
+              "label": "Solver: auto | docker | surrogate (default auto)",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "batch_size",
+              "label": "Candidates per iteration K (1 = sequential BO, default 3)",
+              "kind": "number",
+              "required": false
+            },
+            {
+              "name": "robot",
+              "label": "Robot leg: auto | skip (default skip \u2014 set auto with the ROS/Isaac fleet up)",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "campaign",
+      "type": "sub_workflow",
+      "slug": "campaign",
+      "position": {
+        "x": 290,
+        "y": 70
+      },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Firing-Curve Campaign (child 59)",
+        "description": "Embeds 59-firing-curve-bo wholesale: constrained-BO loop over real OpenFOAM physics, GP animation report, and the human review gate (the reviewer's verification picks come back in `verification_queue`). Settings pass through from this workflow's Start.",
+        "templateId": "00000000-0000-0000-0000-000000000590",
+        "versionPin": {
+          "mode": "latest"
+        },
+        "inputMapping": [
+          {
+            "targetField": "max_iterations",
+            "expression": "input.max_iterations"
+          },
+          {
+            "targetField": "sigma_limit",
+            "expression": "input.sigma_limit"
+          },
+          {
+            "targetField": "hold_temp",
+            "expression": "input.hold_temp"
+          },
+          {
+            "targetField": "solver_mode",
+            "expression": "input.solver_mode"
+          },
+          {
+            "targetField": "batch_size",
+            "expression": "input.batch_size"
+          }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Campaign result",
+          "fields": [
+            {
+              "name": "decision",
+              "label": "Review decision",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "review_comment",
+              "label": "Review comment",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "verification_queue",
+              "label": "Per-curve verification picks",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "top_curves",
+              "label": "Top firing curves",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "best_ramp_K_min",
+              "label": "Best ramp [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "best_cool_K_min",
+              "label": "Best cool [K/min]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "best_hold_s",
+              "label": "Best hold [s]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "best_cost",
+              "label": "Best cost",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "iterations",
+              "label": "Iterations",
+              "kind": "number",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "select",
+      "type": "automated_step",
+      "slug": "select",
+      "position": {
+        "x": 640,
+        "y": 80
+      },
+      "data": {
+        "type": "automated_step",
+        "label": "Join verification picks",
+        "description": "Zips the reviewer's per-row picks (`campaign.verification_queue`) with the curve parameters (`campaign.top_curves`, index-aligned by the review Repeater), keeps the curves flagged `fire_and_verify`, and decides whether the robot leg should run: review decision == approve AND at least one pick AND the `robot` start field enables it.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Selection",
+          "fields": [
+            {
+              "name": "queued",
+              "label": "Curves queued for physical verification",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "n_queued",
+              "label": "Queued count",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "dispatch",
+              "label": "Dispatch robot leg",
+              "kind": "bool",
+              "required": true
+            },
+            {
+              "name": "skip_reason",
+              "label": "Why the robot leg was skipped",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "route",
+      "type": "decision",
+      "position": {
+        "x": 950,
+        "y": 95
+      },
+      "data": {
+        "type": "decision",
+        "label": "Robot leg?",
+        "description": "Dispatch the physical verification only when the reviewer approved, picked curves, and the robot fleet is enabled.",
+        "conditions": [
+          {
+            "edgeId": "branch-fire",
+            "label": "fire + verify",
+            "guard": "select.dispatch == true"
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "fire",
+      "type": "sub_workflow",
+      "slug": "fire",
+      "position": {
+        "x": 1220,
+        "y": 0
+      },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Robot: handle sample (child 40)",
+        "description": "Dispatches the 40-sample-handling child \u2014 the xArm sample-handling workflow composing pick/place/swap \u2014 to physically move the fired puck through the cell for characterization at the predicted peak-stress location (outer rim, end of cool-down). Requires the ROS fleet (`just dev ros-up` / Isaac).",
+        "templateId": "00000000-0000-0000-0000-000000000400",
+        "versionPin": {
+          "mode": "latest"
+        },
+        "inputMapping": [],
+        "output": {
+          "id": "out",
+          "label": "Robot result",
+          "fields": [
+            {
+              "name": "jobs_done",
+              "label": "Robot jobs completed",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "seeded",
+              "label": "Inventory items seeded",
+              "kind": "number",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end-fired",
+      "type": "end",
+      "position": {
+        "x": 1520,
+        "y": 10
+      },
+      "data": {
+        "type": "end",
+        "label": "Verified physically",
+        "resultMapping": [
+          {
+            "targetField": "decision",
+            "expression": "campaign.decision"
+          },
+          {
+            "targetField": "best_ramp_K_min",
+            "expression": "campaign.best_ramp_K_min"
+          },
+          {
+            "targetField": "best_cool_K_min",
+            "expression": "campaign.best_cool_K_min"
+          },
+          {
+            "targetField": "best_hold_s",
+            "expression": "campaign.best_hold_s"
+          },
+          {
+            "targetField": "best_cost",
+            "expression": "campaign.best_cost"
+          },
+          {
+            "targetField": "queued",
+            "expression": "select.queued"
+          },
+          {
+            "targetField": "n_queued",
+            "expression": "select.n_queued"
+          },
+          {
+            "targetField": "robot_jobs_done",
+            "expression": "fire.jobs_done"
+          }
+        ]
+      }
+    },
+    {
+      "id": "end-skipped",
+      "type": "end",
+      "position": {
+        "x": 1220,
+        "y": 190
+      },
+      "data": {
+        "type": "end",
+        "label": "Done (no robot leg)",
+        "resultMapping": [
+          {
+            "targetField": "decision",
+            "expression": "campaign.decision"
+          },
+          {
+            "targetField": "best_ramp_K_min",
+            "expression": "campaign.best_ramp_K_min"
+          },
+          {
+            "targetField": "best_cool_K_min",
+            "expression": "campaign.best_cool_K_min"
+          },
+          {
+            "targetField": "best_hold_s",
+            "expression": "campaign.best_hold_s"
+          },
+          {
+            "targetField": "best_cost",
+            "expression": "campaign.best_cost"
+          },
+          {
+            "targetField": "queued",
+            "expression": "select.queued"
+          },
+          {
+            "targetField": "n_queued",
+            "expression": "select.n_queued"
+          },
+          {
+            "targetField": "skip_reason",
+            "expression": "select.skip_reason"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_campaign",
+      "source": "start",
+      "target": "campaign",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_campaign_select",
+      "source": "campaign",
+      "target": "select",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_select_route",
+      "source": "select",
+      "target": "route",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_fire_branch",
+      "source": "route",
+      "target": "fire",
+      "targetHandle": "in",
+      "sourceHandle": "branch-fire",
+      "label": "fire + verify",
+      "type": "conditional"
+    },
+    {
+      "id": "e_skip_branch",
+      "source": "route",
+      "target": "end-skipped",
+      "targetHandle": "in",
+      "sourceHandle": "default",
+      "label": "skip",
+      "type": "conditional"
+    },
+    {
+      "id": "e_fire_end",
+      "source": "fire",
+      "target": "end-fired",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

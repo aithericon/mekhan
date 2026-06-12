@@ -607,6 +607,12 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // and the 28..40 ROS demos. Capture/record/mirror are live-only
         // (Isaac Sim + ROS bridge). Pre-dated this list; added retroactively.
         "56-isaac-experiment-capture",
+        // 60-closed-loop-firing — flow-in-flow capstone embedding 59 (the BO
+        // campaign) and 40 (robot sample handling) as sub_workflow children
+        // by templateId; needs publish-time child resolution, same class as
+        // 06-subworkflow. The campaign's own AIR is pinned by 59's snapshot;
+        // the composition is proven by the publish path + live runs.
+        "60-closed-loop-firing",
     ]
     .into_iter()
     .collect();

@@ -42,6 +42,10 @@
 		 *  A/D parameter names so older gp_model.json artifacts still read. */
 		x_label?: string;
 		y_label?: string;
+		/** Optional per-panel title overrides (producer-declared) — e.g. a
+		 *  constrained-BO producer shows "predicted sigma_max" instead of the
+		 *  default cost-posterior wording. */
+		titles?: { mean?: string; std?: string; ei?: string };
 	}
 
 	let meanEl: HTMLDivElement | undefined = $state();
@@ -310,19 +314,19 @@
 
 	function render(m: GpModel) {
 		if (meanChart) {
-			meanChart.setOption(buildOption(m, 'mean', 'Posterior mean μ', VIRIDIS), {
+			meanChart.setOption(buildOption(m, 'mean', m.titles?.mean ?? 'Posterior mean μ', VIRIDIS), {
 				notMerge: true,
 				lazyUpdate: true
 			});
 		}
 		if (stdChart) {
-			stdChart.setOption(buildOption(m, 'std', 'Uncertainty σ', VIRIDIS), {
+			stdChart.setOption(buildOption(m, 'std', m.titles?.std ?? 'Uncertainty σ', VIRIDIS), {
 				notMerge: true,
 				lazyUpdate: true
 			});
 		}
 		if (eiChart) {
-			eiChart.setOption(buildOption(m, 'ei', 'Expected improvement', VIRIDIS), {
+			eiChart.setOption(buildOption(m, 'ei', m.titles?.ei ?? 'Expected improvement', VIRIDIS), {
 				notMerge: true,
 				lazyUpdate: true
 			});

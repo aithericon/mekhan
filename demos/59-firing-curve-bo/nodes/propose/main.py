@@ -1,24 +1,36 @@
-"""Loop body head — fit a GP surrogate and propose K candidate firing curves.
+"""Loop body head — constrained-BO proposer for K candidate firing curves.
 
-Bayesian-optimization proposer over the 3-D firing-curve space, normalized to
-the unit cube:
+Searches the 3-D firing-curve space, normalized to the unit cube:
 
-  u_ramp -> ramp_rate  = 2 + 58 * u_ramp     [K/min]  (2 .. 60)
-  u_cool -> cool_rate  = 2 + 58 * u_cool     [K/min]  (2 .. 60)
+  u_ramp -> ramp_rate  = 2 + 148 * u_ramp    [K/min]  (2 .. 150)
+  u_cool -> cool_rate  = 2 + 148 * u_cool    [K/min]  (2 .. 150)
   u_hold -> hold_time  = 600 + 6600 * u_hold [s]      (10 min .. 2 h)
 
-Each iteration it reads the accumulated campaign state off the loop
-accumulators and emits `candidates` — a JSON array of K=3 firing-curve dicts
-for the downstream Map to scatter through the `simulate` objective. Campaign
-constants (`hold_temp`, `sigma_limit`, `solver_mode`) are threaded INTO each
-candidate so the Map body only ever touches token-resident `cand.*` fields.
+(150 K/min reaches speed-sintering territory — wide enough that the REAL
+crack boundary lies inside the box, so the optimizer stops at the material
+limit, not at an arbitrary fence.)
 
-BATCH ACQUISITION: the K parallel candidates are chosen by Expected
-Improvement with the CONSTANT-LIAR heuristic (CL-min) — sequential EI argmax
-with hallucinated `lie = f_best` outcomes appended between picks (posterior
-updated, hyperparameters frozen). Plain top-K-by-EI degenerates to K copies
-of the same acquisition peak; the lie collapses EI around each pick so the
-batch diversifies. This is the cheap, standard q-EI stand-in.
+CONSTRAINED BO (Gardner/Gelbart style), not penalized-cost BO: the cycle time
+is a KNOWN closed-form function of the parameters, so nothing needs learning
+there. What is unknown is the physics. Fitting one GP on a penalty-jump cost
+smears the discontinuity over a wide neighborhood and EI then AVOIDS the
+whole boundary region — exactly where the optimum lives. Instead:
+
+  - GP_sigma : posterior over sigma_max [MPa]  (smooth, no cliff)
+  - GP_soak  : posterior over soak_min  [K]    (smooth, no cliff)
+  - acquisition(x) = max(best_feasible_cycle - cycle(x), 0)
+                     * P(sigma(x) <= limit) * P(soak(x) >= target)
+
+P(feasible) ~ 0.5 right at the learned boundary with a large improvement
+factor, so the acquisition is ATTRACTED to the constraint boundary instead of
+repelled. Before any feasible point exists the improvement factor is dropped
+(pure feasibility search); if no candidate improves, fall back to
+P(feasible) * sigma-uncertainty (probe the uncertain side of the boundary).
+
+BATCH: Kriging Believer on the constraint GPs (append predicted sigma/soak at
+each pick, refit with frozen hyperparameters) PLUS a constant-liar update on
+the deterministic objective (assume the pick succeeds -> its cycle time
+becomes the incumbent), so later picks can't cluster on the same spot.
 
 IMPORTANT (compiler contract): this Python is SCANNED at compile time for slug
 references, not executed. The literal source reads of `campaign.observations`,
@@ -82,8 +94,8 @@ def _denorm(u):
         "u_ramp": round(u_ramp, 6),
         "u_cool": round(u_cool, 6),
         "u_hold": round(u_hold, 6),
-        "ramp_rate": round(2.0 + 58.0 * u_ramp, 2),
-        "cool_rate": round(2.0 + 58.0 * u_cool, 2),
+        "ramp_rate": round(2.0 + 148.0 * u_ramp, 2),
+        "cool_rate": round(2.0 + 148.0 * u_cool, 2),
         "hold_time_s": round(600.0 + 6600.0 * u_hold, 0),
         "hold_temp": float(hold_temp),
         "sigma_limit": float(sigma_limit),
@@ -105,7 +117,7 @@ if n_seen < 2 or iteration < 1:
     log_info(f"propose: bootstrap -> {candidates}")
 
 else:
-    # --- BO phase: GP fit + batch Expected Improvement (Constant Liar) ------
+    # --- BO phase: constraint GPs + improvement x P(feasible) acquisition ---
     candidates = None
 
     try:
@@ -120,77 +132,112 @@ else:
                 for o in observations
             ]
         )
-        y = np.array([float(o["z"]) for o in observations])
+        y_sigma = np.array([float(o["sigma_max_mpa"]) for o in observations])
+        y_soak = np.array([float(o["soak_min_k"]) for o in observations])
 
-        kernel = Matern(
-            nu=2.5,
-            length_scale=[0.25, 0.25, 0.25],
-            length_scale_bounds=(0.01, 1.0),
-        ) + WhiteKernel(
-            noise_level=1e-3,
-            noise_level_bounds=(1e-10, 1.0),
-        )
+        def _kernel():
+            return Matern(
+                nu=2.5,
+                length_scale=[0.25, 0.25, 0.25],
+                length_scale_bounds=(0.01, 1.0),
+            ) + WhiteKernel(
+                noise_level=1e-3,
+                noise_level_bounds=(1e-10, 1.0),
+            )
 
-        gp = GaussianProcessRegressor(
-            kernel=kernel,
-            n_restarts_optimizer=5,
-            normalize_y=True,
-            random_state=42,
-        )
-        gp.fit(X, y)
+        gp_sigma = GaussianProcessRegressor(
+            kernel=_kernel(), n_restarts_optimizer=5, normalize_y=True, random_state=42
+        ).fit(X, y_sigma)
+        gp_soak = GaussianProcessRegressor(
+            kernel=_kernel(), n_restarts_optimizer=5, normalize_y=True, random_state=43
+        ).fit(X, y_soak)
+
+        soak_target = float(hold_temp) - 15.0
+        xi = 0.01  # [h] minimum cycle improvement worth simulating
+
+        def _cycle_h_of(pts):
+            """Deterministic objective — known in closed form, no GP needed."""
+            ramp = 2.0 + 148.0 * pts[:, 0]
+            cool = 2.0 + 148.0 * pts[:, 1]
+            hold = 600.0 + 6600.0 * pts[:, 2]
+            dT = float(hold_temp) - 300.0
+            return (dT / (ramp / 60.0) + hold + dT / (cool / 60.0)) / 3600.0
+
+        feas = [o for o in observations if o.get("verdict") == "OK"]
+        best_cycle = min(float(o["cycle_h"]) for o in feas) if feas else None
+
+        def _acquisition(gs, gk, pts, incumbent_cycle):
+            mu_s, sd_s = gs.predict(pts, return_std=True)
+            sd_s = np.maximum(sd_s, 1e-9)
+            mu_k, sd_k = gk.predict(pts, return_std=True)
+            sd_k = np.maximum(sd_k, 1e-9)
+            pf = norm.cdf((float(sigma_limit) - mu_s) / sd_s) * norm.cdf(
+                (mu_k - soak_target) / sd_k
+            )
+            cyc = _cycle_h_of(pts)
+            if incumbent_cycle is None:
+                # No feasible point yet: pure feasibility search.
+                imp = np.ones_like(cyc)
+            else:
+                imp = np.maximum(incumbent_cycle - cyc - xi, 0.0)
+            acq = imp * pf
+            if not np.any(acq > 0.0):
+                # Nothing improves the incumbent: probe the uncertain side of
+                # the constraint boundary instead of going silent.
+                acq = pf * sd_s
+            return acq
 
         # Dense random cloud over the unit cube (deterministic per iteration).
         rng = np.random.default_rng(1000 + int(iteration))
         grid = rng.random((4096, 3))
-        xi = 0.01
 
-        def _ei_over(model, pts, incumbent):
-            """Expected Improvement for MINIMIZATION."""
-            mu, sigma = model.predict(pts, return_std=True)
-            sigma = np.maximum(sigma, 1e-9)
-            imp = incumbent - mu - xi
-            Z = imp / sigma
-            return imp * norm.cdf(Z) + sigma * norm.pdf(Z)
-
-        # Batch selection via CONSTANT LIAR (CL-min, Ginsbourger et al.):
-        # plain top-K-by-EI puts all K picks on the SAME acquisition peak (EI
-        # is smooth — ranks 1..K are near-identical points), wasting the
-        # parallel Map budget on duplicate simulations. Instead: pick the EI
-        # argmax, append it with the hallucinated outcome `lie = f_best`
-        # (optimistic — kills the improvement potential around the pick),
-        # refit the posterior with HYPERPARAMETERS FROZEN (optimizer=None on
-        # the already-fitted kernel), and re-maximize EI for the next pick.
-        # Each lie collapses EI in a neighborhood of the pick, so the batch
-        # spreads across distinct regions of the acquisition landscape.
-        X_aug = X.copy()
-        y_aug = y.copy()
-        lie = float(np.min(y))
-        frozen = gp.kernel_
+        # Batch: Kriging Believer on the constraint GPs + constant liar on the
+        # deterministic objective (see module docstring).
+        Xs = X.copy()
+        ys_s = y_sigma.copy()
+        ys_k = y_soak.copy()
+        gs, gk = gp_sigma, gp_soak
+        frozen_s, frozen_k = gp_sigma.kernel_, gp_soak.kernel_
+        inc_cycle = best_cycle
         picked_u = []
-        model = gp
         for _j in range(K):
-            ei = _ei_over(model, grid, f_best)
-            idx = int(np.argmax(ei))
-            picked_u.append(grid[idx].copy())
-            X_aug = np.vstack([X_aug, grid[idx]])
-            y_aug = np.append(y_aug, lie)
+            acq = _acquisition(gs, gk, grid, inc_cycle)
+            idx = int(np.argmax(acq))
+            pick = grid[idx].copy()
+            picked_u.append(pick)
+            # Believe the constraint models at the pick...
+            mu_s1 = float(gs.predict(pick.reshape(1, -1))[0])
+            mu_k1 = float(gk.predict(pick.reshape(1, -1))[0])
+            Xs = np.vstack([Xs, pick])
+            ys_s = np.append(ys_s, mu_s1)
+            ys_k = np.append(ys_k, mu_k1)
+            # ...and lie optimistically on the objective: assume the pick
+            # succeeds, so neighbors can't improve on it anymore.
+            cyc_pick = float(_cycle_h_of(pick.reshape(1, -1))[0])
+            inc_cycle = cyc_pick if inc_cycle is None else min(inc_cycle, cyc_pick)
             if _j < K - 1:
-                model = GaussianProcessRegressor(
-                    kernel=frozen, optimizer=None, normalize_y=True, random_state=42
-                )
-                model.fit(X_aug, y_aug)
+                gs = GaussianProcessRegressor(
+                    kernel=frozen_s, optimizer=None, normalize_y=True
+                ).fit(Xs, ys_s)
+                gk = GaussianProcessRegressor(
+                    kernel=frozen_k, optimizer=None, normalize_y=True
+                ).fit(Xs, ys_k)
 
         candidates = [_denorm(u) for u in picked_u]
-        log_info(f"propose: GP + batch-EI (constant liar) -> {candidates}")
+        log_info(
+            f"propose: constrained BO (improvement x P(feasible)) -> {candidates}"
+        )
 
         # --- Interactive posterior artifact (`gp-posterior` render hint) ----
         # The frontend ships an echarts renderer for exactly this JSON shape
         # (HINT_RENDERERS['gp-posterior'] -> GpPosteriorRenderer): interactive
-        # mu / sigma / EI heatmaps with tooltips. One artifact per iteration +
-        # the `iteration` metadata makes the artifact viewer group them into a
-        # single scrubbable panel that live-updates while the campaign runs.
-        # Grids are the (ramp, cool) slice at the incumbent's hold time, axes
-        # in physical units. Emission is telemetry — never fails the step.
+        # heatmaps with tooltips. One artifact per iteration + the `iteration`
+        # metadata makes the artifact viewer group them into a single
+        # scrubbable panel that live-updates while the campaign runs.
+        # Panels now show the LEARNED CONSTRAINT: predicted sigma_max, its
+        # uncertainty, and the improvement x P(feasible) acquisition, on the
+        # (ramp, cool) slice at the incumbent's hold time, axes in physical
+        # units. Emission is telemetry — never fails the step.
         try:
             import json as _json
 
@@ -201,21 +248,24 @@ else:
             slice_grid = np.column_stack(
                 [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc["u_hold"]))]
             )
-            gmu, gsd = gp.predict(slice_grid, return_std=True)
+            gmu, gsd = gp_sigma.predict(slice_grid, return_std=True)
             gsd = np.maximum(gsd, 1e-9)
-            gimp = f_best - gmu - xi
-            gz = gimp / gsd
-            gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)
+            gacq = _acquisition(gp_sigma, gp_soak, slice_grid, best_cycle)
 
-            axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]
+            axis = [round(2.0 + 148.0 * float(u), 2) for u in gside]
             model_doc = {
                 "gp_mean": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],
                 "gp_std": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],
-                "ei": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],
+                "ei": [[round(float(v), 6) for v in row] for row in gacq.reshape(gn, gn).tolist()],
                 "A_lin": axis,
                 "D_lin": axis,
                 "x_label": "ramp [K/min]",
                 "y_label": "cool [K/min]",
+                "titles": {
+                    "mean": f"predicted sigma_max [MPa] (limit {float(sigma_limit):.0f})",
+                    "std": "sigma_max uncertainty [MPa]",
+                    "ei": "acquisition = improvement x P(feasible)",
+                },
                 "next_candidate": {
                     "a": candidates[0]["ramp_rate"],
                     "d": candidates[0]["cool_rate"],

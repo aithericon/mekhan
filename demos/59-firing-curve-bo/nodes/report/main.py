@@ -5,12 +5,16 @@ history off the loop accumulators and re-fits the same GP the proposer used on
 each iteration's observation PREFIX, rendering one frame per iteration:
 
   +----------------+----------------+----------------+
-  | posterior mean | posterior sigma| expected impr. |   (ramp, cool) slice
-  |  mu(ramp,cool) |  (uncertainty) |  (acquisition) |   at the incumbent's
+  | predicted      | sigma_max      | acquisition    |   (ramp, cool) slice
+  | sigma_max [MPa]| uncertainty    | imp x P(feas)  |   at the incumbent's
   +----------------+----------------+----------------+   hold time
-  | mu(ramp,hold)  | where we looked| convergence    |
-  | slice @ cool*  | obs scatter    | best-so-far    |
+  | predicted soak | where we looked| convergence    |
+  | min @ cool*    | obs scatter    | best-so-far    |
   +----------------+----------------+----------------+
+
+CONSTRAINT GPs, not a cost GP: fitting on the penalized cost would smear the
+penalty cliff and distort the rendered landscape (same reason the proposer
+switched to constrained BO — improvement x P(feasible) acquisition).
 
 The frames are stacked into an animated GIF (`gp_evolution.gif`) — the
 "watch the surrogate learn the landscape" artifact — plus the final frame as
@@ -68,17 +72,22 @@ VERDICT_COLOR = {"OK": "#16a34a", "CRACK RISK": "#dc2626", "UNDER-SOAKED": "#d97
 
 def _denorm_axes():
     """Physical-unit extents for the unit-cube axes."""
-    return (2.0, 60.0), (2.0, 60.0), (600.0, 7200.0)  # ramp, cool, hold
+    return (2.0, 150.0), (2.0, 150.0), (600.0, 7200.0)  # ramp, cool, hold
 
 
-def _fit_gp(obs):
-    """Same surrogate family as the proposer (Matern-5/2 + white noise)."""
+def _fit_gp(obs, values):
+    """Same surrogate family as the proposer (Matern-5/2 + white noise).
+
+    Fits on a CONSTRAINT quantity (sigma_max / soak_min) — never on the
+    penalized cost: the penalty jump would smear into the GP and distort
+    the rendered landscape, the same failure the proposer avoids.
+    """
     import numpy as np
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 
     X = np.array([[o["u_ramp"], o["u_cool"], o["u_hold"]] for o in obs])
-    y = np.array([float(o["z"]) for o in obs])
+    y = np.array([float(v) for v in values])
     kernel = Matern(
         nu=2.5, length_scale=[0.25, 0.25, 0.25], length_scale_bounds=(0.01, 1.0)
     ) + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1.0))
@@ -89,6 +98,38 @@ def _fit_gp(obs):
     return gp
 
 
+def _cycle_h_of(pts, ht):
+    """Deterministic cycle time [h] for unit-cube points (closed form)."""
+    import numpy as np
+
+    ramp = 2.0 + 148.0 * pts[:, 0]
+    cool = 2.0 + 148.0 * pts[:, 1]
+    hold = 600.0 + 6600.0 * pts[:, 2]
+    dT = float(ht) - 300.0
+    return (dT / (ramp / 60.0) + hold + dT / (cool / 60.0)) / 3600.0
+
+
+def _acquisition(gs, gk, pts, incumbent_cycle, limit, target, ht):
+    """improvement x P(feasible) — mirrors the proposer's acquisition."""
+    import numpy as np
+    from scipy.stats import norm
+
+    mu_s, sd_s = gs.predict(pts, return_std=True)
+    sd_s = np.maximum(sd_s, 1e-9)
+    mu_k, sd_k = gk.predict(pts, return_std=True)
+    sd_k = np.maximum(sd_k, 1e-9)
+    pf = norm.cdf((float(limit) - mu_s) / sd_s) * norm.cdf((mu_k - float(target)) / sd_k)
+    cyc = _cycle_h_of(pts, ht)
+    if incumbent_cycle is None:
+        imp = np.ones_like(cyc)
+    else:
+        imp = np.maximum(incumbent_cycle - cyc - 0.01, 0.0)
+    acq = imp * pf
+    if not np.any(acq > 0.0):
+        acq = pf * sd_s
+    return acq
+
+
 def _render_frame(obs_prefix, it):
     """Render one campaign-state frame; returns a PIL Image."""
     import numpy as np
@@ -97,7 +138,6 @@ def _render_frame(obs_prefix, it):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from PIL import Image
-    from scipy.stats import norm
 
     (r_lo, r_hi), (c_lo, c_hi), (h_lo, h_hi) = _denorm_axes()
 
@@ -105,11 +145,15 @@ def _render_frame(obs_prefix, it):
     fb = float(inc["z"])
     u_hold_star = float(inc["u_hold"])
     u_cool_star = float(inc["u_cool"])
+    soak_target = float(hold_temp) - 15.0
+    feas = [o for o in obs_prefix if o.get("verdict") == "OK"]
+    best_cycle = min(float(o["cycle_h"]) for o in feas) if feas else None
 
-    gp = None
+    gp_s, gp_k = None, None
     try:
-        if len(obs_prefix) >= 4:
-            gp = _fit_gp(obs_prefix)
+        if len(obs_prefix) >= 2:
+            gp_s = _fit_gp(obs_prefix, [o["sigma_max_mpa"] for o in obs_prefix])
+            gp_k = _fit_gp(obs_prefix, [o["soak_min_k"] for o in obs_prefix])
     except Exception as exc:  # noqa: BLE001
         log_warn(f"report: GP fit failed for frame {it} ({exc!r})")
 
@@ -132,21 +176,23 @@ def _render_frame(obs_prefix, it):
             mec="black", mew=0.8, zorder=5,
         )
 
-    if gp is not None:
-        # Top row: (ramp, cool) slice at the incumbent's hold.
+    if gp_s is not None and gp_k is not None:
+        # Top row: the LEARNED CONSTRAINT on the (ramp, cool) slice at the
+        # incumbent's hold — predicted sigma_max, its uncertainty, and the
+        # improvement x P(feasible) acquisition (mirrors the proposer).
         grid_rc = np.column_stack(
             [gx.ravel(), gy.ravel(), np.full(n * n, u_hold_star)]
         )
-        mu, sd = gp.predict(grid_rc, return_std=True)
+        mu, sd = gp_s.predict(grid_rc, return_std=True)
         sd = np.maximum(sd, 1e-9)
-        imp = fb - mu - 0.01
-        zz = imp / sd
-        ei = imp * norm.cdf(zz) + sd * norm.pdf(zz)
+        acq = _acquisition(
+            gp_s, gp_k, grid_rc, best_cycle, sigma_limit, soak_target, hold_temp
+        )
 
         panels = [
-            (mu, "posterior mean  $\\mu(ramp, cool)$  [cost]", "viridis"),
-            (sd, "posterior $\\sigma$ (uncertainty)", "magma"),
-            (np.maximum(ei, 0.0), "Expected Improvement (next look)", "cividis"),
+            (mu, f"predicted $\\sigma_{{max}}$ [MPa] (limit {float(sigma_limit):.0f})", "viridis"),
+            (sd, "$\\sigma_{max}$ uncertainty [MPa]", "magma"),
+            (acq, "acquisition = improvement $\\times$ P(feasible)", "cividis"),
         ]
         for ax, (vals, title, cmap) in zip(axes[0], panels):
             im = ax.imshow(
@@ -159,11 +205,12 @@ def _render_frame(obs_prefix, it):
             ax.set_xlabel("ramp [K/min]", fontsize=8)
             ax.set_ylabel("cool [K/min]", fontsize=8)
 
-        # Bottom-left: (ramp, hold) slice at the incumbent's cool rate.
+        # Bottom-left: predicted soak_min on the (ramp, hold) slice at the
+        # incumbent's cool rate — the OTHER learned constraint.
         grid_rh = np.column_stack(
             [gx.ravel(), np.full(n * n, u_cool_star), gy.ravel()]
         )
-        mu2, _ = gp.predict(grid_rh, return_std=True)
+        mu2, _ = gp_k.predict(grid_rh, return_std=True)
         ax = axes[1][0]
         im = ax.imshow(
             mu2.reshape(n, n), origin="lower",
@@ -181,7 +228,9 @@ def _render_frame(obs_prefix, it):
             inc["ramp_rate"], inc["hold_time_s"] / 60.0, "*", ms=16,
             color="#facc15", mec="black", mew=0.8, zorder=5,
         )
-        ax.set_title("$\\mu(ramp, hold)$ @ incumbent cool", fontsize=9)
+        ax.set_title(
+            f"predicted soak min [K] (target {soak_target:.0f})", fontsize=9
+        )
         ax.set_xlabel("ramp [K/min]", fontsize=8)
         ax.set_ylabel("hold [min]", fontsize=8)
     else:
@@ -247,11 +296,14 @@ try:
     import json as _json
 
     import numpy as np
-    from scipy.stats import norm
 
     if n_obs >= 2:
-        gp_full = _fit_gp(observations)
+        gp_s_full = _fit_gp(observations, [o["sigma_max_mpa"] for o in observations])
+        gp_k_full = _fit_gp(observations, [o["soak_min_k"] for o in observations])
         inc_full = min(observations, key=lambda o: float(o["z"]))
+        _target = float(hold_temp) - 15.0
+        _feas = [o for o in observations if o.get("verdict") == "OK"]
+        _best_cycle = min(float(o["cycle_h"]) for o in _feas) if _feas else None
 
         gn = 45
         gside = np.linspace(0.0, 1.0, gn)
@@ -259,21 +311,26 @@ try:
         slice_grid = np.column_stack(
             [ggx.ravel(), ggy.ravel(), np.full(gn * gn, float(inc_full["u_hold"]))]
         )
-        gmu, gsd = gp_full.predict(slice_grid, return_std=True)
+        gmu, gsd = gp_s_full.predict(slice_grid, return_std=True)
         gsd = np.maximum(gsd, 1e-9)
-        gimp = float(inc_full["z"]) - gmu - 0.01
-        gz = gimp / gsd
-        gei = np.maximum(gimp * norm.cdf(gz) + gsd * norm.pdf(gz), 0.0)
+        gacq = _acquisition(
+            gp_s_full, gp_k_full, slice_grid, _best_cycle, sigma_limit, _target, hold_temp
+        )
 
-        axis = [round(2.0 + 58.0 * float(u), 2) for u in gside]
+        axis = [round(2.0 + 148.0 * float(u), 2) for u in gside]
         model_doc = {
             "gp_mean": [[round(v, 4) for v in row] for row in gmu.reshape(gn, gn).tolist()],
             "gp_std": [[round(v, 4) for v in row] for row in gsd.reshape(gn, gn).tolist()],
-            "ei": [[round(v, 6) for v in row] for row in gei.reshape(gn, gn).tolist()],
+            "ei": [[round(float(v), 6) for v in row] for row in gacq.reshape(gn, gn).tolist()],
             "A_lin": axis,
             "D_lin": axis,
             "x_label": "ramp [K/min]",
             "y_label": "cool [K/min]",
+            "titles": {
+                "mean": f"predicted sigma_max [MPa] (limit {float(sigma_limit):.0f})",
+                "std": "sigma_max uncertainty [MPa]",
+                "ei": "acquisition = improvement x P(feasible)",
+            },
             "n_observations": n_obs,
             "f_best_used": float(inc_full["z"]),
             "slice_hold_min": round(float(inc_full["hold_time_s"]) / 60.0, 1),
@@ -356,3 +413,92 @@ summary = {
     "sigma_limit_mpa": sigma_limit,
     "hold_temp_k": hold_temp,
 }
+
+# --- Review-facing outputs (consumed by the `review` HumanTask) ---------------
+# The HumanTask's blocks interpolate `{{ report.<field> }}` at instance time:
+# `report_md` renders as an mdsvex block (markdown incl. the results table),
+# the storage KEYS feed `/api/v1/files/{{ report.gp_final_key }}` image/download
+# blocks, and `top_curves` drives a Repeater (`report.top_curves[*]`) with a
+# per-curve "queue for physical verification" checkbox.
+
+# Artifact storage keys are deterministic: artifacts/{execution_id}/{id}/{name}
+# (observed executor-storage layout). Empty when rendering was skipped.
+_exec_id = os.environ.get("AITHERICON_EXECUTION_ID", "")
+if frames_rendered > 0 and _exec_id:
+    gp_final_key = f"artifacts/{_exec_id}/gp_final_state.png/gp_final_state.png"
+    gif_key = f"artifacts/{_exec_id}/gp_evolution.gif/gp_evolution.gif"
+else:
+    gp_final_key = ""
+    gif_key = ""
+
+_soak_target = float(hold_temp) - 15.0
+_n_crack = sum(1 for o in observations if o.get("verdict") == "CRACK RISK")
+_n_soak = sum(1 for o in observations if o.get("verdict") == "UNDER-SOAKED")
+
+
+def _curve_label(o):
+    return (
+        f"{float(o['cycle_h']):.2f} h — ramp {float(o['ramp_rate']):.1f} / "
+        f"cool {float(o['cool_rate']):.1f} K/min, hold "
+        f"{float(o['hold_time_s']) / 60.0:.0f} min  "
+        f"(sigma {float(o['sigma_max_mpa']):.1f} MPa, soak "
+        f"{float(o['soak_min_k']):.1f} K, {o.get('verdict', '?')})"
+    )
+
+
+# Top candidates: feasible curves by cycle time; pad with the nearest misses
+# (boundary probes) so the verification queue always has material.
+_ranked = sorted(feasible, key=lambda o: float(o["cycle_h"]))[:5]
+if len(_ranked) < 5:
+    _misses = sorted(
+        (o for o in observations if o.get("verdict") != "OK"),
+        key=lambda o: float(o["z"]),
+    )
+    _ranked = _ranked + _misses[: 5 - len(_ranked)]
+
+top_curves = [
+    {
+        "label": _curve_label(o),
+        "ramp_rate": float(o["ramp_rate"]),
+        "cool_rate": float(o["cool_rate"]),
+        "hold_min": round(float(o["hold_time_s"]) / 60.0, 1),
+        "sigma_max_mpa": float(o["sigma_max_mpa"]),
+        "soak_min_k": float(o["soak_min_k"]),
+        "cycle_h": float(o["cycle_h"]),
+        "verdict": o.get("verdict", "?"),
+    }
+    for o in _ranked
+]
+
+if feasible:
+    _b = min(feasible, key=lambda o: float(o["cycle_h"]))
+    best_label = _curve_label(_b)
+else:
+    best_label = "no feasible firing curve found — consider more iterations"
+
+_rows = "\n".join(
+    f"| {i + 1} | {c['cycle_h']:.2f} | {c['ramp_rate']:.1f} | {c['cool_rate']:.1f} "
+    f"| {c['hold_min']:.0f} | {c['sigma_max_mpa']:.1f} | {c['soak_min_k']:.1f} "
+    f"| {c['verdict']} |"
+    for i, c in enumerate(top_curves)
+)
+_max_feas_sigma = max((float(o["sigma_max_mpa"]) for o in feasible), default=0.0)
+_min_feas_soak = min((float(o["soak_min_k"]) for o in feasible), default=0.0)
+
+report_md = f"""### Campaign summary
+
+**{n_obs} simulations** across **{n_iters} iterations** — **{len(feasible)} feasible**, {_n_crack} crack-risk, {_n_soak} under-soaked. The infeasible runs are not waste: they are the boundary probes that taught the surrogate where the material limits lie.
+
+#### Top firing curves
+
+| # | cycle [h] | ramp [K/min] | cool [K/min] | hold [min] | sigma_max [MPa] | soak min [K] | verdict |
+|---|-----------|--------------|--------------|------------|------------------|--------------|---------|
+{_rows}
+
+#### How close did we get to the limits?
+
+- Crack threshold **{float(sigma_limit):.0f} MPa** — best feasible curve peaks at **{_max_feas_sigma:.1f} MPa** ({float(sigma_limit) - _max_feas_sigma:.1f} MPa of margin).
+- Soak target **{_soak_target:.0f} K** (hold temp − 15) — tightest feasible soak: **{_min_feas_soak:.1f} K**.
+
+_Search space: ramp / cool 2–150 K/min, hold 10–120 min @ {float(hold_temp):.0f} K. Objective: minimize cycle time subject to sigma_max ≤ {float(sigma_limit):.0f} MPa and full core soak (constrained BO — improvement × P(feasible))._
+"""
