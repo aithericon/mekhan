@@ -17298,7 +17298,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkflowInstance"];
                 };
             };
-            /** @description Template not published */
+            /** @description Mode not runnable for this version (an unpublished draft only runs with mode 'draft'), invalid start tokens, or draft compilation failed (structured `compile_errors`) */
             400: {
                 headers: {
                     [name: string]: unknown;

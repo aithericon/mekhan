@@ -27,7 +27,9 @@ use crate::models::template::{
     UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
-use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
+use crate::process::publish::{
+    resolve_subworkflow_air, ArtifactKeySpace, CompiledArtifacts, PublishService,
+};
 use crate::query::builder::{self, QueryError};
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
@@ -960,6 +962,7 @@ pub async fn publish_template(
             &existing.description,
             id,
             existing.version,
+            ArtifactKeySpace::Version,
             Some(existing.chain_root_id()),
             &mut ydoc_files,
             principal_id,
@@ -1108,7 +1111,9 @@ async fn reconstruct_graph_from_ydoc(
 /// `parse_db_graph` decodes the `Ok(None)` legacy column, letting each caller
 /// keep its own invalid-graph contract (hard `internal`/`bad_request` error vs.
 /// the new-version path's silent `default_graph()` tolerance).
-async fn graph_with_ydoc_fallback<F>(
+/// `pub(crate)`: the draft dev-run path (`create_instance`) compiles a draft
+/// per-launch from the same authored source publish reads.
+pub(crate) async fn graph_with_ydoc_fallback<F>(
     state: &AppState,
     id: Uuid,
     db_graph: serde_json::Value,
@@ -1438,6 +1443,7 @@ pub async fn apply_template(
             &latest.description,
             target_id,
             target_version,
+            ArtifactKeySpace::Version,
             Some(latest.chain_root_id()),
             &mut files_map,
             user.subject_as_uuid(),

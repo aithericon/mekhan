@@ -17,9 +17,9 @@ use uuid::Uuid;
 use crate::compiler::named_global::GlobalKind;
 use crate::compiler::{
     compile_to_air_with_options, derive_child_io, generate_py_io_files, make_child_callable,
-    node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
-    CompileArtifacts, CompileError, CompileOptions, ConfigStorage, InterfaceRegistry, NodeKind,
-    ResolvedChild, SubWorkflowAir,
+    node_files_draft_run_path, node_files_storage_path, node_input_scopes, node_namespace_scopes,
+    node_output_fields, CompileArtifacts, CompileError, CompileOptions, ConfigStorage,
+    InterfaceRegistry, NodeKind, ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -48,6 +48,32 @@ pub struct CompiledArtifacts {
     pub node_configs: HashMap<String, serde_json::Value>,
 }
 
+/// Which S3 key space [`PublishService::compile_artifacts`] embeds into the
+/// AIR's storage paths / `config_ref`s — and therefore where the caller must
+/// upload the staged bytes afterwards.
+#[derive(Clone, Copy)]
+pub enum ArtifactKeySpace {
+    /// The version's deterministic keys
+    /// (`templates/{template_id}/v{version}/...`). Publish/apply/demos:
+    /// written once when the version freezes, immutable thereafter. Pair
+    /// with [`PublishService::upload_files`] /
+    /// [`PublishService::upload_node_configs`].
+    Version,
+    /// Per-run keys under the launched instance
+    /// (`instances/{instance_id}/draft-artifacts/...`). Draft dev-runs: the
+    /// executor fetches node files/configs lazily at step-fire time, so
+    /// version-shared keys would let a re-run (the edit→run→edit→run dev
+    /// loop), a concurrent draft run, or a publish racing a draft-run POST
+    /// swap bytes under an in-flight instance's frozen AIR — or, inverted,
+    /// let the draft-run compile overwrite the artifacts a just-finished
+    /// publish froze for the version. Scoping by instance id removes the
+    /// whole class; the retention sweep's `instances/{id}/` prefix GC
+    /// reclaims the blobs. Pair with
+    /// [`PublishService::upload_files_draft_run`] /
+    /// [`PublishService::upload_node_configs_draft_run`].
+    DraftRun(Uuid),
+}
+
 /// Owns the publish pipeline's domain logic: inject the `_aithericon_io`
 /// stubs, compile AIR, serialize the graph, upload node files to S3, and make
 /// freshly-published triggers live. Behavior-identical to the code that was
@@ -65,9 +91,10 @@ impl<'a> PublishService<'a> {
     /// Synthesize Python IO stubs into `files`, resolve + freeze every
     /// `SubWorkflow` child (pin per `version_pin`, embed the child's
     /// already-published AIR made spawn-callable), then compile the graph to
-    /// AIR under the `(template_id, version)` storage layout and serialize the
-    /// graph. `files` is mutated in place so the caller uploads exactly the
-    /// set that was compiled against.
+    /// AIR under the `key_space` storage layout (the version's deterministic
+    /// keys for publish/apply/demos, per-run instance keys for a draft
+    /// dev-run) and serialize the graph. `files` is mutated in place so the
+    /// caller uploads exactly the set that was compiled against.
     ///
     /// Reads the catalogue of published templates (DB) to resolve children, so
     /// this is no longer side-effect-free — but it still performs no *writes*
@@ -86,6 +113,7 @@ impl<'a> PublishService<'a> {
         description: &str,
         template_id: Uuid,
         version: i32,
+        key_space: ArtifactKeySpace,
         publishing_family: Option<Uuid>,
         files: &mut HashMap<String, HashMap<String, String>>,
         principal_id: Uuid,
@@ -245,11 +273,28 @@ impl<'a> PublishService<'a> {
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
         // entry point so it can still detect `<slug>.<field>` accesses.
-        let air_files = node_files_storage_path(template_id, version, files);
+        let air_files = match key_space {
+            ArtifactKeySpace::Version => node_files_storage_path(template_id, version, files),
+            ArtifactKeySpace::DraftRun(instance_id) => {
+                node_files_draft_run_path(instance_id, files)
+            }
+        };
+        // Per-run config keys ride `ConfigStorage`'s `key_fn` override hook.
+        // The closure must outlive `config_storage`, hence the binding here.
+        let draft_run_config_key = match key_space {
+            ArtifactKeySpace::Version => None,
+            ArtifactKeySpace::DraftRun(instance_id) => {
+                Some(move |_tid: Uuid, _ver: i32, node_id: &str| {
+                    crate::s3::ArtifactStore::draft_run_node_config_key(instance_id, node_id)
+                })
+            }
+        };
         let config_storage = ConfigStorage {
             template_id,
             version,
-            key_fn: None,
+            key_fn: draft_run_config_key
+                .as_ref()
+                .map(|f| f as &(dyn Fn(Uuid, i32, &str) -> String + Sync)),
         };
         // Resolve each Scheduled step's container spec (docs/22). For a step
         // whose job template binds a `container_image` resource, this yields a
@@ -428,6 +473,59 @@ impl<'a> PublishService<'a> {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Per-run sibling of [`Self::upload_files`] for a draft dev-run: stage
+    /// every node file under the launched instance's
+    /// `instances/{instance_id}/draft-artifacts/...` keys — the exact paths
+    /// [`ArtifactKeySpace::DraftRun`] made `compile_artifacts` embed in the
+    /// AIR.
+    pub async fn upload_files_draft_run(
+        &self,
+        instance_id: Uuid,
+        files: &HashMap<String, HashMap<String, String>>,
+    ) -> Result<(), String> {
+        for (node_id, node_files) in files {
+            for (filename, content) in node_files {
+                let key = self
+                    .state
+                    .s3
+                    .upload_draft_run_file(instance_id, node_id, filename, content.as_bytes())
+                    .await
+                    .map_err(|e| format!("upload {node_id}/{filename}: {e}"))?;
+                tracing::info!(
+                    node_id = %node_id,
+                    filename,
+                    key = %key,
+                    "uploaded draft-run node file to S3"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-run sibling of [`Self::upload_node_configs`] for a draft dev-run —
+    /// same per-instance key space as [`Self::upload_files_draft_run`].
+    pub async fn upload_node_configs_draft_run(
+        &self,
+        instance_id: Uuid,
+        node_configs: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        for (node_id, config) in node_configs {
+            let bytes = serde_json::to_vec_pretty(config)
+                .map_err(|e| format!("serialize node config '{node_id}': {e}"))?;
+            self.state
+                .s3
+                .upload_draft_run_node_config(instance_id, node_id, &bytes)
+                .await
+                .map_err(|e| format!("upload node config '{node_id}': {e}"))?;
+            tracing::info!(
+                node_id = %node_id,
+                bytes = bytes.len(),
+                "uploaded draft-run static node config to S3",
+            );
         }
         Ok(())
     }

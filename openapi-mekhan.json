@@ -5215,7 +5215,7 @@
             }
           },
           "400": {
-            "description": "Template not published",
+            "description": "Mode not runnable for this version (an unpublished draft only runs with mode 'draft'), invalid start tokens, or draft compilation failed (structured `compile_errors`)",
             "content": {
               "application/json": {
                 "schema": {

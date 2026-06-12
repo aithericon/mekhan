@@ -1642,6 +1642,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             demo.metadata.description.as_deref().unwrap_or(""),
             template_id,
             1,
+            crate::process::publish::ArtifactKeySpace::Version,
             Some(template_id),
             &mut files,
             DEMO_SEEDER_AUTHOR_ID,

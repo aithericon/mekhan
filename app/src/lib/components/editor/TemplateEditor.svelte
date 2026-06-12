@@ -153,8 +153,10 @@
 			publishGate = null;
 			if (runAfterPublish) {
 				// `template` is the published row now, so the dialog opens in the
-				// same state handleRun() would require.
+				// same state handleRun() would require (a stale draft-run lock
+				// from an earlier "Run draft" must not force mode 'draft').
 				runAfterPublish = false;
+				runDraftLocked = false;
 				runDialogOpen = true;
 			}
 		} catch (e) {
@@ -197,7 +199,29 @@
 
 	function handleRun() {
 		if (!template?.published) return;
+		runDraftLocked = false;
 		runDialogOpen = true;
+	}
+
+	// Draft dev-run: open the same dialog with the mode locked to 'draft'. The
+	// backend compiles the draft per-launch (nothing is published); a compile
+	// failure comes back on the create POST and lands in onRunCompileError.
+	// Private sub-workflows are excluded (toolbar prop gate + guard here):
+	// the backend 400s every standalone run of a private template, so the
+	// affordance would dead-end after the user filled the form.
+	let runDraftLocked = $state(false);
+	function handleRunDraft() {
+		if (!template || template.published || template.visibility === 'private') return;
+		runDraftLocked = true;
+		runDialogOpen = true;
+	}
+
+	// Surface a draft dev-run's compile failure through the SAME plumbing a
+	// failed publish uses (error banner + red canvas rings via compileErrors).
+	function onRunCompileError(e: CompileApiError) {
+		runDialogOpen = false;
+		compileErrors.set(e.compileErrors);
+		error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 	}
 
 	// Throw away this unpublished draft (confirmed via the dialog below). The
@@ -397,6 +421,12 @@
 	}
 
 	function handleEditorKeydown(e: KeyboardEvent) {
+		// The run sheet can sit over a MUTABLE draft (Run draft); its modal
+		// traps focus but not keydown propagation, so without this gate
+		// Cmd+Z/V/D from a button/label inside the sheet would invisibly
+		// mutate the canvas behind the modal (silently corrupting the graph
+		// the draft run is about to compile).
+		if (runDialogOpen) return;
 		if (!e.metaKey && !e.ctrlKey) return;
 		if (isTextEditingTarget(e.target)) return;
 		const key = e.key.toLowerCase();
@@ -544,6 +574,9 @@
 					? () => (discardConfirmOpen = true)
 					: undefined}
 				onrun={handleRun}
+				onrundraft={template && !template.published && template.visibility !== 'private'
+					? handleRunDraft
+					: undefined}
 				ontests={() => (testsPanelOpen = true)}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 				onshare={template && canShare ? () => (shareOpen = true) : undefined}
@@ -670,6 +703,9 @@
 	bind:open={runDialogOpen}
 	templateId={template?.id ?? null}
 	oncreated={onInstanceCreated}
+	lockMode={runDraftLocked ? 'draft' : null}
+	graph={runDraftLocked ? binding.graph : null}
+	oncompileerror={onRunCompileError}
 />
 
 <Dialog.Root bind:open={discardConfirmOpen}>

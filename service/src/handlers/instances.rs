@@ -18,6 +18,7 @@ use crate::auth::{
     ObjectRef, Role,
 };
 use crate::handlers::require_template;
+use crate::handlers::templates::graph_with_ydoc_fallback;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
@@ -26,10 +27,115 @@ use crate::models::instance::{
 use crate::models::responses::{
     AllocationResponse, InstanceChild, InstanceEventsResponse, StepExecutionResponse,
 };
-use crate::models::template::{PaginatedResponse, WorkflowGraph};
+use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
+use crate::process::publish::{ArtifactKeySpace, CompiledArtifacts, PublishService};
 use crate::AppState;
+
+/// Resolve the effective instance mode for a create-instance POST against the
+/// chosen template version's publication state. Pure decision (mirrors
+/// `discard_mode` / `apply_mode` in `templates.rs`) so it's unit-testable
+/// without a DB. `Err` carries the 400 message.
+///
+/// An unpublished draft is runnable ONLY as a `draft` instance (the per-run
+/// compile path); a `live` run of a draft is refused with a pointer at the
+/// draft mode. `test_run` stays reserved for the template-test runner on
+/// published and unpublished versions alike.
+pub(crate) fn resolve_run_mode(
+    published: bool,
+    requested: Option<&str>,
+) -> Result<&'static str, String> {
+    match requested {
+        Some("test_run") => Err("mode 'test_run' is reserved for the template-test runner".into()),
+        Some("draft") => Ok("draft"),
+        None | Some("live") => {
+            if published {
+                Ok("live")
+            } else {
+                Err(
+                    "template version is not published; run it as a draft (mode 'draft') \
+                     to test unpublished changes"
+                        .into(),
+                )
+            }
+        }
+        Some(other) => Err(format!("unknown instance mode: {other}")),
+    }
+}
+
+/// Per-run compile for a draft dev-run: reconstruct the authored graph from
+/// the live Y.Doc exactly like publish does (same `graph_with_ydoc_fallback`
+/// helper), compile to AIR through the shared [`PublishService`] pipeline,
+/// and stage node files + offloaded configs to S3 under keys scoped by the
+/// about-to-launch `instance_id` (`ArtifactKeySpace::DraftRun`) so the
+/// executor can fetch them at run time. Persists NOTHING onto the
+/// `workflow_templates` row — the draft stays unpublished; the run captures
+/// the canvas as-of-launch.
+///
+/// The per-run key scope is load-bearing: the executor fetches node
+/// files/configs lazily at step-fire time, so staging onto the version's
+/// deterministic publish keys would let a re-run (the edit→run→edit→run dev
+/// loop), a concurrent draft run, or a publish racing this POST swap bytes
+/// under an in-flight instance's frozen AIR — and let this compile clobber
+/// the artifacts a just-finished publish froze for the version.
+///
+/// A compile failure surfaces as `ApiError::compile` (HTTP 400, code
+/// `compile-failed`, structured `compile_errors`) — the same envelope the
+/// publish endpoint returns, so the editor renders identical canvas
+/// highlights. An empty/Start-only graph fails here gracefully (compiler
+/// validation), not with a 500.
+async fn compile_draft_air(
+    state: &AppState,
+    user: &AuthUser,
+    template: &WorkflowTemplate,
+    instance_id: Uuid,
+) -> Result<(serde_json::Value, WorkflowGraph), ApiError> {
+    let (graph, mut ydoc_files) =
+        graph_with_ydoc_fallback(state, template.id, template.graph.clone(), |g| {
+            serde_json::from_value(g)
+                .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))
+        })
+        .await?;
+
+    let publisher = PublishService::new(state);
+    let CompiledArtifacts {
+        air_json,
+        node_configs,
+        ..
+    } = publisher
+        .compile_artifacts(
+            &graph,
+            &template.name,
+            &template.description,
+            template.id,
+            template.version,
+            ArtifactKeySpace::DraftRun(instance_id),
+            Some(template.chain_root_id()),
+            &mut ydoc_files,
+            user.subject_as_uuid(),
+            template.workspace_id,
+        )
+        .await?;
+
+    // Stage the files the AIR's per-run storage paths point at. FATAL (unlike
+    // publish's logged warning): nothing ever re-writes this instance's keys,
+    // so a failed upload here couldn't self-heal — the run would only fail
+    // later, mid-flight, at executor stage time with no attribution. Failing
+    // the POST keeps the error on the launch request. The instance row
+    // doesn't exist yet, so nothing is stranded (orphan S3 objects are
+    // inert; for launched runs the retention sweep GCs the prefix).
+    publisher
+        .upload_files_draft_run(instance_id, &ydoc_files)
+        .await
+        .map_err(|e| ApiError::internal(format!("draft-run S3 file upload failed: {e}")))?;
+    publisher
+        .upload_node_configs_draft_run(instance_id, &node_configs)
+        .await
+        .map_err(|e| ApiError::internal(format!("draft-run S3 node-config upload failed: {e}")))?;
+
+    Ok((air_json, graph))
+}
 
 /// POST /api/v1/instances
 #[utoipa::path(
@@ -38,7 +144,7 @@ use crate::AppState;
     request_body = CreateInstanceRequest,
     responses(
         (status = 201, description = "Instance created and deployed to engine", body = WorkflowInstance),
-        (status = 400, description = "Template not published", body = ErrorResponse),
+        (status = 400, description = "Mode not runnable for this version (an unpublished draft only runs with mode 'draft'), invalid start tokens, or draft compilation failed (structured `compile_errors`)", body = ErrorResponse),
         (status = 404, description = "Template not found", body = ErrorResponse),
         (status = 502, description = "Engine deploy failed", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
@@ -51,7 +157,6 @@ pub async fn create_instance(
     Json(req): Json<CreateInstanceRequest>,
 ) -> Result<(StatusCode, Json<WorkflowInstance>), ApiError> {
     let created_by = user.subject_as_uuid();
-    // Fetch the template (must be published)
     let template = require_template(&state.db, req.template_id).await?;
 
     // Object-ACL gate: the launched instance doesn't exist yet, so key the
@@ -68,9 +173,10 @@ pub async fn create_instance(
     .await
     .map_err(map_to_api_error)?;
 
-    if !template.published {
-        return Err(ApiError::bad_request("template is not published"));
-    }
+    // Mode-aware publication gate: a published version runs in any public
+    // mode; an unpublished draft is runnable ONLY as a draft dev-run.
+    let mode = resolve_run_mode(template.published, req.mode.as_deref())
+        .map_err(ApiError::bad_request)?;
 
     if template.visibility == "private" {
         return Err(ApiError::bad_request(
@@ -78,37 +184,40 @@ pub async fn create_instance(
         ));
     }
 
-    let air_json = template
-        .air_json
-        .clone()
-        .ok_or_else(|| ApiError::internal("published template has no AIR JSON"))?;
-
-    // Deserialize the template's graph so parameterize_air can validate
-    // start_tokens against each Start block's declared `initial` port.
-    let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
-        .map_err(|e| ApiError::internal(format!("template graph is invalid: {e}")))?;
-
+    // Minted BEFORE the AIR resolution: the draft path scopes its staged S3
+    // artifacts by this id (`ArtifactKeySpace::DraftRun`).
     let instance_id = Uuid::new_v4();
-    let net_id = format!("mekhan-{instance_id}");
-    let metadata = req.metadata.clone().unwrap_or(json!({}));
 
-    // Categorize the run. `test_run` is reserved for the template-test runner
-    // and rejected from the public endpoint; anything else falls back to
-    // `live`.
-    let mode = match req.mode.as_deref() {
-        None | Some("live") => "live",
-        Some("draft") => "draft",
-        Some("test_run") => {
-            return Err(ApiError::bad_request(
-                "mode 'test_run' is reserved for the template-test runner",
-            ));
+    // AIR + graph source. A published row runs its frozen artifacts; an
+    // unpublished draft (its `air_json` is NULL — `resolve_run_mode` already
+    // forced mode 'draft') compiles per-run from the live Y.Doc, the exact
+    // pipeline publish runs, without persisting onto the template row. The
+    // graph rides along so parameterize_air can validate start_tokens against
+    // each Start block's declared `initial` port — for the draft path that's
+    // the freshly reconstructed graph, not the stale DB column.
+    let (air_json, graph) = match &template.air_json {
+        Some(air) => {
+            let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
+                .map_err(|e| ApiError::internal(format!("template graph is invalid: {e}")))?;
+            (air.clone(), graph)
         }
-        Some(other) => {
-            return Err(ApiError::bad_request(format!(
-                "unknown instance mode: {other}"
-            )));
+        None => {
+            // `resolve_run_mode` yields 'live' only for published rows, so a
+            // NULL `air_json` here means a published row that violates the
+            // publish invariant (every committed writer of `published = TRUE`
+            // binds non-null AIR). Fail-stop like the pre-draft-run behavior
+            // — the per-run-compile leniency is for mode 'draft' only; a
+            // silent live run would prefer unflushed Y.Doc edits over the
+            // published graph.
+            if mode == "live" {
+                return Err(ApiError::internal("published template has no AIR JSON"));
+            }
+            compile_draft_air(&state, &user, &template, instance_id).await?
         }
     };
+
+    let net_id = format!("mekhan-{instance_id}");
+    let metadata = req.metadata.clone().unwrap_or(json!({}));
 
     // Parameterize → insert row (before deploy, for the lifecycle listener) →
     // deploy → roll back the row on deploy failure. The launcher owns that
@@ -970,4 +1079,52 @@ pub async fn cancel_instance(
     .await?;
 
     Ok(Json(instance))
+}
+
+#[cfg(test)]
+mod resolve_run_mode_tests {
+    use super::resolve_run_mode;
+
+    #[test]
+    fn published_defaults_to_live() {
+        assert_eq!(resolve_run_mode(true, None).unwrap(), "live");
+        assert_eq!(resolve_run_mode(true, Some("live")).unwrap(), "live");
+    }
+
+    #[test]
+    fn published_accepts_draft() {
+        assert_eq!(resolve_run_mode(true, Some("draft")).unwrap(), "draft");
+    }
+
+    #[test]
+    fn unpublished_runs_only_as_draft() {
+        assert_eq!(resolve_run_mode(false, Some("draft")).unwrap(), "draft");
+    }
+
+    #[test]
+    fn unpublished_live_refused_with_draft_pointer() {
+        // Both the implicit and the explicit 'live' request are refused, and
+        // the message tells the caller how to proceed (run as draft).
+        for requested in [None, Some("live")] {
+            let err = resolve_run_mode(false, requested).unwrap_err();
+            assert!(err.contains("not published"), "got: {err}");
+            assert!(err.contains("'draft'"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn test_run_reserved_regardless_of_publication() {
+        for published in [true, false] {
+            let err = resolve_run_mode(published, Some("test_run")).unwrap_err();
+            assert!(err.contains("reserved"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn unknown_mode_refused() {
+        for published in [true, false] {
+            let err = resolve_run_mode(published, Some("bogus")).unwrap_err();
+            assert!(err.contains("unknown instance mode"), "got: {err}");
+        }
+    }
 }

@@ -51,6 +51,10 @@
 		ondiscard?: () => void;
 		/** Start a run of a published template (opens the instance dialog). */
 		onrun?: () => void;
+		/** Dev-run an unpublished draft without publishing: opens the instance
+		 *  dialog with the mode locked to 'draft' (the backend compiles the
+		 *  draft per-run). Drafts only. */
+		onrundraft?: () => void;
 		/** Open the template-tests panel. */
 		ontests?: () => void;
 		/** Open the template settings panel (tags + visibility). */
@@ -85,6 +89,7 @@
 		onnewversion,
 		ondiscard,
 		onrun,
+		onrundraft,
 		ontests,
 		onsettings,
 		onshare,
@@ -298,6 +303,18 @@
 			>
 				<Rocket class="size-3.5" />
 				Run
+			</Button>
+		{:else if !published && onrundraft}
+			<Button
+				variant="outline"
+				size="sm"
+				data-testid="btn-run-draft"
+				disabled={saving}
+				onclick={onrundraft}
+				title="Run this draft without publishing (compiled per-run; creates a draft instance)"
+			>
+				<FlaskConical class="size-3.5" />
+				Run draft
 			</Button>
 		{/if}
 
