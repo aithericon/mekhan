@@ -6,7 +6,9 @@
 //! [`MekhanNats::pull_consumer`] centralize them so a factory only declares
 //! what differs: the stream source, the durable base name, the subject
 //! filters, and the two incident-born knobs (`ack_wait` /
-//! `inactive_threshold`).
+//! `inactive_threshold`). Projections driven by
+//! `crate::projections::framework` declare their [`ConsumerSpec`] on the
+//! `Projection` impl instead of adding a factory here.
 
 use std::time::Duration;
 
@@ -300,43 +302,6 @@ impl MekhanNats {
         self.pull_consumer(ConsumerSpec {
             stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
             durable_base: "mekhan-allocations",
-            filter_subjects: vec![Subjects::EVENTS_ALL.into()],
-            ack_wait: None,
-            // Reap the durable if this projection is ever removed
-            // (see step_executions_consumer for the incident rationale).
-            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
-            migrate_from: None,
-        })
-        .await
-    }
-
-    /// Create or get the durable consumer for the `template_stagings` projection
-    /// (B-staging, Phase 4). Consumes `petri.events.>` and folds each staging
-    /// net's terminal `stage_template` `EffectCompleted`/`EffectFailed` into the
-    /// matching `template_stagings` row (see
-    /// `service/src/projections/template_stagings/`). The consumer cheaply
-    /// pre-filters to `staging-*` nets in-process.
-    pub async fn template_stagings_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        self.pull_consumer(ConsumerSpec {
-            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
-            durable_base: "mekhan-template-stagings",
-            filter_subjects: vec![Subjects::EVENTS_ALL.into()],
-            ack_wait: None,
-            // Reap the durable if this projection is ever removed
-            // (see step_executions_consumer for the incident rationale).
-            inactive_threshold: Some(Duration::from_secs(30 * 24 * 60 * 60)),
-            migrate_from: None,
-        })
-        .await
-    }
-
-    /// Durable consumer for the `image_materializations` projection (docs/22).
-    /// Same `petri.events.>` firehose as staging; pre-filters to `materialize-*`
-    /// nets in-process.
-    pub async fn image_materializations_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        self.pull_consumer(ConsumerSpec {
-            stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
-            durable_base: "mekhan-image-materializations",
             filter_subjects: vec![Subjects::EVENTS_ALL.into()],
             ack_wait: None,
             // Reap the durable if this projection is ever removed

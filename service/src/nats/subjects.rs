@@ -30,6 +30,12 @@ pub const BRIDGE_ALL: &str = "petri.bridge.>";
 /// `mekhan-{uuid}` are single tokens (no dots), so `*` matches them.
 pub const NET_LIFECYCLE_EVENTS_FILTER: &str = "petri.events.*.net.>";
 
+/// `petri.events.*.effect.completed` — every net's `EffectCompleted` events.
+pub const EFFECT_COMPLETED_EVENTS_FILTER: &str = "petri.events.*.effect.completed";
+
+/// `petri.events.*.effect.failed` — every net's `EffectFailed` events.
+pub const EFFECT_FAILED_EVENTS_FILTER: &str = "petri.events.*.effect.failed";
+
 /// `petri.events.{net_id}.>` — every event for one net.
 pub fn net_events_filter(net_id: &str) -> String {
     format!("{}.{net_id}.>", Subjects::EVENTS_PREFIX)
@@ -79,6 +85,25 @@ mod tests {
         assert_eq!(
             NET_LIFECYCLE_EVENTS_FILTER,
             format!("{}.*.net.>", Subjects::EVENTS_PREFIX)
+        );
+        // The engine's net-less subjects are `petri.events.{suffix}`; the
+        // per-net filters insert the single-token net-id wildcard after the
+        // prefix, so the suffix tokens stay engine-canonical.
+        assert_eq!(
+            EFFECT_COMPLETED_EVENTS_FILTER,
+            Subjects::EVENT_EFFECT_COMPLETED.replacen(
+                &format!("{}.", Subjects::EVENTS_PREFIX),
+                &format!("{}.*.", Subjects::EVENTS_PREFIX),
+                1
+            )
+        );
+        assert_eq!(
+            EFFECT_FAILED_EVENTS_FILTER,
+            Subjects::EVENT_EFFECT_FAILED.replacen(
+                &format!("{}.", Subjects::EVENTS_PREFIX),
+                &format!("{}.*.", Subjects::EVENTS_PREFIX),
+                1
+            )
         );
         assert_eq!(
             HUMAN_REQUEST_ALL,
