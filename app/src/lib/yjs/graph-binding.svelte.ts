@@ -36,8 +36,11 @@ export class YjsGraphBinding {
 	private edgesObserver: () => void;
 	private viewportObserver: () => void;
 	private deepObservers: Map<string, () => void> = new Map();
+	private undoManager: Y.UndoManager | null = null;
 
 	graph: WorkflowGraph = $state({ nodes: [], edges: [] });
+	canUndo = $state(false);
+	canRedo = $state(false);
 
 	constructor(doc: Y.Doc) {
 		this.doc = doc;
@@ -479,6 +482,47 @@ export class YjsGraphBinding {
 				};
 			}
 		}
+	}
+
+	// --- Undo / redo ---
+
+	/**
+	 * Local-only undo over the graph's shared types (nodes + edges). Tracked
+	 * origins default to `{null}` — exactly the binding's own `doc.transact()`
+	 * mutations. Remote updates apply with the WS provider as origin
+	 * (ws-provider.ts `Y.applyUpdate(doc, payload, this)`), so collaborators'
+	 * edits and the initial server sync never enter this stack: undo only ever
+	 * reverts what THIS client did. `meta` and `viewport` are deliberately out
+	 * of scope (rename goes through the REST API; pan/zoom isn't an edit).
+	 */
+	enableUndo(): void {
+		if (this.undoManager) return;
+		this.undoManager = new Y.UndoManager([this.yNodes, this.yEdges]);
+		const sync = () => {
+			this.canUndo = this.undoManager?.canUndo() ?? false;
+			this.canRedo = this.undoManager?.canRedo() ?? false;
+		};
+		this.undoManager.on('stack-item-added', sync);
+		this.undoManager.on('stack-item-popped', sync);
+		this.undoManager.on('stack-cleared', sync);
+		this.undoManager.on('stack-item-updated', sync);
+	}
+
+	undo(): void {
+		this.undoManager?.undo();
+	}
+
+	redo(): void {
+		this.undoManager?.redo();
+	}
+
+	/**
+	 * Drop all undo history. Called after programmatic load-time writes (the
+	 * SubWorkflow contract backfill) so the user's first Cmd+Z reverts THEIR
+	 * first edit, not an invisible bookkeeping patch.
+	 */
+	clearUndoHistory(): void {
+		this.undoManager?.clear();
 	}
 
 	// --- Mutation methods ---
@@ -1072,6 +1116,8 @@ export class YjsGraphBinding {
 	}
 
 	destroy(): void {
+		this.undoManager?.destroy();
+		this.undoManager = null;
 		this.yNodes.unobserve(this.nodesObserver);
 		this.yEdges.unobserve(this.edgesObserver);
 		this.yViewport.unobserve(this.viewportObserver);

@@ -71,6 +71,10 @@
 	// svelte-ignore state_referenced_locally
 	const session = getSession(templateId);
 	const binding = new YjsGraphBinding(session.doc);
+	// Local-only undo stack (remote origins untracked — see enableUndo). Safe
+	// to enable before the template loads: published mode never routes a
+	// mutation through the binding, so the stack just stays empty.
+	binding.enableUndo();
 
 	// Load template metadata from API
 	async function load() {
@@ -278,6 +282,33 @@
 		selectedNodeId = nodeId;
 	}
 
+	// Cmd/Ctrl+Z → undo, Shift+Cmd/Ctrl+Z or Ctrl+Y → redo. Skipped when the
+	// keystroke targets a text field (input/textarea/contenteditable — incl.
+	// CodeMirror) so native text-editing undo keeps working, and on published
+	// templates (read-only: nothing to undo, and the binding never mutates).
+	function isTextEditingTarget(t: EventTarget | null): boolean {
+		return (
+			t instanceof HTMLInputElement ||
+			t instanceof HTMLTextAreaElement ||
+			t instanceof HTMLSelectElement ||
+			(t instanceof HTMLElement && t.isContentEditable)
+		);
+	}
+
+	function handleUndoKeydown(e: KeyboardEvent) {
+		if (template?.published) return;
+		if (!e.metaKey && !e.ctrlKey) return;
+		const key = e.key.toLowerCase();
+		if (key !== 'z' && key !== 'y') return;
+		if (isTextEditingTarget(e.target)) return;
+		e.preventDefault();
+		if (key === 'y' || e.shiftKey) {
+			binding.redo();
+		} else {
+			binding.undo();
+		}
+	}
+
 	function handleDeleteSelectedNode() {
 		if (!selectedNodeId) return;
 		// Mirror WorkflowCanvas.handleDelete cascade: a scope node also removes
@@ -328,7 +359,11 @@
 	$effect(() => {
 		if (binding.graph.nodes.length === 0 || contractsRefreshed) return;
 		contractsRefreshed = true;
-		void refreshSubworkflowContracts(binding);
+		// The contract backfill writes through the binding (null origin), which
+		// would otherwise seed the undo stack with an invisible bookkeeping
+		// patch — drop the history once it settles so Cmd+Z starts at the
+		// user's first real edit.
+		void refreshSubworkflowContracts(binding).finally(() => binding.clearUndoHistory());
 	});
 
 	$effect(() => {
@@ -348,6 +383,8 @@
 <svelte:head>
 	<title>{template?.name ?? 'Editor'} | Mekhan</title>
 </svelte:head>
+
+<svelte:window onkeydown={handleUndoKeydown} />
 
 <PageShell width="bleed" testid="template-editor-page">
 	{#if loading}
@@ -374,6 +411,10 @@
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 				onshare={template && canShare ? () => (shareOpen = true) : undefined}
 				onrename={handleRename}
+				onundo={() => binding.undo()}
+				onredo={() => binding.redo()}
+				canUndo={binding.canUndo}
+				canRedo={binding.canRedo}
 			/>
 
 			{#if error}

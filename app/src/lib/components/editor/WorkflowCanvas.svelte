@@ -334,7 +334,14 @@
 				return {
 					id: n.id,
 					type: n.type,
-					position: existing?.position ?? n.position,
+					// The graph (Yjs) position is authoritative — taking it here is
+					// what makes undo/redo and co-author moves actually render. The
+					// one exception is a node mid-drag: xyflow owns its position for
+					// the duration of the gesture, and snapping it back to the (stale)
+					// graph value would yank it out of the user's hand. Drag-stop
+					// writes the final position to Yjs, which round-trips right back
+					// through this sync.
+					position: existing?.dragging ? existing.position : n.position,
 					data: n.data,
 					...(n.parentId ? { parentId: n.parentId } : {}),
 					...(n.width != null ? { width: n.width } : {}),

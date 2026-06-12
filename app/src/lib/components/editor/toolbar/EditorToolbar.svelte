@@ -1,5 +1,7 @@
 <script lang="ts">
 	import Save from '@lucide/svelte/icons/save';
+	import Undo2 from '@lucide/svelte/icons/undo-2';
+	import Redo2 from '@lucide/svelte/icons/redo-2';
 	import Upload from '@lucide/svelte/icons/upload';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
 	import Rocket from '@lucide/svelte/icons/rocket';
@@ -48,6 +50,11 @@
 		onshare?: () => void;
 		/** Commit a new template name (parent does the API call + state). */
 		onrename?: (name: string) => void;
+		/** Undo/redo over the local Yjs edit stack (drafts only). */
+		onundo?: () => void;
+		onredo?: () => void;
+		canUndo?: boolean;
+		canRedo?: boolean;
 	};
 
 	let {
@@ -68,7 +75,11 @@
 		ontests,
 		onsettings,
 		onshare,
-		onrename
+		onrename,
+		onundo,
+		onredo,
+		canUndo = false,
+		canRedo = false
 	}: Props = $props();
 
 	// Inline rename. Published templates are server-locked (409), so editing
@@ -171,6 +182,32 @@
 	</div>
 
 	<div class="flex items-center gap-1.5">
+		{#if !published && onundo && onredo}
+			<Button
+				variant="ghost"
+				size="sm"
+				disabled={!canUndo}
+				onclick={onundo}
+				title="Undo (⌘Z)"
+				aria-label="Undo"
+				data-testid="btn-undo"
+			>
+				<Undo2 class="size-3.5" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				disabled={!canRedo}
+				onclick={onredo}
+				title="Redo (⇧⌘Z)"
+				aria-label="Redo"
+				data-testid="btn-redo"
+			>
+				<Redo2 class="size-3.5" />
+			</Button>
+			<div class="mx-1 h-5 w-px bg-border" role="presentation"></div>
+		{/if}
+
 		{#if templateId}
 			<Button
 				variant="ghost"

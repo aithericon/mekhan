@@ -850,3 +850,129 @@ describe('YjsGraphBinding', () => {
 		expect(node2.data.assetBindings).toBeUndefined();
 	});
 });
+
+describe('YjsGraphBinding undo/redo', () => {
+	let doc: Y.Doc;
+	let binding: YjsGraphBinding;
+
+	beforeEach(() => {
+		doc = new Y.Doc();
+		binding = new YjsGraphBinding(doc);
+	});
+
+	// Seed a start→step graph BEFORE enableUndo so the setup itself is not on
+	// the stack — each test then tracks exactly the operations it performs.
+	function seedGraph() {
+		binding.addNode('n1', 'start', { x: 0, y: 0 }, createDefaultNodeData('start'));
+		binding.addNode('n2', 'automated_step', { x: 100, y: 0 }, createDefaultNodeData('automated_step'));
+		binding.addEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'sequence' });
+	}
+
+	it('is inert before enableUndo and tracks nothing from before it', () => {
+		seedGraph();
+		binding.undo(); // no manager yet — must not throw
+		expect(binding.canUndo).toBe(false);
+
+		binding.enableUndo();
+		binding.undo(); // empty stack — must not touch the seeded graph
+		expect(binding.graph.nodes).toHaveLength(2);
+		expect(binding.canUndo).toBe(false);
+	});
+
+	it('undo reverts an addNode; redo reapplies it', () => {
+		seedGraph();
+		binding.enableUndo();
+
+		binding.addNode('n3', 'end', { x: 200, y: 0 }, createDefaultNodeData('end'));
+		expect(binding.canUndo).toBe(true);
+
+		binding.undo();
+		expect(binding.graph.nodes.find((n) => n.id === 'n3')).toBeUndefined();
+		expect(binding.canRedo).toBe(true);
+
+		binding.redo();
+		const restored = binding.graph.nodes.find((n) => n.id === 'n3');
+		expect(restored).toBeDefined();
+		expect(restored!.type).toBe('end');
+		expect(restored!.position).toEqual({ x: 200, y: 0 });
+	});
+
+	it('undo of removeNode restores the node, its config, and its connected edges', () => {
+		seedGraph();
+		binding.updateNodeData('n2', {
+			...(binding.graph.nodes.find((n) => n.id === 'n2')!.data as Extract<
+				WorkflowNodeData,
+				{ type: 'automated_step' }
+			>),
+			label: 'Crunch numbers'
+		});
+		binding.enableUndo();
+
+		binding.removeNode('n2');
+		expect(binding.graph.nodes).toHaveLength(1);
+		expect(binding.graph.edges).toHaveLength(0);
+
+		binding.undo();
+		const node = binding.graph.nodes.find((n) => n.id === 'n2');
+		expect(node).toBeDefined();
+		expect(node!.data.label).toBe('Crunch numbers');
+		// The cascade-deleted edge comes back with the node (one transaction).
+		expect(binding.graph.edges).toHaveLength(1);
+		expect(binding.graph.edges[0].id).toBe('e1');
+		// Nested files survive the round-trip (automated_step seeds main.py).
+		expect(binding.getNodeFiles('n2').has('main.py')).toBe(true);
+	});
+
+	it('undo reverts a position move', () => {
+		seedGraph();
+		binding.enableUndo();
+
+		binding.updateNodePosition('n2', { x: 500, y: 300 });
+		expect(binding.graph.nodes.find((n) => n.id === 'n2')!.position).toEqual({ x: 500, y: 300 });
+
+		binding.undo();
+		expect(binding.graph.nodes.find((n) => n.id === 'n2')!.position).toEqual({ x: 100, y: 0 });
+	});
+
+	it('remote-origin updates are not undoable and survive a local undo', () => {
+		seedGraph();
+		binding.enableUndo();
+
+		// A collaborator adds a node in their own doc; their update arrives with
+		// a non-null origin (the WS provider passes itself — see ws-provider.ts).
+		const remoteDoc = new Y.Doc();
+		Y.applyUpdate(remoteDoc, Y.encodeStateAsUpdate(doc), 'sync');
+		const remoteBinding = new YjsGraphBinding(remoteDoc);
+		remoteBinding.addNode('remote1', 'end', { x: 999, y: 0 }, createDefaultNodeData('end'));
+		Y.applyUpdate(doc, Y.encodeStateAsUpdate(remoteDoc, Y.encodeStateVector(doc)), 'provider');
+
+		expect(binding.graph.nodes.find((n) => n.id === 'remote1')).toBeDefined();
+		expect(binding.canUndo).toBe(false);
+
+		// A local edit is undoable; undoing it leaves the remote node alone.
+		binding.addNode('local1', 'end', { x: 300, y: 0 }, createDefaultNodeData('end'));
+		binding.undo();
+		expect(binding.graph.nodes.find((n) => n.id === 'local1')).toBeUndefined();
+		expect(binding.graph.nodes.find((n) => n.id === 'remote1')).toBeDefined();
+	});
+
+	it('clearUndoHistory empties the stack', () => {
+		seedGraph();
+		binding.enableUndo();
+
+		binding.addNode('n3', 'end', { x: 200, y: 0 }, createDefaultNodeData('end'));
+		expect(binding.canUndo).toBe(true);
+
+		binding.clearUndoHistory();
+		expect(binding.canUndo).toBe(false);
+		binding.undo(); // nothing to revert
+		expect(binding.graph.nodes.find((n) => n.id === 'n3')).toBeDefined();
+	});
+
+	it('destroy tears the manager down without throwing', () => {
+		seedGraph();
+		binding.enableUndo();
+		binding.addNode('n3', 'end', { x: 200, y: 0 }, createDefaultNodeData('end'));
+		binding.destroy();
+	});
+});
