@@ -63,4 +63,8 @@ export type OutputRenderer = {
 	label: string;
 	matches: (value: unknown, ctx: RenderContext) => boolean;
 	component: Component<RendererProps>;
+	/** The component nests its own SmartValue for the payload (and thus its own
+	 *  raw-JSON toggle) as its trailing content — the outer SmartValue must not
+	 *  add a second, visually adjacent toggle for the envelope itself. */
+	ownsRawToggle?: boolean;
 };

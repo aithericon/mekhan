@@ -15,7 +15,7 @@
 	let raw = $state(false);
 
 	const Renderer = $derived(raw ? FALLBACK.component : picked.component);
-	const showToggle = $derived(picked.name !== 'json');
+	const showToggle = $derived(picked.name !== 'json' && !picked.ownsRawToggle);
 </script>
 
 <div class="space-y-1.5">

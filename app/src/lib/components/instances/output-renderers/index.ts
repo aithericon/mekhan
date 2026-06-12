@@ -305,13 +305,15 @@ export const REGISTRY: OutputRenderer[] = [
 		name: 'end-terminal',
 		label: 'Workflow result',
 		matches: matchesEndTerminal,
-		component: EndTerminalEnvelope
+		component: EndTerminalEnvelope,
+		ownsRawToggle: true
 	},
 	{
 		name: 'result-envelope',
 		label: 'Workflow result',
 		matches: matchesResultEnvelope,
-		component: EndTerminalEnvelope
+		component: EndTerminalEnvelope,
+		ownsRawToggle: true
 	},
 	{
 		name: 'process-token',
