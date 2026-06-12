@@ -82,9 +82,16 @@ When you need a new visual treatment:
 ## Primitives
 
 Current set: `badge`, `block-chart`, `button`, `calendar`, `card`, `chart`,
-`checkbox`, `copy-button`, `file-drop-zone`, `input`, `label`, `popover`,
-`radio-group`, `rating-group`, `select`, `separator`, `sheet`, `signature-pad`,
-`sonner`, `spinner`, `textarea`, `tooltip`.
+`checkbox`, `copy-button`, `data-table`, `file-drop-zone`, `input`, `label`,
+`popover`, `radio-group`, `rating-group`, `select`, `separator`, `sheet`,
+`signature-pad`, `sonner`, `spinner`, `table`, `textarea`, `tooltip`.
+
+`table` is the styled table markup (`Table.Root/Header/Body/Row/Head/Cell`);
+`data-table` is the headless `@tanstack/table-core` Svelte 5 adapter
+(`createSvelteTable`, `FlexRender`, `renderComponent`/`renderSnippet`) for
+sortable/filterable/paginated tables — pair them per the shadcn-svelte
+data-table recipe. The hpi report table (`lib/hpi/components/data-table.svelte`)
+is the reference consumer of the adapter.
 
 Missing primitives worth considering (driven by current violations):
 
