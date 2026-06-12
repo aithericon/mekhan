@@ -8,13 +8,25 @@
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import type { createProcessLiveStore } from '$lib/stores/process-live.svelte';
-	import { pickRenderer, groupKey, groupLabel, stepNumber } from './renderers/registry';
+	import {
+		pickRenderer,
+		groupKey,
+		groupLabel,
+		stepNumber,
+		isShowcaseEntry
+	} from './renderers/registry';
 
 	type Store = ReturnType<typeof createProcessLiveStore>;
 	interface Props {
 		store: Store;
+		/**
+		 * Embed mode for the Overview tab: only showcase groups (declared
+		 * render hints + image/video/audio), no header and no empty-state —
+		 * the host card supplies the chrome and gates on artifact presence.
+		 */
+		renderableOnly?: boolean;
 	}
-	let { store }: Props = $props();
+	let { store, renderableOnly = false }: Props = $props();
 
 	/**
 	 * Per group (by render_hint / MIME / category):
@@ -29,9 +41,13 @@
 		entries: LiveArtifactEntry[];
 	}
 
+	const sourceEntries = $derived(
+		renderableOnly ? store.artifacts.filter(isShowcaseEntry) : store.artifacts
+	);
+
 	const groups = $derived.by<Group[]>(() => {
 		const m = new Map<string, LiveArtifactEntry[]>();
-		for (const e of store.artifacts) {
+		for (const e of sourceEntries) {
 			const k = groupKey(e);
 			const arr = m.get(k) ?? [];
 			arr.push(e);
@@ -102,27 +118,31 @@
 	);
 </script>
 
-<section class="mb-6 flex flex-col gap-4">
-	<div class="flex items-center justify-between">
-		<div class="flex items-center gap-2">
-			<FileBox class="size-4 text-muted-foreground" />
-			<h3 class="text-sm font-medium">Live artifact viewer</h3>
-			<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
-			<span class="text-sm text-muted-foreground">{statusLabel}</span>
-		</div>
-		<p class="text-sm text-muted-foreground">
-			{store.artifacts.length} artifact{store.artifacts.length === 1 ? '' : 's'}
-		</p>
-	</div>
-
-	{#if groups.length === 0}
-		<div
-			class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
-		>
+<section class="flex flex-col gap-4 {renderableOnly ? '' : 'mb-6'}">
+	{#if !renderableOnly}
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-2">
+				<FileBox class="size-4 text-muted-foreground" />
+				<h3 class="text-sm font-medium">Live artifact viewer</h3>
+				<span class="inline-block size-2 rounded-full {statusDotClass}"></span>
+				<span class="text-sm text-muted-foreground">{statusLabel}</span>
+			</div>
 			<p class="text-sm text-muted-foreground">
-				No artifacts yet — they'll appear here as the process produces them.
+				{store.artifacts.length} artifact{store.artifacts.length === 1 ? '' : 's'}
 			</p>
 		</div>
+	{/if}
+
+	{#if groups.length === 0}
+		{#if !renderableOnly}
+			<div
+				class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
+			>
+				<p class="text-sm text-muted-foreground">
+					No artifacts yet — they'll appear here as the process produces them.
+				</p>
+			</div>
+		{/if}
 	{:else}
 		{#each groups as g (g.key)}
 			{@const idx = indexFor(g)}

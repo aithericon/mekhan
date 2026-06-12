@@ -20,6 +20,7 @@
 	import { ProcessTimeline } from '$lib/components/process-timeline';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { MetricsPanel, LogsPanel, ArtifactsPanel } from '$lib/components/process-live';
+	import { isShowcaseEntry } from '$lib/components/process-live/renderers/registry';
 	import { createProcessLiveStore } from '$lib/stores/process-live.svelte';
 	import { SmartValue } from '$lib/components/instances/output-renderers';
 	import { onDestroy, untrack } from 'svelte';
@@ -123,6 +124,12 @@
 			)
 	);
 	const showInputs = $derived(!!instance && startSteps.length > 0);
+	// Renderable (showcase) artifacts — declared render hints + image/video/
+	// audio — get a media card on the Overview tab; the live store streaming
+	// them is already alive there for the Recent-activity logs.
+	const showcaseCount = $derived(
+		liveStore ? liveStore.artifacts.filter(isShowcaseEntry).length : 0
+	);
 	const showResults = $derived(
 		!!instance &&
 			(endSteps.length > 0 ||
@@ -566,6 +573,27 @@
 								</div>
 							</div>
 						{/if}
+					</div>
+				{/if}
+
+				{#if liveStore && showcaseCount > 0}
+					<!-- Renderable artifacts (videos, images, audio, declared viz
+					     hints) — same grouped viewer + iteration scrubber as the
+					     Artifacts tab, embedded so the run's media is visible
+					     without leaving the overview. -->
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<FileBox class="size-4 text-muted-foreground" />
+							Media
+							<Badge variant="secondary">{showcaseCount}</Badge>
+							<button
+								class="ml-auto text-sm font-normal text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+								onclick={() => (activeTab = 'artifacts')}
+							>
+								All artifacts
+							</button>
+						</h3>
+						<ArtifactsPanel store={liveStore} renderableOnly />
 					</div>
 				{/if}
 

@@ -46,6 +46,19 @@ export const KNOWN_RENDER_HINTS = Object.keys(HINT_RENDERERS);
 /** Categories always considered potentially renderable (MIME-based). */
 export const RENDERABLE_CATEGORIES = ['model', 'plot', 'image', 'text', 'dataset'];
 
+/**
+ * Showcase artifacts: producer-declared render hints we have a renderer for,
+ * plus media MIME families (image/video/audio). Drives the process Overview
+ * tab's media card — text/json have renderers too but read as data dumps,
+ * not something to lead the overview with.
+ */
+export function isShowcaseEntry(entry: LiveArtifactEntry): boolean {
+	const meta = entry.user_metadata ?? {};
+	const hint = typeof meta.render_hint === 'string' ? meta.render_hint : null;
+	if (hint && HINT_RENDERERS[hint]) return true;
+	return /^(image|video|audio)\//.test(entry.mime_type ?? '');
+}
+
 export function pickRenderer(entry: LiveArtifactEntry): Component<RendererProps> | null {
 	const meta = entry.user_metadata ?? {};
 	const hint = typeof meta.render_hint === 'string' ? meta.render_hint : null;
