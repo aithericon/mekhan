@@ -341,6 +341,7 @@ mod tests {
 
     fn minimal_child() -> ScenarioDefinition {
         ScenarioDefinition {
+            air_version: aithericon_sdk::scenario::SUPPORTED_AIR_VERSION,
             name: "child".to_string(),
             description: None,
             places: vec![place("p_s_ready", "state"), place("p_e_done", "terminal")],

@@ -53,6 +53,7 @@ pub mod clockmaster;
 mod config;
 pub mod create_net_listener;
 pub mod cross_net_bridge;
+pub mod dlq;
 pub mod event_consumer;
 mod event_store;
 pub mod global_bridge_listener;
@@ -79,6 +80,7 @@ pub use create_net_listener::{
     CreateNetListener, CreateNetRequest, CreateNetResponse, InitialToken, NetCreator,
 };
 pub use cross_net_bridge::{CrossNetBridge, CrossNetTokenTransfer};
+pub use dlq::{dlq_stream_config, DlqEntry, DlqErrorClass, DlqPublisher};
 pub use event_consumer::EventConsumer;
 pub use event_store::NatsEventStore;
 pub use global_bridge_listener::{

@@ -13,8 +13,9 @@ use petri_application::{
 use petri_domain::PlaceId;
 use serde::{Deserialize, Serialize};
 
+use crate::dlq::DlqPublisher;
 use crate::idempotency::{CachedResult, IdempotencyCache};
-use crate::message_loop::{run_message_loop, MessageHandler, ProcessError};
+use crate::message_loop::{run_message_loop_cancellable, MessageHandler, ProcessError};
 
 // ============================================================================
 // Token Injection
@@ -82,6 +83,9 @@ where
 
     /// Idempotency cache for deduplication
     idempotency_cache: Arc<IdempotencyCache>,
+
+    /// Dead-letter publisher for unprocessable requests
+    dlq: Option<DlqPublisher>,
 }
 
 impl<E, T, S> TokenInjectionListener<E, T, S>
@@ -100,6 +104,7 @@ where
             service,
             consumer,
             idempotency_cache: Arc::new(IdempotencyCache::new()),
+            dlq: None,
         }
     }
 
@@ -115,7 +120,35 @@ where
             service,
             consumer,
             idempotency_cache,
+            dlq: None,
         }
+    }
+
+    /// Create a listener with restart-durable dedup and dead-lettering.
+    ///
+    /// The idempotency cache is backed by the `petri-idempotency` JetStream
+    /// KV bucket (created if missing), and unprocessable requests land in
+    /// the `PETRI_DLQ` stream instead of being dropped.
+    pub async fn with_durable_cache(
+        service: Arc<PetriNetService<E, T, S>>,
+        consumer: PullConsumer,
+        jetstream: &async_nats::jetstream::Context,
+    ) -> Result<Self, ListenerError> {
+        let cache = IdempotencyCache::durable(jetstream)
+            .await
+            .map_err(ListenerError::ServiceError)?;
+        Ok(Self {
+            service,
+            consumer,
+            idempotency_cache: Arc::new(cache),
+            dlq: Some(DlqPublisher::new(jetstream.clone())),
+        })
+    }
+
+    /// Attach a dead-letter publisher for unprocessable requests.
+    pub fn with_dlq(mut self, dlq: DlqPublisher) -> Self {
+        self.dlq = Some(dlq);
+        self
     }
 
     /// Start listening for token injection requests.
@@ -123,7 +156,7 @@ where
     /// This runs until the consumer is closed or an unrecoverable error occurs.
     pub async fn run(self) -> Result<(), ListenerError> {
         let consumer = self.consumer.clone();
-        run_message_loop(consumer, &self)
+        run_message_loop_cancellable(consumer, &self, None, self.dlq.clone())
             .await
             .map_err(|e| ListenerError::ConsumerError(e.to_string()))
     }
@@ -139,7 +172,7 @@ where
     ) -> TokenCommandResponse {
         // Check idempotency cache first (using automatic key from NATS metadata)
         if let Some(key) = idempotency_key {
-            if let Some(cached) = self.idempotency_cache.get(key) {
+            if let Some(cached) = self.idempotency_cache.get(key).await {
                 tracing::debug!(
                     idempotency_key = %key,
                     "Returning cached response for duplicate injection request"
@@ -185,13 +218,15 @@ where
 
                 // Cache the success
                 if let Some(key) = idempotency_key {
-                    self.idempotency_cache.insert(
-                        key.to_string(),
-                        CachedResult::Success {
-                            event_sequence: event.sequence,
-                            token_id: token_id.clone(),
-                        },
-                    );
+                    self.idempotency_cache
+                        .insert(
+                            key.to_string(),
+                            CachedResult::Success {
+                                event_sequence: event.sequence,
+                                token_id: token_id.clone(),
+                            },
+                        )
+                        .await;
                 }
 
                 TokenCommandResponse {
@@ -206,12 +241,14 @@ where
                 let error = e.to_string();
                 // Cache the failure
                 if let Some(key) = idempotency_key {
-                    self.idempotency_cache.insert(
-                        key.to_string(),
-                        CachedResult::Failure {
-                            error: error.clone(),
-                        },
-                    );
+                    self.idempotency_cache
+                        .insert(
+                            key.to_string(),
+                            CachedResult::Failure {
+                                error: error.clone(),
+                            },
+                        )
+                        .await;
                 }
                 TokenCommandResponse {
                     success: false,
@@ -323,6 +360,7 @@ where
 {
     service: Arc<PetriNetService<E, T, S>>,
     consumer: PullConsumer,
+    dlq: Option<DlqPublisher>,
 }
 
 impl<E, T, S> TokenRemovalListener<E, T, S>
@@ -332,12 +370,22 @@ where
     S: StateProjection + 'static,
 {
     pub fn new(service: Arc<PetriNetService<E, T, S>>, consumer: PullConsumer) -> Self {
-        Self { service, consumer }
+        Self {
+            service,
+            consumer,
+            dlq: None,
+        }
+    }
+
+    /// Attach a dead-letter publisher for unprocessable requests.
+    pub fn with_dlq(mut self, dlq: DlqPublisher) -> Self {
+        self.dlq = Some(dlq);
+        self
     }
 
     pub async fn run(self) -> Result<(), ListenerError> {
         let consumer = self.consumer.clone();
-        run_message_loop(consumer, &self)
+        run_message_loop_cancellable(consumer, &self, None, self.dlq.clone())
             .await
             .map_err(|e| ListenerError::ConsumerError(e.to_string()))
     }
@@ -468,6 +516,7 @@ where
 {
     service: Arc<PetriNetService<E, T, S>>,
     consumer: PullConsumer,
+    dlq: Option<DlqPublisher>,
 }
 
 impl<E, T, S> TokenUpdateListener<E, T, S>
@@ -477,12 +526,22 @@ where
     S: StateProjection + 'static,
 {
     pub fn new(service: Arc<PetriNetService<E, T, S>>, consumer: PullConsumer) -> Self {
-        Self { service, consumer }
+        Self {
+            service,
+            consumer,
+            dlq: None,
+        }
+    }
+
+    /// Attach a dead-letter publisher for unprocessable requests.
+    pub fn with_dlq(mut self, dlq: DlqPublisher) -> Self {
+        self.dlq = Some(dlq);
+        self
     }
 
     pub async fn run(self) -> Result<(), ListenerError> {
         let consumer = self.consumer.clone();
-        run_message_loop(consumer, &self)
+        run_message_loop_cancellable(consumer, &self, None, self.dlq.clone())
             .await
             .map_err(|e| ListenerError::ConsumerError(e.to_string()))
     }

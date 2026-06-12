@@ -23,9 +23,9 @@
 		baseCommand,
 		apiErrorMessage,
 		type CatalogModel,
-		type CatalogSource,
-		type RunnerPresenceSnapshot
+		type CatalogSource
 	} from '$lib/api/models';
+	import { createPolledState } from '$lib/stores/remote.svelte';
 	import { shortId } from '$lib/components/fleet/model-pool';
 	import RunnerTargetPicker, {
 		runnerAdvertises
@@ -44,21 +44,18 @@
 	// Provision targets — live PRESENT model-server runners, polled by the picker.
 	// We mirror the presence snapshot here so the page can reason about the
 	// SELECTED runner's advertised backends (vLLM-vs-Ollama gating below).
-	let runners = $state<RunnerPresenceSnapshot[]>([]);
+	// On a transient poll error the last snapshot is kept — picker stays as-is.
 	let target = $state<string | null>(null);
-	const selectedRunner = $derived(runners.find((r) => r.runner_id === target));
-
-	async function loadRunners() {
-		try {
-			const all = await listRunnerPresence();
-			runners = all.filter((r) => r.present === true);
-			if (target !== null && !runners.some((r) => r.runner_id === target)) {
-				target = runners[0]?.runner_id ?? null;
-			}
-		} catch {
-			/* leave the picker as-is on a transient error */
+	const presence = createPolledState(async () => {
+		const all = await listRunnerPresence();
+		const present = all.filter((r) => r.present === true);
+		if (target !== null && !present.some((r) => r.runner_id === target)) {
+			target = present[0]?.runner_id ?? null;
 		}
-	}
+		return present;
+	}, 5000);
+	const runners = $derived(presence.data ?? []);
+	const selectedRunner = $derived(runners.find((r) => r.runner_id === target));
 
 	/** An hf.co/… pull only works on an Ollama runner — vLLM fixes its base at
 	 *  launch and cannot pull a GGUF repo. Gate Add-to-pool accordingly. */
@@ -81,12 +78,6 @@
 		clearTimeout(timer);
 		timer = setTimeout(() => void fetchCatalog(s, q), 350);
 		return () => clearTimeout(timer);
-	});
-
-	$effect(() => {
-		void loadRunners();
-		const t = setInterval(() => void loadRunners(), 5000);
-		return () => clearInterval(t);
 	});
 
 	async function fetchCatalog(s: CatalogSource, q: string) {

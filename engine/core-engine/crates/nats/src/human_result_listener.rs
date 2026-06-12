@@ -186,7 +186,7 @@ impl HumanResultListener {
             eval_notify: &eval_notify,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None)
+        run_message_loop_cancellable(consumer, &handler, None, None)
             .await
             .map_err(|e| HumanResultListenerError::Consumer(e.to_string()))
     }
@@ -230,7 +230,7 @@ impl HumanResultListener {
             eval_notify: &eval_notify,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None)
+        run_message_loop_cancellable(consumer, &handler, None, None)
             .await
             .map_err(|e| HumanResultListenerError::Consumer(e.to_string()))
     }
@@ -274,7 +274,7 @@ impl HumanResultListener {
             eval_notify: &eval_notify,
         };
 
-        run_message_loop_cancellable(consumer, &handler, None)
+        run_message_loop_cancellable(consumer, &handler, None, None)
             .await
             .map_err(|e| HumanResultListenerError::Consumer(e.to_string()))
     }

@@ -205,9 +205,14 @@ impl CrossNetBridge {
             eval_notify: &eval_notify,
         };
 
-        run_message_loop_cancellable(consumer, &handler, cancel)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        run_message_loop_cancellable(
+            consumer,
+            &handler,
+            cancel,
+            Some(crate::dlq::DlqPublisher::new(self.jetstream.clone())),
+        )
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 }
 

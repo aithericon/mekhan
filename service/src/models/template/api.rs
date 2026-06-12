@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::graph::{FieldMapping, WorkflowGraph};
+use super::graph::{FieldMapping, WorkflowGraph, WorkflowTemplate};
 use super::triggers::TriggerSource;
 
 // --- API request/response types ---
@@ -166,6 +166,18 @@ pub struct TemplateListExtras {
     /// returns *only* those private children (they're otherwise hidden from
     /// the catalogue). When absent, private templates are excluded entirely.
     pub owner_template_id: Option<Uuid>,
+}
+
+/// Response of `DELETE /api/v1/templates/{id}/draft`. Distinguishes the two
+/// discard outcomes so the editor knows where to navigate next.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DiscardDraftResponse {
+    /// True when the discarded draft was the only version in its chain — the
+    /// whole template was deleted (there was no parent to fall back to).
+    pub template_deleted: bool,
+    /// The parent version restored as the chain head (`is_latest = TRUE`).
+    /// `None` exactly when `template_deleted` is true.
+    pub restored_head: Option<WorkflowTemplate>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

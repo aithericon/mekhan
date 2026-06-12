@@ -21,6 +21,14 @@ use petgraph::graph::NodeIndex;
 use serde_json::Value;
 use std::collections::HashMap;
 
+// The SDK's AIR-version const is a lockstep copy of the engine-side one (the
+// SDK deliberately doesn't depend on petri-api-types). mekhan depends on both
+// crates, so pin them together here: a one-sided bump fails this build.
+const _: () = assert!(
+    petri_api_types::SUPPORTED_AIR_VERSION == aithericon_sdk::scenario::SUPPORTED_AIR_VERSION,
+    "petri_api_types::SUPPORTED_AIR_VERSION and aithericon_sdk::scenario::SUPPORTED_AIR_VERSION must be bumped in lockstep"
+);
+
 /// Extract inline Python source text from a [`NodeFiles`] for the
 /// borrow planner. Callers whose `files` already carry `InputSource::Raw`
 /// (preview, stateless compile, most tests) get a complete map for free;
@@ -559,6 +567,14 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     }
 
     let mut scenario = ctx.build();
+
+    // 5a. Stamp the emitted AIR with the format version the engine's deploy
+    //     gate validates against. `petri_api_types::SUPPORTED_AIR_VERSION` is
+    //     the single source for both sides; the SDK carries a lockstep copy
+    //     (`ctx.build()` already stamped it) — this explicit assignment pins
+    //     the service emit to the engine-side const so the two can't drift
+    //     silently.
+    scenario.air_version = petri_api_types::SUPPORTED_AIR_VERSION;
 
     // 5b. Drain registry-resolved pool lease typing collected during lowering.
     //     `Lease__<backend>` definitions + grant-inbox place schema_refs. Done

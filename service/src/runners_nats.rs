@@ -32,8 +32,12 @@ use std::path::PathBuf;
 use nats_io_jwt::{KeyPair, Permission, ResponsePermission, StringList, Token, User};
 use uuid::Uuid;
 
-/// Vault KV-v2 logical path for the persisted account signing seed.
-const VAULT_SECRET_PATH: &str = "secret/data/aithericon/runners/nats_signing_seed";
+/// Vault KV-v2 path (under the default `secret` mount) for the persisted
+/// account signing seed — resolves to
+/// `secret/data/aithericon/runners/nats_signing_seed`.
+const VAULT_SEED_PATH: &str = "aithericon/runners/nats_signing_seed";
+/// Field within the Vault secret that holds the seed.
+const VAULT_SEED_FIELD: &str = "seed";
 /// Local file (under `data_dir`) holding the account signing seed.
 const SEED_FILE_NAME: &str = "runners_account_signing.nk";
 
@@ -413,90 +417,54 @@ fn set_dir_mode_0700(_path: &std::path::Path) {}
 #[cfg(not(unix))]
 fn set_file_mode_0600(_path: &std::path::Path) {}
 
-/// Best-effort KV-v2 read of the account seed from Vault. Returns `None` (never
-/// errors) on any failure — Vault is optional and must not block startup.
-fn vault_read_seed() -> Option<String> {
-    let addr = std::env::var("VAULT_ADDR").ok()?;
-    let token = std::env::var("VAULT_TOKEN").ok()?;
-    let addr = addr.trim_end_matches('/');
-    let url = format!("{addr}/v1/{VAULT_SECRET_PATH}");
-
-    // A short blocking call on its own runtime so this works from the sync
-    // `resolve()` path without coupling to the caller's async context.
-    let body: serde_json::Value = std::thread::scope(|s| {
+/// Run a Vault call to completion on a fresh current-thread runtime in a
+/// scoped thread, so the sync `resolve()` path can use the async
+/// `aithericon_secrets` store without coupling to the caller's async context.
+/// Returns `None` on runtime-build failure or when the 3s budget elapses —
+/// Vault is optional and must not block startup.
+fn block_on_vault<T: Send>(fut: impl std::future::Future<Output = T> + Send) -> Option<T> {
+    std::thread::scope(|s| {
         s.spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .ok()?;
             rt.block_on(async move {
-                let client = reqwest::Client::new();
-                let resp = client
-                    .get(&url)
-                    .header("X-Vault-Token", token)
-                    .timeout(std::time::Duration::from_secs(3))
-                    .send()
+                tokio::time::timeout(std::time::Duration::from_secs(3), fut)
                     .await
-                    .ok()?;
-                if !resp.status().is_success() {
-                    return None;
-                }
-                resp.json::<serde_json::Value>().await.ok()
+                    .ok()
             })
         })
         .join()
         .ok()
         .flatten()
-    })?;
-
-    body.get("data")?
-        .get("data")?
-        .get("seed")?
-        .as_str()
-        .map(str::to_string)
+    })
 }
 
-/// Best-effort KV-v2 write of the account seed to Vault. Logs + swallows any
-/// failure — the local file is authoritative.
-fn vault_write_seed(seed: &str) {
-    let (addr, token) = match (std::env::var("VAULT_ADDR"), std::env::var("VAULT_TOKEN")) {
-        (Ok(a), Ok(t)) => (a, t),
-        _ => return,
-    };
-    let addr = addr.trim_end_matches('/').to_string();
-    let url = format!("{addr}/v1/{VAULT_SECRET_PATH}");
-    let seed = seed.to_string();
+/// Best-effort KV-v2 read of the account seed from Vault via the shared
+/// `aithericon_secrets` store. Returns `None` (never errors) on any failure.
+fn vault_read_seed() -> Option<String> {
+    use aithericon_secrets::SecretStore as _;
+    let store = aithericon_secrets::VaultSecretStore::from_env()?;
+    let key = format!("{VAULT_SEED_PATH}#{VAULT_SEED_FIELD}");
+    block_on_vault(async move { store.get(&key).await })?.ok()
+}
 
-    let ok = std::thread::scope(|s| {
-        s.spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(_) => return false,
-            };
-            rt.block_on(async move {
-                let client = reqwest::Client::new();
-                let payload = serde_json::json!({ "data": { "seed": seed } });
-                client
-                    .put(&url)
-                    .header("X-Vault-Token", token)
-                    .timeout(std::time::Duration::from_secs(3))
-                    .json(&payload)
-                    .send()
-                    .await
-                    .map(|r| r.status().is_success())
-                    .unwrap_or(false)
-            })
-        })
-        .join()
-        .unwrap_or(false)
-    });
-    if ok {
-        tracing::info!("mirrored runner NATS signing seed to Vault");
-    } else {
-        tracing::debug!("could not mirror runner NATS signing seed to Vault (best-effort)");
+/// Best-effort KV-v2 write of the account seed to Vault via the shared
+/// `aithericon_secrets` store. Logs + swallows any failure — the local file
+/// is authoritative.
+fn vault_write_seed(seed: &str) {
+    let Some(store) = aithericon_secrets::VaultSecretStore::from_env() else {
+        return;
+    };
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        VAULT_SEED_FIELD.to_string(),
+        serde_json::Value::String(seed.to_string()),
+    );
+    match block_on_vault(async move { store.put_kv(VAULT_SEED_PATH, &fields).await }) {
+        Some(Ok(())) => tracing::info!("mirrored runner NATS signing seed to Vault"),
+        _ => tracing::debug!("could not mirror runner NATS signing seed to Vault (best-effort)"),
     }
 }
 

@@ -28,7 +28,7 @@ use crate::place::PlaceHandle;
 use crate::resource::ResourceBuilder;
 use crate::scenario::{
     AdapterLogic, BridgeSourceDto, BridgeTargetDto, MockAdapterConfig, ScenarioDefinition,
-    ScenarioGroup, ScenarioPlace, ScenarioToken, ScenarioTransition,
+    ScenarioGroup, ScenarioPlace, ScenarioToken, ScenarioTransition, SUPPORTED_AIR_VERSION,
 };
 use crate::token::DynamicToken;
 use crate::transition::TransitionBuilder;
@@ -1788,6 +1788,7 @@ impl Context {
     pub fn build(self) -> ScenarioDefinition {
         let requirements = Self::build_requirements(&self.service_requirements);
         ScenarioDefinition {
+            air_version: SUPPORTED_AIR_VERSION,
             name: self.name,
             description: self.description,
             places: self.places,
@@ -1803,6 +1804,7 @@ impl Context {
     pub fn to_json(&self) -> String {
         let requirements = Self::build_requirements(&self.service_requirements);
         let scenario = ScenarioDefinition {
+            air_version: SUPPORTED_AIR_VERSION,
             name: self.name.clone(),
             description: self.description.clone(),
             places: self.places.clone(),

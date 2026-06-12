@@ -962,6 +962,17 @@ impl petri_nats::NetCreator for RegistryNetCreator {
 
         let scenario = envelope.into_scenario();
 
+        // AIR version gate — same contract as the HTTP load path: refuse to
+        // interpret a definition emitted for a newer AIR format.
+        if scenario.air_version > petri_api::dto::SUPPORTED_AIR_VERSION {
+            return Err(format!(
+                "unsupported AIR version: scenario declares air_version {}, this engine supports <= {}. \
+                 Upgrade the engine, or re-compile the workflow against this engine's AIR format.",
+                scenario.air_version,
+                petri_api::dto::SUPPORTED_AIR_VERSION
+            ));
+        }
+
         let parsed = petri_api::ScenarioBridge::parse(
             &scenario.places,
             &scenario.transitions,
@@ -1058,6 +1069,17 @@ async fn ensure_streams(
         }
         Err(e) => {
             tracing::warn!(error = %e, "Could not create global stream");
+        }
+    }
+
+    // Dead-letter stream for terminally-failed listener messages
+    match jetstream
+        .get_or_create_stream(petri_nats::dlq_stream_config())
+        .await
+    {
+        Ok(_) => info!(name = %Subjects::STREAM_DLQ, "DLQ stream ready"),
+        Err(e) => {
+            tracing::warn!(error = %e, "Could not create DLQ stream");
         }
     }
 

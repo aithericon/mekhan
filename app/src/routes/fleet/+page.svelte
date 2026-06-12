@@ -23,6 +23,7 @@
 	import MachinesTable from '$lib/components/fleet/MachinesTable.svelte';
 	import NewCapacityModal from '$lib/components/fleet/NewCapacityModal.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
+	import { createPolledState } from '$lib/stores/remote.svelte';
 
 	// ── Tabs + deep-link compat ─────────────────────────────────────────────────
 
@@ -51,10 +52,6 @@
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
-	let capacities = $state<CapacitySummary[]>([]);
-	let error = $state<string | null>(null);
-	let lastUpdated = $state<Date | null>(null);
-
 	// "New pool" → the kind-switcher modal. `editing` non-null ⇒ the same modal
 	// in edit mode (kind + name locked, fields prefilled).
 	let createOpen = $state(false);
@@ -68,26 +65,15 @@
 
 	// ── Polling ────────────────────────────────────────────────────────────────
 
-	async function poll() {
-		try {
-			capacities = await listCapacities();
-			lastUpdated = new Date();
-			error = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to fetch pools';
-		}
-	}
-
-	$effect(() => {
-		void poll();
-		const t = setInterval(() => {
-			void poll();
-		}, 5000);
-		return () => clearInterval(t);
+	const pools = createPolledState(listCapacities, 5000, {
+		errorFallback: 'Failed to fetch pools'
 	});
+	const capacities = $derived(pools.data ?? []);
 
 	const updatedLabel = $derived(
-		lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+		pools.lastUpdated
+			? pools.lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+			: null
 	);
 
 	// ── Pool actions ───────────────────────────────────────────────────────────
@@ -100,7 +86,7 @@
 	function onSaved() {
 		createOpen = false;
 		editing = null;
-		void poll();
+		void pools.poll();
 	}
 
 	/** A machine-pool row's "Enroll" — scope the runner sheet to that pool's path. */
@@ -128,9 +114,9 @@
 		if (!confirm(`Delete pool “${label}”? Its backing net (if any) is retired.`)) return;
 		try {
 			await deleteResource(id);
-			await poll();
+			await pools.poll();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to delete pool';
+			pools.error = e instanceof Error ? e.message : 'Failed to delete pool';
 		}
 	}
 
@@ -138,9 +124,9 @@
 	async function onReconnect(id: string) {
 		try {
 			await reconnectCluster(id);
-			await poll();
+			await pools.poll();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Reconnect failed';
+			pools.error = e instanceof Error ? e.message : 'Reconnect failed';
 		}
 	}
 
@@ -148,9 +134,9 @@
 	async function onDrain(id: string) {
 		try {
 			await drainCluster(id);
-			await poll();
+			await pools.poll();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Drain failed';
+			pools.error = e instanceof Error ? e.message : 'Drain failed';
 		}
 	}
 </script>
@@ -191,11 +177,11 @@
 	{/snippet}
 
 	{#if activeTab === 'pools'}
-		{#if error}
+		{#if pools.error}
 			<div
 				class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
 			>
-				{error}
+				{pools.error}
 			</div>
 		{/if}
 
@@ -225,12 +211,12 @@
 <NewCapacityModal bind:open={createOpen} {editing} onsaved={onSaved} />
 
 <!-- Machine-pool enroll flow, scoped to the row's pool path. -->
-<EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void poll()} />
+<EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void pools.poll()} />
 
 <!-- Worker-pool enroll flow, scoped to the row's pool path. -->
 <EnrollSheet
 	bind:open={enrollWorkerOpen}
 	mode="worker"
 	group={enrollWorkerGroup}
-	onenrolled={() => void poll()}
+	onenrolled={() => void pools.poll()}
 />

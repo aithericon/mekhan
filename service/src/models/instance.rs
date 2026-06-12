@@ -181,6 +181,11 @@ pub struct ListInstancesQuery {
     #[serde(default = "default_per_page")]
     pub per_page: i64,
     pub template_id: Option<Uuid>,
+    /// Filter by template version chain: instances of ANY version in the
+    /// family. Accepts the chain root (`base_template_id`) or any version
+    /// row's id — both resolve through `COALESCE(base_template_id, id)`.
+    /// Unlike `template_id`, which pins one exact version row.
+    pub template_family: Option<Uuid>,
     pub status: Option<String>,
     /// Filter by `mode`. Default behavior when omitted is to return only
     /// `live` instances; pass `mode=any` to include drafts and test runs,

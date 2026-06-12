@@ -11,12 +11,14 @@
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import Settings from '@lucide/svelte/icons/settings';
 	import Share2 from '@lucide/svelte/icons/share-2';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Lock from '@lucide/svelte/icons/lock';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '../AwarenessBar.svelte';
 	import ConnectionStatus from '../ConnectionStatus.svelte';
 	import TemplateVersionMenu from './TemplateVersionMenu.svelte';
+	import EditorRunsMenu from './EditorRunsMenu.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -34,11 +36,19 @@
 		version?: number;
 		awareness?: Awareness;
 		provider?: MekhanWsProvider;
+		/** Version-chain family id (`base_template_id ?? id`) — enables the
+		 *  Runs menu. Set for drafts too: a draft's family may already have
+		 *  runs from earlier published versions. */
+		runsFamilyId?: string;
 		onsave?: () => void;
 		onpublish: () => void;
+		/** Publish, then open the run dialog on success (drafts only). */
+		onpublishrun?: () => void;
 		onpreview: () => void;
 		/** Fork a published template into a fresh editable draft version. */
 		onnewversion?: () => void;
+		/** Discard this unpublished draft (drafts only; opens a confirm). */
+		ondiscard?: () => void;
 		/** Start a run of a published template (opens the instance dialog). */
 		onrun?: () => void;
 		/** Open the template-tests panel. */
@@ -65,12 +75,15 @@
 		saving,
 		templateId,
 		version,
+		runsFamilyId,
 		awareness,
 		provider,
 		onsave,
 		onpublish,
+		onpublishrun,
 		onpreview,
 		onnewversion,
+		ondiscard,
 		onrun,
 		ontests,
 		onsettings,
@@ -121,11 +134,10 @@
 <div class="flex h-10 items-center justify-between border-b border-border bg-card px-3" data-testid="editor-toolbar">
 	<div class="flex items-center gap-3">
 		{#if ownerId}
-			<!-- Full-load nav (not goto): the Yjs editor session is pinned at
-			     mount, so switching templates needs a fresh page. -->
+			<!-- Plain client-side nav: the editor route keys its session on the
+			     `[id]` param, so switching templates remounts it cleanly. -->
 			<a
 				href="/templates/{ownerId}"
-				data-sveltekit-reload
 				class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				title="Open the owning workflow"
 				data-testid="toolbar-owner-breadcrumb"
@@ -206,6 +218,10 @@
 				<Redo2 class="size-3.5" />
 			</Button>
 			<div class="mx-1 h-5 w-px bg-border" role="presentation"></div>
+		{/if}
+
+		{#if runsFamilyId}
+			<EditorRunsMenu familyId={runsFamilyId} />
 		{/if}
 
 		{#if templateId}
@@ -295,6 +311,32 @@
 				New Version
 			</Button>
 		{:else}
+			{#if ondiscard}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-destructive hover:text-destructive"
+					data-testid="btn-discard-draft"
+					disabled={saving}
+					onclick={ondiscard}
+					title="Discard this draft"
+				>
+					<Trash2 class="size-3.5" />
+					Discard
+				</Button>
+			{/if}
+			{#if onpublishrun}
+				<Button
+					variant="outline"
+					size="sm"
+					data-testid="btn-publish-run"
+					disabled={published || saving}
+					onclick={onpublishrun}
+				>
+					<Rocket class="size-3.5" />
+					Publish & Run
+				</Button>
+			{/if}
 			<Button
 				size="sm"
 				data-testid="btn-publish"

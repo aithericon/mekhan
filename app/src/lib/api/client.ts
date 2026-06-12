@@ -55,6 +55,7 @@ export type TemplateSummary = Template;
 export type CreateTemplateRequest = components['schemas']['CreateTemplateRequest'];
 export type UpdateTemplateRequest = components['schemas']['UpdateTemplateRequest'];
 export type CompileRequest = components['schemas']['CompileRequest'];
+export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse'];
 export type PaginatedTemplateResponse =
 	components['schemas']['Paginated_WorkflowTemplate'];
 
@@ -477,6 +478,14 @@ export async function createNewVersion(id: string): Promise<Template> {
 	);
 }
 
+/** Discard an unpublished draft version. The parent version is restored as
+ *  the chain head; a never-published v1 draft deletes the whole template. */
+export async function discardDraft(id: string): Promise<DiscardDraftResponse> {
+	return unwrap(
+		await client.DELETE('/api/v1/templates/{id}/draft', { params: { path: { id } } })
+	);
+}
+
 export async function getTemplateVersions(id: string): Promise<Template[]> {
 	return unwrap(
 		await client.GET('/api/v1/templates/{id}/versions', { params: { path: { id } } })
@@ -561,6 +570,9 @@ export async function listInstances(opts?: {
 	page?: number;
 	perPage?: number;
 	templateId?: string;
+	/// Runs of ANY version in the template's version chain. Accepts the chain
+	/// root or any version row's id. Unlike `templateId` (one exact version).
+	templateFamily?: string;
 	status?: string;
 	/// `'live'` (the default), `'draft'`, `'test_run'`, or `'any'` to include
 	/// every mode. Omitting hides drafts and test runs.
@@ -573,6 +585,7 @@ export async function listInstances(opts?: {
 					page: opts?.page ?? 1,
 					per_page: opts?.perPage ?? 20,
 					template_id: opts?.templateId,
+					template_family: opts?.templateFamily,
 					status: opts?.status,
 					mode: opts?.mode
 				}

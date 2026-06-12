@@ -7,17 +7,32 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import { createFetchState } from '$lib/stores/remote.svelte';
 
-	let task: HumanTask | null = $state(null);
-	let process: ProcessState | null = $state(null);
-	// Note: getProcess now returns ProcessDetail — cast for backward compat
-	let loading = $state(true);
-	let error: string | null = $state(null);
 	let submitting = $state(false);
 	let claiming = $state(false);
 	let showSuccess = $state(false);
 
 	const taskId = $derived($page.params.id as string);
+
+	const remote = createFetchState(
+		async () => {
+			const task: HumanTask = await getTask(taskId);
+			let process: ProcessState | null = null;
+			if (task.process_id) {
+				try {
+					// Note: getProcess now returns ProcessDetail — cast for backward compat
+					process = (await getProcess(task.process_id)) as unknown as ProcessState;
+				} catch {
+					process = null;
+				}
+			}
+			return { task, process };
+		},
+		{ errorFallback: 'Failed to load task' }
+	);
+	const task = $derived(remote.data?.task ?? null);
+	const process = $derived(remote.data?.process ?? null);
 
 	// Where to send the user when they leave this task. ProcessView links here
 	// with ?from=<instance/process page> so "back" returns to the run they were
@@ -50,34 +65,15 @@
 		return null;
 	});
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			task = await getTask(taskId);
-			if (task.process_id) {
-				try {
-					process = await getProcess(task.process_id) as unknown as ProcessState;
-				} catch {
-					process = null;
-				}
-			}
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load task';
-		} finally {
-			loading = false;
-		}
-	}
-
 	async function handleComplete(data: Record<string, unknown>) {
 		if (!task) return;
 		submitting = true;
 		try {
 			await completeTask(task.task_id, data);
 			showSuccess = true;
-			await load();
+			await remote.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to complete task';
+			remote.error = e instanceof Error ? e.message : 'Failed to complete task';
 		} finally {
 			submitting = false;
 		}
@@ -86,18 +82,18 @@
 	async function handleClaim() {
 		if (!task) return;
 		claiming = true;
-		error = null;
+		remote.error = null;
 		try {
 			await claimTask(task.task_id);
 			// 202 — the authoritative `claimed` flip arrives via the pool-net
 			// projection. Poll a few times until the row leaves `offered`.
 			for (let i = 0; i < 8; i++) {
 				await new Promise((r) => setTimeout(r, 600));
-				await load();
+				await remote.refetch();
 				if (task && task.status !== 'offered') break;
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to claim task';
+			remote.error = e instanceof Error ? e.message : 'Failed to claim task';
 		} finally {
 			claiming = false;
 		}
@@ -110,9 +106,9 @@
 		submitting = true;
 		try {
 			await cancelTask(task.task_id, reason || undefined);
-			await load();
+			await remote.refetch();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to cancel task';
+			remote.error = e instanceof Error ? e.message : 'Failed to cancel task';
 		} finally {
 			submitting = false;
 		}
@@ -120,7 +116,7 @@
 
 	$effect(() => {
 		taskId;
-		load();
+		void remote.refetch();
 	});
 </script>
 
@@ -153,13 +149,13 @@
 		</PageHeader>
 	{/snippet}
 
-	{#if error}
+	{#if remote.error}
 		<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-			{error}
+			{remote.error}
 		</div>
 	{/if}
 
-	{#if loading}
+	{#if remote.loading}
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 			Loading...
 		</div>

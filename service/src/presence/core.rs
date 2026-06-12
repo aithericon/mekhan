@@ -13,11 +13,21 @@
 //!   shapes so the envelope JSON is byte-identical across kinds.
 //! - [`inject_claim`] — the consent-pool claim bridge (docs/33 + docs/35 §4),
 //!   kind-agnostic by construction (`runner_id` is the generic correlate key).
+//! - [`inject_acquire`]/[`inject_expires`] — the acquire/expire delegators
+//!   over the well-known pool inbox/signal (the BUILDERS stay per-kind).
 //! - [`grow_slots`] — the pure grow-eager / shrink-lazy slot delta.
 //! - [`sweep_loop`] — the generic TTL sweep, parameterized over the entry map,
 //!   a `should_sweep` predicate, the under-lock expire flip, and the per-item
 //!   async reap.
 //! - [`env_ttl_secs`] — the env-var TTL reader (var name + default per kind).
+//! - [`EntryMap`]/[`new_entry_map`]/[`snapshot_entries`] — the shared
+//!   in-memory liveness map, generic over the per-kind KEY (runner UUID vs the
+//!   human `(capacity, member)` tuple — the key SCHEMES are per-kind policy)
+//!   and entry, plus its read-API snapshot walk.
+//! - [`uuid_from_subject`] — the `{prefix}.{uuid}.{suffix}` liveness-subject
+//!   grammar (the prefixes/suffixes and which SOURCES exist stay per-kind).
+//! - [`subscribe`] — the core-NATS subscribe-or-log harness.
+//! - [`spawn_controller`] — the two-task (subscriber + sweep) spawn harness.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -49,6 +59,75 @@ pub(crate) fn env_ttl_secs(var: &str, default_secs: u64) -> Duration {
         },
         Err(_) => Duration::from_secs(default_secs),
     }
+}
+
+/// The shared in-memory liveness map both adapters track presence in: per-kind
+/// KEY (the runner UUID; the human `(capacity_id, member)` tuple) → per-kind
+/// entry. Guarded by a single `tokio::sync::Mutex` shared between the
+/// subscriber task and the sweep task. The critical sections are tiny (a
+/// HashMap probe + a clone of small values), so a plain `Mutex` is correct and
+/// contention-free in practice.
+pub(crate) type EntryMap<K, E> = Arc<Mutex<HashMap<K, E>>>;
+
+/// Construct a fresh, empty entry map. The subscriber + sweep tasks share it.
+pub(crate) fn new_entry_map<K, E>() -> EntryMap<K, E> {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Snapshot the live entry map for a read API: lock the mutex, then map every
+/// tracked entry through `row` against ONE shared [`Instant::now`] (an
+/// `Instant` has no serializable form, so the adapters surface a relative age
+/// computed against it). `async` because the inner map is a
+/// `tokio::sync::Mutex` shared with the async controller tasks —
+/// `blocking_lock` would panic inside the runtime.
+pub(crate) async fn snapshot_entries<K, E, S>(
+    map: &EntryMap<K, E>,
+    row: impl Fn(&K, &E, Instant) -> S,
+) -> Vec<S> {
+    let now = Instant::now();
+    let map = map.lock().await;
+    map.iter().map(|(k, e)| row(k, e, now)).collect()
+}
+
+/// Parse the unit UUID out of a `{prefix}.{uuid}.{suffix}` liveness subject.
+/// Returns `None` on any structural mismatch (wrong arity, wrong
+/// prefix/suffix, or a non-UUID token). The middle token is the AUTHORITATIVE
+/// identity for both adapters — never the payload.
+pub(crate) fn uuid_from_subject(subject: &str, prefix: &str, suffix: &str) -> Option<Uuid> {
+    let parts: Vec<&str> = subject.split('.').collect();
+    if parts.len() != 3 || parts[0] != prefix || parts[2] != suffix {
+        return None;
+    }
+    Uuid::parse_str(parts[1]).ok()
+}
+
+/// Open one core-NATS subscription, logging at ERROR and returning `None` on
+/// failure (the caller's controller task exits — presence then visibly
+/// degrades to "nothing is admitted" rather than panicking the process).
+/// Liveness pings are ephemeral (not a durable command stream), so a plain
+/// core subscription is right — a missed ping is harmless (the next one
+/// re-renews; the sweep handles a true absence).
+pub(crate) async fn subscribe(nats: &MekhanNats, subject: &str) -> Option<async_nats::Subscriber> {
+    match nats.client().subscribe(subject.to_string()).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::error!("failed to subscribe to {subject}: {e}");
+            None
+        }
+    }
+}
+
+/// Spawn one adapter's controller pair — the subscriber task and the TTL sweep
+/// task — sharing one entry map. The harness is shape-only; each adapter
+/// supplies its own futures (and their per-kind deps: the runner controller
+/// threads [`crate::fleet::FleetLiveness`], the human one a `PetriClient`).
+pub(crate) fn spawn_controller<A, B>(subscriber: A, sweep: B)
+where
+    A: Future<Output = ()> + Send + 'static,
+    B: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(subscriber);
+    tokio::spawn(sweep);
 }
 
 /// The caller-built parts of one pool-net BRIDGE injection (an acquire or a
@@ -102,6 +181,29 @@ pub(crate) async fn inject_bridge(
     publish_jetstream(nats, &subject, &envelope, what).await;
 }
 
+/// Inject ONE slot's `presence_acquire` token into the pool net's
+/// `presence_acquire` bridge_in place via
+/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
+/// `CrossNetTokenTransfer` envelope (what the engine's global bridge listener
+/// deserializes); NO reply routing (acquire is one-way — the unit lives in the
+/// pool until granted/reaped). The BUILDER (`inj`) is per-kind: see the
+/// adapters' `acquire_injection` for each identity + dedup scheme.
+pub(crate) async fn inject_acquire(
+    nats: &MekhanNats,
+    pool_net_id: &str,
+    inj: PoolInjection<'_>,
+    what: &str,
+) {
+    inject_bridge(
+        nats,
+        pool_net_id,
+        well_known::POOL_PRESENCE_ACQUIRE_INBOX,
+        inj,
+        what,
+    )
+    .await;
+}
+
 /// The caller-built parts of one pool-net SIGNAL injection (an expire). Core
 /// wraps these into the engine's `ExternalSignal` shape ([`signal_envelope`])
 /// and publishes ([`inject_signal`]).
@@ -139,6 +241,33 @@ pub(crate) async fn inject_signal(
     let subject = format!("petri.signal.{pool_net_id}.{signal}");
     let envelope = signal_envelope(sig, &Utc::now().to_rfc3339());
     publish_jetstream(nats, &subject, &envelope, what).await;
+}
+
+/// Inject `slots` BARE `presence_expired { runner_id }` signals into the pool
+/// net's signal place via `petri.signal.<pool_net_id>.presence_expired` — one
+/// per applied slot, since each signal is consumed once and reaps exactly one
+/// of the unit's slots (reap-ALL-by-reap-key; the net's `t_reap_free` /
+/// `t_reap_held` discriminate free-vs-held by input place, so mekhan keeps NO
+/// holder tracking). `mk_signal` builds the per-kind signal from the
+/// per-emission stamp (wall-clock millis, folded into the signal key); see the
+/// adapters' `expire_signal` for each source/key scheme.
+pub(crate) async fn inject_expires(
+    nats: &MekhanNats,
+    pool_net_id: &str,
+    slots: u32,
+    mk_signal: impl Fn(i64) -> PoolSignal<'static>,
+    what: &str,
+) {
+    for _ in 0..slots {
+        inject_signal(
+            nats,
+            pool_net_id,
+            well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
+            mk_signal(Utc::now().timestamp_millis()),
+            what,
+        )
+        .await;
+    }
 }
 
 /// Build the claim injection's caller parts (pure, for the byte-shape test).

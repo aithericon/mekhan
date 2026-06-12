@@ -37,15 +37,12 @@
 //! `t_reap_*` correlate without a human-specific net (the whole point of the
 //! generalization, docs/33 §4).
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
-use tokio::sync::Mutex;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -123,11 +120,10 @@ pub(crate) struct HumanPresenceEntry {
 /// enrolled in several human capacities, so the member id alone is not unique.
 type HumanKey = (Uuid, Uuid);
 
-/// In-memory presence map: `(capacity_id, member)` → its tracked state. Guarded
-/// by a single `Mutex` shared between the subscriber task and the sweep task. The
-/// critical sections are tiny (a HashMap probe + a clone of small values), so a
-/// plain `Mutex` is correct and contention-free in practice.
-type HumanPresenceMap = Arc<Mutex<HashMap<HumanKey, HumanPresenceEntry>>>;
+/// In-memory presence map: `(capacity_id, member)` → its tracked state (the
+/// shared [`core::EntryMap`], keyed by the COMPOSITE tuple — unlike the runner
+/// adapter's stable UUID key).
+type HumanPresenceMap = core::EntryMap<HumanKey, HumanPresenceEntry>;
 
 /// Public newtype wrapper around the [`HumanPresenceMap`] so the `pub`
 /// [`crate::AppState`] can hold a handle to the live map WITHOUT leaking the
@@ -144,7 +140,7 @@ impl HumanPresence {
     /// Construct a fresh, empty presence handle. The controller tasks + any read
     /// API share this one map.
     pub fn new() -> Self {
-        Self(new_human_presence_map())
+        Self(core::new_entry_map())
     }
 
     /// Borrow the inner shared map for the controller tasks (subscriber + sweep).
@@ -152,25 +148,19 @@ impl HumanPresence {
         &self.0
     }
 
-    /// Snapshot the live presence map for the read API. Locks the mutex, then for
-    /// each tracked member emits a [`HumanPresenceSnapshot`] with the elapsed time
-    /// since its last renewal computed against [`Instant::now`] (an `Instant` has
-    /// no serializable form, so we surface a relative age instead). `async`
-    /// because the inner map is a `tokio::sync::Mutex` shared with the async
-    /// controller tasks.
+    /// Snapshot the live presence map for the read API (the shared
+    /// [`core::snapshot_entries`] walk): each tracked member becomes a
+    /// [`HumanPresenceSnapshot`] with the elapsed time since its last renewal.
     pub async fn snapshot(&self) -> Vec<HumanPresenceSnapshot> {
-        let now = Instant::now();
-        let map = self.0.lock().await;
-        map.iter()
-            .map(
-                |((capacity_id, member_user_id), entry)| HumanPresenceSnapshot {
-                    capacity_id: *capacity_id,
-                    member_user_id: *member_user_id,
-                    present: entry.present,
-                    last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
-                },
-            )
-            .collect()
+        core::snapshot_entries(&self.0, |(capacity_id, member_user_id), entry, now| {
+            HumanPresenceSnapshot {
+                capacity_id: *capacity_id,
+                member_user_id: *member_user_id,
+                present: entry.present,
+                last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
+            }
+        })
+        .await
     }
 }
 
@@ -275,57 +265,17 @@ pub(crate) fn acquire_injection(
     }
 }
 
-/// Inject ONE slot's `presence_acquire` unit into the pool net's
-/// `presence_acquire` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
-/// [`CrossNetTokenTransfer`] envelope; see [`acquire_injection`] for the
-/// identity + epoch-stamped dedup scheme.
-async fn inject_acquire(
-    nats: &MekhanNats,
-    pool_net_id: &str,
-    member: Uuid,
-    slot: u32,
-    epoch: i64,
-    caps: &serde_json::Value,
-) {
-    core::inject_bridge(
-        nats,
-        pool_net_id,
-        well_known::POOL_PRESENCE_ACQUIRE_INBOX,
-        acquire_injection(member, slot, epoch, caps),
-        "human presence acquire",
-    )
-    .await;
-}
-
 /// Build the caller parts of a BARE `presence_expired { runner_id }` signal
 /// (pure, so the envelope byte-shape is pinned in [`super::core`]'s tests).
-/// `now_ms` is the emission stamp folded into the signal key.
+/// `now_ms` is the emission stamp folded into the signal key. Same shape as
+/// [`super::runners`]'s expire: `runner_id` carries the MEMBER id (the reap
+/// key). Injected via the shared [`core::inject_expires`].
 pub(crate) fn expire_signal(member: Uuid, now_ms: i64) -> PoolSignal<'static> {
     PoolSignal {
         source: "human-presence",
         signal_key: format!("human-presence-expire-{member}-{now_ms}"),
         payload: json!({ "runner_id": member.to_string() }),
     }
-}
-
-/// Inject a BARE `presence_expired { runner_id }` signal into the pool net's
-/// signal place via `petri.signal.<pool_net_id>.presence_expired`.
-///
-/// Same shape as [`super::runners`]'s expire: `runner_id` carries the
-/// MEMBER id (the reap key), and one signal is injected per applied slot — each
-/// is consumed once and reaps exactly one of the member's `C` slots
-/// (reap-ALL-by-reap-key). Wire shape is the engine's `ExternalSignal` envelope;
-/// NO reply routing (signals are injected routing-less).
-async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, member: Uuid) {
-    core::inject_signal(
-        nats,
-        pool_net_id,
-        well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
-        expire_signal(member, Utc::now().timestamp_millis()),
-        "human presence expire",
-    )
-    .await;
 }
 
 /// Count how many pool units the engine net currently holds for `member` — the
@@ -456,7 +406,13 @@ async fn reconcile(
                 .map(|r| r.len() as u32)
                 .unwrap_or(0);
             for slot in 0..need {
-                inject_acquire(nats, &pool_net_id, member, slot, epoch, &caps).await;
+                core::inject_acquire(
+                    nats,
+                    &pool_net_id,
+                    acquire_injection(member, slot, epoch, &caps),
+                    "human presence acquire",
+                )
+                .await;
             }
             tracing::info!(
                 %member, pool_net_id, concurrency, existing, need,
@@ -468,9 +424,14 @@ async fn reconcile(
             member,
             concurrency,
         } => {
-            for _ in 0..concurrency {
-                inject_expire(nats, &pool_net_id, member).await;
-            }
+            core::inject_expires(
+                nats,
+                &pool_net_id,
+                concurrency,
+                |now_ms| expire_signal(member, now_ms),
+                "human presence expire",
+            )
+            .await;
             tracing::info!(
                 %member, pool_net_id, concurrency,
                 "human presence expired (member reaped from pool)"
@@ -714,42 +675,28 @@ async fn handle_heartbeat(
     }
 }
 
-/// Parse the member UUID out of a `human.{member}.{suffix}` subject. Returns
-/// `None` on any structural mismatch (wrong arity, wrong prefix/suffix, or a
-/// non-UUID token).
+/// Parse the member UUID out of a `human.{member}.{suffix}` subject (the shared
+/// [`core::uuid_from_subject`] grammar). Returns `None` on any structural
+/// mismatch.
 fn member_from_subject(subject: &str, expect_suffix: &str) -> Option<Uuid> {
-    let parts: Vec<&str> = subject.split('.').collect();
-    // human.{member}.{suffix}
-    if parts.len() != 3 || parts[0] != "human" || parts[2] != expect_suffix {
-        return None;
-    }
-    Uuid::parse_str(parts[1]).ok()
+    core::uuid_from_subject(subject, "human", expect_suffix)
 }
 
 /// Start the human presence subscriber: ONE task that `tokio::select!`s over BOTH
 /// the `human.*.availability` (INTENT) and `human.*.presence` (LIVENESS) core-NATS
-/// subscriptions. Both are ephemeral liveness (not a durable command stream), so a
-/// plain core subscription is right — a missed message is harmless (the next one
-/// re-renews; the sweep handles a true absence).
+/// subscriptions (the shared [`core::subscribe`] harness — ephemeral liveness, no
+/// JetStream durable).
 pub(crate) async fn start_human_presence_subscriber(
     nats: MekhanNats,
     db: PgPool,
     petri: PetriClient,
     presence: HumanPresenceMap,
 ) {
-    let mut availability = match nats.client().subscribe("human.*.availability").await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("failed to subscribe to human.*.availability: {e}");
-            return;
-        }
+    let Some(mut availability) = core::subscribe(&nats, "human.*.availability").await else {
+        return;
     };
-    let mut heartbeat = match nats.client().subscribe("human.*.presence").await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("failed to subscribe to human.*.presence: {e}");
-            return;
-        }
+    let Some(mut heartbeat) = core::subscribe(&nats, "human.*.presence").await else {
+        return;
     };
     tracing::info!("human presence subscriber started on human.*.availability + human.*.presence");
 
@@ -819,19 +766,18 @@ pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: Human
                     %member, pool_net_id, concurrency,
                     "human presence TTL miss; reaping member's slots"
                 );
-                for _ in 0..concurrency {
-                    inject_expire(&nats, &pool_net_id, member).await;
-                }
+                core::inject_expires(
+                    &nats,
+                    &pool_net_id,
+                    concurrency,
+                    |now_ms| expire_signal(member, now_ms),
+                    "human presence expire",
+                )
+                .await;
             }
         },
     )
     .await;
-}
-
-/// Construct a fresh, empty human presence map. The subscriber + sweep tasks
-/// share it.
-pub(crate) fn new_human_presence_map() -> HumanPresenceMap {
-    Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Spawn BOTH human presence tasks (the dual-subscription subscriber + the sweep)
@@ -847,13 +793,10 @@ pub fn spawn_human_presence_controller(
     db: PgPool,
     petri: PetriClient,
 ) {
-    tokio::spawn(start_human_presence_subscriber(
-        nats.clone(),
-        db,
-        petri,
-        presence.map().clone(),
-    ));
-    tokio::spawn(start_human_presence_sweep(nats, presence.map().clone()));
+    core::spawn_controller(
+        start_human_presence_subscriber(nats.clone(), db, petri, presence.map().clone()),
+        start_human_presence_sweep(nats, presence.map().clone()),
+    );
 }
 
 #[cfg(test)]
@@ -998,6 +941,22 @@ mod tests {
             now,
             ttl
         ));
+    }
+
+    #[test]
+    fn ttl_boundary_admit_and_sweep_are_exact_complements() {
+        // Constraint pin: the admit gate is `<= ttl` ([`should_admit`]) and the
+        // sweep gate is `> ttl` ([`should_sweep`]) — at EXACTLY the boundary
+        // (elapsed == ttl) a session member is still admitted and NOT swept.
+        // The two predicates must partition time with no gap (a member that
+        // flaps absent while still admissible) and no overlap (admit + reap in
+        // the same tick); editing either comparison alone breaks this.
+        let ttl = Duration::from_secs(45);
+        let now = Instant::now();
+        let at_boundary = now - ttl; // elapsed == ttl exactly
+        let e = present_entry(LivenessSource::Session, at_boundary);
+        assert!(should_admit(&e, now, ttl), "elapsed == ttl is still fresh");
+        assert!(!should_sweep(&e, now), "elapsed == ttl is not yet reapable");
     }
 
     #[test]

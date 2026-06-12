@@ -55,15 +55,14 @@ pub trait LlmTestKit: Send + Sync {
         env: HashMap<String, String>,
     ) -> RunContext {
         let execution_id = format!("llm-conform-{}", uuid::Uuid::new_v4());
-        RunContext {
-            env,
-            ..RunContext::for_test(
-                execution_id.clone(),
-                spec,
-                RunDirectory::new(&PathBuf::from("/tmp"), &execution_id),
-                timeout,
-            )
-        }
+        let mut ctx = RunContext::for_test(
+            execution_id.clone(),
+            spec,
+            RunDirectory::new(&PathBuf::from("/tmp"), &execution_id),
+            timeout,
+        );
+        ctx.env = env;
+        ctx
     }
 
     /// Cleanup after a backend-level test.

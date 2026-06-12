@@ -3807,6 +3807,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/templates/{id}/draft
+         * @description Discard a single unpublished draft version — the reverse of `new_version`.
+         *     The draft row is deleted (its `yjs_documents`/`yjs_snapshots` cascade via
+         *     FK) and the parent version is restored as the chain head
+         *     (`is_latest = TRUE`) in one transaction. A never-published v1 root draft
+         *     has no parent: the draft IS the chain, so the whole template is deleted
+         *     via the same path as `DELETE /api/v1/templates/{id}` (which also owns the
+         *     chain-root `object_grants` cleanup).
+         */
+        delete: operations["discard_draft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/folder": {
         parameters: {
             query?: never;
@@ -6969,6 +6995,18 @@ export interface components {
             name: string;
             /** Format: int64 */
             size?: number | null;
+        };
+        /**
+         * @description Response of `DELETE /api/v1/templates/{id}/draft`. Distinguishes the two
+         *     discard outcomes so the editor knows where to navigate next.
+         */
+        DiscardDraftResponse: {
+            restored_head?: null | components["schemas"]["WorkflowTemplate"];
+            /**
+             * @description True when the discarded draft was the only version in its chain — the
+             *     whole template was deleted (there was no parent to fall back to).
+             */
+            template_deleted: boolean;
         };
         /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
@@ -17203,6 +17241,13 @@ export interface operations {
                 page?: number;
                 per_page?: number;
                 template_id?: string | null;
+                /**
+                 * @description Filter by template version chain: instances of ANY version in the
+                 *     family. Accepts the chain root (`base_template_id`) or any version
+                 *     row's id — both resolve through `COALESCE(base_template_id, id)`.
+                 *     Unlike `template_id`, which pins one exact version row.
+                 */
+                template_family?: string | null;
                 status?: string | null;
                 /**
                  * @description Filter by `mode`. Default behavior when omitted is to return only
@@ -21835,6 +21880,56 @@ export interface operations {
             };
             /** @description Template not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    discard_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Draft template version id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft discarded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscardDraftResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Version is published or not the chain head */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
