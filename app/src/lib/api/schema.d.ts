@@ -17203,6 +17203,13 @@ export interface operations {
                 page?: number;
                 per_page?: number;
                 template_id?: string | null;
+                /**
+                 * @description Filter by template version chain: instances of ANY version in the
+                 *     family. Accepts the chain root (`base_template_id`) or any version
+                 *     row's id — both resolve through `COALESCE(base_template_id, id)`.
+                 *     Unlike `template_id`, which pins one exact version row.
+                 */
+                template_family?: string | null;
                 status?: string | null;
                 /**
                  * @description Filter by `mode`. Default behavior when omitted is to return only

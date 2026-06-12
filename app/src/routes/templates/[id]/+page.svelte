@@ -4,6 +4,7 @@
 	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
+	import { templateFamilyId } from '$lib/components/editor/toolbar/runs-menu';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
@@ -112,25 +113,49 @@
 		}
 	}
 
+	// "Publish & Run" handoff. Plain (non-rune) on purpose — nothing renders
+	// off it; it only routes publish success into opening the run dialog. It
+	// survives the publish-gate modal so Force/Retry from the gate still
+	// completes the run; closing the gate or any hard failure aborts it.
+	let runAfterPublish = false;
+
 	async function handlePublish(force = false) {
-		if (!template || template.published) return;
+		if (!template || template.published) {
+			runAfterPublish = false;
+			return;
+		}
 		try {
 			saving = true;
 			template = await publishTemplate(template.id, force);
 			compileErrors.clear();
 			publishGate = null;
+			if (runAfterPublish) {
+				// `template` is the published row now, so the dialog opens in the
+				// same state handleRun() would require.
+				runAfterPublish = false;
+				runDialogOpen = true;
+			}
 		} catch (e) {
 			if (e instanceof PublishGateError) {
+				// Keep runAfterPublish: the gate modal's Force publish / Retry
+				// re-enter handlePublish and can still finish the handoff.
 				publishGate = e.failingTests;
 			} else if (e instanceof CompileApiError) {
+				runAfterPublish = false;
 				compileErrors.set(e.compileErrors);
 				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 			} else {
+				runAfterPublish = false;
 				error = e instanceof Error ? e.message : 'Failed to publish';
 			}
 		} finally {
 			saving = false;
 		}
+	}
+
+	function handlePublishAndRun() {
+		runAfterPublish = true;
+		void handlePublish(false);
 	}
 
 	async function handleNewVersion() {
@@ -156,7 +181,11 @@
 
 	function onInstanceCreated(instanceId: string) {
 		runDialogOpen = false;
-		goto(`/instances/${instanceId}`);
+		// Editor-launched runs land on the instance's Workflow (graph) tab —
+		// the view that mirrors the canvas the author just left. Other entry
+		// points (instances list, rerun) keep the default Process tab via the
+		// bare `/instances/{id}` redirect.
+		goto(`/instances/${instanceId}/workflow`);
 	}
 
 	// Shared by the toolbar's inline rename and the settings-sheet Name field.
@@ -401,9 +430,11 @@
 				{saving}
 				{templateId}
 				version={template?.version}
+				runsFamilyId={template ? templateFamilyId(template) : undefined}
 				awareness={session.awareness}
 				provider={session.provider}
 				onpublish={() => handlePublish(false)}
+				onpublishrun={template && !template.published ? handlePublishAndRun : undefined}
 				onpreview={handlePreview}
 				onnewversion={handleNewVersion}
 				onrun={handleRun}
@@ -512,7 +543,11 @@
 <PublishGateModal
 	open={publishGate !== null}
 	failingTests={publishGate ?? []}
-	onclose={() => (publishGate = null)}
+	onclose={() => {
+		publishGate = null;
+		// Abandoning the gate abandons a pending Publish & Run handoff too.
+		runAfterPublish = false;
+	}}
 	onforce={async () => {
 		publishGate = null;
 		await handlePublish(true);

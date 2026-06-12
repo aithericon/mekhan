@@ -17,6 +17,7 @@
 	import AwarenessBar from '../AwarenessBar.svelte';
 	import ConnectionStatus from '../ConnectionStatus.svelte';
 	import TemplateVersionMenu from './TemplateVersionMenu.svelte';
+	import EditorRunsMenu from './EditorRunsMenu.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -34,8 +35,14 @@
 		version?: number;
 		awareness?: Awareness;
 		provider?: MekhanWsProvider;
+		/** Version-chain family id (`base_template_id ?? id`) — enables the
+		 *  Runs menu. Set for drafts too: a draft's family may already have
+		 *  runs from earlier published versions. */
+		runsFamilyId?: string;
 		onsave?: () => void;
 		onpublish: () => void;
+		/** Publish, then open the run dialog on success (drafts only). */
+		onpublishrun?: () => void;
 		onpreview: () => void;
 		/** Fork a published template into a fresh editable draft version. */
 		onnewversion?: () => void;
@@ -65,10 +72,12 @@
 		saving,
 		templateId,
 		version,
+		runsFamilyId,
 		awareness,
 		provider,
 		onsave,
 		onpublish,
+		onpublishrun,
 		onpreview,
 		onnewversion,
 		onrun,
@@ -208,6 +217,10 @@
 			<div class="mx-1 h-5 w-px bg-border" role="presentation"></div>
 		{/if}
 
+		{#if runsFamilyId}
+			<EditorRunsMenu familyId={runsFamilyId} />
+		{/if}
+
 		{#if templateId}
 			<Button
 				variant="ghost"
@@ -295,6 +308,18 @@
 				New Version
 			</Button>
 		{:else}
+			{#if onpublishrun}
+				<Button
+					variant="outline"
+					size="sm"
+					data-testid="btn-publish-run"
+					disabled={published || saving}
+					onclick={onpublishrun}
+				>
+					<Rocket class="size-3.5" />
+					Publish & Run
+				</Button>
+			{/if}
 			<Button
 				size="sm"
 				data-testid="btn-publish"

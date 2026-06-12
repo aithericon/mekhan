@@ -561,6 +561,9 @@ export async function listInstances(opts?: {
 	page?: number;
 	perPage?: number;
 	templateId?: string;
+	/// Runs of ANY version in the template's version chain. Accepts the chain
+	/// root or any version row's id. Unlike `templateId` (one exact version).
+	templateFamily?: string;
 	status?: string;
 	/// `'live'` (the default), `'draft'`, `'test_run'`, or `'any'` to include
 	/// every mode. Omitting hides drafts and test runs.
@@ -573,6 +576,7 @@ export async function listInstances(opts?: {
 					page: opts?.page ?? 1,
 					per_page: opts?.perPage ?? 20,
 					template_id: opts?.templateId,
+					template_family: opts?.templateFamily,
 					status: opts?.status,
 					mode: opts?.mode
 				}

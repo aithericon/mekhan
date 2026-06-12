@@ -198,6 +198,16 @@ pub async fn list_instances(
         conditions.push(format!("wi.template_id = ${bind_index}"));
         bind_index += 1;
     }
+    // Family filter: every version in the chain. The bound id may be the
+    // chain root OR any version row's id (the templates API accepts both —
+    // see `get_template_io_contract`), so resolve it to its root first.
+    if params.template_family.is_some() {
+        conditions.push(format!(
+            "COALESCE(wt.base_template_id, wt.id) = \
+             (SELECT COALESCE(t.base_template_id, t.id) FROM workflow_templates t WHERE t.id = ${bind_index})"
+        ));
+        bind_index += 1;
+    }
     if params.status.is_some() {
         conditions.push(format!("wi.status = ${bind_index}"));
         bind_index += 1;
@@ -235,6 +245,10 @@ pub async fn list_instances(
     if let Some(tid) = params.template_id {
         list_query = list_query.bind(tid);
         count_query = count_query.bind(tid);
+    }
+    if let Some(fid) = params.template_family {
+        list_query = list_query.bind(fid);
+        count_query = count_query.bind(fid);
     }
     if let Some(ref status) = params.status {
         list_query = list_query.bind(status);

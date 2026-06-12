@@ -14,12 +14,15 @@
 	let error = $state<string | null>(null);
 
 	const templateFilter = $derived(page.url.searchParams.get('template_id') ?? undefined);
+	/// Family scope: runs of ANY version of the template (the editor's
+	/// "View all runs" deep-link). `template_id` pins one exact version.
+	const familyFilter = $derived(page.url.searchParams.get('template_family') ?? undefined);
 	const statusFilter = $derived(page.url.searchParams.get('status') ?? undefined);
 	/// `'any'` returns everything; an explicit category scopes; absent
 	/// defaults to live-only (the historical view).
 	const modeFilter = $derived(page.url.searchParams.get('mode') ?? undefined);
 	const filteredTemplateName = $derived(
-		templateFilter ? (instances[0]?.template_name ?? 'this template') : null
+		templateFilter || familyFilter ? (instances[0]?.template_name ?? 'this template') : null
 	);
 
 	const modeBadgeClass: Record<string, string> = {
@@ -28,7 +31,11 @@
 	};
 
 	const baseQuery = $derived(
-		templateFilter ? `template_id=${encodeURIComponent(templateFilter)}&` : ''
+		templateFilter
+			? `template_id=${encodeURIComponent(templateFilter)}&`
+			: familyFilter
+				? `template_family=${encodeURIComponent(familyFilter)}&`
+				: ''
 	);
 
 	// Mode filter pills. Default view hides drafts and test runs; `any`
@@ -61,6 +68,7 @@
 		try {
 			const result = await listInstances({
 				templateId: templateFilter,
+				templateFamily: familyFilter,
 				status: statusFilter,
 				mode: modeFilter
 			});
@@ -86,8 +94,10 @@
 	const formatDate = (s: string) => new Date(s).toLocaleString();
 
 	$effect(() => {
-		// Re-load when the URL filter (template_id / status / mode) changes.
+		// Re-load when the URL filter (template_id / template_family / status /
+		// mode) changes.
 		void templateFilter;
+		void familyFilter;
 		void statusFilter;
 		void modeFilter;
 		load();
@@ -101,7 +111,7 @@
 
 	<FilterPills class="mb-4" testid="mode-filter" active={activeMode} options={modeOptions} />
 
-	{#if templateFilter}
+	{#if templateFilter || familyFilter}
 		<div
 			class="mb-4 flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2 text-sm"
 		>

@@ -5138,6 +5138,19 @@
             }
           },
           {
+            "name": "template_family",
+            "in": "query",
+            "description": "Filter by template version chain: instances of ANY version in the\nfamily. Accepts the chain root (`base_template_id`) or any version\nrow's id — both resolve through `COALESCE(base_template_id, id)`.\nUnlike `template_id`, which pins one exact version row.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
             "name": "status",
             "in": "query",
             "required": false,
