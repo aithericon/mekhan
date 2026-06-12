@@ -38,7 +38,8 @@ pub async fn start_inventory_fold_ingest(nats: MekhanNats, db: PgPool) {
         }
     };
 
-    // Cap the pull batch (see step_executions_consumer's incident rationale):
+    // Cap the pull batch (see the step-executions projection's incident
+    // rationale on its ConsumerSpec in projections/step_executions/):
     // folds are set-based (constant statements per batch), but anything
     // prefetched and not acked within `ack_wait` redelivers, so keep the
     // prefetch window small. 8 × worst-case seconds stays inside the 120s

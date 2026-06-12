@@ -12,9 +12,10 @@
 //!   matching event is a self-contained row update).
 //! - [`run_projection`] — the driver: batched pull loop, per-net grouping
 //!   (concurrent across nets, strictly sequential within one), LRU-bounded
-//!   per-net state cache with replay-on-miss bootstrap, sequence-gap
-//!   re-bootstrap, dup skip, terminal-event eviction, ack-on-success /
-//!   NAK-with-delay on failure.
+//!   per-net state cache with replay-on-miss bootstrap, dup skip,
+//!   terminal-event eviction, ack-on-success / NAK-with-delay on failure.
+//!   Delivered sequence gaps are applied incrementally — subject filters make
+//!   them the steady state (see [`StepAction::Apply`]).
 //! - [`HistoryLoader`] — seam over [`crate::petri::events::fetch_events`] so
 //!   the per-event decision core ([`step_event`]) is unit-testable without
 //!   NATS.
@@ -98,8 +99,8 @@ pub trait Projection: Send + Sync + 'static {
         BootstrapPolicy::ReplayHistory
     }
 
-    /// Build the per-net state by folding the full event history (cache miss /
-    /// gap re-bootstrap). `Ok(None)` means "this net is not mine" — the event
+    /// Build the per-net state by folding the full event history (cache
+    /// miss). `Ok(None)` means "this net is not mine" — the event
     /// is ACKed and the net is deliberately NOT cached, so non-matching nets
     /// stay cheap misses instead of holding state.
     async fn bootstrap(
@@ -263,19 +264,23 @@ pub enum StepAction {
     /// `seq <= last_applied` — already folded (bootstrap overlap / JetStream
     /// redelivery); ACK without work.
     SkipDup,
-    /// `seq == last_applied + 1` — fold incrementally.
+    /// `seq > last_applied` — fold incrementally. Sequence gaps are NORMAL
+    /// here, not a missed-event signal: `PersistedEvent.sequence` numbers the
+    /// full per-net log while the durable's subject filters exclude
+    /// fold-irrelevant event types (e.g. `token.consumed`), so delivered
+    /// sequences routinely skip. The per-projection filter-coverage tests pin
+    /// that every fold-relevant variant IS delivered, and the two genuine
+    /// missed-event hazards both drop the cache entry and take [`Bootstrap`]
+    /// instead: LRU eviction (entry gone → miss) and processing failure
+    /// (run_projection drops the entry before NAK).
     Apply,
-    /// `seq > last_applied + 1` — events were missed (LRU eviction race /
-    /// purge); evict and re-bootstrap from fresh history.
-    Rebootstrap,
 }
 
 pub fn classify(last_applied: Option<u64>, seq: u64) -> StepAction {
     match last_applied {
         None => StepAction::Bootstrap,
         Some(la) if seq <= la => StepAction::SkipDup,
-        Some(la) if seq == la + 1 => StepAction::Apply,
-        Some(_) => StepAction::Rebootstrap,
+        Some(_) => StepAction::Apply,
     }
 }
 
@@ -301,7 +306,7 @@ pub(crate) async fn step_event<P: Projection>(
             projection.apply(db, net_id, &mut e.state, ev).await?;
             e.last_applied = ev.sequence;
         }
-        StepAction::Bootstrap | StepAction::Rebootstrap => {
+        StepAction::Bootstrap => {
             *entry = None;
             let history = loader.load(net_id).await?;
             let last_applied = history.last().map(|e| e.sequence).unwrap_or(0);
@@ -681,7 +686,9 @@ mod tests {
         assert_eq!(classify(Some(5), 4), StepAction::SkipDup);
         assert_eq!(classify(Some(5), 5), StepAction::SkipDup);
         assert_eq!(classify(Some(5), 6), StepAction::Apply);
-        assert_eq!(classify(Some(5), 8), StepAction::Rebootstrap);
+        // Gap: filtered-out event types make non-contiguous delivered
+        // sequences the common case — must apply, NOT refetch history.
+        assert_eq!(classify(Some(5), 8), StepAction::Apply);
     }
 
     #[tokio::test]
@@ -723,7 +730,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gap_triggers_exactly_one_rebootstrap() {
+    async fn gap_applies_incrementally_without_refetch() {
         let p = RecordingProjection::default();
         let loader = MockLoader::new((1..=8).map(ev).collect());
         let db = lazy_db();
@@ -732,14 +739,16 @@ mod tests {
             state: (),
         });
 
+        // seq jumps 5 → 8: the in-between events were filtered out by the
+        // durable's subject filters, so this is the steady-state hot path —
+        // it must NOT touch the history loader.
         step_event(&p, &loader, &db, &mut entry, "net-a", &ev(8))
             .await
             .unwrap();
 
-        assert_eq!(loader.calls(), 1);
-        assert_eq!(p.bootstraps.load(Ordering::SeqCst), 1);
-        // The event is in the fresh history — folded by bootstrap, not apply.
-        assert!(p.applied.lock().unwrap().is_empty());
+        assert_eq!(loader.calls(), 0);
+        assert_eq!(p.bootstraps.load(Ordering::SeqCst), 0);
+        assert_eq!(*p.applied.lock().unwrap(), vec![8]);
         assert_eq!(entry.as_ref().unwrap().last_applied, 8);
     }
 
