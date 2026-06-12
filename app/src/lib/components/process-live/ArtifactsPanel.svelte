@@ -41,8 +41,13 @@
 		entries: LiveArtifactEntry[];
 	}
 
+	// The viewer only ever shows artifacts it can actually render — files
+	// without a renderer (ndjson, parquet, …) are already covered by the
+	// artifact card list, so a "no renderer" placeholder here is pure noise.
 	const sourceEntries = $derived(
-		renderableOnly ? store.artifacts.filter(isShowcaseEntry) : store.artifacts
+		renderableOnly
+			? store.artifacts.filter(isShowcaseEntry)
+			: store.artifacts.filter((e) => pickRenderer(e) !== null)
 	);
 
 	const groups = $derived.by<Group[]>(() => {
@@ -119,7 +124,10 @@
 </script>
 
 <section class="flex flex-col gap-4 {renderableOnly ? '' : 'mb-6'}">
-	{#if !renderableOnly}
+	<!-- Header + empty-state only when there's something to say: artifacts
+	     that exist but have no renderer live in the card list below, so the
+	     viewer disappears entirely rather than apologizing per file. -->
+	{#if !renderableOnly && (groups.length > 0 || store.artifacts.length === 0)}
 		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
 				<FileBox class="size-4 text-muted-foreground" />
@@ -128,13 +136,13 @@
 				<span class="text-sm text-muted-foreground">{statusLabel}</span>
 			</div>
 			<p class="text-sm text-muted-foreground">
-				{store.artifacts.length} artifact{store.artifacts.length === 1 ? '' : 's'}
+				{sourceEntries.length} renderable artifact{sourceEntries.length === 1 ? '' : 's'}
 			</p>
 		</div>
 	{/if}
 
 	{#if groups.length === 0}
-		{#if !renderableOnly}
+		{#if !renderableOnly && store.artifacts.length === 0}
 			<div
 				class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
 			>
@@ -220,11 +228,6 @@
 
 				{#if Renderer}
 					<Renderer {entry} />
-				{:else}
-					<p class="text-sm text-muted-foreground">
-						No live renderer for <code>{entry.mime_type ?? entry.category}</code> — see the
-						history grid below.
-					</p>
 				{/if}
 			</div>
 		{/each}
