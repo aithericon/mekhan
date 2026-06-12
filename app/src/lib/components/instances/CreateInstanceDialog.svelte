@@ -9,6 +9,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
 	import X from '@lucide/svelte/icons/x';
+	import { untrack } from 'svelte';
 	import { getTemplate, createInstance, uploadFile, CompileApiError } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
@@ -96,14 +97,26 @@
 			error = null;
 			return;
 		}
-		void loadTemplate(templateId);
+		const id = templateId;
+		// Load ONCE per open. The editor's draft dev-run passes its LIVE
+		// Yjs-bound graph, which is wholesale-reassigned on every doc change
+		// (a collaborator editing, even panning). loadTemplate reads it
+		// synchronously, so left tracked any such change would re-run this
+		// effect — wiping typed start values and re-firing the
+		// no-typed-fields auto-submit. untrack confines the dependencies to
+		// `open` + `templateId`.
+		untrack(() => void loadTemplate(id));
 	});
 
 	async function loadTemplate(id: string) {
 		loadingTemplate = true;
 		error = null;
 		try {
-			const effectiveGraph = graph ?? ((await getTemplate(id)).graph as WorkflowGraph);
+			// Detach from the live $state proxy: the form's field model must
+			// be frozen as-of-open, not mutate under the user mid-fill.
+			const effectiveGraph = graph
+				? ($state.snapshot(graph) as WorkflowGraph)
+				: ((await getTemplate(id)).graph as WorkflowGraph);
 			const startNodes: { id: string; label: string; initial: Port }[] = [];
 			const seed: Record<string, Record<string, unknown>> = {};
 			for (const node of effectiveGraph.nodes ?? []) {
@@ -242,7 +255,10 @@
 	}
 
 	async function submit() {
-		if (!templateId) return;
+		// `submitting` re-entry guard: the no-typed-fields path auto-submits
+		// from loadTemplate, so a stray second call (double-click, effect
+		// re-run) must not POST a duplicate instance.
+		if (!templateId || submitting) return;
 		submitting = true;
 		error = null;
 		try {

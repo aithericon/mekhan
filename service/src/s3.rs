@@ -166,6 +166,76 @@ impl ArtifactStore {
         format!("templates/{template_id}/v{version}/{node_id}/node-config.json")
     }
 
+    /// Per-run key for a draft dev-run node file. Draft-run staging is scoped
+    /// by the LAUNCHED INSTANCE, not the version's deterministic
+    /// `templates/...` keys: the executor fetches node files lazily at
+    /// step-fire time, so version-shared keys would let a re-run, a
+    /// concurrent draft run, or a racing publish swap bytes under an
+    /// in-flight instance's AIR. Living under `instances/{instance_id}/`
+    /// also rides the retention sweep's existing prefix GC. The literal
+    /// `draft-artifacts` segment keeps these disjoint from the agent
+    /// transcript keys (`instances/{id}/{node_id}/turn-N.json`).
+    pub fn draft_run_file_key(instance_id: Uuid, node_id: &str, filename: &str) -> String {
+        format!("instances/{instance_id}/draft-artifacts/{node_id}/{filename}")
+    }
+
+    /// Per-run sibling of [`Self::node_config_key`] for draft dev-runs — see
+    /// [`Self::draft_run_file_key`] for the scoping rationale.
+    pub fn draft_run_node_config_key(instance_id: Uuid, node_id: &str) -> String {
+        format!("instances/{instance_id}/draft-artifacts/{node_id}/node-config.json")
+    }
+
+    /// Upload a draft dev-run node file under its per-run key and return it.
+    pub async fn upload_draft_run_file(
+        &self,
+        instance_id: Uuid,
+        node_id: &str,
+        filename: &str,
+        content: &[u8],
+    ) -> Result<String, ArtifactStoreError> {
+        let key = Self::draft_run_file_key(instance_id, node_id, filename);
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(content.to_vec()))
+            .cache_control("immutable")
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("upload {key}: {e}")))?;
+
+        tracing::debug!(key = %key, "uploaded draft-run artifact to S3");
+
+        Ok(key)
+    }
+
+    /// Upload a draft dev-run's per-node static config blob under its per-run
+    /// key and return it.
+    pub async fn upload_draft_run_node_config(
+        &self,
+        instance_id: Uuid,
+        node_id: &str,
+        content: &[u8],
+    ) -> Result<String, ArtifactStoreError> {
+        let key = Self::draft_run_node_config_key(instance_id, node_id);
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(content.to_vec()))
+            .content_type("application/json")
+            .cache_control("immutable")
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("upload node config {key}: {e}")))?;
+
+        tracing::debug!(key = %key, bytes = content.len(), "uploaded draft-run node config to S3");
+
+        Ok(key)
+    }
+
     /// Upload a file for an asset `File` field and return the S3 key.
     /// Key format: `assets/{asset_id}/v{version}/{field}/{filename}`. The key
     /// is publish-stable (immutable-per-version, like `upload_file`) so a
@@ -292,5 +362,36 @@ impl ArtifactStore {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod draft_run_key_tests {
+    use super::ArtifactStore;
+    use uuid::Uuid;
+
+    /// Draft-run staging keys must be disjoint from the version's frozen
+    /// `templates/...` namespace (the whole point of the per-run scope — see
+    /// `ArtifactKeySpace::DraftRun`) and live under `instances/{id}/` so the
+    /// retention sweep's prefix GC reclaims them.
+    #[test]
+    fn draft_run_keys_are_instance_scoped() {
+        let iid = Uuid::nil();
+        let file = ArtifactStore::draft_run_file_key(iid, "node_1", "main.py");
+        let config = ArtifactStore::draft_run_node_config_key(iid, "node_1");
+        for key in [&file, &config] {
+            assert!(
+                key.starts_with(&format!("instances/{iid}/draft-artifacts/")),
+                "got: {key}"
+            );
+        }
+        assert_eq!(
+            file,
+            format!("instances/{iid}/draft-artifacts/node_1/main.py")
+        );
+        assert_eq!(
+            config,
+            format!("instances/{iid}/draft-artifacts/node_1/node-config.json")
+        );
     }
 }

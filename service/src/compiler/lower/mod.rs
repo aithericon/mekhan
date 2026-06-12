@@ -114,6 +114,41 @@ pub fn node_files_storage_path(
         .collect()
 }
 
+/// Per-run sibling of [`node_files_storage_path`] for draft dev-runs: keys
+/// are scoped by the launched instance
+/// (`instances/{instance_id}/draft-artifacts/...`,
+/// [`crate::s3::ArtifactStore::draft_run_file_key`] is the single source of
+/// the shape) so a re-run, a concurrent draft run, or a racing publish never
+/// shares mutable keys with an in-flight instance's AIR.
+pub fn node_files_draft_run_path(
+    instance_id: uuid::Uuid,
+    ydoc_files: &HashMap<String, HashMap<String, String>>,
+) -> NodeFiles {
+    ydoc_files
+        .iter()
+        .map(|(node_id, files)| {
+            let sources = files
+                .keys()
+                .map(|filename| {
+                    let path = crate::s3::ArtifactStore::draft_run_file_key(
+                        instance_id,
+                        node_id,
+                        filename,
+                    );
+                    (
+                        filename.clone(),
+                        InputSource::StoragePath {
+                            path,
+                            storage: None,
+                        },
+                    )
+                })
+                .collect();
+            (node_id.clone(), sources)
+        })
+        .collect()
+}
+
 /// Instruction to merge `dead` place into `survivor` place.
 /// All references to `dead` become references to `survivor`, then `dead` is removed.
 pub(crate) struct PlaceMerge {
@@ -313,7 +348,9 @@ pub struct ConfigStorage<'a> {
     pub version: i32,
     /// Optional override for the key-computation function. None means use
     /// the standard `templates/{tid}/v{ver}/{node_id}/node-config.json`
-    /// format. Reserved for future use (e.g., per-tenant prefixes).
+    /// format. Draft dev-runs override with the per-run
+    /// `instances/{instance_id}/draft-artifacts/...` key (see
+    /// `ArtifactKeySpace::DraftRun` in `process::publish`).
     #[allow(clippy::type_complexity)]
     pub key_fn: Option<&'a (dyn Fn(uuid::Uuid, i32, &str) -> String + Sync)>,
 }

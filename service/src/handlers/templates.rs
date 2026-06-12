@@ -27,7 +27,9 @@ use crate::models::template::{
     UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
-use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
+use crate::process::publish::{
+    resolve_subworkflow_air, ArtifactKeySpace, CompiledArtifacts, PublishService,
+};
 use crate::query::builder::{self, QueryError};
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
@@ -960,6 +962,7 @@ pub async fn publish_template(
             &existing.description,
             id,
             existing.version,
+            ArtifactKeySpace::Version,
             Some(existing.chain_root_id()),
             &mut ydoc_files,
             principal_id,
@@ -1440,6 +1443,7 @@ pub async fn apply_template(
             &latest.description,
             target_id,
             target_version,
+            ArtifactKeySpace::Version,
             Some(latest.chain_root_id()),
             &mut files_map,
             user.subject_as_uuid(),

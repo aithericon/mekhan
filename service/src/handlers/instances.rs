@@ -30,7 +30,7 @@ use crate::models::responses::{
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
-use crate::process::publish::{CompiledArtifacts, PublishService};
+use crate::process::publish::{ArtifactKeySpace, CompiledArtifacts, PublishService};
 use crate::AppState;
 
 /// Resolve the effective instance mode for a create-instance POST against the
@@ -64,14 +64,21 @@ pub(crate) fn resolve_run_mode(
     }
 }
 
-/// Per-run compile for a draft dev-run (or a legacy published row missing
-/// `air_json`): reconstruct the authored graph from the live Y.Doc exactly
-/// like publish does (same `graph_with_ydoc_fallback` helper), compile to AIR
-/// through the shared [`PublishService`] pipeline, and stage node files +
-/// offloaded configs to S3 under the version's deterministic keys so the
+/// Per-run compile for a draft dev-run: reconstruct the authored graph from
+/// the live Y.Doc exactly like publish does (same `graph_with_ydoc_fallback`
+/// helper), compile to AIR through the shared [`PublishService`] pipeline,
+/// and stage node files + offloaded configs to S3 under keys scoped by the
+/// about-to-launch `instance_id` (`ArtifactKeySpace::DraftRun`) so the
 /// executor can fetch them at run time. Persists NOTHING onto the
 /// `workflow_templates` row — the draft stays unpublished; the run captures
 /// the canvas as-of-launch.
+///
+/// The per-run key scope is load-bearing: the executor fetches node
+/// files/configs lazily at step-fire time, so staging onto the version's
+/// deterministic publish keys would let a re-run (the edit→run→edit→run dev
+/// loop), a concurrent draft run, or a publish racing this POST swap bytes
+/// under an in-flight instance's frozen AIR — and let this compile clobber
+/// the artifacts a just-finished publish froze for the version.
 ///
 /// A compile failure surfaces as `ApiError::compile` (HTTP 400, code
 /// `compile-failed`, structured `compile_errors`) — the same envelope the
@@ -82,6 +89,7 @@ async fn compile_draft_air(
     state: &AppState,
     user: &AuthUser,
     template: &WorkflowTemplate,
+    instance_id: Uuid,
 ) -> Result<(serde_json::Value, WorkflowGraph), ApiError> {
     let (graph, mut ydoc_files) =
         graph_with_ydoc_fallback(state, template.id, template.graph.clone(), |g| {
@@ -102,6 +110,7 @@ async fn compile_draft_air(
             &template.description,
             template.id,
             template.version,
+            ArtifactKeySpace::DraftRun(instance_id),
             Some(template.chain_root_id()),
             &mut ydoc_files,
             user.subject_as_uuid(),
@@ -109,22 +118,21 @@ async fn compile_draft_air(
         )
         .await?;
 
-    // Stage the files the AIR's storage paths point at. Non-fatal, mirroring
-    // publish — a transient S3 hiccup degrades the run, not the request.
-    // Re-running the draft overwrites the same keys with the latest canvas
-    // content, which is exactly the dev-run contract (drafts are mutable).
-    if let Err(e) = publisher
-        .upload_files(template.id, template.version, &ydoc_files)
+    // Stage the files the AIR's per-run storage paths point at. FATAL (unlike
+    // publish's logged warning): nothing ever re-writes this instance's keys,
+    // so a failed upload here couldn't self-heal — the run would only fail
+    // later, mid-flight, at executor stage time with no attribution. Failing
+    // the POST keeps the error on the launch request. The instance row
+    // doesn't exist yet, so nothing is stranded (orphan S3 objects are
+    // inert; for launched runs the retention sweep GCs the prefix).
+    publisher
+        .upload_files_draft_run(instance_id, &ydoc_files)
         .await
-    {
-        tracing::warn!("draft-run S3 file upload failed (non-fatal): {e}");
-    }
-    if let Err(e) = publisher
-        .upload_node_configs(template.id, template.version, &node_configs)
+        .map_err(|e| ApiError::internal(format!("draft-run S3 file upload failed: {e}")))?;
+    publisher
+        .upload_node_configs_draft_run(instance_id, &node_configs)
         .await
-    {
-        tracing::warn!("draft-run S3 node-config upload failed (non-fatal): {e}");
-    }
+        .map_err(|e| ApiError::internal(format!("draft-run S3 node-config upload failed: {e}")))?;
 
     Ok((air_json, graph))
 }
@@ -176,6 +184,10 @@ pub async fn create_instance(
         ));
     }
 
+    // Minted BEFORE the AIR resolution: the draft path scopes its staged S3
+    // artifacts by this id (`ArtifactKeySpace::DraftRun`).
+    let instance_id = Uuid::new_v4();
+
     // AIR + graph source. A published row runs its frozen artifacts; an
     // unpublished draft (its `air_json` is NULL — `resolve_run_mode` already
     // forced mode 'draft') compiles per-run from the live Y.Doc, the exact
@@ -189,10 +201,21 @@ pub async fn create_instance(
                 .map_err(|e| ApiError::internal(format!("template graph is invalid: {e}")))?;
             (air.clone(), graph)
         }
-        None => compile_draft_air(&state, &user, &template).await?,
+        None => {
+            // `resolve_run_mode` yields 'live' only for published rows, so a
+            // NULL `air_json` here means a published row that violates the
+            // publish invariant (every committed writer of `published = TRUE`
+            // binds non-null AIR). Fail-stop like the pre-draft-run behavior
+            // — the per-run-compile leniency is for mode 'draft' only; a
+            // silent live run would prefer unflushed Y.Doc edits over the
+            // published graph.
+            if mode == "live" {
+                return Err(ApiError::internal("published template has no AIR JSON"));
+            }
+            compile_draft_air(&state, &user, &template, instance_id).await?
+        }
     };
 
-    let instance_id = Uuid::new_v4();
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 

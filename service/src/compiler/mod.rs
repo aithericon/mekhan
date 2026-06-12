@@ -30,7 +30,9 @@ pub use compile::{
 };
 pub use error::{CompileError, CompileErrorView};
 pub use interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
-pub use lower::{node_files_inline, node_files_storage_path, ConfigStorage};
+pub use lower::{
+    node_files_draft_run_path, node_files_inline, node_files_storage_path, ConfigStorage,
+};
 pub use pyio::generate_py_io_files;
 pub use subworkflow::{
     derive_child_io, make_child_callable, CHILD_FAIL_OUT, CHILD_INBOX, CHILD_REPLY_OUT,
