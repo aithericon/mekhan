@@ -1167,6 +1167,67 @@ describe('YjsGraphBinding copy / paste', () => {
 		expect(binding.graph.nodes.find((n) => n.id === 'n1')!.slug).toBe('my_step');
 	});
 
+	it('remaps in-set `<slug>.<field>` refs in config onto the clones', () => {
+		binding.addNode(
+			'prod_a',
+			'automated_step',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.addNode('dec_b', 'decision', { x: 100, y: 0 }, createDefaultNodeData('decision'));
+		const dec = binding.graph.nodes.find((n) => n.id === 'dec_b')!;
+		if (dec.data.type !== 'decision') throw new Error('unexpected type');
+		binding.updateNodeData('dec_b', {
+			...dec.data,
+			// One ref to the in-set producer's DEFAULT (id-derived) slug, one to
+			// an out-of-set producer — only the former must be rewritten.
+			conditions: [
+				{ edgeId: 'e1', label: 'hot', guard: 'prod_a.temp > 5 && outside.flag' }
+			]
+		} as Extract<WorkflowNodeData, { type: 'decision' }>);
+
+		const clip = binding.copySubgraph(['prod_a', 'dec_b']);
+		const newIds = binding.pasteSubgraph(clip);
+		const newProdId = newIds[clip.nodes.findIndex((n) => n.id === 'prod_a')];
+		const newDecId = newIds[clip.nodes.findIndex((n) => n.id === 'dec_b')];
+		const cloneDec = binding.graph.nodes.find((n) => n.id === newDecId)!;
+		if (cloneDec.data.type !== 'decision') throw new Error('unexpected type');
+		expect(cloneDec.data.conditions[0].guard).toBe(`${newProdId}.temp > 5 && outside.flag`);
+		// The original decision still references the original producer.
+		const origDec = binding.graph.nodes.find((n) => n.id === 'dec_b')!;
+		if (origDec.data.type !== 'decision') throw new Error('unexpected type');
+		expect(origDec.data.conditions[0].guard).toBe('prod_a.temp > 5 && outside.flag');
+	});
+
+	it('remaps refs to an in-set EXPLICIT slug, including inside file text', () => {
+		binding.addNode(
+			'prod_a',
+			'automated_step',
+			{ x: 0, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		binding.updateNodeSlug('prod_a', 'my_producer');
+		binding.addNode(
+			'cons_b',
+			'automated_step',
+			{ x: 100, y: 0 },
+			createDefaultNodeData('automated_step')
+		);
+		// `my_producer_extra` must NOT match — `_` is a word char, so the
+		// boundary regex can't hit a partial slug.
+		binding.createFile('cons_b', 'main.py', 'x = my_producer.value + my_producer_extra.y\n');
+
+		const clip = binding.copySubgraph(['prod_a', 'cons_b']);
+		const newIds = binding.pasteSubgraph(clip);
+		const newProdId = newIds[clip.nodes.findIndex((n) => n.id === 'prod_a')];
+		const newConsId = newIds[clip.nodes.findIndex((n) => n.id === 'cons_b')];
+		expect(binding.getFileText(newConsId, 'main.py')!.toString()).toBe(
+			`x = ${newProdId}.value + my_producer_extra.y\n`
+		);
+		// Clone still gets NO explicit slug (default = its minted id).
+		expect(binding.graph.nodes.find((n) => n.id === newProdId)!.slug).toBeUndefined();
+	});
+
 	it('pasting an empty clipboard is a no-op', () => {
 		expect(binding.pasteSubgraph({ nodes: [], edges: [] })).toEqual([]);
 		expect(binding.graph.nodes).toHaveLength(0);

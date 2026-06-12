@@ -59,6 +59,17 @@ impl YjsManager {
         self.rooms.remove_if(&template_id, |_, _| true);
         tracing::info!(template_id = %template_id, "evicted empty Yjs room");
     }
+
+    /// Evict the room and kick all connected clients — for template deletion
+    /// (discard draft / delete template). Without this a collaborator's open
+    /// socket keeps accepting edits whose persistence INSERTs fail on the
+    /// dangling `yjs_documents` FK, silently losing their work.
+    pub async fn close_room(&self, template_id: Uuid) {
+        if let Some((_, room)) = self.rooms.remove(&template_id) {
+            room.close().await;
+            tracing::info!(template_id = %template_id, "closed Yjs room (template deleted)");
+        }
+    }
 }
 
 /// Load raw updates from DB, build Doc + Room in spawn_blocking.

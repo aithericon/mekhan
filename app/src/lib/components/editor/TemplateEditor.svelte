@@ -84,6 +84,13 @@
 	// Yjs session + binding — bound once for this component instance; the
 	// `{#key}` wrapper remounts it on id change, so the initial-value read is
 	// intended.
+	// `compileErrors` is a module-level singleton that used to be wiped by the
+	// full-page reload on every version switch. With in-app navigation the
+	// `{#key}` remount is the only reset point, so clear it here — otherwise a
+	// failed publish on a draft leaks red error rings onto the next version
+	// viewed (the fork preserves node ids, so `byNodeId` still matches).
+	compileErrors.clear();
+
 	// svelte-ignore state_referenced_locally
 	const session = getSession(templateId);
 	const binding = new YjsGraphBinding(session.doc);
@@ -353,8 +360,10 @@
 	// Ctrl+Y → redo, Cmd/Ctrl+C/V/D → copy/paste/duplicate the canvas
 	// selection. All skipped when the keystroke targets a text field
 	// (input/textarea/contenteditable — incl. CodeMirror) so native text
-	// editing keeps working, and on published templates (read-only: the
-	// binding never mutates).
+	// editing keeps working. Copy is a pure read and works on published
+	// versions too (the module clipboard exists precisely so a known-good
+	// published graph can be copied into another template's draft); every
+	// mutating shortcut stays draft-gated.
 	function isTextEditingTarget(t: EventTarget | null): boolean {
 		return (
 			t instanceof HTMLInputElement ||
@@ -388,19 +397,9 @@
 	}
 
 	function handleEditorKeydown(e: KeyboardEvent) {
-		if (template?.published) return;
 		if (!e.metaKey && !e.ctrlKey) return;
 		if (isTextEditingTarget(e.target)) return;
 		const key = e.key.toLowerCase();
-		if (key === 'z' || key === 'y') {
-			e.preventDefault();
-			if (key === 'y' || e.shiftKey) {
-				binding.redo();
-			} else {
-				binding.undo();
-			}
-			return;
-		}
 		if (key === 'c') {
 			// Don't hijack copy while the user has real text selected on the page.
 			if (window.getSelection()?.toString()) return;
@@ -408,6 +407,17 @@
 			if (clip) {
 				e.preventDefault();
 				setClipboard(clip);
+			}
+			return;
+		}
+		// Everything below mutates the doc — draft only.
+		if (template?.published) return;
+		if (key === 'z' || key === 'y') {
+			e.preventDefault();
+			if (key === 'y' || e.shiftKey) {
+				binding.redo();
+			} else {
+				binding.undo();
 			}
 			return;
 		}

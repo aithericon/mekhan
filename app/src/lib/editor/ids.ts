@@ -14,7 +14,24 @@
  * sanitizer rewrites.
  */
 export function mintNodeId(): string {
-	return `node_${crypto.randomUUID().replaceAll('-', '')}`;
+	return `node_${randomUuid().replaceAll('-', '')}`;
+}
+
+/**
+ * `crypto.randomUUID` exists only in secure contexts (https or localhost) —
+ * opening the dev app from another device over plain HTTP
+ * (http://192.168.x.x:5173) has `crypto.getRandomValues` but NOT `randomUUID`,
+ * which would kill every node/edge creation gesture with a TypeError. Fall
+ * back to a getRandomValues-based v4 so insecure contexts keep the same
+ * collision safety.
+ */
+export function randomUuid(): string {
+	if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+	const b = crypto.getRandomValues(new Uint8Array(16));
+	b[6] = (b[6] & 0x0f) | 0x40; // version 4
+	b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
+	const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+	return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
 /**
@@ -24,5 +41,5 @@ export function mintNodeId(): string {
  * Edge ids never feed slug/identifier derivation, so dashes are fine here.
  */
 export function mintEdgeId(source: string, target: string): string {
-	return `e-${source}-${target}-${crypto.randomUUID().slice(0, 8)}`;
+	return `e-${source}-${target}-${randomUuid().slice(0, 8)}`;
 }

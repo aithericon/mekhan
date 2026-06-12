@@ -2,6 +2,7 @@
 	import type { HumanTaskNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import { randomUuid } from '$lib/editor/ids';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -68,7 +69,7 @@
 			steps: [
 				...data.steps,
 				{
-					id: crypto.randomUUID(),
+					id: randomUuid(),
 					title: `Step ${data.steps.length + 1}`,
 					blocks: []
 				}

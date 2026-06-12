@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use uuid::Uuid;
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
@@ -30,6 +30,11 @@ pub struct YjsRoom {
     state: RwLock<Vec<u8>>,
     clients: RwLock<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>,
     persistence: YjsPersistence,
+    /// Flipped to `true` when the backing template row is deleted out from
+    /// under the room (discard draft / delete template). Connected WS handlers
+    /// watch this and disconnect — otherwise their edits keep hitting the
+    /// dangling `yjs_documents` FK and are silently dropped.
+    closed_tx: watch::Sender<bool>,
 }
 
 impl YjsRoom {
@@ -38,12 +43,28 @@ impl YjsRoom {
     pub fn from_doc(template_id: Uuid, doc: &Doc, persistence: YjsPersistence) -> Self {
         let txn = doc.transact();
         let state = txn.encode_state_as_update_v1(&StateVector::default());
+        let (closed_tx, _) = watch::channel(false);
         Self {
             template_id,
             state: RwLock::new(state),
             clients: RwLock::new(HashMap::new()),
             persistence,
+            closed_tx,
         }
+    }
+
+    /// Subscribe to the room-closed signal (see `close`).
+    pub fn closed_signal(&self) -> watch::Receiver<bool> {
+        self.closed_tx.subscribe()
+    }
+
+    /// Mark the room closed and kick every connected client — called when the
+    /// backing template is deleted.
+    pub async fn close(&self) {
+        let _ = self.closed_tx.send(true);
+        // Dropping the broadcast senders also unblocks each client's outbound
+        // forwarder once its handler shuts down.
+        self.clients.write().await.clear();
     }
 
     /// Add a client.

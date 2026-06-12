@@ -16,6 +16,7 @@ import type {
 	StreamSinkNodeData
 } from '$lib/types/editor';
 import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
+import { sanitizeSlug } from '$lib/editor/sanitize-slug';
 
 /**
  * One node snapshotted out of the Y.Doc for copy/paste: config flattened to
@@ -31,6 +32,9 @@ export interface ClipboardNode {
 	parentId?: string;
 	width?: number;
 	height?: number;
+	/** Explicit slug at copy time — used ONLY to remap `<slug>.<field>`
+	 *  references on paste; never re-set on the clone (see copySubgraph). */
+	slug?: string;
 	config: Record<string, unknown>;
 	files: Record<string, string>;
 }
@@ -47,6 +51,35 @@ export interface GraphClipboard {
 // de-proxies in one move.
 function jsonClone<T>(value: T): T {
 	return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+}
+
+/**
+ * Rewrite producer-namespaced `<slug>.<field>` references in a string through
+ * an old-slug → new-slug map. Matches a whole identifier immediately followed
+ * by a field access (`\b<slug>\b(?=\.)`); slugs are sanitized
+ * (`^[a-z][a-z0-9_]*$`), so no regex escaping is needed and `_` being a word
+ * char rules out partial-slug hits.
+ */
+function remapSlugRefs(text: string, slugMap: Map<string, string>): string {
+	let out = text;
+	for (const [oldSlug, newSlug] of slugMap) {
+		out = out.replace(new RegExp(`\\b${oldSlug}\\b(?=\\.)`, 'g'), newSlug);
+	}
+	return out;
+}
+
+/** Deep-walk a JSON-plain config value, remapping refs in every string leaf.
+ *  Keys are never refs (mapping keys name the CONSUMER side), so only values
+ *  are rewritten. Returns fresh structures — never mutates the input. */
+function remapRefsDeep(value: unknown, slugMap: Map<string, string>): unknown {
+	if (typeof value === 'string') return remapSlugRefs(value, slugMap);
+	if (Array.isArray(value)) return value.map((v) => remapRefsDeep(v, slugMap));
+	if (value && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value).map(([k, v]) => [k, remapRefsDeep(v, slugMap)])
+		);
+	}
+	return value;
 }
 
 /**
@@ -841,9 +874,11 @@ export class YjsGraphBinding {
 	 *  - a child selected WITHOUT its container is snapshotted as a top-level
 	 *    node at its WORLD position (parentId dropped) — the simple semantics;
 	 *  - edges with either endpoint outside the (expanded) set are dropped;
-	 *  - explicit `slug`s are deliberately NOT copied: two nodes sharing an
-	 *    explicit slug is CompileError::SlugConflict, so clones fall back to
-	 *    the compiler's id-derived default slug instead.
+	 *  - explicit `slug`s are deliberately NOT re-applied to clones: two nodes
+	 *    sharing an explicit slug is CompileError::SlugConflict, so clones fall
+	 *    back to the compiler's id-derived default slug instead. The copy-time
+	 *    slug still rides the clipboard so pasteSubgraph can remap in-set
+	 *    `<slug>.<field>` references onto the clones.
 	 */
 	copySubgraph(nodeIds: string[]): GraphClipboard {
 		const selected = new Set(nodeIds.filter((id) => this.yNodes.has(id)));
@@ -873,6 +908,7 @@ export class YjsGraphBinding {
 			const description = yNode.get('description') as string | undefined;
 			const width = yNode.get('width') as number | undefined;
 			const height = yNode.get('height') as number | undefined;
+			const slug = yNode.get('slug') as string | undefined;
 			const configMap = yNode.get('config');
 			const filesMap = yNode.get('files');
 			const files: Record<string, string> = {};
@@ -892,6 +928,9 @@ export class YjsGraphBinding {
 				...(parentInSet ? { parentId } : {}),
 				...(width != null ? { width } : {}),
 				...(height != null ? { height } : {}),
+				// Carried for paste-time REF REMAPPING only — pasteSubgraph never
+				// sets it on the clone (see the slug note in the doc comment).
+				...(slug && slug.trim() !== '' ? { slug } : {}),
 				config:
 					configMap instanceof Y.Map
 						? jsonClone(Object.fromEntries(configMap.entries()))
@@ -922,8 +961,9 @@ export class YjsGraphBinding {
 
 	/**
 	 * Insert a clipboard into the doc with FRESH ids: every node gets a new
-	 * minted id, in-set `parentId`s and edge endpoints are remapped through
-	 * the old→new map, edge ids are re-minted. The `offset` shifts paste
+	 * minted id, in-set `parentId`s, edge endpoints AND `<slug>.<field>`
+	 * references (in config strings + file text) are remapped through the
+	 * old→new map, edge ids are re-minted. The `offset` shifts paste
 	 * roots only — children of a pasted container keep their parent-relative
 	 * position (they ride the container's shift). ONE doc.transact(), so a
 	 * single undo reverts the whole paste. Returns the new node ids.
@@ -935,6 +975,20 @@ export class YjsGraphBinding {
 		if (clip.nodes.length === 0) return [];
 		const idMap = new Map<string, string>();
 		for (const n of clip.nodes) idMap.set(n.id, mintNodeId());
+
+		// Producer-namespaced `<slug>.<field>` refs between copied siblings must
+		// follow the clones: after a same-doc paste the ORIGINAL producers still
+		// exist, so an un-rewritten ref compiles clean but silently reads from
+		// the original across the copy boundary. Map each in-set producer's
+		// effective slug at copy time (explicit slug, else the id-derived
+		// default) to the clone's default slug — the freshly minted id, which is
+		// already sanitize_slug-stable verbatim (see mintNodeId).
+		const slugMap = new Map<string, string>();
+		for (const n of clip.nodes) {
+			const oldSlug =
+				n.slug && n.slug.trim() !== '' ? sanitizeSlug(n.slug) : sanitizeSlug(n.id);
+			slugMap.set(oldSlug, idMap.get(n.id)!);
+		}
 
 		this.doc.transact(() => {
 			for (const n of clip.nodes) {
@@ -957,15 +1011,18 @@ export class YjsGraphBinding {
 
 				const config = new Y.Map<unknown>();
 				for (const [key, value] of Object.entries(n.config)) {
-					// Clone per paste so repeated pastes of one clipboard never
-					// share mutable object state.
-					config.set(key, jsonClone(value));
+					// Remap in-set refs onto the clones; remapRefsDeep returns fresh
+					// structures, so repeated pastes of one clipboard never share
+					// mutable object state either.
+					config.set(key, remapRefsDeep(jsonClone(value), slugMap));
 				}
 				yNode.set('config', config);
 
 				const files = new Y.Map<Y.Text>();
 				for (const [name, text] of Object.entries(n.files)) {
-					files.set(name, new Y.Text(text));
+					// Python sources reference upstream producers as `<slug>.<field>`
+					// too (the compiler synthesizes read-arcs from them) — same remap.
+					files.set(name, new Y.Text(remapSlugRefs(text, slugMap)));
 				}
 				yNode.set('files', files);
 

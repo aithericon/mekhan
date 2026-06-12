@@ -3722,7 +3722,8 @@ export interface paths {
         post?: never;
         /**
          * DELETE /api/v1/templates/{id}
-         *     Per Section 11.7: cascade cleanup for published templates with finished instances.
+         *     Per Section 11.7: cascade cleanup of the chain's instances (published runs
+         *     AND draft test runs) before the template rows.
          */
         delete: operations["delete_template"];
         options?: never;
@@ -3820,9 +3821,11 @@ export interface paths {
         /**
          * DELETE /api/v1/templates/{id}/draft
          * @description Discard a single unpublished draft version — the reverse of `new_version`.
-         *     The draft row is deleted (its `yjs_documents`/`yjs_snapshots` cascade via
-         *     FK) and the parent version is restored as the chain head
-         *     (`is_latest = TRUE`) in one transaction. A never-published v1 root draft
+         *     The draft's instances (publish-gate `test_run`s bind to the draft id and
+         *     their FK has no cascade) and the draft row are deleted (its
+         *     `yjs_documents`/`yjs_snapshots` cascade via FK) and the parent version is
+         *     restored as the chain head (`is_latest = TRUE`) in one transaction; the
+         *     instances' engine nets are purged after commit. A never-published v1 root draft
          *     has no parent: the draft IS the chain, so the whole template is deleted
          *     via the same path as `DELETE /api/v1/templates/{id}` (which also owns the
          *     chain-root `object_grants` cleanup).
@@ -21928,7 +21931,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Version is published or not the chain head */
+            /** @description Version is published, not the chain head, or has running instances */
             409: {
                 headers: {
                     [name: string]: unknown;
