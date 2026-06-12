@@ -748,6 +748,36 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::users::resolve_profiles))
 }
 
+/// Collect both OpenApiRouter halves on a thread with explicit stack headroom.
+///
+/// utoipa's derived schema collection materializes each DTO's full schema tree
+/// through by-value builder temporaries in ONE monolithic frame per type — for
+/// the big template DTOs (`WorkflowNodeData`, reached via
+/// `CreateTemplateRequest` in `routes!()` auto-discovery) the debug-build
+/// frames sum to ~2 MiB across a <50-frame chain. That sits exactly at the
+/// default stack size of libtest threads and tokio workers, so any codegen
+/// layout shift (a module split, a new enum variant) can tip a 2 MiB caller
+/// into a stack overflow. 16 MiB of headroom makes router/spec construction
+/// stack-safe from any calling context.
+#[allow(clippy::type_complexity)]
+fn collect_openapi_parts() -> (
+    (Router<AppState>, utoipa::openapi::OpenApi),
+    (Router<AppState>, utoipa::openapi::OpenApi),
+) {
+    std::thread::Builder::new()
+        .name("openapi-collect".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            (
+                build_protected_openapi_router().split_for_parts(),
+                build_public_openapi_router().split_for_parts(),
+            )
+        })
+        .expect("failed to spawn openapi-collect thread")
+        .join()
+        .expect("openapi collection panicked")
+}
+
 pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
     let cors_config = state.config.clone();
@@ -764,8 +794,8 @@ pub fn build_router(state: AppState) -> Router {
     // The protected OpenApiRouter holds every authenticated handler; the
     // public one holds only `/healthz`. Both contribute to the same
     // `api_spec` so the published OpenAPI document stays a single document.
-    let (protected_router, mut api_spec) = build_protected_openapi_router().split_for_parts();
-    let (public_router, public_spec) = build_public_openapi_router().split_for_parts();
+    let ((protected_router, mut api_spec), (public_router, public_spec)) =
+        collect_openapi_parts();
     api_spec.merge(public_spec);
 
     // The auth middleware gates every JSON API route. The WS endpoint is
@@ -907,8 +937,7 @@ fn build_cors_layer(cfg: &AppConfig) -> CorsLayer {
 /// the public (`/healthz`) and protected halves so the published spec is a
 /// single document.
 pub fn openapi_spec() -> utoipa::openapi::OpenApi {
-    let (_, mut api) = build_protected_openapi_router().split_for_parts();
-    let (_, public) = build_public_openapi_router().split_for_parts();
+    let ((_, mut api), (_, public)) = collect_openapi_parts();
     api.merge(public);
     api
 }
