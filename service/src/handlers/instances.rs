@@ -394,7 +394,11 @@ pub(crate) fn instance_jetstream_events(
     net_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send + 'static {
     async_stream::stream! {
-        let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
+        let stream_h = match nats
+            .jetstream()
+            .get_stream(crate::nats::subjects::Subjects::STREAM_GLOBAL)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 yield Ok(Event::default().event("error").data(format!("stream: {e}")));
@@ -405,7 +409,7 @@ pub(crate) fn instance_jetstream_events(
         // client disconnects and this future is dropped.
         let consumer = match stream_h
             .create_consumer(jetstream::consumer::pull::Config {
-                filter_subject: format!("petri.events.{net_id}.>"),
+                filter_subject: crate::nats::subjects::net_events_filter(&net_id),
                 deliver_policy: jetstream::consumer::DeliverPolicy::All,
                 ack_policy: jetstream::consumer::AckPolicy::Explicit,
                 ..Default::default()
