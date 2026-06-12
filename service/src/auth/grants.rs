@@ -603,6 +603,78 @@ pub async fn effective_object_roles(
     Ok(out)
 }
 
+/// A list-row DTO carrying the `my_effective_role` ACL annotation. One-line
+/// impls live next to each summary/list model so the generic list helpers
+/// below ([`filter_and_annotate_visible`] / [`annotate_roles_keep_all`]) can
+/// stamp — and, for the default helper, filter — any of them.
+pub trait AclAnnotated {
+    /// The id [`effective_object_roles`] keys the role map on.
+    fn acl_id(&self) -> Uuid;
+    /// Write the caller's effective-role wire label (`None` = no annotation).
+    fn set_my_effective_role(&mut self, role: Option<String>);
+}
+
+/// Stamp pass: write each row's [`Role::as_label`] from the role map; rows the
+/// map omits get `None`.
+fn stamp_roles<T: AclAnnotated>(items: &mut [T], roles: &HashMap<Uuid, Role>) {
+    for item in items.iter_mut() {
+        item.set_my_effective_role(
+            roles
+                .get(&item.acl_id())
+                .map(|r| r.as_label().to_string()),
+        );
+    }
+}
+
+/// Pure core shared by the async list helpers: optionally drop rows omitted
+/// from the role map, then stamp the labels.
+fn apply_role_map<T: AclAnnotated>(
+    items: &mut Vec<T>,
+    roles: &HashMap<Uuid, Role>,
+    drop_missing: bool,
+) {
+    if drop_missing {
+        items.retain(|i| roles.contains_key(&i.acl_id()));
+    }
+    stamp_roles(items, roles);
+}
+
+/// THE default for list endpoints: resolve the caller's effective role for a
+/// page of rows in ONE query ([`effective_object_roles`]), stamp
+/// `my_effective_role`, and DROP rows omitted from the map — dropping omitted
+/// rows is exactly what hides `restricted` objects the caller has no grant
+/// for (non-restricted rows always resolve via the workspace floor).
+pub async fn filter_and_annotate_visible<T: AclAnnotated>(
+    db: &PgPool,
+    user: &AuthUser,
+    kind: ObjectKind,
+    workspace_id: Uuid,
+    items: &mut Vec<T>,
+) -> Result<(), MembershipError> {
+    let ids: Vec<Uuid> = items.iter().map(|i| i.acl_id()).collect();
+    let roles = effective_object_roles(db, user, kind, workspace_id, &ids).await?;
+    apply_role_map(items, &roles, true);
+    Ok(())
+}
+
+/// EXPLICIT opt-out of the restricted-row filtering in
+/// [`filter_and_annotate_visible`]: stamp `my_effective_role` but keep every
+/// row (omitted ⇒ `None`). For surfaces that intentionally show rows the
+/// caller cannot open — e.g. the folder tree, where navigation needs the full
+/// path structure and detail access is gated by [`require_object_role`].
+pub async fn annotate_roles_keep_all<T: AclAnnotated>(
+    db: &PgPool,
+    user: &AuthUser,
+    kind: ObjectKind,
+    workspace_id: Uuid,
+    items: &mut [T],
+) -> Result<(), MembershipError> {
+    let ids: Vec<Uuid> = items.iter().map(|i| i.acl_id()).collect();
+    let roles = effective_object_roles(db, user, kind, workspace_id, &ids).await?;
+    stamp_roles(items, &roles);
+    Ok(())
+}
+
 /// Upsert a grant on the UNIQUE `(object_type, object_id, user_id)` key.
 /// Generic over the executor so it runs on a pool or inside a transaction
 /// (Phase 4 invites call this on accept).
@@ -682,6 +754,69 @@ mod tests {
         assert!(ObjectKind::Instance.keys_on_self());
         assert!(!ObjectKind::Folder.keys_on_self());
         assert!(!ObjectKind::Template.keys_on_self());
+    }
+
+    struct Row {
+        id: Uuid,
+        role: Option<String>,
+    }
+
+    impl AclAnnotated for Row {
+        fn acl_id(&self) -> Uuid {
+            self.id
+        }
+        fn set_my_effective_role(&mut self, role: Option<String>) {
+            self.role = role;
+        }
+    }
+
+    fn rows(ids: &[Uuid]) -> Vec<Row> {
+        ids.iter().map(|&id| Row { id, role: None }).collect()
+    }
+
+    #[test]
+    fn apply_role_map_drop_mode_drops_omitted_and_stamps_labels() {
+        let visible = Uuid::new_v4();
+        let hidden = Uuid::new_v4();
+        let mut items = rows(&[visible, hidden]);
+        let roles: HashMap<Uuid, Role> = [(visible, Role::Editor)].into_iter().collect();
+
+        apply_role_map(&mut items, &roles, true);
+
+        assert_eq!(items.len(), 1, "omitted id must be dropped");
+        assert_eq!(items[0].id, visible);
+        assert_eq!(items[0].role.as_deref(), Some("editor"));
+    }
+
+    #[test]
+    fn apply_role_map_keep_mode_stamps_none_and_keeps_rows() {
+        let granted = Uuid::new_v4();
+        let omitted = Uuid::new_v4();
+        let mut items = rows(&[granted, omitted]);
+        let roles: HashMap<Uuid, Role> = [(granted, Role::Viewer)].into_iter().collect();
+
+        apply_role_map(&mut items, &roles, false);
+
+        assert_eq!(items.len(), 2, "keep mode must retain every row");
+        assert_eq!(items[0].role.as_deref(), Some("viewer"));
+        assert_eq!(items[1].role, None, "omitted row is stamped None");
+    }
+
+    #[test]
+    fn apply_role_map_empty_map_non_member() {
+        let ids = [Uuid::new_v4(), Uuid::new_v4()];
+        let empty = HashMap::new();
+
+        // Drop mode: a non-member (empty map) sees nothing.
+        let mut dropped = rows(&ids);
+        apply_role_map(&mut dropped, &empty, true);
+        assert!(dropped.is_empty());
+
+        // Keep mode: rows survive, all annotations None.
+        let mut kept = rows(&ids);
+        apply_role_map(&mut kept, &empty, false);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|r| r.role.is_none()));
     }
 
     /// The floor + most-specific-override role math, isolated from SQL. Mirrors

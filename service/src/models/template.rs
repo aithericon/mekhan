@@ -80,6 +80,15 @@ impl WorkflowTemplate {
     }
 }
 
+impl crate::auth::AclAnnotated for WorkflowTemplate {
+    fn acl_id(&self) -> Uuid {
+        self.id
+    }
+    fn set_my_effective_role(&mut self, role: Option<String>) {
+        self.my_effective_role = role;
+    }
+}
+
 // --- Visual editor data model (Section 2) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

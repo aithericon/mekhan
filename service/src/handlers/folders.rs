@@ -15,8 +15,8 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::{
-    can_read_template, effective_object_roles, map_to_api_error, require_object_role, require_role,
-    template_workspace, AuthUser, ObjectKind, ObjectRef, Role,
+    annotate_roles_keep_all, can_read_template, map_to_api_error, require_object_role,
+    require_role, template_workspace, AuthUser, ObjectKind, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -115,13 +115,10 @@ pub async fn list_folders(
     // Annotate each row with the caller's effective object role (one query for
     // the whole list) so the SPA can gate edit/Share affordances; the backend
     // still enforces on every folder mutate path.
-    let ids: Vec<Uuid> = rows.iter().map(|f| f.id).collect();
-    let roles = effective_object_roles(&state.db, &user, ObjectKind::Folder, workspace_id, &ids)
+    // Keep-all on purpose: tree navigation must see the full path structure.
+    annotate_roles_keep_all(&state.db, &user, ObjectKind::Folder, workspace_id, &mut rows)
         .await
         .map_err(map_to_api_error)?;
-    for f in &mut rows {
-        f.my_effective_role = roles.get(&f.id).map(|r| r.as_label().to_string());
-    }
     Ok(Json(rows))
 }
 

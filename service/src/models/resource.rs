@@ -113,6 +113,15 @@ pub struct ResourceSummary {
     pub restricted: bool,
 }
 
+impl crate::auth::AclAnnotated for ResourceSummary {
+    fn acl_id(&self) -> Uuid {
+        self.id
+    }
+    fn set_my_effective_role(&mut self, role: Option<String>) {
+        self.my_effective_role = role;
+    }
+}
+
 impl From<ResourceRow> for ResourceSummary {
     fn from(r: ResourceRow) -> Self {
         Self {

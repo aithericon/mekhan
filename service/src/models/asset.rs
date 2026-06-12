@@ -280,6 +280,15 @@ pub struct AssetSummary {
     pub restricted: bool,
 }
 
+impl crate::auth::AclAnnotated for AssetSummary {
+    fn acl_id(&self) -> Uuid {
+        self.id
+    }
+    fn set_my_effective_role(&mut self, role: Option<String>) {
+        self.my_effective_role = role;
+    }
+}
+
 impl From<AssetRow> for AssetSummary {
     fn from(r: AssetRow) -> Self {
         Self {

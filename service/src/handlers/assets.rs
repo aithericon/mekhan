@@ -34,8 +34,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{
-    apply_grant, effective_object_roles, map_to_api_error, require_object_role, AuthUser,
-    ObjectKind, ObjectRef, Role,
+    apply_grant, effective_object_roles, filter_and_annotate_visible, map_to_api_error,
+    require_object_role, AuthUser, ObjectKind, ObjectRef, Role,
 };
 use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
@@ -758,14 +758,15 @@ pub async fn list_assets(
 
     // Object-ACL: stamp the caller's effective role and DROP assets they can't
     // reach (a restricted asset with no grant is absent from the role map).
-    let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
-    let roles = effective_object_roles(&state.db, &user, ObjectKind::Asset, workspace_id, &ids)
-        .await
-        .map_err(map_to_api_error)?;
-    summaries.retain(|s| roles.contains_key(&s.id));
-    for s in &mut summaries {
-        s.my_effective_role = roles.get(&s.id).map(|r| r.as_label().to_string());
-    }
+    filter_and_annotate_visible(
+        &state.db,
+        &user,
+        ObjectKind::Asset,
+        workspace_id,
+        &mut summaries,
+    )
+    .await
+    .map_err(map_to_api_error)?;
 
     Ok(Json(paginate(summaries, params.page, params.per_page)))
 }

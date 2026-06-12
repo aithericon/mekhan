@@ -37,8 +37,8 @@ use uuid::Uuid;
 use aithericon_resources::registry::{all, lookup, schema_json_cached};
 
 use crate::auth::{
-    apply_grant, effective_object_roles, map_to_api_error, require_object_role, require_role,
-    AuthUser, ObjectKind, ObjectRef, Role,
+    apply_grant, effective_object_roles, filter_and_annotate_visible, map_to_api_error,
+    require_object_role, require_role, AuthUser, ObjectKind, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::resource::{
@@ -609,14 +609,15 @@ async fn annotate_resource_roles(
     workspace_id: Uuid,
     mut items: Vec<ResourceSummary>,
 ) -> Result<Vec<ResourceSummary>, ApiError> {
-    let ids: Vec<Uuid> = items.iter().map(|i| i.id).collect();
-    let roles = effective_object_roles(&state.db, user, ObjectKind::Resource, workspace_id, &ids)
-        .await
-        .map_err(map_to_api_error)?;
-    items.retain(|i| roles.contains_key(&i.id));
-    for i in &mut items {
-        i.my_effective_role = roles.get(&i.id).map(|r| r.as_label().to_string());
-    }
+    filter_and_annotate_visible(
+        &state.db,
+        user,
+        ObjectKind::Resource,
+        workspace_id,
+        &mut items,
+    )
+    .await
+    .map_err(map_to_api_error)?;
     Ok(items)
 }
 
