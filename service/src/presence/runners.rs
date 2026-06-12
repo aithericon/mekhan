@@ -39,14 +39,10 @@
 //! expire signal and flips `present = false` — so a runner is reaped at most
 //! once per presence episode, and the next heartbeat cleanly re-acquires.
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use futures::StreamExt;
@@ -121,11 +117,10 @@ pub(crate) struct PresenceEntry {
     present: bool,
 }
 
-/// In-memory presence map: `runner_id` → its tracked state. Guarded by a single
-/// `Mutex` shared between the subscriber task and the sweep task. The critical
-/// sections are tiny (a HashMap probe + a clone of small strings), so a plain
-/// `Mutex` is correct and contention-free in practice.
-type PresenceMap = Arc<Mutex<HashMap<Uuid, PresenceEntry>>>;
+/// In-memory presence map: `runner_id` → its tracked state (the shared
+/// [`core::EntryMap`], keyed by the runner's STABLE UUID — unlike the human
+/// adapter's composite `(capacity, member)` key).
+type PresenceMap = core::EntryMap<Uuid, PresenceEntry>;
 
 /// Public newtype wrapper around the [`PresenceMap`] so the `pub` [`crate::AppState`]
 /// can hold a handle to the live presence map WITHOUT leaking the `pub(crate)`
@@ -141,7 +136,7 @@ impl RunnerPresence {
     /// Construct a fresh, empty presence handle. The controller tasks + the read
     /// API share this one map.
     pub fn new() -> Self {
-        Self(new_presence_map())
+        Self(core::new_entry_map())
     }
 
     /// Borrow the inner shared map for the controller tasks (subscriber + sweep).
@@ -149,26 +144,20 @@ impl RunnerPresence {
         &self.0
     }
 
-    /// Snapshot the live presence map for the read API. Locks the mutex, then for
-    /// each tracked runner emits a [`RunnerPresenceSnapshot`] with the elapsed
-    /// time since its last heartbeat computed against [`Instant::now`] (an
-    /// `Instant` has no serializable form, so we surface a relative age instead).
-    /// `async` because the inner map is a `tokio::sync::Mutex` (shared with the
-    /// async controller tasks) — `blocking_lock` would panic inside the runtime.
+    /// Snapshot the live presence map for the read API (the shared
+    /// [`core::snapshot_entries`] walk): each tracked runner becomes a
+    /// [`RunnerPresenceSnapshot`] with the elapsed time since its last heartbeat.
     pub async fn snapshot(&self) -> Vec<crate::models::runner::RunnerPresenceSnapshot> {
-        let now = Instant::now();
-        let map = self.0.lock().await;
-        map.iter()
-            .map(
-                |(runner_id, entry)| crate::models::runner::RunnerPresenceSnapshot {
-                    runner_id: *runner_id,
-                    present: entry.present,
-                    last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
-                    backends: entry.backends.clone(),
-                    host: entry.host.clone(),
-                },
-            )
-            .collect()
+        core::snapshot_entries(&self.0, |runner_id, entry, now| {
+            crate::models::runner::RunnerPresenceSnapshot {
+                runner_id: *runner_id,
+                present: entry.present,
+                last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
+                backends: entry.backends.clone(),
+                host: entry.host.clone(),
+            }
+        })
+        .await
     }
 
     /// Whether ANY currently-present runner in the pool aliased `pool_alias`
@@ -382,58 +371,16 @@ pub(crate) fn acquire_injection(
     }
 }
 
-/// Inject ONE slot's `presence_acquire` token into the pool net's
-/// `presence_acquire` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
-/// [`CrossNetTokenTransfer`] envelope (what the engine's global bridge listener
-/// deserializes); we set NO reply routing (acquire is one-way — the unit lives
-/// in the pool until granted/reaped). See [`acquire_injection`] for the
-/// identity + dedup scheme.
-async fn inject_acquire(
-    nats: &MekhanNats,
-    pool_net_id: &str,
-    runner_id: Uuid,
-    slot: u32,
-    executor_namespace: &str,
-    caps: &serde_json::Value,
-) {
-    core::inject_bridge(
-        nats,
-        pool_net_id,
-        well_known::POOL_PRESENCE_ACQUIRE_INBOX,
-        acquire_injection(runner_id, slot, executor_namespace, caps),
-        "presence acquire",
-    )
-    .await;
-}
-
 /// Build the caller parts of a BARE `presence_expired { runner_id }` signal
 /// (pure, so the envelope byte-shape is pinned in [`super::core`]'s tests).
-/// `now_ms` is the emission stamp folded into the signal key.
+/// `now_ms` is the emission stamp folded into the signal key. Injected via the
+/// shared [`core::inject_expires`].
 pub(crate) fn expire_signal(runner_id: Uuid, now_ms: i64) -> PoolSignal<'static> {
     PoolSignal {
         source: "presence",
         signal_key: format!("presence-expire-{runner_id}-{now_ms}"),
         payload: json!({ "runner_id": runner_id.to_string() }),
     }
-}
-
-/// Inject a BARE `presence_expired { runner_id }` signal into the pool net's
-/// signal place via `petri.signal.<pool_net_id>.presence_expired`.
-///
-/// Wire shape is the engine's `ExternalSignal` envelope (the same the trigger
-/// dispatcher publishes): `payload` is the bare `{ runner_id }` token color. NO
-/// reply routing — signals are injected routing-less; the "fail" routing for a
-/// held unit rides the HOLD, not this signal.
-async fn inject_expire(nats: &MekhanNats, pool_net_id: &str, runner_id: Uuid) {
-    core::inject_signal(
-        nats,
-        pool_net_id,
-        well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
-        expire_signal(runner_id, Utc::now().timestamp_millis()),
-        "presence expire",
-    )
-    .await;
 }
 
 /// Handle one `runner.*.presence` message: resolve the runner + its pool, and
@@ -503,13 +450,11 @@ async fn handle_presence(
                         let executor_namespace = format!("runner-jobs/{runner_id}");
                         let caps = runner.capabilities.clone();
                         for slot in new_slots {
-                            inject_acquire(
+                            core::inject_acquire(
                                 nats,
                                 &pool_net_id,
-                                runner_id,
-                                slot,
-                                &executor_namespace,
-                                &caps,
+                                acquire_injection(runner_id, slot, &executor_namespace, &caps),
+                                "presence acquire",
                             )
                             .await;
                         }
@@ -587,13 +532,11 @@ async fn handle_presence(
     // lease; they share `runner_id` so the reap-all-by-runner_id signals match
     // any of them.
     for slot in 0..concurrency {
-        inject_acquire(
+        core::inject_acquire(
             nats,
             &pool_net_id,
-            runner_id,
-            slot,
-            &executor_namespace,
-            &caps,
+            acquire_injection(runner_id, slot, &executor_namespace, &caps),
+            "presence acquire",
         )
         .await;
     }
@@ -634,15 +577,11 @@ async fn touch_last_seen(db: &PgPool, runner_id: Uuid) {
     }
 }
 
-/// Parse the runner UUID out of a `runner.{runner_id}.presence` subject. Returns
-/// `None` on any structural mismatch.
+/// Parse the runner UUID out of a `runner.{runner_id}.presence` subject (the
+/// shared [`core::uuid_from_subject`] grammar). Returns `None` on any
+/// structural mismatch.
 fn parse_runner_subject(subject: &str) -> Option<Uuid> {
-    let parts: Vec<&str> = subject.split('.').collect();
-    // runner.{id}.presence
-    if parts.len() != 3 || parts[0] != "runner" || parts[2] != "presence" {
-        return None;
-    }
-    Uuid::parse_str(parts[1]).ok()
+    core::uuid_from_subject(subject, "runner", "presence")
 }
 
 /// Extract the runner's advertised `backends` + `concurrency` from a presence
@@ -690,23 +629,17 @@ fn parse_presence(payload: &[u8]) -> (Vec<String>, u32, Option<HostInfo>) {
 /// ceiling is generous while bounding the blast radius of a lying/buggy runner.
 const MAX_RUNNER_CONCURRENCY: u32 = 256;
 
-/// Start the presence subscriber: a core-NATS subscription to `runner.*.presence`.
-///
-/// Presence pings are ephemeral liveness (not a durable command stream), so this
-/// uses a plain core subscription rather than a JetStream durable — a missed
-/// ping is harmless (the next one re-acquires; the sweep handles a true absence).
+/// Start the presence subscriber: a core-NATS subscription to `runner.*.presence`
+/// (the shared [`core::subscribe`] harness — ephemeral liveness, no JetStream
+/// durable).
 pub(crate) async fn start_presence_subscriber(
     nats: MekhanNats,
     db: PgPool,
     presence: PresenceMap,
     fleet: FleetLiveness,
 ) {
-    let mut sub = match nats.client().subscribe("runner.*.presence").await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("failed to subscribe to runner.*.presence: {e}");
-            return;
-        }
+    let Some(mut sub) = core::subscribe(&nats, "runner.*.presence").await else {
+        return;
     };
     tracing::info!("presence subscriber started on runner.*.presence");
 
@@ -799,18 +732,18 @@ pub(crate) async fn start_presence_sweep(
                     %runner_id, pool_net_id, applied_c,
                     "presence TTL miss; reaping runner's slots"
                 );
-                for _ in 0..applied_c {
-                    inject_expire(&nats, &pool_net_id, runner_id).await;
-                }
+                core::inject_expires(
+                    &nats,
+                    &pool_net_id,
+                    applied_c,
+                    |now_ms| expire_signal(runner_id, now_ms),
+                    "presence expire",
+                )
+                .await;
             }
         },
     )
     .await;
-}
-
-/// Construct a fresh, empty presence map. The subscriber + sweep tasks share it.
-pub(crate) fn new_presence_map() -> PresenceMap {
-    Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Spawn BOTH presence tasks (subscriber + sweep) sharing one presence map.
@@ -832,13 +765,10 @@ pub fn spawn_presence_controller(
     _petri: PetriClient,
     fleet: FleetLiveness,
 ) {
-    tokio::spawn(start_presence_subscriber(
-        nats.clone(),
-        db.clone(),
-        presence.map().clone(),
-        fleet.clone(),
-    ));
-    tokio::spawn(start_presence_sweep(nats, presence.map().clone(), fleet));
+    core::spawn_controller(
+        start_presence_subscriber(nats.clone(), db, presence.map().clone(), fleet.clone()),
+        start_presence_sweep(nats, presence.map().clone(), fleet),
+    );
 }
 
 #[cfg(test)]
@@ -867,7 +797,7 @@ mod tests {
         // White-box the present-edge state machine on the map alone (no NATS/DB):
         // first observation should be the absent→present edge, subsequent ones
         // should be no-ops, and a sweep-style flip re-arms the edge.
-        let presence = new_presence_map();
+        let presence: PresenceMap = core::new_entry_map();
         let rid = Uuid::new_v4();
 
         // Simulate the acquire commit.
