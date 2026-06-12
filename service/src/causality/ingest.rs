@@ -12,6 +12,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use crate::catalogue::model::CatalogueRegisterCommand;
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::causality::live::LiveBroadcasts;
+use crate::nats::subjects::{BRIDGE_PREFIX_DOT, EVENTS_PREFIX_DOT};
 use crate::nats::MekhanNats;
 use crate::observability::record_silent_drop_with;
 use crate::triggers::TriggerDispatcher;
@@ -68,10 +69,10 @@ pub async fn start_causality_ingest(
 
         let subject = msg.subject.as_str();
 
-        let result = if subject.starts_with("petri.bridge.") {
+        let result = if subject.starts_with(BRIDGE_PREFIX_DOT) {
             // Bridge transfer message: petri.bridge.{target_net_id}.{place_name}
             process_bridge_transfer(&db, subject, &msg.payload).await
-        } else if subject.starts_with("petri.events.") {
+        } else if subject.starts_with(EVENTS_PREFIX_DOT) {
             // Domain event: petri.events.{net_id}.{event_type...}
             process_domain_event(
                 &db,
