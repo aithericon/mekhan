@@ -117,6 +117,9 @@
 	const hasExtras = $derived(Object.keys(extras).length > 0);
 	const hasProcessMeta = $derived(Object.keys(processMeta).length > 0);
 
+	// Workflow-level metadata (name/status/task_id/process_id) is only rendered
+	// for the bare-End fallback — with an exit_code present it's redundant with
+	// the page header, so no disclosure surfaces it.
 	const metadata = $derived<Record<string, unknown>>({
 		...(env.name !== undefined ? { name: env.name } : {}),
 		...(env.status !== undefined ? { status: env.status } : {}),
@@ -124,7 +127,6 @@
 		...(env.process_id !== undefined ? { process_id: env.process_id } : {})
 	});
 
-	let metadataOpen = $state(false);
 	let processMetaOpen = $state(false);
 </script>
 
@@ -215,26 +217,4 @@
 		</div>
 	{/if}
 
-	{#if (isOk || isErr) && Object.keys(metadata).length > 0}
-		<div>
-			<button
-				type="button"
-				class="flex w-full items-center gap-1 text-left text-sm font-semibold text-muted-foreground hover:text-foreground"
-				onclick={() => (metadataOpen = !metadataOpen)}
-			>
-				{#if metadataOpen}
-					<ChevronDown class="size-3.5" />
-				{:else}
-					<ChevronRight class="size-3.5" />
-				{/if}
-				Workflow metadata
-				<span class="ml-1 font-normal">({Object.keys(metadata).length})</span>
-			</button>
-			{#if metadataOpen}
-				<div class="mt-2">
-					<KeyValueList value={metadata} {ctx} />
-				</div>
-			{/if}
-		</div>
-	{/if}
 </div>

@@ -467,7 +467,7 @@
 	{#if activeTab === 'overview'}
 		<!-- Two-column tiling: a 2/3 reading column (results → inputs → live
 		     activity, answer-first) beside a 1/3 status rail (needs-attention
-		     tasks → progress → timeline → tab counts). On narrow viewports
+		     tasks → media → metrics → progress → timeline). On narrow viewports
 		     the rail stacks FIRST — attention items lead. -->
 		<div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
 			<div class="order-2 min-w-0 space-y-4 lg:order-1 lg:col-span-2">
@@ -475,8 +475,9 @@
 					<!-- The run's I/O pair: inputs left, results right — reads
 					     in → out. A lone card spans the full column; the pair
 					     splits side-by-side only at xl, where each half is still
-					     wide enough for SmartValue's field tables. -->
-					<div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+					     wide enough for SmartValue's field tables. Default grid
+					     stretch (no items-start) keeps both cards equal height. -->
+					<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
 						{#if showInputs}
 							<!-- The workflow's Start envelope(s) — what was fed into this run.
 							     One section per Start block; SmartValue picks ProcessTokenEnvelope
@@ -576,27 +577,6 @@
 					</div>
 				{/if}
 
-				{#if liveStore && showcaseCount > 0}
-					<!-- Renderable artifacts (videos, images, audio, declared viz
-					     hints) — same grouped viewer + iteration scrubber as the
-					     Artifacts tab, embedded so the run's media is visible
-					     without leaving the overview. -->
-					<div class="rounded-lg border border-border bg-card p-4">
-						<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-							<FileBox class="size-4 text-muted-foreground" />
-							Media
-							<Badge variant="secondary">{showcaseCount}</Badge>
-							<button
-								class="ml-auto text-sm font-normal text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-								onclick={() => (activeTab = 'artifacts')}
-							>
-								All artifacts
-							</button>
-						</h3>
-						<ArtifactsPanel store={liveStore} renderableOnly />
-					</div>
-				{/if}
-
 				<!-- Recent activity uses the exact same LogsPanel as the Logs tab so
 				     row shape, level badges, expand toggles, and follow-tail behave
 				     identically — otherwise the two surfaces look like different
@@ -665,6 +645,27 @@
 								</div>
 							{/each}
 						</div>
+					</div>
+				{/if}
+
+				{#if liveStore && showcaseCount > 0}
+					<!-- Renderable artifacts (videos, images, audio, declared viz
+					     hints) — same grouped viewer + iteration scrubber as the
+					     Artifacts tab, embedded in the rail so the run's media is
+					     visible without leaving the overview. -->
+					<div class="rounded-lg border border-border bg-card p-4">
+						<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+							<FileBox class="size-4 text-muted-foreground" />
+							Media
+							<Badge variant="secondary">{showcaseCount}</Badge>
+							<button
+								class="ml-auto text-sm font-normal text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+								onclick={() => (activeTab = 'artifacts')}
+							>
+								All artifacts
+							</button>
+						</h3>
+						<ArtifactsPanel store={liveStore} renderableOnly />
 					</div>
 				{/if}
 
