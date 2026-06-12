@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Select from '$lib/components/ui/select';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Pencil from '@lucide/svelte/icons/pencil';
@@ -53,6 +54,13 @@
 	// the prop when present, else this internal state (driven by the selector).
 	let scopeState = $state<ScopeContext>({ kind: 'workspace' });
 	const scope = $derived<ScopeContext>(scopeProp ?? scopeState);
+
+	// Collections (Assets) vs schemas (Types) split into sibling tabs — the two
+	// concerns share a scope but are otherwise orthogonal, so stacking them
+	// vertically pinned types above every folder's collections. Internal state
+	// (this component is mounted standalone and inside the folders browser).
+	let activeTab = $state<'assets' | 'types'>('assets');
+
 	let types = $state<AssetTypeSummary[]>([]);
 	let assets = $state<AssetSummary[]>([]);
 	let typeFilter = $state<string>('');
@@ -191,26 +199,10 @@
 	}
 </script>
 
-<div class="space-y-6" data-testid="assets-list">
-	<div class="flex flex-wrap items-center gap-3">
-		{#if !scopeProp}
-			<ScopeSelector value={scope} onChange={(s) => (scopeState = s)} />
-		{/if}
-		<div class="flex items-center gap-2">
-			<span class="text-sm font-medium text-muted-foreground">Type</span>
-			<Select.Root type="single" value={typeFilter} onValueChange={(v) => (typeFilter = v ?? '')}>
-				<Select.Trigger class="h-9 min-w-[160px]">
-					{typeFilter ? typeName(typeFilter) : 'All types'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="All types" />
-					{#each types as t (t.id)}
-						<Select.Item value={t.id} label={t.display_name} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
-		</div>
-	</div>
+<div class="space-y-4" data-testid="assets-list">
+	{#if !scopeProp}
+		<ScopeSelector value={scope} onChange={(s) => (scopeState = s)} />
+	{/if}
 
 	{#if error}
 		<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -218,167 +210,193 @@
 		</div>
 	{/if}
 
-	<!-- Asset types section -->
-	<section class="space-y-3">
-		<div class="flex items-center justify-between">
-			<div class="flex items-center gap-2">
-				<Boxes class="size-4 text-muted-foreground" />
-				<h2 class="text-base font-semibold">Asset types</h2>
-			</div>
-			<Button variant="outline" size="sm" class="gap-1.5" onclick={openCreateType} data-testid="asset-type-create">
-				<Plus class="size-4" />
-				New type
-			</Button>
-		</div>
-		{#if loading}
-			<p class="py-4 text-center text-sm text-muted-foreground">Loading…</p>
-		{:else if types.length === 0}
-			<p class="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-				No asset types defined in this scope. Define a schema (a list of typed fields) to start curating content.
-			</p>
-		{:else}
-			<div class="space-y-2">
-				{#each types as t (t.id)}
-					<div class="group flex items-center justify-between rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40">
-						<button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => openEditType(t.id)}>
-							<Boxes class="size-4 shrink-0 text-muted-foreground" />
-							<div class="min-w-0">
-								<div class="flex flex-wrap items-center gap-2">
-									<span class="font-mono text-sm font-medium">{t.name}</span>
-									<Badge variant="secondary">{t.cardinality}</Badge>
-									<Badge variant="outline">v{t.version}</Badge>
-									{#if t.display_path}<Badge variant="outline" class="font-mono">{t.display_path}</Badge>{/if}
-								</div>
-								<p class="mt-0.5 truncate text-sm text-muted-foreground">{t.display_name}</p>
-							</div>
-						</button>
-						<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-							<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditType(t.id)}>
-								<Pencil class="size-3.5" /> Edit
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-								onclick={() => handleDeleteType(t)}
-								title="Soft-delete"
-							>
-								<Trash2 class="size-3.5" />
-							</Button>
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
-	</section>
+	<Tabs.Root value={activeTab} onValueChange={(v) => (activeTab = v === 'types' ? 'types' : 'assets')}>
+		<Tabs.List variant="underline" class="border-b border-border">
+			<Tabs.Trigger variant="underline" value="assets" data-testid="assets-tab-collections">
+				<Database class="size-4" />
+				Assets
+				{#if !loading && assets.length}<Badge variant="secondary">{assets.length}</Badge>{/if}
+			</Tabs.Trigger>
+			<Tabs.Trigger variant="underline" value="types" data-testid="assets-tab-types">
+				<Boxes class="size-4" />
+				Types
+				{#if !loading && types.length}<Badge variant="secondary">{types.length}</Badge>{/if}
+			</Tabs.Trigger>
+		</Tabs.List>
 
-	<!-- Assets section, grouped by virtual folder -->
-	<section class="space-y-3">
-		<div class="flex items-center justify-between">
-			<div class="flex items-center gap-2">
-				<Database class="size-4 text-muted-foreground" />
-				<h2 class="text-base font-semibold">Assets</h2>
+		<!-- Assets (collections), grouped by virtual folder -->
+		<Tabs.Content value="assets" class="mt-4 space-y-3">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div class="flex items-center gap-2">
+					<span class="text-sm font-medium text-muted-foreground">Type</span>
+					<Select.Root type="single" value={typeFilter} onValueChange={(v) => (typeFilter = v ?? '')}>
+						<Select.Trigger class="h-9 min-w-[160px]">
+							{typeFilter ? typeName(typeFilter) : 'All types'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All types" />
+							{#each types as t (t.id)}
+								<Select.Item value={t.id} label={t.display_name} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<Button variant="default" size="sm" class="gap-1.5" onclick={openCreate} data-testid="asset-create" disabled={types.length === 0}>
+					<Plus class="size-4" />
+					New asset
+				</Button>
 			</div>
-			<Button variant="default" size="sm" class="gap-1.5" onclick={openCreate} data-testid="asset-create" disabled={types.length === 0}>
-				<Plus class="size-4" />
-				New asset
-			</Button>
-		</div>
 
-		{#if loading}
-			<p class="py-4 text-center text-sm text-muted-foreground">Loading…</p>
-		{:else if assets.length === 0}
-			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
-				<Database class="size-9 text-muted-foreground/40" />
-				<p class="mt-3 text-sm text-muted-foreground">No assets in this scope</p>
-				<p class="text-sm text-muted-foreground">Curated content collections — a materials table, a script library, reference data.</p>
-			</div>
-		{:else}
-			<div class="space-y-3">
-				{#each grouped as group (group.folder)}
-					<div>
-						{#if group.folder}
-							<button
-								type="button"
-								class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
-								onclick={() => toggleFolder(group.folder)}
-							>
-								{#if collapsed[group.folder]}
-									<ChevronRight class="size-4" />
-								{:else}
-									<ChevronDown class="size-4" />
-								{/if}
-								<Folder class="size-3.5" />
-								<span class="font-mono">{group.folder}</span>
-								<Badge variant="secondary">{group.assets.length}</Badge>
-							</button>
-						{/if}
-						{#if !group.folder || !collapsed[group.folder]}
-							<div class="space-y-2 {group.folder ? 'ml-5' : ''}">
-								{#each group.assets as a (a.id)}
-									{@const canEdit = roleAtLeast(a.my_effective_role, 'editor')}
-									{@const canShare = roleAtLeast(a.my_effective_role, 'admin')}
-									<div class="group flex items-center justify-between rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40" data-testid="asset-item-{a.id}">
-										<button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => openEditAsset(a)}>
-											<Database class="size-4 shrink-0 text-muted-foreground" />
-											<div class="min-w-0">
-												<div class="flex flex-wrap items-center gap-2">
-													<span class="font-mono text-sm font-medium">{a.ref_key}</span>
-													<Badge variant="secondary">{typeName(a.type_id)}</Badge>
-													<Badge variant="outline">v{a.version}</Badge>
-													{#if a.restricted}
-														<Badge
-															class="gap-1 bg-amber-100 text-amber-800"
-															variant="secondary"
-															title="Private — access by grant only, not shared workspace-wide"
-														>
-															<Lock class="size-3" /> Private
-														</Badge>
-													{/if}
+			{#if loading}
+				<p class="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+			{:else if assets.length === 0}
+				<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
+					<Database class="size-9 text-muted-foreground/40" />
+					<p class="mt-3 text-sm text-muted-foreground">No assets in this scope</p>
+					<p class="text-sm text-muted-foreground">Curated content collections — a materials table, a script library, reference data.</p>
+				</div>
+			{:else}
+				<div class="space-y-3">
+					{#each grouped as group (group.folder)}
+						<div>
+							{#if group.folder}
+								<button
+									type="button"
+									class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+									onclick={() => toggleFolder(group.folder)}
+								>
+									{#if collapsed[group.folder]}
+										<ChevronRight class="size-4" />
+									{:else}
+										<ChevronDown class="size-4" />
+									{/if}
+									<Folder class="size-3.5" />
+									<span class="font-mono">{group.folder}</span>
+									<Badge variant="secondary">{group.assets.length}</Badge>
+								</button>
+							{/if}
+							{#if !group.folder || !collapsed[group.folder]}
+								<div class="space-y-2 {group.folder ? 'ml-5' : ''}">
+									{#each group.assets as a (a.id)}
+										{@const canEdit = roleAtLeast(a.my_effective_role, 'editor')}
+										{@const canShare = roleAtLeast(a.my_effective_role, 'admin')}
+										<div class="group flex items-center justify-between rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40" data-testid="asset-item-{a.id}">
+											<button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => openEditAsset(a)}>
+												<Database class="size-4 shrink-0 text-muted-foreground" />
+												<div class="min-w-0">
+													<div class="flex flex-wrap items-center gap-2">
+														<span class="font-mono text-sm font-medium">{a.ref_key}</span>
+														<Badge variant="secondary">{typeName(a.type_id)}</Badge>
+														<Badge variant="outline">v{a.version}</Badge>
+														{#if a.restricted}
+															<Badge
+																class="gap-1 bg-amber-100 text-amber-800"
+																variant="secondary"
+																title="Private — access by grant only, not shared workspace-wide"
+															>
+																<Lock class="size-3" /> Private
+															</Badge>
+														{/if}
+													</div>
+													<p class="mt-0.5 truncate text-sm text-muted-foreground">{a.display_name}</p>
+													<AuthorshipChips
+														class="mt-0.5"
+														createdBy={a.created_by}
+														createdAt={a.created_at}
+														updatedBy={a.updated_by}
+														updatedAt={a.updated_at}
+													/>
 												</div>
-												<p class="mt-0.5 truncate text-sm text-muted-foreground">{a.display_name}</p>
-												<AuthorshipChips
-													class="mt-0.5"
-													createdBy={a.created_by}
-													createdAt={a.created_at}
-													updatedBy={a.updated_by}
-													updatedAt={a.updated_at}
-												/>
+											</button>
+											<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+												{#if canShare}
+													<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openShare(a)} title="Share / manage access" data-testid="asset-share-{a.id}">
+														<Share2 class="size-3.5" /> Share
+													</Button>
+												{/if}
+												{#if canEdit}
+													<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openCsv(a)} title="Import CSV">
+														<Upload class="size-3.5" /> CSV
+													</Button>
+													<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditAsset(a)}>
+														<Pencil class="size-3.5" /> Edit
+													</Button>
+													<Button
+														variant="ghost"
+														size="sm"
+														class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+														onclick={() => handleDeleteAsset(a)}
+														title="Soft-delete"
+													>
+														<Trash2 class="size-3.5" />
+													</Button>
+												{/if}
 											</div>
-										</button>
-										<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-											{#if canShare}
-												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openShare(a)} title="Share / manage access" data-testid="asset-share-{a.id}">
-													<Share2 class="size-3.5" /> Share
-												</Button>
-											{/if}
-											{#if canEdit}
-												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openCsv(a)} title="Import CSV">
-													<Upload class="size-3.5" /> CSV
-												</Button>
-												<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditAsset(a)}>
-													<Pencil class="size-3.5" /> Edit
-												</Button>
-												<Button
-													variant="ghost"
-													size="sm"
-													class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-													onclick={() => handleDeleteAsset(a)}
-													title="Soft-delete"
-												>
-													<Trash2 class="size-3.5" />
-												</Button>
-											{/if}
 										</div>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{/each}
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</Tabs.Content>
+
+		<!-- Asset types (schemas) -->
+		<Tabs.Content value="types" class="mt-4 space-y-3">
+			<div class="flex items-center justify-between">
+				<p class="text-sm text-muted-foreground">
+					User-defined schemas — a list of typed fields. Define one to start curating collections.
+				</p>
+				<Button variant="default" size="sm" class="gap-1.5" onclick={openCreateType} data-testid="asset-type-create">
+					<Plus class="size-4" />
+					New type
+				</Button>
 			</div>
-		{/if}
-	</section>
+			{#if loading}
+				<p class="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+			{:else if types.length === 0}
+				<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-12">
+					<Boxes class="size-9 text-muted-foreground/40" />
+					<p class="mt-3 text-sm text-muted-foreground">No asset types defined in this scope</p>
+					<p class="text-sm text-muted-foreground">Define a schema (a list of typed fields) to start curating content.</p>
+				</div>
+			{:else}
+				<div class="space-y-2">
+					{#each types as t (t.id)}
+						<div class="group flex items-center justify-between rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40">
+							<button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => openEditType(t.id)}>
+								<Boxes class="size-4 shrink-0 text-muted-foreground" />
+								<div class="min-w-0">
+									<div class="flex flex-wrap items-center gap-2">
+										<span class="font-mono text-sm font-medium">{t.name}</span>
+										<Badge variant="secondary">{t.cardinality}</Badge>
+										<Badge variant="outline">v{t.version}</Badge>
+										{#if t.display_path}<Badge variant="outline" class="font-mono">{t.display_path}</Badge>{/if}
+									</div>
+									<p class="mt-0.5 truncate text-sm text-muted-foreground">{t.display_name}</p>
+								</div>
+							</button>
+							<div class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+								<Button variant="ghost" size="sm" class="gap-1 text-sm text-muted-foreground" onclick={() => openEditType(t.id)}>
+									<Pencil class="size-3.5" /> Edit
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+									onclick={() => handleDeleteType(t)}
+									title="Soft-delete"
+								>
+									<Trash2 class="size-3.5" />
+								</Button>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</Tabs.Content>
+	</Tabs.Root>
 </div>
 
 <AssetTypeBuilder bind:open={typeBuilderOpen} typeId={editingTypeId} {scope} onsaved={onTypeSaved} />
