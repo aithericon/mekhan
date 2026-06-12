@@ -22,6 +22,7 @@
 		provideInstanceContext,
 		type InstanceContext
 	} from '$lib/components/instances/instance-context';
+	import { isGraphStructuralEvent } from '$lib/components/instances/instance-graph-refresh';
 	import SaveAsTestDialog from '$lib/components/instances/SaveAsTestDialog.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
@@ -84,7 +85,11 @@
 		processes: [],
 		loading: true,
 		error: null,
-		reload
+		reload,
+		// Bumped by the SSE handler below on each non-noise domain event; the
+		// graph view subscribes to it to drive event-driven projection refetches
+		// (replacing its old blind 2 s poll). See instance-graph-refresh.ts.
+		structuralEventTick: 0
 	});
 
 	provideInstanceContext(ctx);
@@ -233,6 +238,15 @@
 					reloadUntilTerminal(10);
 				} else if (event !== 'connected' && !HEADER_NOISE_EVENTS.has(event)) {
 					scheduleRefetch();
+				}
+				// Surface every graph-relevant STRUCTURAL event down to the graph
+				// view via the shared context, which subscribes to this tick to
+				// fire a coalesced projection refetch (no second EventSource). The
+				// classifier shares the noise set with HEADER_NOISE_EVENTS above
+				// (TokenCreated / EffectCompleted) and also drops `connected` /
+				// `result`, so the per-frame flood never bumps the tick.
+				if (isGraphStructuralEvent(event)) {
+					ctx.structuralEventTick++;
 				}
 			}
 		});

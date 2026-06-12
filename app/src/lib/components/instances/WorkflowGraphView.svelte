@@ -28,12 +28,21 @@
 	} from '$lib/stores/instance-marking.svelte';
 	import { PoolContentionView } from '$lib/components/petri';
 	import { groupChildrenByNode } from './subworkflow-children';
+	import { tryUseInstanceContext } from './instance-context';
+	import { RefreshScheduler } from './instance-graph-refresh';
 
 	type Props = {
 		instance: WorkflowInstance;
 	};
 
 	let { instance }: Props = $props();
+
+	// The layout holds ONE instance SSE stream and bumps `structuralEventTick`
+	// on each non-noise domain event. We subscribe to that tick to drive
+	// event-driven projection refetches (below) instead of blind 2 s polling.
+	// Nullable: if this view is ever mounted outside the /instances/[id] layout
+	// (standalone embed / isolation), we degrade to plain polling.
+	const instanceCtx = tryUseInstanceContext();
 
 	let template = $state<Template | null>(null);
 	let executions = $state<StepExecution[]>([]);
@@ -257,22 +266,86 @@
 		return () => marking.destroy();
 	});
 
+	// ── Event-driven refresh (replaces the old blind 2 s poll) ───────────────
+	// The instance projection tables (step executions, marking, children,
+	// allocations) are written by a SEPARATE causality consumer and LAG the raw
+	// domain events. So a structural SSE event means "a projection update is
+	// imminent" — we SCHEDULE a coalesced refetch, never assume the row is
+	// already there. The scheduler debounces a burst into one refetch, then
+	// fires ONE short follow-up to pick up the just-arrived event's lagging row.
+	//
+	// Timings: 300 ms debounce coalesces an event burst; +1000 ms follow-up
+	// rides out the projection-consumer lag. A SLOW 12 s safety-net poll
+	// guarantees a dropped/missed SSE event can't permanently stale the view.
+	const REFRESH_DEBOUNCE_MS = 300;
+	const REFRESH_FOLLOWUP_MS = 1000;
+	const SAFETY_NET_POLL_MS = 6000;
+	const FALLBACK_POLL_MS = 2000;
+
+	// The coalescing scheduler that turns SSE structural events into debounced
+	// projection refetches. Owned by an effect (created/disposed with the
+	// component lifetime), poked by the tick effect. Only used when the layout
+	// context is present; null otherwise (no-context → fall back to polling).
+	let eventScheduler: RefreshScheduler | null = null;
+	$effect(() => {
+		if (!instanceCtx) return; // no layout context → fall back to polling below
+		const scheduler = new RefreshScheduler(refreshAll, {
+			debounceMs: REFRESH_DEBOUNCE_MS,
+			followUpMs: REFRESH_FOLLOWUP_MS
+		});
+		eventScheduler = scheduler;
+		return () => {
+			scheduler.dispose();
+			eventScheduler = null;
+		};
+	});
+
+	// React to the layout's SSE tick: a fresh non-noise structural event bumps
+	// `structuralEventTick`, which is the sole tracked dependency here, so this
+	// effect re-runs and schedules a coalesced refetch. Skip the initial value —
+	// the mount effect already did the first load. `untrack` the scheduler poke
+	// so reading it doesn't add a dependency (and a scheduler re-create from the
+	// effect above doesn't re-run this).
+	let lastSeenTick = -1;
+	$effect(() => {
+		if (!instanceCtx) return;
+		const tick = instanceCtx.structuralEventTick;
+		if (lastSeenTick === -1) {
+			lastSeenTick = tick; // baseline; the mount load covers this
+			return;
+		}
+		if (tick === lastSeenTick) return;
+		lastSeenTick = tick;
+		// The terminal NetCompleted/NetCancelled events are themselves structural,
+		// so they bump the tick. Don't schedule a post-terminal refetch here — the
+		// terminal effect below owns the final reconcile (immediate + settle). This
+		// keeps "no live timer runs past terminal" literally true.
+		if (isTerminal) return;
+		untrack(() => eventScheduler?.notify());
+	});
+
 	$effect(() => {
 		if (isTerminal) {
-			// The instance just reached a terminal status, so the live interval
-			// stops here. But the LAST interval tick ran up to 2 s BEFORE the
-			// terminal transition landed, so any node that flipped to
-			// completed/failed in that closing window would keep rendering its
-			// stale "running" badge until a manual page refresh. Streaming steps
-			// are the usual victims — they close their channel, and complete, last.
-			// Catch up once immediately, then once more after a short delay because
-			// the instance row can go terminal a beat before the step-execution
-			// projection finishes folding the final node completions.
+			// The instance just reached a terminal status. Any node that flipped to
+			// completed/failed in the closing window (or whose projection row is
+			// still folding when the row went terminal) would keep rendering a
+			// stale "running" badge until a manual refresh. Streaming steps are the
+			// usual victims — they close their channel, and complete, last. Catch
+			// up once immediately, then once more after a short delay because the
+			// instance row can go terminal a beat before the step-execution
+			// projection finishes folding the final node completions. No live timer
+			// runs past terminal — both the event scheduler (idle once events stop)
+			// and the safety-net / fallback polls below stop themselves on terminal.
 			refreshAll();
 			const settle = setTimeout(refreshAll, 1500);
 			return () => clearTimeout(settle);
 		}
-		const t = setInterval(refreshAll, 2000);
+		// SLOW safety-net poll (event-driven path) / FAST fallback poll (no
+		// layout context). The safety net catches a dropped SSE event so the view
+		// can't permanently stale; the fallback is the old behavior when no
+		// context is available to drive events.
+		const period = instanceCtx ? SAFETY_NET_POLL_MS : FALLBACK_POLL_MS;
+		const t = setInterval(refreshAll, period);
 		return () => clearInterval(t);
 	});
 
