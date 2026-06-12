@@ -1218,6 +1218,14 @@ struct AssetFixture {
     ref_key: String,
     #[serde(default)]
     display_name: Option<String>,
+    /// Demo category folder this asset (and its type) is scoped into, named by
+    /// the same slug grammar as `demo.json::folder` (`"robotics"`, `"assets"`).
+    /// Absent ⇒ workspace-scoped (visible to every template). When set, the
+    /// asset is folder-scoped, so it only resolves for demos filed into that
+    /// folder — every demo that references it MUST live there (see the
+    /// reference map; all referenced demo assets are single-folder by design).
+    #[serde(default)]
+    folder: Option<String>,
     #[serde(default)]
     records: Vec<serde_json::Value>,
 }
@@ -1244,9 +1252,6 @@ async fn seed_demo_assets(state: &crate::AppState, root: &Path) {
         .collect();
     paths.sort();
 
-    let scope_kind = ScopeKind::Workspace;
-    let scope_id = DEMO_WORKSPACE_ID;
-
     for path in paths {
         let raw = match std::fs::read_to_string(&path) {
             Ok(s) => s,
@@ -1261,6 +1266,25 @@ async fn seed_demo_assets(state: &crate::AppState, root: &Path) {
                 tracing::warn!(fixture = %path.display(), error = %e, "demo asset: parse failed");
                 continue;
             }
+        };
+
+        // Per-fixture scope: a declared `folder` files the asset + its type into
+        // that demo category folder (the same `/demos/<slug>` tree the templates
+        // live in), so the folder rail shows real scoped content and downward-
+        // visibility resolution still reaches it for demos in that folder. The
+        // template-folder filing now happens BEFORE compile (see `seed_one`), so
+        // a robotics demo's compile sees the robotics-scoped asset. Absent
+        // `folder` ⇒ workspace scope (visible everywhere), the historical
+        // default for cross-cutting assets.
+        let (scope_kind, scope_id) = match fixture.folder.as_deref() {
+            Some(f) if !f.trim().is_empty() => match ensure_demo_folder(state, Some(f)).await {
+                Ok(folder_id) => (ScopeKind::Folder, folder_id),
+                Err(e) => {
+                    tracing::warn!(asset = %fixture.ref_key, folder = %f, error = %e, "demo asset: folder resolution failed — defaulting to workspace scope");
+                    (ScopeKind::Workspace, DEMO_WORKSPACE_ID)
+                }
+            },
+            _ => (ScopeKind::Workspace, DEMO_WORKSPACE_ID),
         };
 
         // Resolve (or create) the asset type by name within the demo workspace.
@@ -1558,6 +1582,48 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         return Ok(SeedOutcome::AlreadyPresent);
     }
 
+    // File the demo into its declared folder (default "Demos") BEFORE compiling.
+    // Asset/resource resolution is downward-visible from the template's folder
+    // chain (`visible_scopes_for(Template, …)` reads `template_folders`), so a
+    // demo that references a *folder-scoped* asset (see `seed_demo_assets`) only
+    // resolves it once it has been filed there. `template_folders.base_template_id`
+    // has no FK to `workflow_templates`, so filing the (not-yet-inserted) v1
+    // template id is legal; a later compile failure leaves an inert orphan row
+    // that the next seed's `ON CONFLICT` heals. Keyed on `base_template_id`
+    // (= `template_id` here, since this is v1), so the home follows the live
+    // `is_latest` version automatically.
+    //
+    // Private children are skipped: they're hidden from the catalogue, so a
+    // `template_folders` row for them would be dead weight, not a demo a user
+    // can open from the folder view.
+    if visibility != "private" {
+        match ensure_demo_folder(state, demo.metadata.folder.as_deref()).await {
+            Ok(folder_id) => {
+                if let Err(e) = sqlx::query(
+                    "INSERT INTO template_folders (base_template_id, folder_id, workspace_id, moved_by) \
+                          VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (base_template_id) \
+                          DO UPDATE SET folder_id = EXCLUDED.folder_id, \
+                                        workspace_id = EXCLUDED.workspace_id, \
+                                        moved_by = EXCLUDED.moved_by, \
+                                        moved_at = NOW()",
+                )
+                .bind(template_id)
+                .bind(folder_id)
+                .bind(DEMO_WORKSPACE_ID)
+                .bind(DEMO_SEEDER_AUTHOR_ID)
+                .execute(&state.db)
+                .await
+                {
+                    tracing::warn!(template_id = %template_id, error = %e, "file demo into folder failed (skipped)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "ensure demo folder failed — demo seeded without folder grouping");
+            }
+        }
+    }
+
     // From here on, this mirrors `apply_template`'s seed-mode path:
     // compile → upload → INSERT born-published row → init Y.Doc →
     // register triggers live. Each step is logged on failure but no
@@ -1619,41 +1685,8 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .fetch_one(&state.db)
     .await?;
 
-    // File the demo into its declared folder (default "Demos"). Keyed on
-    // `base_template_id` (= `template_id` here, since this is v1), so the home
-    // follows the live `is_latest` version automatically. Best-effort: a
-    // filing failure must not fail the seed.
-    //
-    // Private children are skipped: they're hidden from the catalogue, so a
-    // `template_folders` row for them would be dead weight, not a demo a user
-    // can open from the folder view.
-    if visibility != "private" {
-        match ensure_demo_folder(state, demo.metadata.folder.as_deref()).await {
-            Ok(folder_id) => {
-                if let Err(e) = sqlx::query(
-                    "INSERT INTO template_folders (base_template_id, folder_id, workspace_id, moved_by) \
-                          VALUES ($1, $2, $3, $4) \
-                     ON CONFLICT (base_template_id) \
-                          DO UPDATE SET folder_id = EXCLUDED.folder_id, \
-                                        workspace_id = EXCLUDED.workspace_id, \
-                                        moved_by = EXCLUDED.moved_by, \
-                                        moved_at = NOW()",
-                )
-                .bind(template_id)
-                .bind(folder_id)
-                .bind(DEMO_WORKSPACE_ID)
-                .bind(DEMO_SEEDER_AUTHOR_ID)
-                .execute(&state.db)
-                .await
-                {
-                    tracing::warn!(template_id = %template_id, error = %e, "file demo into folder failed (skipped)");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "ensure demo folder failed — demo seeded without folder grouping");
-            }
-        }
-    }
+    // (The demo was already filed into its folder above, pre-compile, so
+    // folder-scoped asset references resolve during `compile_artifacts`.)
 
     // Initialize Y.Doc so the web editor sees the same graph + files the
     // executor will run. Non-fatal on failure (the executor reads AIR

@@ -20,6 +20,7 @@
     ]
   },
   "ref_key": "transfer_jobs",
+  "folder": "robotics",
   "display_name": "Transfer Jobs",
   "records": [
     { "sample_id": "S1", "from_loc": "A1", "to_loc": "P1", "op": "pick" },

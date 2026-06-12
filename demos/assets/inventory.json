@@ -11,6 +11,7 @@
     ]
   },
   "ref_key": "run_inventory",
+  "folder": "robotics",
   "display_name": "Run Inventory",
   "records": [
     {

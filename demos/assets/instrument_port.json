@@ -11,6 +11,7 @@
     ]
   },
   "ref_key": "instrument_ports",
+  "folder": "robotics",
   "display_name": "Instrument Ports",
   "records": [
     {

@@ -40,7 +40,6 @@
 	let mode = $state<'create' | 'edit'>('create');
 	let name = $state('');
 	let displayName = $state('');
-	let displayPath = $state('');
 	let cardinality = $state<Cardinality>('collection');
 	let fields = $state<PortField[]>([]);
 	let loading = $state(false);
@@ -87,7 +86,6 @@
 			mode = 'create';
 			name = '';
 			displayName = '';
-			displayPath = '';
 			cardinality = 'collection';
 			fields = [];
 			return;
@@ -98,7 +96,6 @@
 			const detail = await getAssetType(target);
 			name = detail.name;
 			displayName = detail.display_name;
-			displayPath = detail.display_path ?? '';
 			cardinality = (detail.cardinality as Cardinality) ?? 'collection';
 			fields = [...detail.fields];
 			editScope =
@@ -170,7 +167,6 @@
 				await createAssetType({
 					name,
 					display_name: displayName || name,
-					display_path: displayPath || null,
 					cardinality,
 					fields,
 					scope_kind: scope.kind,
@@ -179,7 +175,6 @@
 			} else if (typeId) {
 				await updateAssetType(typeId, {
 					display_name: displayName || name,
-					display_path: displayPath || null,
 					fields
 				});
 			}
@@ -243,16 +238,6 @@
 						placeholder="Material"
 						class="text-sm"
 						oninput={(e) => (displayName = (e.currentTarget as HTMLInputElement).value)}
-					/>
-				</FormField>
-
-				<FormField label="Folder (display path)" for="asset-type-folder">
-					<Input
-						id="asset-type-folder"
-						value={displayPath}
-						placeholder="materials/metals"
-						class="font-mono text-sm"
-						oninput={(e) => (displayPath = (e.currentTarget as HTMLInputElement).value)}
 					/>
 				</FormField>
 

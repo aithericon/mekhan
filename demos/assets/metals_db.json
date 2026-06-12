@@ -12,6 +12,7 @@
     ]
   },
   "ref_key": "metals_db",
+  "folder": "assets",
   "display_name": "Metals DB",
   "records": [
     { "name": "Aluminum 6061", "density": 2.70, "e_modulus": 69 },

@@ -261,7 +261,7 @@
 		if (mode === 'edit') return null; // path is locked on edit
 		if (!path) return null; // empty handled at submit
 		if (!PATH_PATTERN.test(path)) {
-			return 'Lowercase letter first, then letters / digits / underscores. Used as `<path>.<field>` in Python.';
+			return 'Lowercase letter first, then letters / digits / underscores. Used as `<key>.<field>` in Python.';
 		}
 		return null;
 	});
@@ -312,7 +312,7 @@
 		}
 		if (mode === 'create') {
 			if (!path) {
-				error = 'Enter a path';
+				error = 'Enter a key';
 				return;
 			}
 			if (pathError) {
@@ -430,8 +430,8 @@
 					</FormField>
 
 					<FormField
-						label="Path"
-						description="Snake_case identifier. Referenced in workflow code as `<path>.<field>`."
+						label="Key"
+						description="Snake_case identifier — the resource's reference key, not a folder. Referenced in workflow code as `<key>.<field>`."
 					>
 						<Input
 							type="text"

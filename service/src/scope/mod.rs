@@ -330,11 +330,33 @@ pub async fn visible_scopes_for(
             let (base_id, workspace_id) = match base {
                 Some(b) => b,
                 None => {
-                    // Unknown template — treat scope_id itself as the template
-                    // owner with no workspace/folders (defensive).
+                    // No `workflow_templates` row yet. This is the seed-time
+                    // compile window: the demo seeder files the template into
+                    // its folder (`template_folders`) BEFORE compiling, but the
+                    // template row itself only lands after a successful compile
+                    // (it needs the compiled artifacts). So fall back to the
+                    // pre-filed home folder — which carries its own
+                    // `workspace_id` — so folder-scoped asset/resource
+                    // definitions resolve during that compile. With no filing
+                    // (a genuinely unknown id), this degrades to the historical
+                    // defensive empty result.
+                    let home: Option<(Uuid, Uuid)> = sqlx::query_as(
+                        "SELECT folder_id, workspace_id FROM template_folders WHERE base_template_id = $1",
+                    )
+                    .bind(scope_id)
+                    .fetch_optional(db)
+                    .await?;
+                    let (folders, workspace) = match home {
+                        Some((home_id, ws)) => {
+                            let chain: Vec<(Uuid,)> =
+                                sqlx::query_as(CHAIN_SQL).bind(home_id).fetch_all(db).await?;
+                            (chain.into_iter().map(|(f,)| f).collect(), Some(ws))
+                        }
+                        None => (Vec::new(), None),
+                    };
                     return Ok(VisibleScopes {
-                        workspace: None,
-                        folders: Vec::new(),
+                        workspace,
+                        folders,
                         template: Some(scope_id),
                     });
                 }

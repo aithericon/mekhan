@@ -9,6 +9,7 @@
     ]
   },
   "ref_key": "steel_spec",
+  "folder": "assets",
   "display_name": "Steel Spec",
   "records": [
     { "yield_strength": 355, "grade": "S355" }

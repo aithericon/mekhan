@@ -11,6 +11,7 @@
     ]
   },
   "ref_key": "robot_descriptions",
+  "folder": "robotics",
   "display_name": "Robot Description",
   "records": [
     {

@@ -11,6 +11,7 @@
     ]
   },
   "ref_key": "swap_inventory",
+  "folder": "robotics",
   "display_name": "Swap Inventory",
   "records": [
     {
