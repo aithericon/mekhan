@@ -11,6 +11,7 @@
 	import Zap from '@lucide/svelte/icons/zap';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { appendSnippet } from '$lib/editor/append-snippet';
+	import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
 
 	type Port = components['schemas']['Port'];
 
@@ -94,11 +95,11 @@
 		// on the right, the Start's `target` handle on the left), stacked so
 		// multiple triggers don't overlap.
 		const position = { x: base.x - 260, y: base.y + feedingTriggers.length * 88 };
-		const triggerId = `node-${Date.now()}`;
+		const triggerId = mintNodeId();
 		const triggerData = createDefaultNodeData('trigger');
 		binding.addNode(triggerId, 'trigger', position, triggerData);
 		binding.addEdge({
-			id: `e-${triggerId}-${nodeId}-${Date.now()}`,
+			id: mintEdgeId(triggerId, nodeId),
 			source: triggerId,
 			target: nodeId,
 			sourceHandle: 'out',

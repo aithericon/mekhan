@@ -23,6 +23,7 @@
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { createDefaultNodeData } from '$lib/types/editor';
+	import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Zap from '@lucide/svelte/icons/zap';
@@ -95,11 +96,11 @@
 		// on the right, the Start's `target` handle on the left), stacked so
 		// multiple triggers don't overlap.
 		const position = { x: base.x - 260, y: base.y + feedingTriggers.length * 88 };
-		const triggerId = `node-${Date.now()}`;
+		const triggerId = mintNodeId();
 		const triggerData = createDefaultNodeData('trigger');
 		binding.addNode(triggerId, 'trigger', position, triggerData);
 		binding.addEdge({
-			id: `e-${triggerId}-${nodeId}-${Date.now()}`,
+			id: mintEdgeId(triggerId, nodeId),
 			source: triggerId,
 			target: nodeId,
 			sourceHandle: 'out',

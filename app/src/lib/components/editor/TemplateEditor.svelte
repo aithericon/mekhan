@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import { templateFamilyId } from '$lib/components/editor/toolbar/runs-menu';
@@ -39,7 +39,8 @@
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
-	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import { YjsGraphBinding, type GraphClipboard } from '$lib/yjs/graph-binding.svelte';
+	import { getClipboard, setClipboard, nextPasteOffset } from '$lib/editor/graph-clipboard';
 	import { setWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 	import { refreshSubworkflowContracts } from '$lib/editor/subworkflow-contracts';
 	import type {
@@ -60,6 +61,11 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
+	// Full multi-selection mirror (copy/duplicate operate on this); the single
+	// `selectedNodeId` keeps driving the property panel.
+	let selectedNodeIds = $state<string[]>([]);
+	// bind:this seam to the canvas — only the selection setter is exposed.
+	let canvasRef = $state<{ setSelectedNodes: (ids: string[]) => void } | null>(null);
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
 	let testsPanelOpen = $state(false);
@@ -343,10 +349,12 @@
 		selectedNodeId = nodeId;
 	}
 
-	// Cmd/Ctrl+Z → undo, Shift+Cmd/Ctrl+Z or Ctrl+Y → redo. Skipped when the
-	// keystroke targets a text field (input/textarea/contenteditable — incl.
-	// CodeMirror) so native text-editing undo keeps working, and on published
-	// templates (read-only: nothing to undo, and the binding never mutates).
+	// Page-level editor shortcuts: Cmd/Ctrl+Z → undo, Shift+Cmd/Ctrl+Z or
+	// Ctrl+Y → redo, Cmd/Ctrl+C/V/D → copy/paste/duplicate the canvas
+	// selection. All skipped when the keystroke targets a text field
+	// (input/textarea/contenteditable — incl. CodeMirror) so native text
+	// editing keeps working, and on published templates (read-only: the
+	// binding never mutates).
 	function isTextEditingTarget(t: EventTarget | null): boolean {
 		return (
 			t instanceof HTMLInputElement ||
@@ -356,17 +364,70 @@
 		);
 	}
 
-	function handleUndoKeydown(e: KeyboardEvent) {
+	// Current canvas selection → doc-detached clipboard payload. Null when
+	// nothing is selected (the keydown handler then lets the browser default
+	// through). Multi-selection wins over the single property-panel id.
+	function snapshotSelection(): GraphClipboard | null {
+		const ids =
+			selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [];
+		if (ids.length === 0) return null;
+		const clip = binding.copySubgraph(ids);
+		return clip.nodes.length > 0 ? clip : null;
+	}
+
+	async function pasteNodes(clip: GraphClipboard, offset: { x: number; y: number }) {
+		// One transaction inside pasteSubgraph → a single Cmd+Z reverts it all.
+		const newIds = binding.pasteSubgraph(clip, offset);
+		if (newIds.length === 0) return;
+		// Hand the selection to the clones once the canvas has synced the new
+		// graph (its $effect.pre runs pre-render; tick() awaits that flush).
+		await tick();
+		canvasRef?.setSelectedNodes(newIds);
+		selectedNodeIds = newIds;
+		selectedNodeId = newIds.length === 1 ? newIds[0] : null;
+	}
+
+	function handleEditorKeydown(e: KeyboardEvent) {
 		if (template?.published) return;
 		if (!e.metaKey && !e.ctrlKey) return;
-		const key = e.key.toLowerCase();
-		if (key !== 'z' && key !== 'y') return;
 		if (isTextEditingTarget(e.target)) return;
-		e.preventDefault();
-		if (key === 'y' || e.shiftKey) {
-			binding.redo();
-		} else {
-			binding.undo();
+		const key = e.key.toLowerCase();
+		if (key === 'z' || key === 'y') {
+			e.preventDefault();
+			if (key === 'y' || e.shiftKey) {
+				binding.redo();
+			} else {
+				binding.undo();
+			}
+			return;
+		}
+		if (key === 'c') {
+			// Don't hijack copy while the user has real text selected on the page.
+			if (window.getSelection()?.toString()) return;
+			const clip = snapshotSelection();
+			if (clip) {
+				e.preventDefault();
+				setClipboard(clip);
+			}
+			return;
+		}
+		if (key === 'v') {
+			const clip = getClipboard();
+			if (clip) {
+				e.preventDefault();
+				void pasteNodes(clip, nextPasteOffset());
+			}
+			return;
+		}
+		if (key === 'd') {
+			const clip = snapshotSelection();
+			if (clip) {
+				e.preventDefault();
+				// One-gesture duplicate — deliberately does NOT touch the copy
+				// clipboard, so Cmd+D between a copy and its paste is harmless.
+				void pasteNodes(clip, { x: 24, y: 24 });
+			}
+			return;
 		}
 	}
 
@@ -445,7 +506,7 @@
 	<title>{template?.name ?? 'Editor'} | Mekhan</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleUndoKeydown} />
+<svelte:window onkeydown={handleEditorKeydown} />
 
 <PageShell width="bleed" testid="template-editor-page">
 	{#if loading}
@@ -504,9 +565,11 @@
 
 			<div class="relative flex flex-1 overflow-hidden">
 				<WorkflowCanvas
+					bind:this={canvasRef}
 					graph={binding.graph}
 					readonly={template?.published ?? false}
 					onselect={handleNodeSelect}
+					onSelectionChange={(ids) => (selectedNodeIds = ids)}
 					onAddNode={handleAddNode}
 					onRemoveNodes={handleRemoveNodes}
 					onMoveNodes={handleMoveNodes}

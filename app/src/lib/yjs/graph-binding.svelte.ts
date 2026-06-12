@@ -15,6 +15,39 @@ import type {
 	StreamSourceNodeData,
 	StreamSinkNodeData
 } from '$lib/types/editor';
+import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
+
+/**
+ * One node snapshotted out of the Y.Doc for copy/paste: config flattened to
+ * plain JSON, files flattened to plain strings — fully detached from the
+ * source doc, so the clipboard survives the source being edited or deleted.
+ */
+export interface ClipboardNode {
+	id: string;
+	type: WorkflowNodeType;
+	position: { x: number; y: number };
+	label: string;
+	description?: string;
+	parentId?: string;
+	width?: number;
+	height?: number;
+	config: Record<string, unknown>;
+	files: Record<string, string>;
+}
+
+export interface GraphClipboard {
+	nodes: ClipboardNode[];
+	edges: WorkflowEdge[];
+}
+
+// Config values are JSON-plain semantically (they round-trip through Yjs
+// encoding), but at runtime they're often Svelte `$state` proxies —
+// writeDataToConfig stores the editor's reactive objects as-is, and
+// structuredClone REJECTS proxies. JSON round-trip both detaches and
+// de-proxies in one move.
+function jsonClone<T>(value: T): T {
+	return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+}
 
 /**
  * YjsGraphBinding observes a Y.Doc and exposes a reactive WorkflowGraph.
@@ -774,6 +807,189 @@ export class YjsGraphBinding {
 			this.yEdges.delete(index, 1);
 			this.yEdges.insert(index, [obj]);
 		});
+	}
+
+	// --- Clipboard (copy / paste / duplicate) ---
+
+	/** World position of a node — its stored (parent-relative) position summed
+	 *  up the `parentId` chain. Mirrors WorkflowCanvas.worldPosOf but reads the
+	 *  Y.Doc directly so clipboard logic stays canvas-free and unit-testable. */
+	private worldPositionOf(nodeId: string): { x: number; y: number } {
+		let x = 0;
+		let y = 0;
+		let cur: string | undefined = nodeId;
+		const seen = new Set<string>();
+		while (cur && !seen.has(cur)) {
+			seen.add(cur);
+			const yNode = this.yNodes.get(cur);
+			if (!yNode || !(yNode instanceof Y.Map)) break;
+			const pos =
+				(yNode.get('position') as { x: number; y: number } | undefined) ?? { x: 0, y: 0 };
+			x += pos.x;
+			y += pos.y;
+			cur = yNode.get('parentId') as string | undefined;
+		}
+		return { x, y };
+	}
+
+	/**
+	 * Snapshot a node set (+ the edges fully inside it) into a plain,
+	 * doc-detached clipboard. Pure read — no mutation, no id minting (that's
+	 * pasteSubgraph's job). Selection semantics:
+	 *  - a selected container brings ALL its descendants (transitively), so a
+	 *    copied Scope/Loop pastes with its body intact;
+	 *  - a child selected WITHOUT its container is snapshotted as a top-level
+	 *    node at its WORLD position (parentId dropped) — the simple semantics;
+	 *  - edges with either endpoint outside the (expanded) set are dropped;
+	 *  - explicit `slug`s are deliberately NOT copied: two nodes sharing an
+	 *    explicit slug is CompileError::SlugConflict, so clones fall back to
+	 *    the compiler's id-derived default slug instead.
+	 */
+	copySubgraph(nodeIds: string[]): GraphClipboard {
+		const selected = new Set(nodeIds.filter((id) => this.yNodes.has(id)));
+		// Expand to descendants of selected containers — fixpoint over parentId
+		// so nested containers (loop inside lease_scope) come along too.
+		let grew = true;
+		while (grew) {
+			grew = false;
+			this.yNodes.forEach((yNode, id) => {
+				if (selected.has(id) || !(yNode instanceof Y.Map)) return;
+				const pid = yNode.get('parentId') as string | undefined;
+				if (pid && selected.has(pid)) {
+					selected.add(id);
+					grew = true;
+				}
+			});
+		}
+
+		const nodes: ClipboardNode[] = [];
+		for (const id of selected) {
+			const yNode = this.yNodes.get(id);
+			if (!yNode || !(yNode instanceof Y.Map)) continue;
+			const parentId = yNode.get('parentId') as string | undefined;
+			const parentInSet = parentId != null && selected.has(parentId);
+			const posRaw =
+				(yNode.get('position') as { x: number; y: number } | undefined) ?? { x: 0, y: 0 };
+			const description = yNode.get('description') as string | undefined;
+			const width = yNode.get('width') as number | undefined;
+			const height = yNode.get('height') as number | undefined;
+			const configMap = yNode.get('config');
+			const filesMap = yNode.get('files');
+			const files: Record<string, string> = {};
+			if (filesMap instanceof Y.Map) {
+				filesMap.forEach((value: unknown, name: string) => {
+					if (value instanceof Y.Text) files[name] = value.toString();
+				});
+			}
+			nodes.push({
+				id,
+				type: yNode.get('type') as WorkflowNodeType,
+				// Children keep their parent-relative position; an orphaned child
+				// (container not in the set) flattens to its world position.
+				position: parentInSet ? { ...posRaw } : this.worldPositionOf(id),
+				label: (yNode.get('label') as string) ?? '',
+				...(description ? { description } : {}),
+				...(parentInSet ? { parentId } : {}),
+				...(width != null ? { width } : {}),
+				...(height != null ? { height } : {}),
+				config:
+					configMap instanceof Y.Map
+						? jsonClone(Object.fromEntries(configMap.entries()))
+						: {},
+				files
+			});
+		}
+
+		const edges: WorkflowEdge[] = [];
+		this.yEdges.forEach((item) => {
+			const source = item.source as string;
+			const target = item.target as string;
+			if (!selected.has(source) || !selected.has(target)) return;
+			edges.push({
+				id: item.id as string,
+				source,
+				target,
+				sourceHandle: item.sourceHandle as string | undefined,
+				targetHandle: item.targetHandle as string | undefined,
+				label: item.label as string | undefined,
+				type: (item.type as WorkflowEdgeType) ?? 'sequence',
+				...(item.join === 'gather' ? { join: 'gather' as const } : {})
+			});
+		});
+
+		return { nodes, edges };
+	}
+
+	/**
+	 * Insert a clipboard into the doc with FRESH ids: every node gets a new
+	 * minted id, in-set `parentId`s and edge endpoints are remapped through
+	 * the old→new map, edge ids are re-minted. The `offset` shifts paste
+	 * roots only — children of a pasted container keep their parent-relative
+	 * position (they ride the container's shift). ONE doc.transact(), so a
+	 * single undo reverts the whole paste. Returns the new node ids.
+	 */
+	pasteSubgraph(
+		clip: GraphClipboard,
+		offset: { x: number; y: number } = { x: 24, y: 24 }
+	): string[] {
+		if (clip.nodes.length === 0) return [];
+		const idMap = new Map<string, string>();
+		for (const n of clip.nodes) idMap.set(n.id, mintNodeId());
+
+		this.doc.transact(() => {
+			for (const n of clip.nodes) {
+				const newId = idMap.get(n.id)!;
+				const newParentId = n.parentId ? idMap.get(n.parentId) : undefined;
+				const yNode = new Y.Map<unknown>();
+				yNode.set('type', n.type);
+				yNode.set(
+					'position',
+					newParentId
+						? { ...n.position }
+						: { x: n.position.x + offset.x, y: n.position.y + offset.y }
+				);
+				yNode.set('label', n.label);
+				if (n.description) yNode.set('description', n.description);
+				if (newParentId) yNode.set('parentId', newParentId);
+				if (n.width != null) yNode.set('width', n.width);
+				if (n.height != null) yNode.set('height', n.height);
+				// No `slug` — see copySubgraph: clones use the id-derived default.
+
+				const config = new Y.Map<unknown>();
+				for (const [key, value] of Object.entries(n.config)) {
+					// Clone per paste so repeated pastes of one clipboard never
+					// share mutable object state.
+					config.set(key, jsonClone(value));
+				}
+				yNode.set('config', config);
+
+				const files = new Y.Map<Y.Text>();
+				for (const [name, text] of Object.entries(n.files)) {
+					files.set(name, new Y.Text(text));
+				}
+				yNode.set('files', files);
+
+				this.yNodes.set(newId, yNode);
+			}
+
+			for (const e of clip.edges) {
+				const source = idMap.get(e.source)!;
+				const target = idMap.get(e.target)!;
+				const obj: Record<string, unknown> = {
+					id: mintEdgeId(source, target),
+					source,
+					target,
+					type: e.type
+				};
+				if (e.sourceHandle) obj.sourceHandle = e.sourceHandle;
+				if (e.targetHandle) obj.targetHandle = e.targetHandle;
+				if (e.label) obj.label = e.label;
+				if (e.join === 'gather') obj.join = 'gather';
+				this.yEdges.push([obj]);
+			}
+		});
+
+		return clip.nodes.map((n) => idMap.get(n.id)!);
 	}
 
 	// --- File operations ---
