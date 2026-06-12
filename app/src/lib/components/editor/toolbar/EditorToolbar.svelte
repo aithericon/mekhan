@@ -130,11 +130,10 @@
 <div class="flex h-10 items-center justify-between border-b border-border bg-card px-3" data-testid="editor-toolbar">
 	<div class="flex items-center gap-3">
 		{#if ownerId}
-			<!-- Full-load nav (not goto): the Yjs editor session is pinned at
-			     mount, so switching templates needs a fresh page. -->
+			<!-- Plain client-side nav: the editor route keys its session on the
+			     `[id]` param, so switching templates remounts it cleanly. -->
 			<a
 				href="/templates/{ownerId}"
-				data-sveltekit-reload
 				class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 				title="Open the owning workflow"
 				data-testid="toolbar-owner-breadcrumb"

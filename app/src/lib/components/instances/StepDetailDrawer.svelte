@@ -469,8 +469,7 @@
 				{#if showChildren}
 					<!-- Sub-workflow drill-in: each child ran as its own instance
 					     (a separate engine net). Navigating to it is a fresh
-					     /instances/[id] mount — a plain <a> is correct (no
-					     data-sveltekit-reload; that's only for the Yjs editor). -->
+					     /instances/[id] mount — a plain <a> is correct. -->
 					<section>
 						<h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
 							<Workflow class="size-4 text-muted-foreground" />

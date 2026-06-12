@@ -8,6 +8,7 @@
 		DropdownMenuContent,
 		DropdownMenuItem
 	} from '$lib/components/ui/dropdown-menu';
+	import { goto } from '$app/navigation';
 	import { getTemplateVersions, type Template } from '$lib/api/client';
 
 	type Props = {
@@ -53,15 +54,13 @@
 		return mode === 'ide' ? `/templates/${v.id}/ide` : `/templates/${v.id}`;
 	}
 
-	// Full document navigation (not `goto`) on purpose: the editor page reuses
-	// its component instance across `[id]` param changes, so the Yjs session
-	// and binding — created once from the initial templateId — would stay
-	// pinned to the old version's doc. A real load guarantees the picked
-	// version's session, metadata and canvas all come up fresh.
+	// In-app navigation: both editor routes key their session-owning component
+	// on the `[id]` param, so a param-only `goto` tears the old Yjs session
+	// down (WS closed) and mounts the picked version fresh — no full reload.
 	function select(v: Template) {
 		open = false;
 		if (v.version === currentVersion) return;
-		window.location.assign(hrefFor(v));
+		void goto(hrefFor(v));
 	}
 
 	const fmtDate = (s: string) =>
