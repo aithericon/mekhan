@@ -17,3 +17,7 @@ pub mod handlers;
 pub mod model;
 pub mod queries;
 pub mod snapshot;
+/// Per-template usage analytics (`/api/v1/templates/{id}/analytics*`) — the
+/// summary + timeseries read surface over the `template_*_rollup` tables, plus
+/// the one-time backfill that seeds them from the durable source tables.
+pub mod template;

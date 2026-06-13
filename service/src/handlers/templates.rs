@@ -1052,6 +1052,7 @@ pub async fn publish_template(
         graph_json,
         interface_json,
         node_configs,
+        metrics,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -1130,6 +1131,7 @@ pub async fn publish_template(
         &air_json,
         &graph_json,
         &interface_json,
+        &metrics,
         None,
         user.subject_as_uuid(),
     )
@@ -1283,12 +1285,14 @@ where
 /// UI publish (column stays NULL) and `Some` for `apply`'s seed path. Generic
 /// over the executor so publish (pool) and apply (txn) share one statement —
 /// the single place the `source_ref` column is threaded on an UPDATE.
+#[allow(clippy::too_many_arguments)]
 async fn finalize_publish_row<'e, E>(
     exec: E,
     id: Uuid,
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
     interface_json: &serde_json::Value,
+    metrics: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
     updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
@@ -1299,7 +1303,8 @@ where
         r#"
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
-            interface_json = $4, source_ref = $5, updated_at = NOW(), updated_by = $6
+            interface_json = $4, source_ref = $5, updated_at = NOW(), updated_by = $6,
+            metrics = $7
         WHERE id = $1
         RETURNING *
         "#,
@@ -1310,6 +1315,7 @@ where
     .bind(interface_json)
     .bind(source_ref)
     .bind(updated_by)
+    .bind(metrics)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1332,6 +1338,7 @@ async fn insert_published_version<'e, E>(
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
     interface_json: &serde_json::Value,
+    metrics: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
     updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
@@ -1345,8 +1352,8 @@ where
             (id, name, description, base_template_id, parent_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, source_ref, author_id,
-             workspace_id, visibility, owner_template_id, updated_by)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15)
+             workspace_id, visibility, owner_template_id, updated_by, metrics)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING *
         "#,
     )
@@ -1365,6 +1372,7 @@ where
     .bind(&src.visibility)
     .bind(src.owner_template_id)
     .bind(updated_by)
+    .bind(metrics)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1570,6 +1578,7 @@ pub async fn apply_template(
         graph_json,
         interface_json,
         node_configs,
+        metrics,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -1629,6 +1638,7 @@ pub async fn apply_template(
                 &air_json,
                 &graph_json,
                 &interface_json,
+                &metrics,
                 source_ref_json.as_ref(),
                 user.subject_as_uuid(),
             )
@@ -1644,6 +1654,7 @@ pub async fn apply_template(
                 &air_json,
                 &graph_json,
                 &interface_json,
+                &metrics,
                 source_ref_json.as_ref(),
                 user.subject_as_uuid(),
             )

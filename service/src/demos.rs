@@ -1635,6 +1635,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         graph_json,
         interface_json,
         node_configs,
+        metrics,
     } = publisher
         .compile_artifacts(
             &demo.graph,
@@ -1668,8 +1669,9 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
-             interface_json, author_id, workspace_id, visibility, owner_template_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
+             interface_json, author_id, workspace_id, visibility, owner_template_id,
+             metrics)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         "#,
     )
@@ -1683,6 +1685,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .bind(DEMO_WORKSPACE_ID)
     .bind(visibility)
     .bind(owner_template_id)
+    .bind(&metrics)
     .fetch_one(&state.db)
     .await?;
 

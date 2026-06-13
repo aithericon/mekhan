@@ -34,6 +34,7 @@
 //!   letting it accumulate pending forever (the fate of the orphaned
 //!   `mekhan-{node,model}-replicas` durables).
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -271,6 +272,81 @@ async fn upsert_rows(
         .bind(row.error.as_ref())
         .bind(row.last_sequence as i64)
         .bind(row.execution_id.as_deref())
+        .execute(db)
+        .await?;
+    }
+
+    refresh_node_rollup(db, ctx, rows).await?;
+    Ok(())
+}
+
+/// Recompute the `template_node_rollup` buckets touched by this batch.
+///
+/// Replay-safety: the step-executions projection bootstraps by REPLAYING a
+/// net's full event log from scratch, so a blind `count = count + 1` increment
+/// would multiply on every re-fold. Instead we treat the rollup as a pure
+/// projection of `step_execution` — for each terminal (node, status) the batch
+/// just wrote, we re-derive the bucket as the COUNT + duration-SUM over ALL
+/// `step_execution` rows of that (template, version, node, status) and write it
+/// with `DO UPDATE SET` (assignment, not increment). Re-running over identical
+/// source rows yields identical numbers, so replays and redeliveries are inert.
+///
+/// Only TERMINAL statuses (`completed` / `failed` / `skipped`) are rolled up:
+/// `pending` / `running` are transient (a row leaves them) and would otherwise
+/// inflate counts mid-flight. Because a terminal status never transitions
+/// again (guarded by the fold + the `last_sequence` cursor), recomputing only
+/// the touched terminal buckets can never strand a stale count in another
+/// bucket. The `step_execution (template_id, template_version, node_id)` index
+/// keeps each aggregate cheap.
+async fn refresh_node_rollup(
+    db: &PgPool,
+    ctx: &InstanceContext,
+    rows: &[StepExecutionRow],
+) -> Result<(), sqlx::Error> {
+    // Distinct terminal (node_id, status) pairs touched this batch — dedup so a
+    // batch that wrote the same node twice recomputes its bucket once.
+    let mut touched: HashSet<(&str, &'static str)> = HashSet::new();
+    for row in rows {
+        let status = step_status_str(row.status);
+        if matches!(
+            row.status,
+            StepStatus::Completed | StepStatus::Failed | StepStatus::Skipped
+        ) {
+            touched.insert((row.node_id.as_str(), status));
+        }
+    }
+
+    for (node_id, status) in touched {
+        sqlx::query(
+            r#"
+            INSERT INTO template_node_rollup (
+                template_id, template_version, node_id, status,
+                count, duration_ms_sum
+            )
+            SELECT $1, $2, $3, $4,
+                   COUNT(*)::bigint,
+                   COALESCE(
+                       SUM(
+                           CASE
+                               WHEN started_at IS NOT NULL AND completed_at IS NOT NULL
+                               THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000.0)::bigint
+                               ELSE 0
+                           END
+                       ),
+                       0
+                   )::bigint
+            FROM step_execution
+            WHERE template_id = $1 AND template_version = $2
+              AND node_id = $3 AND status = $4
+            ON CONFLICT (template_id, template_version, node_id, status) DO UPDATE SET
+                count = EXCLUDED.count,
+                duration_ms_sum = EXCLUDED.duration_ms_sum
+            "#,
+        )
+        .bind(ctx.template_id)
+        .bind(ctx.template_version)
+        .bind(node_id)
+        .bind(status)
         .execute(db)
         .await?;
     }
