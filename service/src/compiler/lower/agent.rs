@@ -480,6 +480,25 @@ fn lower_agent_loop(
         format!("[{}]", inner.join(", "))
     };
 
+    // Worker-group partition stamp (docs/23/24) for the multi-turn LLM dispatch.
+    // The single-shot (degenerate) path inherits the full AutomatedStep dispatch
+    // and is stamped there, but the multi-turn `t_prepare_call` below builds its
+    // own job token and so MUST stamp `executor_namespace` itself — otherwise the
+    // LLM turn lands on the bare, unconsumed `executor.<prio>` subject and the
+    // agent hangs forever on a grouped-only executor (every dev/prod executor
+    // binds only the `executor-<wire>-grp` partitions). Agent nodes carry no
+    // `group` field, so the partition is always the workspace `default` worker
+    // group's capacity-resource UUID, resolved through the same `cx.known_resources`
+    // registry automated steps use (`discover_resource_globals` injects the
+    // `default` head). The no-registry compile path (tests/analyze) falls back to
+    // the literal `default` token. Computed BEFORE the `&mut *cx.ctx` reborrow.
+    let agent_dispatch_ns = ExecutionBackendType::Llm.executor_namespace_for_group(
+        &cx.known_resources
+            .get(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH)
+            .map(|r| r.id.to_string())
+            .unwrap_or_else(|| crate::worker_groups::DEFAULT_WORKER_GROUP_PATH.to_string()),
+    );
+
     let ctx = &mut *cx.ctx;
 
     // ----- Places -----
@@ -596,7 +615,7 @@ fn lower_agent_loop(
     // clear it on the parked state: the worker folds it into the turn-N blob
     // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = {per_turn_max_retries}; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = {per_turn_max_retries}; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} if type_of(s.input) == "map" && s.input._executor_namespace != () {{ d.executor_namespace = s.input._executor_namespace; }} else {{ d.executor_namespace = "{agent_dispatch_ns}"; }} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
