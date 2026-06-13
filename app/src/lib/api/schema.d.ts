@@ -1544,6 +1544,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/folders/{id}/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/folders/{id}/pages
+         * @description List the free pages homed in a folder. Gated Viewer on the folder; every row
+         *     shares that one host, so the caller's folder role annotates all of them.
+         */
+        get: operations["list_folder_pages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/human-presence": {
         parameters: {
             query?: never;
@@ -1812,6 +1833,27 @@ export interface paths {
         put: operations["put_instance_grant"];
         post?: never;
         delete: operations["delete_instance_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/instances/{id}/page
+         * @description The instance's singleton attached "Report" page, or `null`. Gated Viewer on
+         *     the instance.
+         */
+        get: operations["get_instance_page"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2545,6 +2587,87 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/pages
+         * @description Create a page. Supply EITHER `folder_id` (free page) OR `attached_kind` +
+         *     `attached_id` (singleton tab). The handler XOR-validates before the DB
+         *     backstop, requires Editor on the host (folder or attached template/instance),
+         *     derives `workspace_id` server-side, and — for a template attach — keys the
+         *     singleton on the chain root (D5). A singleton collision maps to 409.
+         */
+        post: operations["create_page"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/attached/{kind}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * PUT /api/v1/pages/attached/{kind}/{id}
+         * @description Idempotent get-or-create of the singleton page attached to a host (D4). One
+         *     round-trip — no client 404→POST race. For `kind = template` the row is keyed
+         *     on the chain root (D5). Requires Editor on the host. Returns the singleton
+         *     `Page` (created on first call, the same row thereafter).
+         */
+        put: operations["upsert_attached_page"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/pages/{id}
+         * @description Fetch a page (404 if absent) then gate Viewer on its host (fetch-then-gate
+         *     avoids leaking existence to non-members).
+         */
+        get: operations["get_page"];
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/pages/{id}
+         * @description Delete a page: the `pages` row + its Yjs document/snapshot rows (the
+         *     generalized tables lost the host FK, so cleanup is explicit) in one txn,
+         *     then `close_room` to kick any still-connected editor whose `store_update`
+         *     would otherwise fail on the deleted rows.
+         */
+        delete: operations["delete_page"];
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/v1/pages/{id}
+         * @description Rename (`title`, both kinds) and/or MOVE a free page between folders
+         *     (`folder_id`). A move re-authorizes Editor on BOTH the source and the
+         *     destination folder. Moving an attached page is rejected.
+         */
+        patch: operations["update_page"];
         trace?: never;
     };
     "/api/v1/processes": {
@@ -3988,6 +4111,28 @@ export interface paths {
         put?: never;
         /** POST /api/v1/templates/{id}/new-version */
         post: operations["new_version"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/page
+         * @description The template's singleton attached page, or `null` when none exists yet.
+         *     Read-only viewers use this (NOT the upsert) so they never create a row.
+         *     Gated Viewer on the template; keyed on the chain root (D5).
+         */
+        get: operations["get_template_page"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6629,6 +6774,19 @@ export interface components {
              * @description Optional `model_registry` resource this model was curated from.
              */
             registry_resource_id?: string | null;
+        };
+        /**
+         * @description Create a page. Supply EITHER `folder_id` (free page) OR
+         *     `attached_kind` + `attached_id` (singleton tab); the handler XOR-validates
+         *     before the DB CHECK backstop.
+         */
+        CreatePageRequest: {
+            /** Format: uuid */
+            attached_id?: string | null;
+            attached_kind?: string | null;
+            /** Format: uuid */
+            folder_id?: string | null;
+            title?: string;
         };
         /** @description Request body for `POST /api/v1/runners/registration-tokens`. */
         CreateRegistrationTokenRequest: {
@@ -9323,6 +9481,47 @@ export interface components {
          * @enum {string}
          */
         OutputAuthoring: "free" | "fixed" | "derived";
+        /**
+         * @description A page row. `attached_kind`/`attached_id` (singleton tab on a template or
+         *     instance) and `folder_id` (free page) are mutually exclusive.
+         */
+        Page: {
+            /**
+             * Format: uuid
+             * @description The host id: a template chain-root id (D5) or an instance id. Polymorphic,
+             *     no FK. `None` for a free page.
+             */
+            attached_id?: string | null;
+            /** @description `template` or `instance` for an attached page; `None` for a free page. */
+            attached_kind?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            /**
+             * Format: uuid
+             * @description Home folder for a free page; `None` for an attached page.
+             */
+            folder_id?: string | null;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description The caller's effective object role on this page's HOST
+             *     (`owner|admin|editor|viewer`), stamped by the list/get handlers. NOT a
+             *     database column — `#[sqlx(default)]` lets the `SELECT *` row map satisfy
+             *     `FromRow`; the handler fills it in. Lets the SPA gate edit affordances.
+             *     `skip_serializing_if` (NOT `skip_deserializing` — utoipa drops the
+             *     latter) keeps it out of the wire shape when unset.
+             */
+            my_effective_role?: string | null;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            updated_by: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
         PaginatedResponse_AssetSummary: {
             items: {
                 /** Format: date-time */
@@ -12440,6 +12639,15 @@ export interface components {
         UpdateMemberRoleRequest: {
             /** @description One of: `owner`, `admin`, `editor`, `viewer`. */
             role: string;
+        };
+        /**
+         * @description Partial update for a page. `title` applies to both kinds; `folder_id` moves
+         *     a FREE page between folders (rejected on an attached page).
+         */
+        UpdatePageRequest: {
+            /** Format: uuid */
+            folder_id?: string | null;
+            title?: string | null;
         };
         /**
          * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
@@ -17141,6 +17349,38 @@ export interface operations {
             };
         };
     };
+    list_folder_pages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pages in this folder */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"][];
+                };
+            };
+            /** @description No read access to folder */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     human_presence: {
         parameters: {
             query?: never;
@@ -17694,6 +17934,38 @@ export interface operations {
             };
             /** @description Object not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_instance_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attached page, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": null | components["schemas"]["Page"];
+                };
+            };
+            /** @description No read access to instance */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19121,6 +19393,252 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SilentDropsResponse"];
+                };
+            };
+        };
+    };
+    create_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePageRequest"];
+            };
+        };
+        responses: {
+            /** @description Page created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Invalid placement (must set exactly one of folder_id / attached host) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required on host */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Host not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A page is already attached to this host */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upsert_attached_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Host kind: 'template' or 'instance' */
+                kind: string;
+                /** @description Host id (template: any version, collapsed to chain root) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Singleton page (created or existing) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Invalid host kind */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required on host */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Host not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Page id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description No read access to host */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Page not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Page id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required on host */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Page not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Page id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePageRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page"];
+                };
+            };
+            /** @description Cannot move an attached page / bad destination folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required on host (and destination folder for a move) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Page not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -22376,6 +22894,47 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_template_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attached page, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": null | components["schemas"]["Page"];
+                };
+            };
+            /** @description No read access to template */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

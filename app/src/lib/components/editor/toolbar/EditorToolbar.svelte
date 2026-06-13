@@ -9,6 +9,7 @@
 	import Code from '@lucide/svelte/icons/code';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
+	import NotebookPen from '@lucide/svelte/icons/notebook-pen';
 	import Settings from '@lucide/svelte/icons/settings';
 	import Share2 from '@lucide/svelte/icons/share-2';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -55,6 +56,8 @@
 		onrundraft?: () => void;
 		/** Open the template-tests panel. */
 		ontests?: () => void;
+		/** Open the template Notes panel (collaborative rich-text page). */
+		onnotes?: () => void;
 		/** Open the template settings panel (tags + visibility). */
 		onsettings?: () => void;
 		/** Open the object-grant Share dialog (object-Admin only; the page
@@ -88,6 +91,7 @@
 		onrun,
 		onrundraft,
 		ontests,
+		onnotes,
 		onsettings,
 		onshare,
 		onrename,
@@ -257,6 +261,18 @@
 			>
 				<FlaskConical class="size-3.5" />
 				Tests
+			</Button>
+		{/if}
+
+		{#if onnotes}
+			<Button
+				variant="ghost"
+				size="sm"
+				data-testid="btn-notes"
+				onclick={onnotes}
+			>
+				<NotebookPen class="size-3.5" />
+				Notes
 			</Button>
 		{/if}
 

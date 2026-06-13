@@ -325,6 +325,15 @@
 			icon: LayoutDashboard,
 			testid: 'instance-tab-process'
 		},
+		// Report is ALWAYS available — even before the run has started — so a
+		// human can attach context/notes to a run at any point in its lifecycle.
+		{
+			href: `/instances/${instanceId}/report`,
+			label: 'Report',
+			icon: FileText,
+			title: 'Collaborative rich-text report attached to this run',
+			testid: 'instance-tab-report'
+		},
 		...(hasNet
 			? [
 					{
@@ -514,27 +523,22 @@
 						{/if}
 					</div>
 
-					{#if primaryProcess || hasNet}
-						<div class="-mb-px mt-3">
-							<PageTabs testid="instance-tabs" {tabs} />
-						</div>
-					{:else}
-						<div class="pb-3"></div>
-					{/if}
+					<!-- The Process and Report tabs are ALWAYS present (Report is
+					     available even before the run starts), so the tab strip always
+					     renders. The Workflow / Steps / Petri-net tabs are still gated
+					     on `hasNet` inside `tabs`. -->
+					<div class="-mb-px mt-3">
+						<PageTabs testid="instance-tabs" {tabs} />
+					</div>
 				</div>
 			</div>
 
-			{#if primaryProcess || hasNet}
-				<div class="relative flex-1 min-h-0">
-					{@render children()}
-				</div>
-			{:else}
-				<div
-					class="flex flex-1 items-center justify-center py-16 text-sm text-muted-foreground"
-				>
-					Instance has not started yet. No Petri net is available.
-				</div>
-			{/if}
+			<!-- Always render the active subpage. Report works before the run has
+			     started; Process / Steps / Petri-net keep their own not-started
+			     empty states. -->
+			<div class="relative flex-1 min-h-0">
+				{@render children()}
+			</div>
 		{/if}
 	</div>
 </PageShell>

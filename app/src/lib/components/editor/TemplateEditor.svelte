@@ -5,6 +5,7 @@
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import { templateFamilyId } from '$lib/components/editor/toolbar/runs-menu';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import PageEditor from '$lib/components/pages/PageEditor.svelte';
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
@@ -30,10 +31,12 @@
 		createNewVersion,
 		discardDraft,
 		compileGraph,
+		ensureAttachedPage,
 		CompileApiError,
 		PublishGateError,
 		type Template,
-		type FailingTestInfo
+		type FailingTestInfo,
+		type Page
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
@@ -70,6 +73,12 @@
 	let runDialogOpen = $state(false);
 	let testsPanelOpen = $state(false);
 	let settingsPanelOpen = $state(false);
+	let notesOpen = $state(false);
+	// Lazily fetched-or-created on first Notes open. Keyed on the template
+	// FAMILY id (chain root), so every version of a workflow shares one page.
+	let notesPage = $state<Page | null>(null);
+	let notesLoading = $state(false);
+	let notesError = $state<string | null>(null);
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 	let shareOpen = $state(false);
@@ -261,6 +270,30 @@
 			throw e;
 		}
 	}
+
+	// Open the Notes sheet, fetching-or-creating the template-family's singleton
+	// page on first open. Keyed on the chain-root family id so all versions of a
+	// workflow share one page (ensureAttachedPage is an idempotent upsert). The
+	// sheet renders immediately; the PageEditor mounts once notesPage resolves.
+	async function openNotes() {
+		notesOpen = true;
+		if (!template || notesPage || notesLoading) return;
+		try {
+			notesLoading = true;
+			notesError = null;
+			notesPage = await ensureAttachedPage('template', templateFamilyId(template));
+		} catch (e) {
+			notesError = e instanceof Error ? e.message : 'Failed to open notes';
+		} finally {
+			notesLoading = false;
+		}
+	}
+
+	// Notes editability rides the template's own effective role — NOT
+	// `published`. The server's WS handler bypasses the published gate for
+	// attached pages on purpose (Notes stay editable on a published template),
+	// so threading `published` here would wrongly lock the editor.
+	const notesEditable = $derived(roleAtLeast(template?.my_effective_role, 'editor'));
 
 	async function handlePreview() {
 		try {
@@ -551,6 +584,7 @@
 					? handleRunDraft
 					: undefined}
 				ontests={() => (testsPanelOpen = true)}
+				onnotes={template ? openNotes : undefined}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 				onshare={template && canShare ? () => (shareOpen = true) : undefined}
 				onrename={handleRename}
@@ -651,6 +685,23 @@
 				ondescriptionchange={handleDescriptionChange}
 			/>
 		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<Sheet.Root open={notesOpen} onOpenChange={(o: boolean) => (notesOpen = o)}>
+	<SheetContent class="flex w-full max-w-2xl flex-col p-0 sm:max-w-2xl">
+		<SheetTitle class="border-b border-border px-4 py-3 text-sm font-medium">Notes</SheetTitle>
+		<div class="min-h-0 flex-1 overflow-hidden px-4 py-3">
+			{#if notesError}
+				<div class="text-sm text-destructive">{notesError}</div>
+			{:else if notesLoading || !notesPage}
+				<div class="text-sm text-muted-foreground">Loading notes…</div>
+			{:else}
+				{#key notesPage.id}
+					<PageEditor pageId={notesPage.id} editable={notesEditable} />
+				{/key}
+			{/if}
+		</div>
 	</SheetContent>
 </Sheet.Root>
 

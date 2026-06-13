@@ -22,6 +22,7 @@ competing managed service.
 | `shared/apalis` (`apalis`, `apalis-nats`) | **MIT OR Apache-2.0** | Vendored fork of upstream `apalis`; license dictated by upstream. See `NOTICE`. |
 | `service` (`mekhan-service`) | **FSL-1.1-ALv2** | Deployable control plane / orchestrator. Source-available; converts to Apache-2.0 two years after each release. |
 | `app` (SvelteKit frontend) | **FSL-1.1-ALv2** | Control-plane UI shipped with `service`. Same terms as `service`. |
+| `app/src/lib/components/edra` (vendored) | **MIT** | Trimmed adaptation of [Edra](https://github.com/Tsuzat/Edra) (Tiptap v3 + Svelte 5 rich-text editor) by Tsuzat. License dictated by upstream — see `app/src/lib/components/edra/LICENSE` + `README.md`. Powers collaborative Entity Pages. |
 
 Enterprise features and the managed cloud are **not** in this repository. They
 are separate proprietary components under a commercial agreement, loaded by the

@@ -28,6 +28,7 @@
 	import FolderSettingsPanel from '$lib/components/folders/FolderSettingsPanel.svelte';
 	import ResourceList from '$lib/components/resources/ResourceList.svelte';
 	import AssetList from '$lib/components/assets/AssetList.svelte';
+	import FolderPagesPanel from '$lib/components/folders/FolderPagesPanel.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
@@ -508,6 +509,9 @@
 											<Tabs.Trigger variant="underline" value="assets" data-testid="tab-assets">
 												Assets
 											</Tabs.Trigger>
+											<Tabs.Trigger variant="underline" value="pages" data-testid="tab-pages">
+												Pages
+											</Tabs.Trigger>
 											<Tabs.Trigger variant="underline" value="settings" data-testid="tab-settings">
 												Settings
 											</Tabs.Trigger>
@@ -524,6 +528,12 @@
 									</Tabs.Content>
 									<Tabs.Content value="assets" class="pt-4">
 										<AssetList scope={{ kind: 'folder', id: selected.id }} />
+									</Tabs.Content>
+									<Tabs.Content value="pages" class="pt-4">
+										<FolderPagesPanel
+											folderId={selected.id}
+											editableRole={selected.my_effective_role}
+										/>
 									</Tabs.Content>
 									<Tabs.Content value="settings" class="pt-4">
 										<FolderSettingsPanel folder={selected} onUpdated={handleUpdated} />

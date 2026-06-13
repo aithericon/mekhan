@@ -1,0 +1,163 @@
+/**
+ * Editor content styles, scoped to `.edra-content` (the ProseMirror root).
+ *
+ * This app has no `@tailwindcss/typography` (`prose`) plugin, so the rich-text
+ * element styles are self-contained here. Colors use the app's design tokens
+ * (`--foreground`, `--muted-foreground`, `--border`, `--muted`, `--primary`)
+ * so the editor honors light/dark mode without extra wiring.
+ */
+
+.edra-content {
+	color: hsl(var(--foreground));
+	font-size: 0.95rem;
+	line-height: 1.7;
+}
+
+.edra-content :where(p) {
+	margin: 0.6em 0;
+}
+
+.edra-content :where(h1) {
+	font-size: 1.6rem;
+	font-weight: 700;
+	line-height: 1.25;
+	margin: 1.2em 0 0.5em;
+}
+.edra-content :where(h2) {
+	font-size: 1.3rem;
+	font-weight: 600;
+	line-height: 1.3;
+	margin: 1em 0 0.4em;
+}
+.edra-content :where(h3) {
+	font-size: 1.1rem;
+	font-weight: 600;
+	line-height: 1.35;
+	margin: 0.9em 0 0.35em;
+}
+
+.edra-content :where(ul, ol) {
+	margin: 0.6em 0;
+	padding-left: 1.5em;
+}
+.edra-content :where(ul) {
+	list-style: disc;
+}
+.edra-content :where(ol) {
+	list-style: decimal;
+}
+.edra-content :where(li) {
+	margin: 0.2em 0;
+}
+.edra-content :where(li > p) {
+	margin: 0.2em 0;
+}
+
+.edra-content :where(blockquote) {
+	border-left: 3px solid hsl(var(--border));
+	color: hsl(var(--muted-foreground));
+	padding-left: 1em;
+	margin: 0.8em 0;
+	font-style: italic;
+}
+
+.edra-content :where(a) {
+	color: hsl(var(--primary));
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+.edra-content :where(hr) {
+	border: none;
+	border-top: 1px solid hsl(var(--border));
+	margin: 1.2em 0;
+}
+
+.edra-content :where(code) {
+	background: hsl(var(--muted));
+	border-radius: 0.25rem;
+	padding: 0.1em 0.35em;
+	font-size: 0.85em;
+	font-family:
+		ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+.edra-content :where(pre) {
+	background: hsl(var(--muted));
+	border: 1px solid hsl(var(--border));
+	border-radius: 0.5rem;
+	padding: 0.9em 1em;
+	margin: 0.8em 0;
+	overflow-x: auto;
+	font-size: 0.85rem;
+	line-height: 1.55;
+}
+.edra-content :where(pre code) {
+	background: transparent;
+	border: none;
+	padding: 0;
+	font-size: inherit;
+}
+
+/* Tables */
+.edra-content :where(table) {
+	border-collapse: collapse;
+	margin: 0.8em 0;
+	width: 100%;
+	table-layout: fixed;
+	overflow: hidden;
+}
+.edra-content :where(th, td) {
+	border: 1px solid hsl(var(--border));
+	padding: 0.4em 0.6em;
+	vertical-align: top;
+	text-align: left;
+}
+.edra-content :where(th) {
+	background: hsl(var(--muted));
+	font-weight: 600;
+}
+.edra-content :where(.selectedCell)::after {
+	background: hsl(var(--primary) / 0.12);
+	content: '';
+	inset: 0;
+	pointer-events: none;
+	position: absolute;
+	z-index: 2;
+}
+.edra-content :where(.tableWrapper) {
+	overflow-x: auto;
+}
+
+/* Placeholder (Tiptap Placeholder extension on the first empty node) */
+.edra-content :where(p.is-editor-empty:first-child)::before {
+	color: hsl(var(--muted-foreground));
+	content: attr(data-placeholder);
+	float: left;
+	height: 0;
+	pointer-events: none;
+}
+
+/* ProseMirror baseline: a focused editor must not show the UA outline */
+.edra-content.ProseMirror:focus {
+	outline: none;
+}
+
+/* lowlight / highlight.js token colors via design tokens (kept minimal) */
+.edra-content :where(.hljs-comment, .hljs-quote) {
+	color: hsl(var(--muted-foreground));
+	font-style: italic;
+}
+.edra-content :where(.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal) {
+	color: hsl(var(--primary));
+}
+.edra-content :where(.hljs-string, .hljs-attr, .hljs-template-tag) {
+	color: hsl(142 45% 45%);
+}
+.edra-content :where(.hljs-number, .hljs-symbol, .hljs-bullet) {
+	color: hsl(28 70% 50%);
+}
+.edra-content :where(.hljs-title, .hljs-section, .hljs-name) {
+	color: hsl(210 70% 55%);
+}

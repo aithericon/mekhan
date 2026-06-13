@@ -154,6 +154,14 @@ export type Folder = components['schemas']['Folder'];
 export type CreateFolderRequest = components['schemas']['CreateFolderRequest'];
 export type UpdateFolderRequest = components['schemas']['UpdateFolderRequest'];
 export type SetFolderRequest = components['schemas']['SetFolderRequest'];
+
+// ─── Pages (collaborative rich-text docs — Edra + Yjs) ──────────────────────
+export type Page = components['schemas']['Page'];
+export type CreatePageRequest = components['schemas']['CreatePageRequest'];
+export type UpdatePageRequest = components['schemas']['UpdatePageRequest'];
+/** `kind` for an attached (singleton-tab) page's host. */
+export type PageAttachKind = 'template' | 'instance';
+
 export type SetTagsRequest = components['schemas']['SetTagsRequest'];
 export type SetVisibilityRequest = components['schemas']['SetVisibilityRequest'];
 export type SetActiveWorkspaceRequest =
@@ -1326,6 +1334,88 @@ export async function getTemplateFolder(templateId: string): Promise<Folder | nu
 		);
 	}
 	return (res.data ?? null) as Folder | null;
+}
+
+// ── Pages (collaborative rich-text docs; rich content lives in a Yjs doc keyed
+//    on the page id, never in these REST payloads) ───────────────────────────
+
+/** PUT /api/v1/pages/attached/{kind}/{id} — idempotent get-or-create of the
+ *  singleton page attached to a host (D4). One round-trip, no client 404→POST
+ *  race. For `kind = 'template'` pass the chain-root id (D5). Editor on host. */
+export async function ensureAttachedPage(
+	kind: PageAttachKind,
+	id: string
+): Promise<Page> {
+	return unwrap(
+		await client.PUT('/api/v1/pages/attached/{kind}/{id}', {
+			params: { path: { kind, id } }
+		})
+	);
+}
+
+/** GET /api/v1/folders/{id}/pages — the free pages homed in a folder, ACL-annotated. */
+export async function listFolderPages(folderId: string): Promise<Page[]> {
+	return unwrap(
+		await client.GET('/api/v1/folders/{id}/pages', {
+			params: { path: { id: folderId } }
+		})
+	);
+}
+
+/** POST /api/v1/pages — create a page. Supply EITHER `folder_id` (free page) OR
+ *  `attached_kind` + `attached_id` (singleton tab); the two are XOR. */
+export async function createPage(body: CreatePageRequest): Promise<Page> {
+	return unwrap(await client.POST('/api/v1/pages', { body }));
+}
+
+/** GET /api/v1/pages/{id} — fetch a page (gated Viewer on its host). */
+export async function getPage(id: string): Promise<Page> {
+	return unwrap(await client.GET('/api/v1/pages/{id}', { params: { path: { id } } }));
+}
+
+/** PATCH /api/v1/pages/{id} — rename (`title`) and/or move a free page between
+ *  folders (`folder_id`). Moving an attached page is rejected server-side. */
+export async function updatePage(id: string, body: UpdatePageRequest): Promise<Page> {
+	return unwrap(
+		await client.PATCH('/api/v1/pages/{id}', { params: { path: { id } }, body })
+	);
+}
+
+/** DELETE /api/v1/pages/{id} — drops the row + its Yjs document rows. */
+export async function deletePage(id: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/pages/{id}', { params: { path: { id } } });
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+/** GET /api/v1/templates/{id}/page — the template's singleton attached page, or
+ *  `null` when none exists yet (read-only viewers use THIS, not the upsert). */
+export async function getTemplatePage(templateId: string): Promise<Page | null> {
+	const res = await client.GET('/api/v1/templates/{id}/page', {
+		params: { path: { id: templateId } }
+	});
+	if (res.error !== undefined) {
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
+	}
+	return (res.data ?? null) as Page | null;
+}
+
+/** GET /api/v1/instances/{id}/page — the instance's singleton attached page, or
+ *  `null` when none exists yet. */
+export async function getInstancePage(instanceId: string): Promise<Page | null> {
+	const res = await client.GET('/api/v1/instances/{id}/page', {
+		params: { path: { id: instanceId } }
+	});
+	if (res.error !== undefined) {
+		throw new ApiError(
+			res.response.status,
+			res.error as Record<string, unknown> | string | undefined
+		);
+	}
+	return (res.data ?? null) as Page | null;
 }
 
 export async function getTemplateTags(templateId: string): Promise<string[]> {
