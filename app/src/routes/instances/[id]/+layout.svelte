@@ -38,6 +38,8 @@
 	import CornerLeftUp from '@lucide/svelte/icons/corner-left-up';
 	import Clock from '@lucide/svelte/icons/clock';
 	import { CopyButton } from '$lib/components/ui/copy-button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { timeAgo } from '$lib/utils';
 
 	let saveAsTestOpen = $state(false);
 	let shareOpen = $state(false);
@@ -492,11 +494,27 @@
 
 						{#if instance.started_at}
 							<span class="text-border">·</span>
-							<span>Started {formatDate(instance.started_at)}</span>
+							<span class="inline-flex items-center gap-1">
+								Started
+								<Tooltip.Root>
+									<Tooltip.Trigger class="cursor-default underline-offset-2 hover:underline">
+										{timeAgo(instance.started_at)}
+									</Tooltip.Trigger>
+									<Tooltip.Content>{formatDate(instance.started_at)}</Tooltip.Content>
+								</Tooltip.Root>
+							</span>
 						{/if}
 						{#if instance.completed_at}
 							<span class="text-border">·</span>
-							<span>Finished {formatDate(instance.completed_at)}</span>
+							<span class="inline-flex items-center gap-1">
+								Finished
+								<Tooltip.Root>
+									<Tooltip.Trigger class="cursor-default underline-offset-2 hover:underline">
+										{timeAgo(instance.completed_at)}
+									</Tooltip.Trigger>
+									<Tooltip.Content>{formatDate(instance.completed_at)}</Tooltip.Content>
+								</Tooltip.Root>
+							</span>
 						{:else if isLive && instance.current_step}
 							<span class="text-border">·</span>
 							<span class="text-foreground">Working on {instance.current_step}</span>
