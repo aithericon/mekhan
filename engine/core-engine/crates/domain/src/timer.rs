@@ -14,6 +14,17 @@ pub struct TimerScheduleRequest {
     pub delay_ms: u64,
     /// Optional payload to include in the signal token
     pub payload: serde_json::Value,
+    /// Multi-tenancy: the workspace of the net scheduling this timer. Persisted
+    /// into the durable timer record so the Clockmaster fires the wake signal
+    /// under the right tenant (`petri.{workspace_id}.{net}.signal.{place}`),
+    /// even while a single shared Clockmaster watches the process bucket.
+    /// Defaults to `"default"` for legacy/SDK callers that omit it.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
+}
+
+fn default_workspace() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Error)]

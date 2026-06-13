@@ -39,6 +39,15 @@ pub enum NetStatus {
 pub struct NetMetadata {
     pub net_id: String,
     pub status: NetStatus,
+    /// Multi-tenancy: the workspace (tenant) this net belongs to, derived from
+    /// the event subject (`petri.{ws}.{net}.events.*`) by the projection. This
+    /// is a KV-internal field (NOT part of the hash-chained `DomainEvent`), so
+    /// adding it is safe. It lets the net_id-keyed global metadata index double
+    /// as a net_id → workspace resolver — the woken-net wake path reads it to
+    /// stamp the correct tenant before hydrating (hazard #2). Defaults to
+    /// `DEFAULT_WORKSPACE` for legacy entries written before this field existed.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,32 +69,45 @@ pub struct NetMetadata {
     pub cancel_reason: Option<String>,
 }
 
-/// Watches the NATS event stream for lifecycle events and projects them
-/// into the per-workspace `KV_NET_METADATA_{ws}` bucket.
+fn default_workspace() -> String {
+    Subjects::DEFAULT_WORKSPACE.to_string()
+}
+
+/// Watches the NATS event stream for lifecycle events and projects them into
+/// per-tenant metadata KV.
 ///
-/// One projection runs per workspace: it filters the global stream down to
-/// that workspace's lifecycle events (`petri.{ws}.*.events.>`) and writes to
-/// the workspace-scoped KV bucket, so two tenants hosted in one engine process
-/// never share metadata.
+/// This is a SINGLE GLOBAL consumer over every workspace's lifecycle events
+/// (`petri.*.events.>`). For each event it derives the workspace from the
+/// subject (`petri.{ws}.{net}.events.*`) and DUAL-WRITES:
+///
+/// 1. the global net_id-keyed index bucket [`METADATA_KV_BUCKET`]
+///    (`KV_NET_METADATA`) — the index every net_id-only reader uses
+///    (tombstone gates, discovery endpoint, woken-net workspace resolver). The
+///    entry now carries `workspace_id`, so the index doubles as a
+///    net_id → workspace map.
+/// 2. the per-tenant bucket `KV_NET_METADATA_{ws}` (via [`crate::kv_bucket_for`])
+///    — so two tenants hosted in one engine process never share metadata state.
+///    These per-ws stores are opened lazily and cached.
+///
+/// TODO(stream-per-ws): once the stream is sharded per workspace, this becomes
+/// one `net-metadata-projection-{ws}` durable per tenant filtering
+/// `petri.{ws}.*.events.>`, and the global index bucket can be dropped in favor
+/// of a workspace-scoped discovery API.
 pub struct NetMetadataProjection {
     jetstream: async_nats::jetstream::Context,
+    /// Global net_id-keyed index bucket (`KV_NET_METADATA`). Every net_id-only
+    /// reader (tombstone gate, discovery, woken-ws resolver) reads this.
     kv: Store,
-    workspace_id: String,
 }
 
 impl NetMetadataProjection {
-    /// Create a projection scoped to a workspace.
+    /// Create the global metadata projection.
     ///
-    /// `kv` must be the workspace's metadata bucket (see
-    /// [`crate::kv_bucket_for`] with [`METADATA_KV_BUCKET`]); `workspace_id`
-    /// drives the event subject filter and the durable consumer name so each
-    /// workspace gets an isolated consumer.
-    pub fn new(jetstream: async_nats::jetstream::Context, kv: Store, workspace_id: String) -> Self {
-        Self {
-            jetstream,
-            kv,
-            workspace_id,
-        }
+    /// `kv` is the global net_id-keyed index bucket ([`METADATA_KV_BUCKET`]);
+    /// per-tenant `KV_NET_METADATA_{ws}` buckets are opened lazily from
+    /// `jetstream` as workspaces are observed on the event stream.
+    pub fn new(jetstream: async_nats::jetstream::Context, kv: Store) -> Self {
+        Self { jetstream, kv }
     }
 
     /// Start the metadata projection as a spawned tokio task.
@@ -105,23 +127,21 @@ impl NetMetadataProjection {
             pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
         };
 
-        // The single global stream still captures every workspace's subjects
-        // (petri.>); the per-workspace seam returns PETRI_GLOBAL today.
-        let _stream_name = crate::stream_for_workspace(&self.workspace_id);
         let stream = self
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // Subscribe to lifecycle events across all nets IN THIS WORKSPACE.
-        // Events are published as: petri.{ws}.{net_id}.events.{suffix}.
-        // net_id="*" fans in every net within the workspace:
-        // petri.{ws}.*.events.>
-        let filter = Subjects::net_events_filter(&self.workspace_id, "*");
-        // Per-workspace durable so each workspace gets an isolated consumer
-        // cursor (two tenants must not share the net-metadata projection).
-        let consumer_name = format!("net-metadata-projection-{}", self.workspace_id);
+        // Subscribe to lifecycle events across ALL nets in ALL workspaces.
+        // Events are published as `petri.{ws}.{net_id}.events.{suffix}`; the two
+        // leading wildcards span ws and net: `petri.*.*.events.>`. The ws is
+        // recovered per-event from the subject so the projection can write the
+        // per-tenant bucket.
+        // TODO(stream-per-ws): split into per-workspace durables filtered on
+        // `petri.{ws}.*.events.>`.
+        let filter = Subjects::net_events_filter("*", "*");
+        let consumer_name = "net-metadata-projection".to_string();
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(consumer_name.clone()),
@@ -136,7 +156,11 @@ impl NetMetadataProjection {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
-        let handler = MetadataHandler { kv: &self.kv };
+        let handler = MetadataHandler {
+            jetstream: self.jetstream.clone(),
+            index_kv: self.kv.clone(),
+            per_ws_kv: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        };
 
         run_message_loop_cancellable(consumer, &handler, None, None).await
     }
@@ -188,13 +212,19 @@ impl NetMetadataProjection {
     }
 }
 
-/// Handler that processes lifecycle events and updates the KV bucket.
-struct MetadataHandler<'a> {
-    kv: &'a Store,
+/// Handler that processes lifecycle events and updates the per-tenant KV.
+///
+/// Owns the global net_id-keyed index bucket plus a lazily-populated cache of
+/// per-workspace `KV_NET_METADATA_{ws}` stores, both written on every event
+/// (dual-write) so net_id-only readers and per-tenant isolation both hold.
+struct MetadataHandler {
+    jetstream: async_nats::jetstream::Context,
+    index_kv: Store,
+    per_ws_kv: tokio::sync::Mutex<std::collections::HashMap<String, Store>>,
 }
 
 #[async_trait::async_trait]
-impl MessageHandler for MetadataHandler<'_> {
+impl MessageHandler for MetadataHandler {
     fn listener_name(&self) -> &str {
         "net-metadata-projection"
     }
@@ -203,6 +233,13 @@ impl MessageHandler for MetadataHandler<'_> {
         // Deserialize the persisted event
         let persisted: petri_domain::PersistedEvent =
             serde_json::from_slice(&msg.payload).map_err(|e| ProcessError::Parse(e.to_string()))?;
+
+        // Recover the workspace from the delivered subject
+        // (`petri.{ws}.{net}.events.*`). The single global consumer spans all
+        // tenants, so the concrete workspace lives only on the subject — it is
+        // stamped onto every metadata entry and selects the per-tenant bucket.
+        let ws = extract_workspace_from_subject(msg.subject.as_str())
+            .unwrap_or_else(|| Subjects::DEFAULT_WORKSPACE.to_string());
 
         match &persisted.event {
             petri_domain::DomainEvent::NetCreated {
@@ -216,6 +253,7 @@ impl MessageHandler for MetadataHandler<'_> {
                 let meta = NetMetadata {
                     net_id: net_id.clone(),
                     status: NetStatus::Created,
+                    workspace_id: ws.clone(),
                     template_id: template_id.clone(),
                     parameters: parameters.clone(),
                     created_at: persisted.timestamp.to_rfc3339(),
@@ -227,7 +265,7 @@ impl MessageHandler for MetadataHandler<'_> {
                     cancelled_by: None,
                     cancel_reason: None,
                 };
-                self.put_metadata(net_id, &meta).await?;
+                self.put_metadata(net_id, &ws, &meta).await?;
                 tracing::debug!(net_id = %net_id, "Metadata projection: net created");
             }
 
@@ -245,6 +283,7 @@ impl MessageHandler for MetadataHandler<'_> {
                         None => NetMetadata {
                             net_id: net_id.clone(),
                             status: NetStatus::Running,
+                            workspace_id: ws.clone(),
                             template_id: None,
                             parameters: None,
                             created_at: persisted.timestamp.to_rfc3339(),
@@ -257,7 +296,7 @@ impl MessageHandler for MetadataHandler<'_> {
                             cancel_reason: None,
                         },
                     };
-                    self.put_metadata(&net_id, &meta).await?;
+                    self.put_metadata(&net_id, &ws, &meta).await?;
                     tracing::debug!(net_id = %net_id, "Metadata projection: net initialized → running");
                 }
             }
@@ -275,6 +314,7 @@ impl MessageHandler for MetadataHandler<'_> {
                     None => NetMetadata {
                         net_id: net_id.clone(),
                         status: NetStatus::Completed,
+                        workspace_id: ws.clone(),
                         template_id: None,
                         parameters: None,
                         created_at: persisted.timestamp.to_rfc3339(),
@@ -287,7 +327,7 @@ impl MessageHandler for MetadataHandler<'_> {
                         cancel_reason: None,
                     },
                 };
-                self.put_metadata(net_id, &meta).await?;
+                self.put_metadata(net_id, &ws, &meta).await?;
                 tracing::info!(net_id = %net_id, "Metadata projection: net completed");
             }
 
@@ -307,6 +347,7 @@ impl MessageHandler for MetadataHandler<'_> {
                     None => NetMetadata {
                         net_id: net_id.clone(),
                         status: NetStatus::Cancelled,
+                        workspace_id: ws.clone(),
                         template_id: None,
                         parameters: None,
                         created_at: persisted.timestamp.to_rfc3339(),
@@ -319,7 +360,7 @@ impl MessageHandler for MetadataHandler<'_> {
                         cancel_reason: reason.clone(),
                     },
                 };
-                self.put_metadata(net_id, &meta).await?;
+                self.put_metadata(net_id, &ws, &meta).await?;
                 tracing::info!(net_id = %net_id, "Metadata projection: net cancelled");
             }
 
@@ -347,6 +388,7 @@ impl MessageHandler for MetadataHandler<'_> {
                     None => NetMetadata {
                         net_id: net_id.clone(),
                         status: NetStatus::Failed,
+                        workspace_id: ws.clone(),
                         template_id: None,
                         parameters: None,
                         created_at: persisted.timestamp.to_rfc3339(),
@@ -359,7 +401,7 @@ impl MessageHandler for MetadataHandler<'_> {
                         cancel_reason: Some(detail),
                     },
                 };
-                self.put_metadata(net_id, &meta).await?;
+                self.put_metadata(net_id, &ws, &meta).await?;
                 tracing::warn!(net_id = %net_id, "Metadata projection: net failed");
             }
 
@@ -371,20 +413,99 @@ impl MessageHandler for MetadataHandler<'_> {
     }
 }
 
-impl MetadataHandler<'_> {
-    async fn put_metadata(&self, net_id: &str, meta: &NetMetadata) -> Result<(), ProcessError> {
-        let value = serde_json::to_vec(meta).map_err(|e| ProcessError::Business(e.to_string()))?;
-        self.kv.put(net_id, value.into()).await.map_err(|e| {
-            ProcessError::Business(format!("Failed to put metadata for {}: {}", net_id, e))
-        })?;
+impl MetadataHandler {
+    /// Open (and cache) the per-workspace `KV_NET_METADATA_{ws}` store.
+    async fn per_ws_store(&self, ws: &str) -> Option<Store> {
+        {
+            let cache = self.per_ws_kv.lock().await;
+            if let Some(store) = cache.get(ws) {
+                return Some(store.clone());
+            }
+        }
+        let bucket = crate::kv_bucket_for(METADATA_KV_BUCKET, ws);
+        // get-or-create: the projection may observe a workspace before any
+        // other component opened its bucket.
+        let store = match self.jetstream.get_key_value(&bucket).await {
+            Ok(s) => Some(s),
+            Err(_) => match self
+                .jetstream
+                .create_key_value(async_nats::jetstream::kv::Config {
+                    bucket: bucket.clone(),
+                    history: 1,
+                    ..Default::default()
+                })
+                .await
+            {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!(bucket = %bucket, error = %e,
+                        "Failed to open per-workspace metadata bucket");
+                    None
+                }
+            },
+        };
+        if let Some(ref s) = store {
+            self.per_ws_kv
+                .lock()
+                .await
+                .insert(ws.to_string(), s.clone());
+        }
+        store
+    }
+
+    /// DUAL-WRITE the metadata: stamp `workspace_id` (the event subject is
+    /// authoritative), then write the global net_id-keyed index AND the
+    /// per-tenant `KV_NET_METADATA_{ws}` bucket.
+    async fn put_metadata(
+        &self,
+        net_id: &str,
+        ws: &str,
+        meta: &NetMetadata,
+    ) -> Result<(), ProcessError> {
+        let mut meta = meta.clone();
+        meta.workspace_id = ws.to_string();
+        let value = serde_json::to_vec(&meta).map_err(|e| ProcessError::Business(e.to_string()))?;
+
+        // 1. Global index bucket (net_id-keyed; readers that lack a ws use this).
+        self.index_kv
+            .put(net_id, value.clone().into())
+            .await
+            .map_err(|e| {
+                ProcessError::Business(format!("Failed to put index metadata for {}: {}", net_id, e))
+            })?;
+
+        // 2. Per-tenant bucket (isolation). Best-effort: if the bucket can't be
+        // opened the index write above still keeps the net discoverable.
+        // TODO(stream-per-ws): once metadata is sharded per workspace, the
+        // per-ws bucket becomes the source of truth and the index is dropped.
+        if let Some(store) = self.per_ws_store(ws).await {
+            if let Err(e) = store.put(net_id, value.into()).await {
+                tracing::warn!(net_id = %net_id, workspace = %ws, error = %e,
+                    "Failed to put per-workspace metadata (index write succeeded)");
+            }
+        }
         Ok(())
     }
 
     async fn get_metadata(&self, net_id: &str) -> Option<NetMetadata> {
-        match self.kv.get(net_id).await {
+        match self.index_kv.get(net_id).await {
             Ok(Some(entry)) => serde_json::from_slice(&entry).ok(),
             _ => None,
         }
+    }
+}
+
+/// Extract the workspace (tenant) from a ws-segmented event subject like
+/// `petri.{ws}.{net_id}.events.{suffix}` (ADR-09 layout).
+fn extract_workspace_from_subject(subject: &str) -> Option<String> {
+    let parts: Vec<&str> = subject.split('.').collect();
+    if parts.len() >= 5
+        && parts[0] == Subjects::PETRI_ROOT
+        && parts[3] == Subjects::EVENTS_CATEGORY
+    {
+        Some(parts[1].to_string())
+    } else {
+        None
     }
 }
 
@@ -412,6 +533,7 @@ mod tests {
         let meta = NetMetadata {
             net_id: "test-net".to_string(),
             status: NetStatus::Running,
+            workspace_id: "ws1".to_string(),
             template_id: Some("template-1".to_string()),
             parameters: Some(serde_json::json!({"key": "value"})),
             created_at: "2024-01-01T00:00:00Z".to_string(),
@@ -429,7 +551,39 @@ mod tests {
 
         assert_eq!(parsed.net_id, "test-net");
         assert_eq!(parsed.status, NetStatus::Running);
+        assert_eq!(parsed.workspace_id, "ws1");
         assert_eq!(parsed.template_id, Some("template-1".to_string()));
+    }
+
+    #[test]
+    fn test_workspace_id_defaults_for_legacy_entry() {
+        // A metadata blob written before `workspace_id` existed must still
+        // deserialize, defaulting to DEFAULT_WORKSPACE.
+        let legacy = serde_json::json!({
+            "net_id": "old-net",
+            "status": "running",
+            "created_at": "2024-01-01T00:00:00Z"
+        });
+        let parsed: NetMetadata = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.workspace_id, Subjects::DEFAULT_WORKSPACE);
+    }
+
+    #[test]
+    fn test_extract_workspace_from_subject() {
+        assert_eq!(
+            extract_workspace_from_subject("petri.default.my-net.events.net.initialized"),
+            Some("default".to_string())
+        );
+        assert_eq!(
+            extract_workspace_from_subject("petri.ws1.net-123.events.token.created"),
+            Some("ws1".to_string())
+        );
+        // Old (pre-ws) scheme no longer matches.
+        assert_eq!(
+            extract_workspace_from_subject("petri.events.my-net.net.initialized"),
+            None
+        );
+        assert_eq!(extract_workspace_from_subject("petri.events"), None);
     }
 
     #[test]

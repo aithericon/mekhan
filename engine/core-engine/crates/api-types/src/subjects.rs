@@ -152,6 +152,25 @@ impl Subjects {
         )
     }
 
+    /// Parse the workspace out of a `petri.{ws}.commands.create_net` subject.
+    ///
+    /// Returns `Some(ws)` when the subject matches the create-net shape, else
+    /// `None`. The create-net listener filters on the wildcard-ws subject and
+    /// recovers the concrete workspace from the delivered subject so spawned /
+    /// NATS-created child nets are stamped under the parent's tenant (hazard #3).
+    pub fn parse_create_net_subject(subject: &str) -> Option<&str> {
+        let parts: Vec<&str> = subject.split('.').collect();
+        if parts.len() == 4
+            && parts[0] == Self::PETRI_ROOT
+            && parts[2] == Self::COMMANDS_CATEGORY
+            && parts[3] == Self::COMMAND_CREATE_NET_SUFFIX
+        {
+            Some(parts[1])
+        } else {
+            None
+        }
+    }
+
     // ==================== Human Task Subjects ====================
     //
     // Human task subjects use a separate root (`human.`, not `petri.`) to avoid

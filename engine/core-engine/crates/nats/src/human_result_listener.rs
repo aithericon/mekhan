@@ -298,11 +298,11 @@ impl HumanResultListener {
 /// Stream name constant for human completed results.
 pub const STREAM_HUMAN_COMPLETED: &str = "HUMAN_COMPLETED";
 
-// TODO(phase2): these are single global streams capturing the human result
-// subjects of ALL workspaces. Human subjects are ws-segmented
+// These are single global streams capturing the human result subjects of ALL
+// workspaces. Human subjects are ws-segmented
 // (`human.{ws}.{category}.{net}.{place}`), so each stream captures a
-// `human.*.{category}.>` wildcard over the workspace token. Phase 2 may shard
-// per-workspace.
+// `human.*.{category}.>` wildcard over the workspace token.
+// TODO(stream-per-ws): shard these streams per workspace.
 fn completed_stream_config() -> StreamConfig {
     StreamConfig {
         name: STREAM_HUMAN_COMPLETED.to_string(),

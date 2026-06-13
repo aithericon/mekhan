@@ -128,8 +128,8 @@ impl GlobalSignalListener {
         // ADR-09 shape is `petri.{ws}.{net}.signal.{place}`, so the two
         // leading wildcards span ws and net.
         //
-        // TODO(phase2): per-workspace consumer split — replace this single
-        // cross-workspace consumer with one durable per workspace using
+        // TODO(stream-per-ws): per-workspace consumer split — replace this
+        // single cross-workspace consumer with one durable per workspace using
         // `Subjects::signal_workspace_filter(ws)` (`petri.{ws}.*.signal.>`)
         // so each tenant's signal stream is independently consumable.
         let filter = format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::SIGNAL_CATEGORY);
@@ -179,10 +179,10 @@ impl MessageHandler for GlobalSignalHandler<'_> {
 
         // Parse subject: petri.{ws}.{net_id}.signal.{place_name}
         //
-        // TODO(phase2): once consumers are split per workspace, the resolver
-        // should be scoped by `ws` so a signal can only wake a net in its own
-        // tenant. Today the resolver is global, so `ws` is parsed but only used
-        // for diagnostics.
+        // Delivery is by net_id (globally-unique UUID), so the global resolver
+        // routes correctly across tenants; `ws` is parsed for diagnostics.
+        // TODO(stream-per-ws): once consumers are split per workspace, scope the
+        // resolver by `ws` so a signal can only wake a net in its own tenant.
         let (ws, net_id, place_name) =
             Subjects::parse_signal_subject(subject).ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse signal subject: {}", subject))

@@ -99,8 +99,8 @@ impl GlobalHumanResultListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // TODO(phase2): per-workspace consumer split — replace this single
-        // cross-workspace consumer with one durable per workspace using
+        // TODO(stream-per-ws): per-workspace consumer split — replace this
+        // single cross-workspace consumer with one durable per workspace using
         // `Subjects::human_workspace_filter(ws, HUMAN_COMPLETED_CATEGORY)`.
         let filter = all_workspace_human_filter(Subjects::HUMAN_COMPLETED_CATEGORY);
         let consumer_name = format!("{}-completed", self.consumer_name_prefix);
@@ -194,9 +194,9 @@ impl GlobalHumanResultListener {
 /// Cross-workspace subscription/stream filter for a human-task category:
 /// `human.*.{category}.>` (the leading `*` spans `{ws}` per ADR-09).
 ///
-/// TODO(phase2): per-workspace consumer split — this single cross-workspace
-/// filter is replaced by `Subjects::human_workspace_filter(ws, category)`
-/// (`human.{ws}.{category}.>`) once each tenant gets its own durable.
+/// TODO(stream-per-ws): per-workspace consumer split — this single
+/// cross-workspace filter is replaced by `Subjects::human_workspace_filter(ws,
+/// category)` (`human.{ws}.{category}.>`) once each tenant gets its own durable.
 fn all_workspace_human_filter(category: &str) -> String {
     format!("{}.*.{}.>", Subjects::HUMAN_ROOT, category)
 }

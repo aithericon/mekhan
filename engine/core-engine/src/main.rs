@@ -54,17 +54,29 @@ async fn main() {
         tracing::warn!(error = %e, "Failed to create NATS streams (they may already exist)");
     }
 
-    // Ensure the timers KV bucket exists
-    if let Err(e) = ensure_timer_kv(&jetstream).await {
+    // Ensure the timers KV bucket exists. The live bucket is per-workspace
+    // (`KV_TIMERS_{ws}`); pre-create the process-workspace one here so the
+    // single shared `NatsTimerClient` / `Clockmaster` (which `get` the bucket,
+    // not create it) find it. Per-tenant timer buckets for non-default
+    // workspaces are pre-created on demand below.
+    // TODO(stream-per-ws): create one `KV_TIMERS_{ws}` per workspace + a
+    // per-ws Clockmaster lifecycle.
+    let process_workspace = config.workspace().to_string();
+    if let Err(e) = ensure_timer_kv(&jetstream, &process_workspace).await {
         tracing::warn!(error = %e, "Failed to create timers KV bucket");
     }
 
     // Initialize timer client and clockmaster.
-    // TODO(phase2): these are process-level singletons spanning all workspaces.
-    // They are scoped to the process-level workspace fallback (DEFAULT_WORKSPACE
-    // in dev) for now; phase 2 makes timers/clockmaster per-workspace so
-    // `KV_TIMERS_{ws}` and the signal subjects stay tenant-isolated.
-    let process_workspace = config.workspace().to_string();
+    //
+    // Single process-workspace `NatsTimerClient` + `Clockmaster` watching
+    // `KV_TIMERS_{process_ws}`. Tenant isolation for the FIRE path is preserved
+    // even with one shared watcher: each scheduled `TimerValue` carries its
+    // net's real `workspace_id` (the timer handler shares the service's
+    // workspace cell), and the Clockmaster fires `petri.{timer.ws}.{net}.
+    // signal.{place}` under THAT workspace, not its own.
+    // TODO(stream-per-ws): one `Clockmaster` per workspace watching
+    // `KV_TIMERS_{ws}` (true per-tenant timer buckets); the `TimerValue.
+    // workspace_id` carry becomes redundant then.
     let timer_client = match NatsTimerClient::new(&jetstream, &process_workspace).await {
         Ok(client) => Some(Arc::new(client)),
         Err(e) => {
@@ -93,8 +105,13 @@ async fn main() {
             .and_then(|s| s.parse().ok())
             .unwrap_or(300), // 5 minutes default
     );
-    // TODO(phase2): single process-level tracker scoped to the process workspace
-    // fallback; phase 2 makes activity tracking per-workspace.
+    // Single process-level activity tracker. This stays correct under
+    // multi-tenancy WITHOUT a per-ws bucket because the tracker is keyed by
+    // net_id, which is a globally-unique UUID (mekhan derives it from
+    // `uuid::Uuid`) — two tenants can never collide on a net_id, so one shared
+    // activity bucket isolates hibernation correctly.
+    // TODO(stream-per-ws): per-workspace activity buckets (ws parsed from the
+    // listener subject) if hibernation policy ever needs to differ per tenant.
     let activity_tracker = activity_kv.map(|kv| {
         Arc::new(ActivityTracker::new(
             kv,
@@ -113,14 +130,19 @@ async fn main() {
     // hibernated nets after a cold engine boot.
     let metadata_kv_for_registry = metadata_kv.as_ref().cloned();
 
-    // Start net metadata projection
+    // Start net metadata projection.
+    //
+    // ONE global consumer over `petri.*.events.>`: it derives the workspace
+    // per-event from the subject and DUAL-WRITES the global net_id-keyed index
+    // bucket (`KV_NET_METADATA`, the index every net_id-only reader uses) plus
+    // the per-tenant `KV_NET_METADATA_{ws}` bucket (isolation). The index entry
+    // now carries `workspace_id`, so the woken-net resolver can recover a net's
+    // tenant from it (hazard #2).
+    // TODO(stream-per-ws): replace with one `net-metadata-projection-{ws}`
+    // durable per workspace once the stream is sharded per tenant.
     if let Some(kv) = metadata_kv {
-        // TODO(phase2): single process-level projection scoped to the process
-        // workspace fallback; phase 2 runs one `net-metadata-projection-{ws}`
-        // durable per workspace.
-        let projection =
-            NetMetadataProjection::new(jetstream.clone(), kv, process_workspace.clone());
-        info!("Starting net metadata projection");
+        let projection = NetMetadataProjection::new(jetstream.clone(), kv);
+        info!("Starting net metadata projection (global, ws-deriving)");
         let _handle = projection.start();
     }
 
@@ -146,62 +168,109 @@ async fn main() {
         // Create oneshot for hydration-complete signal
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-        // Create and start consumer (handles hydration + live consumption)
+        // Create the consumer (handles hydration + live consumption). It is NOT
+        // started here (multi-tenancy linchpin): at factory time the net's real
+        // workspace is unknown, so an eager start would filter
+        // `petri.{process_fallback}.{net}.events.>` — the wrong tenant. We hand
+        // the consumer to a `ConsumerStarter` the registry invokes AFTER the
+        // workspace is stamped (per-net `load_scenario` / `create_and_load`),
+        // filtering on the real workspace.
         let consumer =
             EventConsumer::new(cache.clone(), topology_store.clone(), applied_tx, ready_tx);
 
-        let js_consumer = js.clone();
-        let net_id_consumer = net_id.to_string();
-        // TODO(phase2): the event consumer is created at store-factory time,
-        // before the scenario load stamps the per-net workspace on the service.
-        // Filter on the process-level workspace fallback for now; phase 2 threads
-        // the LoadScenarioRequest.workspace_id into the factory so each net's
-        // consumer filters `petri.{ws}.{net}.events.>` under its real tenant.
-        let ws_consumer = cfg.workspace().to_string();
-        let shutdown = shutdown_for_factory.clone();
+        // Shared per-net workspace cell: the publisher reads it, and
+        // `PetriNetService::set_workspace_id` (which the registry builds against
+        // this same Arc) writes through it. The consumer-starter also reads the
+        // ws passed to it (resolved from the service post-stamp).
+        let workspace_cell: Arc<std::sync::RwLock<Option<String>>> =
+            Arc::new(std::sync::RwLock::new(None));
 
-        // Use block_in_place to start consumer and wait for hydration
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                // Spawn consumer as background task
-                tokio::spawn(async move {
-                    if let Err(e) = consumer
-                        .start(&js_consumer, &ws_consumer, &net_id_consumer, shutdown)
-                        .await
-                    {
-                        tracing::error!(
-                            error = %e,
-                            net_id = %net_id_consumer,
-                            "Event consumer stopped with error"
-                        );
-                    }
-                });
-
-                // Wait for hydration to complete before returning stores
-                if ready_rx.await.is_err() {
-                    tracing::warn!(
-                        "Event consumer ready signal dropped (consumer may have failed)"
-                    );
-                }
-            })
-        });
-
-        // Each net gets its own config with the correct net_id for bridge routing
+        // Each net gets its own config with the correct net_id for bridge routing.
         let mut net_cfg = cfg.clone();
         net_cfg.net_id = Some(net_id.to_string());
         let applied_rx_for_registry = applied_rx.clone();
-        let event_store = Arc::new(NatsEventStore::new(cache, js.clone(), net_cfg, applied_rx));
+        let event_store = Arc::new(NatsEventStore::new_with_workspace(
+            cache,
+            js.clone(),
+            net_cfg,
+            applied_rx,
+            workspace_cell.clone(),
+        ));
+
+        // Build the deferred consumer starter. Invoked once by the registry
+        // under the real per-net workspace: it spawns the consumer (filtered on
+        // `petri.{ws}.{net}.events.>`) and blocks on hydration so a woken net's
+        // history is replayed before the eval loop consults topology. The
+        // `ready_rx` is wrapped in a Mutex<Option<>> so the `Fn` closure can
+        // `take` it on the single invocation (FnOnce semantics inside an Fn).
+        let js_consumer = js.clone();
+        let net_id_consumer = net_id.to_string();
+        let shutdown = shutdown_for_factory.clone();
+        let consumer_cell = std::sync::Arc::new(std::sync::Mutex::new(Some((consumer, ready_rx))));
+        let consumer_starter: petri_api::net_registry::ConsumerStarter =
+            Arc::new(move |ws: String| {
+                let js_consumer = js_consumer.clone();
+                let net_id_consumer = net_id_consumer.clone();
+                let shutdown = shutdown.clone();
+                let consumer_cell = consumer_cell.clone();
+                Box::pin(async move {
+                    let Some((consumer, ready_rx)) = consumer_cell.lock().unwrap().take() else {
+                        // Already started — idempotent no-op.
+                        return;
+                    };
+                    tokio::spawn(async move {
+                        if let Err(e) = consumer
+                            .start(&js_consumer, &ws, &net_id_consumer, shutdown)
+                            .await
+                        {
+                            tracing::error!(
+                                error = %e,
+                                net_id = %net_id_consumer,
+                                workspace = %ws,
+                                "Event consumer stopped with error"
+                            );
+                        }
+                    });
+                    // Wait for hydration to complete before returning. For a
+                    // fresh net this resolves immediately (no history); for a
+                    // woken net it blocks until replay finishes so the registry
+                    // sees populated topology.
+                    if ready_rx.await.is_err() {
+                        tracing::warn!(
+                            "Event consumer ready signal dropped (consumer may have failed)"
+                        );
+                    }
+                })
+            });
+
         (
             event_store,
             topology_store,
             Arc::new(MarkingProjection::new()),
             applied_rx_for_registry,
+            workspace_cell,
+            consumer_starter,
         )
     });
 
     let mut registry = NetRegistry::new(store_factory);
     if let Some(kv) = metadata_kv_for_registry {
-        registry.set_metadata_lookup(Arc::new(KvMetadataLookup { metadata_kv: kv }));
+        registry.set_metadata_lookup(Arc::new(KvMetadataLookup {
+            metadata_kv: kv.clone(),
+        }));
+        // Woken-net workspace resolver (multi-tenancy linchpin / hazard #2):
+        // when a hibernated net is rehydrated, `get_or_create` consults this to
+        // stamp + start its event consumer under the REAL workspace before
+        // consulting topology. impl 1/2 wires a single-bucket resolver that
+        // reads the persisted metadata (which today carries no per-net
+        // workspace) and returns `None` → DEFAULT_WORKSPACE, preserving the
+        // single-workspace dev path. impl 2/2 must (a) persist the workspace on
+        // the per-tenant `KV_NET_METADATA_{ws}` entry (or derive it from the
+        // event subject in the projection) and (b) return it here so a woken
+        // multi-tenant net hydrates from `petri.{realws}.{net}.events.>`.
+        registry.set_woken_workspace_resolver(Arc::new(KvWokenWorkspaceResolver {
+            metadata_kv: kv,
+        }));
     }
     // Let the HTTP command handlers record net activity, so an HTTP-driven net
     // has the same idle/hibernation lifecycle as a NATS-stimulated one (the
@@ -619,12 +688,17 @@ async fn start_server(app: axum::Router, port: u16) {
 
 async fn ensure_timer_kv(
     jetstream: &async_nats::jetstream::Context,
+    workspace: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use async_nats::jetstream::kv::Config;
     use petri_nats::TIMER_KV_BUCKET;
 
+    // Per-workspace bucket: `KV_TIMERS_{ws}`. The timer client + Clockmaster
+    // open this by name (they don't create it), so it must exist first.
+    let bucket = petri_nats::kv_bucket_for(TIMER_KV_BUCKET, workspace);
+
     let kv_config = Config {
-        bucket: TIMER_KV_BUCKET.to_string(),
+        bucket: bucket.clone(),
         // Default TTL for timers if not otherwise specified.
         // Note: Option A uses bucket-level TTL for the "native" expiry.
         // We set it to a large enough value or a specific value for the lab.
@@ -636,10 +710,10 @@ async fn ensure_timer_kv(
 
     match jetstream.create_key_value(kv_config).await {
         Ok(_) => {
-            info!(bucket = %TIMER_KV_BUCKET, "Timers KV bucket ready");
+            info!(bucket = %bucket, "Timers KV bucket ready");
         }
         Err(e) => {
-            tracing::warn!(error = %e, "Could not create timers KV bucket (it may already exist)");
+            tracing::warn!(error = %e, bucket = %bucket, "Could not create timers KV bucket (it may already exist)");
         }
     }
 
@@ -845,6 +919,34 @@ impl petri_api::net_registry::MetadataLookup for KvMetadataLookup {
     }
 }
 
+/// Resolves a WOKEN net's persisted workspace so `get_or_create` can start its
+/// event consumer under the real tenant before consulting topology (hazard #2).
+///
+/// Reads the net's `workspace_id` off the global net_id-keyed metadata index
+/// (`KV_NET_METADATA`), which the projection stamps from the event subject. A
+/// woken multi-tenant net therefore hydrates from `petri.{realws}.{net}.
+/// events.>` rather than `petri.default.*`. Returns `None` (→ DEFAULT_WORKSPACE)
+/// for an unknown net or a legacy entry whose stored ws is already the default
+/// sentinel — exactly the single-workspace dev path.
+struct KvWokenWorkspaceResolver {
+    metadata_kv: async_nats::jetstream::kv::Store,
+}
+
+#[async_trait::async_trait]
+impl petri_api::net_registry::WokenWorkspaceResolver for KvWokenWorkspaceResolver {
+    async fn workspace_for(&self, net_id: &str) -> Option<String> {
+        match self.metadata_kv.get(net_id).await {
+            Ok(Some(entry)) => match serde_json::from_slice::<NetMetadata>(&entry) {
+                Ok(meta) if meta.workspace_id != Subjects::DEFAULT_WORKSPACE => {
+                    Some(meta.workspace_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 /// Implements `BridgeResolver` for the `NetRegistry` (resolves nets for bridge token injection).
 struct RegistryBridgeResolver {
     registry:
@@ -949,8 +1051,23 @@ struct RegistryNetCreator {
 
 #[async_trait::async_trait]
 impl petri_nats::NetCreator for RegistryNetCreator {
-    async fn create_and_load(&self, request: &petri_nats::CreateNetRequest) -> Result<(), String> {
+    async fn create_and_load(
+        &self,
+        request: &petri_nats::CreateNetRequest,
+        workspace: &str,
+    ) -> Result<(), String> {
         let instance = self.registry.get_or_create(&request.net_id);
+
+        // Multi-tenancy linchpin / hazard #3: stamp the workspace recovered from
+        // the create-net subject and START the deferred event consumer BEFORE the
+        // first append (`NetCreated` below + `initialize`'s `NetInitialized`).
+        // Both go through the NATS publisher, which reads the shared workspace
+        // cell to pick the subject and BLOCKS waiting for the consumer to apply
+        // the event; the consumer must be live AND filtered on the real
+        // workspace before that. Without this, spawned / NATS-created child nets
+        // publish under DEFAULT_WORKSPACE regardless of the parent's tenant.
+        instance.service.set_workspace_id(workspace.to_string());
+        instance.start_event_consumer().await;
 
         // Emit NetCreated lifecycle event
         let event = petri_domain::DomainEvent::NetCreated {
@@ -1116,11 +1233,11 @@ async fn ensure_streams(
     // Create human task streams (cancel, cancelled, failed)
     // HUMAN_REQUESTS and HUMAN_COMPLETED are created by the human client and UI respectively.
     {
-        // TODO(phase2): these are single global streams capturing the human
-        // subjects of ALL workspaces. Human subjects are now ws-segmented
+        // These are single global streams capturing the human subjects of ALL
+        // workspaces. Human subjects are ws-segmented
         // (`human.{ws}.{category}.{net}.{place}`), so each stream captures a
-        // `human.*.{category}.>` wildcard across the workspace token. Phase 2
-        // may shard these per-workspace.
+        // `human.*.{category}.>` wildcard across the workspace token.
+        // TODO(stream-per-ws): shard these streams per-workspace.
         let human_streams = [
             (
                 Subjects::STREAM_HUMAN_CANCEL,

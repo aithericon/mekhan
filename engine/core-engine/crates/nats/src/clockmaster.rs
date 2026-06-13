@@ -40,6 +40,21 @@ struct TimerValue {
     pub correlation_id: uuid::Uuid,
     pub expires_at_ms: u64,
     pub payload: serde_json::Value,
+    /// Multi-tenancy: the workspace this timer belongs to, persisted at schedule
+    /// time from the scheduling net's `service.workspace()`. The Clockmaster
+    /// fires under THIS workspace (`petri.{workspace_id}.{net}.signal.{place}`)
+    /// rather than its own process-level workspace, so a timer scheduled by a
+    /// tenant-A net signals tenant A even while a single shared Clockmaster
+    /// watches the process bucket. Defaults to `DEFAULT_WORKSPACE` for legacy
+    /// entries written before this field existed.
+    /// TODO(stream-per-ws): once a Clockmaster runs per workspace watching
+    /// `KV_TIMERS_{ws}`, this field is redundant with the watcher's own ws.
+    #[serde(default = "default_workspace")]
+    pub workspace_id: String,
+}
+
+fn default_workspace() -> String {
+    Subjects::DEFAULT_WORKSPACE.to_string()
 }
 
 /// Timer client that schedules delays by writing to a NATS KV bucket.
@@ -84,6 +99,7 @@ impl TimerClient for NatsTimerClient {
             correlation_id: request.correlation_id,
             expires_at_ms,
             payload: request.payload,
+            workspace_id: request.workspace_id,
         };
 
         let payload = serde_json::to_vec(&value).map_err(|e| TimerError::Fatal(e.to_string()))?;
@@ -223,7 +239,19 @@ impl Clockmaster {
     async fn schedule_timer_execution(&self, key: String, timer: TimerValue) {
         let js = self.js.clone();
         let kv = self.kv.clone();
-        let workspace_id = self.workspace_id.clone();
+        // Fire under the timer's OWN workspace (persisted at schedule time), not
+        // the Clockmaster's process-level workspace — a single shared Clockmaster
+        // watching the process bucket would otherwise signal the wrong tenant.
+        // Falls back to the watcher's ws only for a legacy entry whose
+        // `workspace_id` deserialized to the default sentinel AND the watcher is
+        // non-default (belt-and-suspenders; today both are `default` in dev).
+        let workspace_id = if timer.workspace_id == Subjects::DEFAULT_WORKSPACE
+            && self.workspace_id != Subjects::DEFAULT_WORKSPACE
+        {
+            self.workspace_id.clone()
+        } else {
+            timer.workspace_id.clone()
+        };
 
         tokio::spawn(async move {
             let now_ms = SystemTime::now()

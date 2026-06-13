@@ -60,8 +60,20 @@ pub struct CreateNetResponse {
 /// Trait for decoupling net creation logic from the NetRegistry.
 #[async_trait::async_trait]
 pub trait NetCreator: Send + Sync {
-    /// Create a new net instance and load the scenario.
-    async fn create_and_load(&self, request: &CreateNetRequest) -> Result<(), String>;
+    /// Create a new net instance and load the scenario under `workspace`.
+    ///
+    /// Multi-tenancy: `workspace` is recovered from the create-net subject
+    /// (`petri.{ws}.commands.create_net`) by the listener — it is NOT a field on
+    /// `CreateNetRequest` (keeps the wire contract stable and matches the
+    /// wildcard-ws subject filter). The creator stamps it onto the spawned net's
+    /// service BEFORE `initialize()` so the child publishes under the parent's
+    /// tenant rather than `DEFAULT_WORKSPACE` (hazard #3 — cross-tenant leak for
+    /// sub-workflows).
+    async fn create_and_load(
+        &self,
+        request: &CreateNetRequest,
+        workspace: &str,
+    ) -> Result<(), String>;
 }
 
 /// Listens for `petri.commands.create_net` messages and creates net instances.
@@ -112,12 +124,13 @@ impl CreateNetListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // TODO(phase2): this is a single global listener spanning ALL
-        // workspaces. The create_net subject is now ws-segmented
-        // (`petri.{ws}.commands.create_net`), so we filter with a `*` wildcard
-        // over the workspace token and recover the concrete workspace from the
-        // request payload / parsed subject downstream. Phase 2 splits this into
-        // per-workspace durables.
+        // Single global listener spanning ALL workspaces. The create_net
+        // subject is ws-segmented (`petri.{ws}.commands.create_net`), so we
+        // filter with a `*` wildcard over the workspace token and recover the
+        // concrete workspace from the delivered subject in the handler (threaded
+        // into `create_and_load` so the child net is stamped under the parent's
+        // tenant — hazard #3).
+        // TODO(stream-per-ws): split into per-workspace durables.
         let filter_subject = format!(
             "{}.*.{}.{}",
             Subjects::PETRI_ROOT,
@@ -167,15 +180,26 @@ impl MessageHandler for CreateNetHandler<'_> {
         let request: CreateNetRequest = serde_json::from_slice(&msg.payload)
             .map_err(|e| ProcessError::Parse(format!("Invalid CreateNetRequest: {}", e)))?;
 
+        // Recover the workspace from the delivered subject
+        // (`petri.{ws}.commands.create_net`). The listener filters wildcard-ws,
+        // so the concrete tenant lives only on the subject — thread it into
+        // `create_and_load` so the spawned child net is stamped under the
+        // parent's workspace (hazard #3). Falls back to DEFAULT_WORKSPACE for a
+        // malformed/legacy subject.
+        let workspace = Subjects::parse_create_net_subject(&msg.subject)
+            .unwrap_or(Subjects::DEFAULT_WORKSPACE)
+            .to_string();
+
         tracing::info!(
             net_id = %request.net_id,
+            workspace = %workspace,
             template_id = ?request.template_id,
             created_by = ?request.created_by,
             "Create-net command received"
         );
 
         self.creator
-            .create_and_load(&request)
+            .create_and_load(&request, &workspace)
             .await
             .map_err(ProcessError::Business)?;
 

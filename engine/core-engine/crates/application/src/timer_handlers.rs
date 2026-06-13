@@ -23,6 +23,13 @@ pub struct TimerScheduleHandler {
     static_delay_ms: Option<u64>,
     /// Optional override for target place (if not in token)
     static_target_place_id: Option<String>,
+    /// Shared per-net workspace cell, read LAZILY at fire time. The handler is
+    /// registered (inside `get_or_create`) BEFORE the scenario load stamps the
+    /// workspace, so it cannot capture a concrete ws at construction — it clones
+    /// the service's cell and reads it on each `execute()` so the persisted
+    /// `TimerScheduleRequest.workspace_id` (and thus the Clockmaster's fire
+    /// subject) is the net's real tenant. `None` cell → `"default"`.
+    workspace: Option<Arc<std::sync::RwLock<Option<String>>>>,
 }
 
 impl TimerScheduleHandler {
@@ -39,7 +46,27 @@ impl TimerScheduleHandler {
             output_port: output_port.into(),
             static_delay_ms: None,
             static_target_place_id: None,
+            workspace: None,
         }
+    }
+
+    /// Wire the shared per-net workspace cell so the scheduled timer records the
+    /// real tenant (multi-tenancy). The registry calls this at registration with
+    /// `service.workspace_cell()`.
+    pub fn with_workspace_cell(
+        mut self,
+        cell: Arc<std::sync::RwLock<Option<String>>>,
+    ) -> Self {
+        self.workspace = Some(cell);
+        self
+    }
+
+    /// Resolve the effective workspace at fire time (`"default"` if unstamped).
+    fn workspace(&self) -> String {
+        self.workspace
+            .as_ref()
+            .and_then(|c| c.read().unwrap().clone())
+            .unwrap_or_else(|| "default".to_string())
     }
 
     pub fn with_static_config(mut self, delay_ms: u64, target_place_id: impl Into<String>) -> Self {
@@ -86,6 +113,7 @@ impl EffectHandler for TimerScheduleHandler {
                 correlation_id,
                 delay_ms,
                 payload: payload.clone(),
+                workspace_id: self.workspace(),
             })
             .await
             .map_err(|e| EffectError::ExecutionFailed(e.to_string()))?;

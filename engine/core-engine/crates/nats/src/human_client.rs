@@ -56,8 +56,9 @@ impl HumanNatsClient {
             return Ok(());
         }
 
-        // TODO(phase2): single global stream capturing the request subjects of
-        // ALL workspaces (`human.*.request.>`). Phase 2 may shard per-workspace.
+        // Single global stream capturing the request subjects of ALL
+        // workspaces (`human.*.request.>`).
+        // TODO(stream-per-ws): shard per-workspace.
         let config = StreamConfig {
             name: HUMAN_STREAM_NAME.to_string(),
             subjects: vec![format!(
@@ -86,8 +87,9 @@ impl HumanNatsClient {
             return Ok(());
         }
 
-        // TODO(phase2): single global stream capturing the cancel subjects of
-        // ALL workspaces (`human.*.cancel.>`). Phase 2 may shard per-workspace.
+        // Single global stream capturing the cancel subjects of ALL
+        // workspaces (`human.*.cancel.>`).
+        // TODO(stream-per-ws): shard per-workspace.
         let config = StreamConfig {
             name: HUMAN_CANCEL_STREAM_NAME.to_string(),
             subjects: vec![format!(
