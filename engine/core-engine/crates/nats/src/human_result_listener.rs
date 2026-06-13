@@ -45,6 +45,11 @@ pub enum HumanResultListenerError {
 /// Each result is injected as a token with a `status` field.
 pub struct HumanResultListener {
     net_id: String,
+    /// Workspace (tenant) of this net. Human result/cancel/fail subjects are
+    /// ws-segmented (`human.{ws}.{category}.{net}.{place}`), so the per-net
+    /// consumer filters on `human.{ws}.{category}.{net}.>`. Defaults to the
+    /// reserved DEFAULT_WORKSPACE sentinel until stamped via [`Self::with_workspace`].
+    workspace_id: String,
     jetstream: async_nats::jetstream::Context,
     epoch: Arc<AtomicU64>,
 }
@@ -53,9 +58,17 @@ impl HumanResultListener {
     pub fn new(net_id: String, jetstream: async_nats::jetstream::Context) -> Self {
         Self {
             net_id,
+            workspace_id: Subjects::DEFAULT_WORKSPACE.to_string(),
             jetstream,
             epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Stamp this net's workspace so the per-net consumers filter on the
+    /// correct `human.{ws}.{category}.{net}.>` subjects.
+    pub fn with_workspace(mut self, workspace_id: impl Into<String>) -> Self {
+        self.workspace_id = workspace_id.into();
+        self
     }
 
     /// Advance the epoch for scenario reload filtering.
@@ -163,7 +176,7 @@ impl HumanResultListener {
             .await
             .map_err(|e| HumanResultListenerError::JetStream(e.to_string()))?;
 
-        let filter = Subjects::human_completed_filter(&self.net_id);
+        let filter = Subjects::human_completed_filter(&self.workspace_id, &self.net_id);
         let consumer_name = format!("human-completed-{}", self.net_id);
 
         let consumer_config = ConsumerConfig {
@@ -207,7 +220,7 @@ impl HumanResultListener {
             .await
             .map_err(|e| HumanResultListenerError::JetStream(e.to_string()))?;
 
-        let filter = Subjects::human_cancelled_filter(&self.net_id);
+        let filter = Subjects::human_cancelled_filter(&self.workspace_id, &self.net_id);
         let consumer_name = format!("human-cancelled-{}", self.net_id);
 
         let consumer_config = ConsumerConfig {
@@ -251,7 +264,7 @@ impl HumanResultListener {
             .await
             .map_err(|e| HumanResultListenerError::JetStream(e.to_string()))?;
 
-        let filter = Subjects::human_failed_filter(&self.net_id);
+        let filter = Subjects::human_failed_filter(&self.workspace_id, &self.net_id);
         let consumer_name = format!("human-failed-{}", self.net_id);
 
         let consumer_config = ConsumerConfig {
@@ -285,10 +298,19 @@ impl HumanResultListener {
 /// Stream name constant for human completed results.
 pub const STREAM_HUMAN_COMPLETED: &str = "HUMAN_COMPLETED";
 
+// TODO(phase2): these are single global streams capturing the human result
+// subjects of ALL workspaces. Human subjects are ws-segmented
+// (`human.{ws}.{category}.{net}.{place}`), so each stream captures a
+// `human.*.{category}.>` wildcard over the workspace token. Phase 2 may shard
+// per-workspace.
 fn completed_stream_config() -> StreamConfig {
     StreamConfig {
         name: STREAM_HUMAN_COMPLETED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_COMPLETED_PREFIX)],
+        subjects: vec![format!(
+            "{}.*.{}.>",
+            Subjects::HUMAN_ROOT,
+            Subjects::HUMAN_COMPLETED_CATEGORY
+        )],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -298,7 +320,11 @@ fn completed_stream_config() -> StreamConfig {
 fn cancelled_stream_config() -> StreamConfig {
     StreamConfig {
         name: Subjects::STREAM_HUMAN_CANCELLED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_CANCELLED_PREFIX)],
+        subjects: vec![format!(
+            "{}.*.{}.>",
+            Subjects::HUMAN_ROOT,
+            Subjects::HUMAN_CANCELLED_CATEGORY
+        )],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -308,7 +334,11 @@ fn cancelled_stream_config() -> StreamConfig {
 fn failed_stream_config() -> StreamConfig {
     StreamConfig {
         name: Subjects::STREAM_HUMAN_FAILED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_FAILED_PREFIX)],
+        subjects: vec![format!(
+            "{}.*.{}.>",
+            Subjects::HUMAN_ROOT,
+            Subjects::HUMAN_FAILED_CATEGORY
+        )],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -409,7 +439,7 @@ where
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
         let place_name = Subjects::parse_human_completed_subject(subject)
-            .map(|(_net_id, place)| place)
+            .map(|(_ws, _net_id, place)| place)
             .ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse completed subject: {}", subject))
             })?;
@@ -487,7 +517,7 @@ where
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
         let place_name = Subjects::parse_human_cancelled_subject(subject)
-            .map(|(_net_id, place)| place)
+            .map(|(_ws, _net_id, place)| place)
             .ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse cancelled subject: {}", subject))
             })?;
@@ -563,7 +593,7 @@ where
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
         let place_name = Subjects::parse_human_failed_subject(subject)
-            .map(|(_net_id, place)| place)
+            .map(|(_ws, _net_id, place)| place)
             .ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse failed subject: {}", subject))
             })?;

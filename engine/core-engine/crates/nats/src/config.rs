@@ -105,6 +105,17 @@ pub struct NatsConfig {
 
     /// This engine's net identity (for bridge publishing as source_net_id)
     pub net_id: Option<String>,
+
+    /// Dev/process-level workspace fallback (from `WORKSPACE_ID`).
+    ///
+    /// IMPORTANT: this is ONLY a default for loads that arrive without an
+    /// explicit `workspace_id` on `LoadScenarioRequest`. The engine hosts many
+    /// workspaces' nets in one process, so the REAL workspace is set PER-net at
+    /// load time and overrides this env default — a single process-global
+    /// workspace would stamp every net the same and collapse all tenant
+    /// isolation. `from_env` defaults this to the reserved `"default"`
+    /// sentinel.
+    pub workspace_id: Option<String>,
 }
 
 impl Default for NatsConfig {
@@ -122,11 +133,23 @@ impl Default for NatsConfig {
             circuit_breaker_threshold: 5,
             circuit_breaker_reset: Duration::from_secs(30),
             net_id: None,
+            workspace_id: None,
         }
     }
 }
 
 impl NatsConfig {
+    /// Resolve the workspace (tenant) segment for subject routing, falling back
+    /// to the reserved [`Subjects::DEFAULT_WORKSPACE`] sentinel when no
+    /// `workspace_id` is set. This is the single seam every subject builder in
+    /// this crate routes through, so a net loaded without an explicit workspace
+    /// deterministically lands under `petri.default.{net}…`.
+    pub fn workspace(&self) -> &str {
+        self.workspace_id
+            .as_deref()
+            .unwrap_or(petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE)
+    }
+
     /// Create configuration from environment variables.
     ///
     /// Uses `config-rs` with the `NATS_` prefix.
@@ -144,6 +167,12 @@ impl NatsConfig {
     /// - `NATS_CIRCUIT_BREAKER_THRESHOLD` - Failures before circuit opens (default: 5)
     /// - `NATS_CIRCUIT_BREAKER_RESET_MS` - Circuit reset time in ms (default: 30000)
     /// - `NET_ID` - Engine net identity for cross-net bridging (optional)
+    /// - `WORKSPACE_ID` - DEV-ONLY process-level workspace fallback. Defaults to
+    ///   the reserved `"default"` sentinel. This is overridden per-net by the
+    ///   first-class `workspace_id` on each `LoadScenarioRequest`; it must NOT be
+    ///   relied on as the workspace for multi-tenant operation (a single
+    ///   process-global workspace would collapse tenant isolation — see the
+    ///   field doc on [`NatsConfig::workspace_id`]).
     pub fn from_env() -> Self {
         let raw: NatsConfigRaw = Config::builder()
             .add_source(Environment::with_prefix("NATS").try_parsing(true))
@@ -165,6 +194,16 @@ impl NatsConfig {
             circuit_breaker_threshold: raw.circuit_breaker_threshold,
             circuit_breaker_reset: Duration::from_millis(raw.circuit_breaker_reset_ms),
             net_id: std::env::var("NET_ID").ok().filter(|s| !s.is_empty()),
+            // Dev fallback only. Empty/unset ⇒ the reserved "default" sentinel.
+            // The real per-net workspace overrides this at load time.
+            workspace_id: Some(
+                std::env::var("WORKSPACE_ID")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string()
+                    }),
+            ),
         }
     }
 
@@ -253,6 +292,7 @@ mod tests {
             "NATS_CIRCUIT_BREAKER_THRESHOLD",
             "NATS_CIRCUIT_BREAKER_RESET_MS",
             "NET_ID",
+            "WORKSPACE_ID",
         ] {
             std::env::remove_var(key);
         }
@@ -272,6 +312,7 @@ mod tests {
         assert_eq!(config.circuit_breaker_reset, Duration::from_secs(30));
         assert!(config.jetstream_domain.is_none());
         assert!(config.net_id.is_none());
+        assert!(config.workspace_id.is_none());
     }
 
     #[test]
@@ -291,6 +332,8 @@ mod tests {
         assert_eq!(config.circuit_breaker_reset, Duration::from_secs(30));
         assert!(config.jetstream_domain.is_none());
         assert!(config.net_id.is_none());
+        // Unset WORKSPACE_ID resolves to the reserved "default" sentinel.
+        assert_eq!(config.workspace_id.as_deref(), Some("default"));
     }
 
     #[test]
@@ -309,6 +352,7 @@ mod tests {
         std::env::set_var("NATS_CIRCUIT_BREAKER_THRESHOLD", "10");
         std::env::set_var("NATS_CIRCUIT_BREAKER_RESET_MS", "60000");
         std::env::set_var("NET_ID", "net-alpha");
+        std::env::set_var("WORKSPACE_ID", "ws-alpha");
 
         let config = NatsConfig::from_env();
         assert_eq!(config.url, "nats://remote:4222");
@@ -322,6 +366,7 @@ mod tests {
         assert_eq!(config.circuit_breaker_threshold, 10);
         assert_eq!(config.circuit_breaker_reset, Duration::from_secs(60));
         assert_eq!(config.net_id.as_deref(), Some("net-alpha"));
+        assert_eq!(config.workspace_id.as_deref(), Some("ws-alpha"));
 
         clear_nats_env();
     }

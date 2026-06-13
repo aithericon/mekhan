@@ -112,9 +112,22 @@ impl CreateNetListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
+        // TODO(phase2): this is a single global listener spanning ALL
+        // workspaces. The create_net subject is now ws-segmented
+        // (`petri.{ws}.commands.create_net`), so we filter with a `*` wildcard
+        // over the workspace token and recover the concrete workspace from the
+        // request payload / parsed subject downstream. Phase 2 splits this into
+        // per-workspace durables.
+        let filter_subject = format!(
+            "{}.*.{}.{}",
+            Subjects::PETRI_ROOT,
+            Subjects::COMMANDS_CATEGORY,
+            Subjects::COMMAND_CREATE_NET_SUFFIX
+        );
+
         let consumer_config = ConsumerConfig {
             durable_name: Some(self.consumer_name.clone()),
-            filter_subject: Subjects::COMMAND_CREATE_NET.to_string(),
+            filter_subject,
             ack_policy: AckPolicy::Explicit,
             deliver_policy: DeliverPolicy::New,
             ..Default::default()

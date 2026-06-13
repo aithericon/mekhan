@@ -124,7 +124,11 @@ async fn test_activity_touch_creates_entry() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
 
@@ -142,7 +146,11 @@ async fn test_activity_is_hot_after_touch() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.is_hot("net-1").await.expect("is_hot"));
@@ -157,7 +165,11 @@ async fn test_activity_is_hot_returns_false_for_unknown() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     assert!(!tracker.is_hot("nonexistent").await.expect("is_hot"));
 
@@ -171,7 +183,11 @@ async fn test_activity_mark_hibernating() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.is_hot("net-1").await.expect("is_hot"));
@@ -192,7 +208,11 @@ async fn test_activity_remove_deletes_entry() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.get_entry("net-1").await.expect("get").is_some());
@@ -233,7 +253,11 @@ async fn test_hibernation_triggers_on_timeout() {
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
 
     let idle_timeout = Duration::from_millis(200);
-    let activity = Arc::new(ActivityTracker::new(kv, idle_timeout));
+    let activity = Arc::new(ActivityTracker::new(
+        kv,
+        idle_timeout,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    ));
     let mock_hibernator = Arc::new(MockHibernator {
         hibernated: Mutex::new(Vec::new()),
     });
@@ -289,7 +313,11 @@ async fn test_hibernation_resets_on_retouch() {
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
 
     let idle_timeout = Duration::from_millis(500);
-    let activity = Arc::new(ActivityTracker::new(kv, idle_timeout));
+    let activity = Arc::new(ActivityTracker::new(
+        kv,
+        idle_timeout,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    ));
     let mock_hibernator = Arc::new(MockHibernator {
         hibernated: Mutex::new(Vec::new()),
     });
@@ -355,7 +383,11 @@ async fn test_metadata_projection_get_returns_none_for_unknown() {
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_metadata_kv(&ctx.jetstream, &ctx.prefix).await;
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let result = projection.get("nonexistent").await.expect("get");
     assert!(result.is_none());
@@ -390,7 +422,11 @@ async fn test_metadata_kv_put_and_get_roundtrip() {
     let value = serde_json::to_vec(&meta).unwrap();
     kv.put("test-net", value.into()).await.expect("put");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let fetched = projection
         .get("test-net")
@@ -435,7 +471,11 @@ async fn test_metadata_projection_list_all() {
             .expect("put");
     }
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let all = projection.list_all().await.expect("list_all");
     assert_eq!(all.len(), 3, "Should list all 3 nets");
@@ -471,7 +511,11 @@ async fn test_metadata_status_transitions() {
         .await
         .expect("put created");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv.clone(),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     // Update to Running
     meta.status = NetStatus::Running;
@@ -525,7 +569,11 @@ async fn test_metadata_cancelled_status() {
     let value = serde_json::to_vec(&meta).unwrap();
     kv.put("cancelled-net", value.into()).await.expect("put");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let fetched = projection.get("cancelled-net").await.expect("get").unwrap();
     assert_eq!(fetched.status, NetStatus::Cancelled);
@@ -567,7 +615,11 @@ async fn test_metadata_tombstone_completed_net() {
     let value = serde_json::to_vec(&meta).unwrap();
     kv.put("tombstone-net", value.into()).await.expect("put");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv.clone(),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     // Tombstone check: reading back should show Completed
     let fetched = projection.get("tombstone-net").await.expect("get").unwrap();
@@ -609,7 +661,11 @@ async fn test_metadata_tombstone_cancelled_net() {
         .await
         .expect("put");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv.clone(),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let fetched = projection
         .get("cancelled-tombstone")
@@ -649,7 +705,11 @@ async fn test_metadata_running_net_not_tombstone() {
     let value = serde_json::to_vec(&meta).unwrap();
     kv.put("running-net", value.into()).await.expect("put");
 
-    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
+    let projection = NetMetadataProjection::new(
+        ctx.jetstream.clone(),
+        kv.clone(),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     let fetched = projection.get("running-net").await.expect("get").unwrap();
     let is_tombstone =
@@ -822,7 +882,8 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("completed-net", "some_place");
+    let subject =
+        Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "completed-net", "some_place");
     let payload = serde_json::to_vec(&signal_to_completed).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -839,7 +900,7 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("running-net", "inbox");
+    let subject = Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "running-net", "inbox");
     let payload = serde_json::to_vec(&signal_to_running).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -995,7 +1056,7 @@ async fn test_global_signal_rejects_cancelled_net() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("cancelled-net", "inbox");
+    let subject = Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "cancelled-net", "inbox");
     let payload = serde_json::to_vec(&signal).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -1043,7 +1104,9 @@ async fn test_create_net_request_nats_publish_roundtrip() {
     let consumer = stream
         .create_consumer(async_nats::jetstream::consumer::pull::Config {
             durable_name: Some(format!("{}_create_net", ctx.prefix)),
-            filter_subject: crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            filter_subject: crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::New,
             ..Default::default()
         })
@@ -1064,7 +1127,9 @@ async fn test_create_net_request_nats_publish_roundtrip() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1158,7 +1223,9 @@ async fn test_create_net_listener_delivers_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1247,7 +1314,9 @@ async fn test_create_net_listener_works_without_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1339,7 +1408,9 @@ async fn test_create_net_listener_multiple_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1428,7 +1499,15 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let net_id1 = net_id.clone();
     let shutdown1 = shutdown.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer1.start(&js1, &net_id1, shutdown1).await {
+        if let Err(e) = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer1 error");
         }
     });
@@ -1512,7 +1591,15 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer2.start(&js2, &net_id2, shutdown2_clone).await {
+        if let Err(e) = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer2 error");
         }
     });
@@ -1652,7 +1739,15 @@ async fn test_full_cycle_create_hibernate_wake_eval() {
     let net_id1 = net_id.clone();
     let shutdown1_clone = shutdown1.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer1.start(&js1, &net_id1, shutdown1_clone).await {
+        if let Err(e) = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer1 error");
         }
     });
@@ -1744,7 +1839,15 @@ async fn test_full_cycle_create_hibernate_wake_eval() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer2.start(&js2, &net_id2, shutdown2_clone).await {
+        if let Err(e) = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer2 error");
         }
     });
@@ -1874,7 +1977,16 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let net_id1 = net_id.clone();
     let shutdown1_clone = shutdown1.clone();
     let handle1 =
-        tokio::spawn(async move { consumer1.start(&js1, &net_id1, shutdown1_clone).await });
+        tokio::spawn(async move {
+            consumer1
+                .start(
+                    &js1,
+                    crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                    &net_id1,
+                    shutdown1_clone,
+                )
+                .await
+        });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx1)
         .await
@@ -1951,7 +2063,16 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     let handle2 =
-        tokio::spawn(async move { consumer2.start(&js2, &net_id2, shutdown2_clone).await });
+        tokio::spawn(async move {
+            consumer2
+                .start(
+                    &js2,
+                    crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                    &net_id2,
+                    shutdown2_clone,
+                )
+                .await
+        });
 
     // Wait for hydration — should succeed with all 3 events
     tokio::time::timeout(Duration::from_secs(5), ready_rx2)
@@ -2023,7 +2144,11 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
         let js = ctx.jetstream.clone();
         let nid = net_a.clone();
         let s = shutdown.clone();
-        tokio::spawn(async move { consumer.start(&js, &nid, s).await });
+        tokio::spawn(async move {
+            consumer
+                .start(&js, crate::subjects::Subjects::DEFAULT_WORKSPACE, &nid, s)
+                .await
+        });
 
         tokio::time::timeout(Duration::from_secs(5), ready_rx)
             .await
@@ -2068,7 +2193,11 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
         let js = ctx.jetstream.clone();
         let nid = net_b.clone();
         let s = shutdown.clone();
-        tokio::spawn(async move { consumer.start(&js, &nid, s).await });
+        tokio::spawn(async move {
+            consumer
+                .start(&js, crate::subjects::Subjects::DEFAULT_WORKSPACE, &nid, s)
+                .await
+        });
 
         tokio::time::timeout(Duration::from_secs(5), ready_rx)
             .await
@@ -2135,12 +2264,30 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
     let js_a = ctx.jetstream.clone();
     let nid_a = net_a.clone();
     let sa = shutdown_a.clone();
-    tokio::spawn(async move { consumer_a.start(&js_a, &nid_a, sa).await });
+    tokio::spawn(async move {
+        consumer_a
+            .start(
+                &js_a,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &nid_a,
+                sa,
+            )
+            .await
+    });
 
     let js_b = ctx.jetstream.clone();
     let nid_b = net_b.clone();
     let sb = shutdown_b.clone();
-    tokio::spawn(async move { consumer_b.start(&js_b, &nid_b, sb).await });
+    tokio::spawn(async move {
+        consumer_b
+            .start(
+                &js_b,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &nid_b,
+                sb,
+            )
+            .await
+    });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx_a)
         .await
@@ -2278,7 +2425,8 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
         dedup_id: None,
     };
 
-    let subject = Subjects::bridge_transfer(&target_net_id, "inbox");
+    let subject =
+        Subjects::bridge_transfer(Subjects::DEFAULT_WORKSPACE, &target_net_id, "inbox");
     ctx.jetstream
         .publish(
             subject.clone(),
@@ -2686,7 +2834,7 @@ mod dlq_tests {
         stream
             .create_consumer(PullConfig {
                 durable_name: Some(format!("dlq_{}_{}", class, ctx.prefix)),
-                filter_subject: Subjects::dlq_subject(class),
+                filter_subject: Subjects::dlq_subject(Subjects::DEFAULT_WORKSPACE, class),
                 deliver_policy: DeliverPolicy::New,
                 ack_policy: AckPolicy::Explicit,
                 ..Default::default()

@@ -395,11 +395,24 @@ where
     // dispatch options against the scenario's declared transitions. Failures
     // here MUST fail-closed BEFORE any service mutation (no half-loaded
     // state on bad input).
+    // Resolve the effective workspace (tenant) for this load BEFORE
+    // destructuring — `workspace()` borrows the envelope and falls back to the
+    // reserved `DEFAULT_WORKSPACE` sentinel when no explicit `workspace_id` was
+    // supplied (legacy/SDK/demo/dev). This is the load-bearing per-net
+    // provenance: it is stamped onto THIS net's service (read per-net by the
+    // NATS publisher/consumer/listener/KV layer constructed in main.rs's
+    // store_factory + on_create), NOT taken from a process-global env — a
+    // single shared workspace would collapse all tenant isolation.
+    let workspace_id = envelope.workspace().to_string();
+
     let LoadScenarioRequest {
         scenario,
         skip_mask,
         stage_overrides,
         net_parameters,
+        // Consumed above via `envelope.workspace()`; bound here only to keep
+        // the destructure exhaustive against the ws-segmented contract.
+        workspace_id: _workspace_id,
     } = envelope;
 
     // AIR version gate — FIRST, before any interpretation of the scenario.
@@ -488,6 +501,16 @@ where
         )
     })?;
     app_state.service.set_initial_tokens(initial_tokens.clone());
+
+    // Stamp the effective workspace (tenant) onto THIS net's service. This is
+    // the canonical per-net workspace provenance: the NATS publisher /
+    // event-consumer / signal+bridge listeners / KV buckets for this net are
+    // constructed against the same `Arc<PetriNetService>` handle (in main.rs's
+    // store_factory + on_create) and read `service.workspace()` to namespace
+    // every subject/durable/bucket under `petri.{ws}.{net}…`. It is stored
+    // per-NetInstance (NEVER from a process-global env var) so one engine
+    // process hosting many tenants' nets keeps them hard-isolated.
+    app_state.service.set_workspace_id(workspace_id);
 
     // Store the submitter-supplied net parameter bag on the service so the
     // firing path can consult it for `$params.` resolution and pre-dispatch
@@ -1482,10 +1505,50 @@ pub mod net_scoped {
                         targets.insert(target_net_id.clone());
                     }
                 }
+                // Multi-tenancy: bridges are destination-addressed and
+                // INTRA-workspace only — the cross-net bridge subject is
+                // `petri.{ws}.{target_net}.bridge.{place}`, where `{ws}` is the
+                // SOURCE net's workspace (we publish into our own workspace's
+                // bridge inbox and the target consumes its own inbox filter).
+                // A bridge whose target net lives in a DIFFERENT workspace would
+                // therefore route under the wrong `{ws}` segment and silently
+                // never arrive (or, worse, collide with a same-net_id tenant).
+                // Assert source-ws == target-ws here while we have both live
+                // instances. WARN-only for this phase.
+                // Workspace is stamped per-NetInstance on the service handle;
+                // fall back to the reserved DEFAULT_WORKSPACE sentinel for nets
+                // loaded without an explicit workspace.
+                let source_ws = instance.service.workspace().unwrap_or_else(|| {
+                    petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string()
+                });
                 for target in targets {
                     // Wake-if-known; ignore errors — a tombstoned/unknown target
                     // stays unresolved and is reported by validation below.
-                    let _ = get_instance(&registry, &target).await;
+                    match get_instance(&registry, &target).await {
+                        Ok(target_instance) => {
+                            let target_ws =
+                                target_instance.service.workspace().unwrap_or_else(|| {
+                                    petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE
+                                        .to_string()
+                                });
+                            if target_ws != source_ws {
+                                // TODO(phase2): enforce — reject entering Running
+                                // with a cross-workspace bridge (return 422 with a
+                                // BRIDGE_CROSS_WORKSPACE issue) instead of warning.
+                                tracing::warn!(
+                                    net_id = %net_id,
+                                    source_workspace = %source_ws,
+                                    target_net_id = %target,
+                                    target_workspace = %target_ws,
+                                    "Cross-workspace bridge: source and target nets are in \
+                                     different workspaces — bridge tokens route under the source \
+                                     workspace and will not reach the target. Bridges are \
+                                     intra-workspace only (WARN-only this phase)."
+                                );
+                            }
+                        }
+                        Err(_) => { /* unresolved target reported by validation below */ }
+                    }
                 }
 
                 let report = petri_application::validate_bridges(

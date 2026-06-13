@@ -13,7 +13,12 @@ use crate::message_loop::{
 };
 use crate::subjects::Subjects;
 
-/// NATS KV bucket name for net metadata.
+/// Base NATS KV bucket name for net metadata.
+///
+/// The live bucket is per-workspace: `KV_NET_METADATA_{ws}`, built with
+/// [`crate::kv_bucket_for`]. The caller opens the workspace-scoped bucket and
+/// passes the [`Store`] into [`NetMetadataProjection::new`] alongside the
+/// matching `workspace_id`.
 pub const METADATA_KV_BUCKET: &str = "KV_NET_METADATA";
 
 /// Status of a net instance.
@@ -56,15 +61,31 @@ pub struct NetMetadata {
 }
 
 /// Watches the NATS event stream for lifecycle events and projects them
-/// into the `KV_NET_METADATA` bucket.
+/// into the per-workspace `KV_NET_METADATA_{ws}` bucket.
+///
+/// One projection runs per workspace: it filters the global stream down to
+/// that workspace's lifecycle events (`petri.{ws}.*.events.>`) and writes to
+/// the workspace-scoped KV bucket, so two tenants hosted in one engine process
+/// never share metadata.
 pub struct NetMetadataProjection {
     jetstream: async_nats::jetstream::Context,
     kv: Store,
+    workspace_id: String,
 }
 
 impl NetMetadataProjection {
-    pub fn new(jetstream: async_nats::jetstream::Context, kv: Store) -> Self {
-        Self { jetstream, kv }
+    /// Create a projection scoped to a workspace.
+    ///
+    /// `kv` must be the workspace's metadata bucket (see
+    /// [`crate::kv_bucket_for`] with [`METADATA_KV_BUCKET`]); `workspace_id`
+    /// drives the event subject filter and the durable consumer name so each
+    /// workspace gets an isolated consumer.
+    pub fn new(jetstream: async_nats::jetstream::Context, kv: Store, workspace_id: String) -> Self {
+        Self {
+            jetstream,
+            kv,
+            workspace_id,
+        }
     }
 
     /// Start the metadata projection as a spawned tokio task.
@@ -84,19 +105,26 @@ impl NetMetadataProjection {
             pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
         };
 
+        // The single global stream still captures every workspace's subjects
+        // (petri.>); the per-workspace seam returns PETRI_GLOBAL today.
+        let _stream_name = crate::stream_for_workspace(&self.workspace_id);
         let stream = self
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // Subscribe to lifecycle events across all nets
-        // Events are published as: petri.events.{net_id}.net.created, etc.
-        let filter = format!("{}.>", Subjects::EVENTS_PREFIX);
-        let consumer_name = "net-metadata-projection";
+        // Subscribe to lifecycle events across all nets IN THIS WORKSPACE.
+        // Events are published as: petri.{ws}.{net_id}.events.{suffix}.
+        // net_id="*" fans in every net within the workspace:
+        // petri.{ws}.*.events.>
+        let filter = Subjects::net_events_filter(&self.workspace_id, "*");
+        // Per-workspace durable so each workspace gets an isolated consumer
+        // cursor (two tenants must not share the net-metadata projection).
+        let consumer_name = format!("net-metadata-projection-{}", self.workspace_id);
 
         let consumer_config = ConsumerConfig {
-            durable_name: Some(consumer_name.to_string()),
+            durable_name: Some(consumer_name.clone()),
             filter_subject: filter,
             ack_policy: AckPolicy::Explicit,
             deliver_policy: DeliverPolicy::All,
@@ -104,7 +132,7 @@ impl NetMetadataProjection {
         };
 
         let consumer = stream
-            .get_or_create_consumer(consumer_name, consumer_config)
+            .get_or_create_consumer(&consumer_name, consumer_config)
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
@@ -204,7 +232,8 @@ impl MessageHandler for MetadataHandler<'_> {
             }
 
             petri_domain::DomainEvent::NetInitialized { .. } => {
-                // Extract net_id from the subject: petri.events.{net_id}.net.initialized
+                // Extract net_id from the subject:
+                // petri.{ws}.{net_id}.events.{suffix}
                 let subject = msg.subject.as_str();
                 if let Some(net_id) = extract_net_id_from_subject(subject) {
                     // Update existing entry to Running, or create a new one
@@ -359,11 +388,15 @@ impl MetadataHandler<'_> {
     }
 }
 
-/// Extract net_id from a NATS event subject like `petri.events.{net_id}.net.initialized`.
+/// Extract net_id from a ws-segmented NATS event subject like
+/// `petri.{ws}.{net_id}.events.{suffix}` (ADR-09 layout).
 fn extract_net_id_from_subject(subject: &str) -> Option<String> {
     let parts: Vec<&str> = subject.split('.').collect();
-    // petri.events.{net_id}.{event_type...}
-    if parts.len() >= 4 && parts[0] == "petri" && parts[1] == "events" {
+    // petri.{ws}.{net_id}.events.{event_type...}
+    if parts.len() >= 5
+        && parts[0] == Subjects::PETRI_ROOT
+        && parts[3] == Subjects::EVENTS_CATEGORY
+    {
         Some(parts[2].to_string())
     } else {
         None
@@ -422,12 +455,17 @@ mod tests {
     #[test]
     fn test_extract_net_id_from_subject() {
         assert_eq!(
-            extract_net_id_from_subject("petri.events.my-net.net.initialized"),
+            extract_net_id_from_subject("petri.default.my-net.events.net.initialized"),
             Some("my-net".to_string())
         );
         assert_eq!(
-            extract_net_id_from_subject("petri.events.net-123.token.created"),
+            extract_net_id_from_subject("petri.ws1.net-123.events.token.created"),
             Some("net-123".to_string())
+        );
+        // Old (pre-ws) scheme no longer matches.
+        assert_eq!(
+            extract_net_id_from_subject("petri.events.my-net.net.initialized"),
+            None
         );
         assert_eq!(extract_net_id_from_subject("petri.events"), None);
         assert_eq!(extract_net_id_from_subject("invalid.subject"), None);

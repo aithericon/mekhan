@@ -488,6 +488,22 @@ pub struct LoadScenarioRequest {
     /// Petri-net definition (canonical structural shape; unchanged from the
     /// pre-γ.mekhan `ScenarioDefinition` semantics).
     pub scenario: ScenarioDefinition,
+    /// First-class tenant (workspace) identifier for this net instance.
+    ///
+    /// Per ADR-09 every NATS subject/stream/KV/durable the engine creates for
+    /// this net carries a `{workspace_id}` segment, giving hard subject-level
+    /// isolation between tenants hosted in one engine process. It is stored
+    /// PER-`NetInstance` at load time and threaded into THAT net's
+    /// publisher/consumer/listener/KV — it is NEVER a process-global.
+    ///
+    /// Deliberately first-class (NOT carried in the opaque `net_parameters`
+    /// bag): the engine ascribes routing semantics to it. Absent ⇒ the net
+    /// routes on the reserved `"default"` workspace sentinel
+    /// ([`subjects::Subjects::DEFAULT_WORKSPACE`]) for legacy/SDK/demo/dev
+    /// loads. Serialize-skips when absent so such loads render byte-identically
+    /// to the prior shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     /// Transition IDs to skip at evaluate-time. See [`DispatchOptions::skip_mask`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skip_mask: Vec<String>,
@@ -520,7 +536,8 @@ impl LoadScenarioRequest {
         self.scenario
     }
 
-    /// Construct an envelope from a bare scenario, with no dispatch options.
+    /// Construct an envelope from a bare scenario, with no dispatch options
+    /// and no explicit workspace (routes on the `"default"` sentinel).
     /// Convenience for tests and ergonomic call sites that don't need
     /// ablation.
     pub fn from_scenario(scenario: ScenarioDefinition) -> Self {
@@ -529,7 +546,17 @@ impl LoadScenarioRequest {
             skip_mask: Vec::new(),
             stage_overrides: HashMap::new(),
             net_parameters: None,
+            workspace_id: None,
         }
+    }
+
+    /// Resolve the effective workspace for this load: the explicit
+    /// `workspace_id` if present, else the reserved
+    /// [`subjects::Subjects::DEFAULT_WORKSPACE`] sentinel.
+    pub fn workspace(&self) -> &str {
+        self.workspace_id
+            .as_deref()
+            .unwrap_or(crate::subjects::Subjects::DEFAULT_WORKSPACE)
     }
 }
 

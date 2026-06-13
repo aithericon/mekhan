@@ -323,6 +323,13 @@ fn envelope_deserialization_roundtrip_no_options() {
         !wire_obj.contains_key("stage_overrides"),
         "empty stage_overrides must NOT serialise"
     );
+    // `workspace_id` is first-class but `skip_serializing_if = Option::is_none`;
+    // a `from_scenario` envelope (no explicit workspace, routes on the
+    // `"default"` sentinel) MUST NOT grow the field on the wire.
+    assert!(
+        !wire_obj.contains_key("workspace_id"),
+        "absent workspace_id must NOT serialise"
+    );
 }
 
 // =============================================================================

@@ -88,7 +88,16 @@ impl<E: EventRepository> NatsEventPublisher<E> {
             return;
         }
 
-        let subject = Subjects::for_event(&event.event, self.config.net_id.as_deref());
+        // Per-net workspace: the engine hosts many workspaces' nets in one
+        // process, so the workspace comes from THIS net's config (set at load
+        // time from `LoadScenarioRequest.workspace_id`), falling back to the
+        // reserved DEFAULT_WORKSPACE sentinel. It must NOT be a shared global.
+        let ws = self
+            .config
+            .workspace_id
+            .as_deref()
+            .unwrap_or(Subjects::DEFAULT_WORKSPACE);
+        let subject = Subjects::for_event(&event.event, ws, self.config.net_id.as_deref());
 
         let payload = match serde_json::to_vec(event) {
             Ok(p) => p,
@@ -309,7 +318,14 @@ impl<E: EventRepository> NatsEventPublisher<E> {
             dedup_id,
         };
 
-        let subject = Subjects::bridge_transfer(target_net_id, target_place_name);
+        // Bridges are INTRA-workspace only: the target net lives in the same
+        // workspace as this (source) net, so route on this net's workspace.
+        let ws = self
+            .config
+            .workspace_id
+            .as_deref()
+            .unwrap_or(Subjects::DEFAULT_WORKSPACE);
+        let subject = Subjects::bridge_transfer(ws, target_net_id, target_place_name);
         let payload = match serde_json::to_vec(&transfer) {
             Ok(p) => p,
             Err(e) => {

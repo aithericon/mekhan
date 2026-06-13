@@ -59,8 +59,13 @@ async fn main() {
         tracing::warn!(error = %e, "Failed to create timers KV bucket");
     }
 
-    // Initialize timer client and clockmaster
-    let timer_client = match NatsTimerClient::new(&jetstream).await {
+    // Initialize timer client and clockmaster.
+    // TODO(phase2): these are process-level singletons spanning all workspaces.
+    // They are scoped to the process-level workspace fallback (DEFAULT_WORKSPACE
+    // in dev) for now; phase 2 makes timers/clockmaster per-workspace so
+    // `KV_TIMERS_{ws}` and the signal subjects stay tenant-isolated.
+    let process_workspace = config.workspace().to_string();
+    let timer_client = match NatsTimerClient::new(&jetstream, &process_workspace).await {
         Ok(client) => Some(Arc::new(client)),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to create NatsTimerClient, timers disabled");
@@ -68,7 +73,7 @@ async fn main() {
         }
     };
 
-    if let Ok(clockmaster) = Clockmaster::new(jetstream.clone()).await {
+    if let Ok(clockmaster) = Clockmaster::new(jetstream.clone(), &process_workspace).await {
         info!("Starting Clockmaster service");
         tokio::spawn(async move {
             if let Err(e) = clockmaster.run().await {
@@ -88,7 +93,15 @@ async fn main() {
             .and_then(|s| s.parse().ok())
             .unwrap_or(300), // 5 minutes default
     );
-    let activity_tracker = activity_kv.map(|kv| Arc::new(ActivityTracker::new(kv, idle_timeout)));
+    // TODO(phase2): single process-level tracker scoped to the process workspace
+    // fallback; phase 2 makes activity tracking per-workspace.
+    let activity_tracker = activity_kv.map(|kv| {
+        Arc::new(ActivityTracker::new(
+            kv,
+            idle_timeout,
+            process_workspace.clone(),
+        ))
+    });
 
     // Clone metadata KV for the resolver (tombstone check on signal routing)
     let metadata_kv_for_resolver = metadata_kv.as_ref().cloned();
@@ -102,7 +115,11 @@ async fn main() {
 
     // Start net metadata projection
     if let Some(kv) = metadata_kv {
-        let projection = NetMetadataProjection::new(jetstream.clone(), kv);
+        // TODO(phase2): single process-level projection scoped to the process
+        // workspace fallback; phase 2 runs one `net-metadata-projection-{ws}`
+        // durable per workspace.
+        let projection =
+            NetMetadataProjection::new(jetstream.clone(), kv, process_workspace.clone());
         info!("Starting net metadata projection");
         let _handle = projection.start();
     }
@@ -135,6 +152,12 @@ async fn main() {
 
         let js_consumer = js.clone();
         let net_id_consumer = net_id.to_string();
+        // TODO(phase2): the event consumer is created at store-factory time,
+        // before the scenario load stamps the per-net workspace on the service.
+        // Filter on the process-level workspace fallback for now; phase 2 threads
+        // the LoadScenarioRequest.workspace_id into the factory so each net's
+        // consumer filters `petri.{ws}.{net}.events.>` under its real tenant.
+        let ws_consumer = cfg.workspace().to_string();
         let shutdown = shutdown_for_factory.clone();
 
         // Use block_in_place to start consumer and wait for hydration
@@ -143,7 +166,7 @@ async fn main() {
                 // Spawn consumer as background task
                 tokio::spawn(async move {
                     if let Err(e) = consumer
-                        .start(&js_consumer, &net_id_consumer, shutdown)
+                        .start(&js_consumer, &ws_consumer, &net_id_consumer, shutdown)
                         .await
                     {
                         tracing::error!(
@@ -319,8 +342,15 @@ async fn main() {
             // Apply execution config (schema validation settings)
             instance.service.set_execution_config(exec_config.clone());
 
-            // Register spawn_net effect handler (uses JetStream to create child nets)
-            let spawn_handler = petri_nats::SpawnNetHandler::new(js_for_spawn.clone(), &net_id);
+            // Register spawn_net effect handler (uses JetStream to create child nets).
+            // Spawns are intra-workspace: stamp the parent's workspace so spawned
+            // children are created under `petri.{ws}.commands.create_net`.
+            let parent_workspace = instance
+                .service
+                .workspace()
+                .unwrap_or_else(|| Subjects::DEFAULT_WORKSPACE.to_string());
+            let spawn_handler = petri_nats::SpawnNetHandler::new(js_for_spawn.clone(), &net_id)
+                .with_workspace(parent_workspace);
             instance
                 .service
                 .register_effect_handler(
@@ -1086,19 +1116,30 @@ async fn ensure_streams(
     // Create human task streams (cancel, cancelled, failed)
     // HUMAN_REQUESTS and HUMAN_COMPLETED are created by the human client and UI respectively.
     {
+        // TODO(phase2): these are single global streams capturing the human
+        // subjects of ALL workspaces. Human subjects are now ws-segmented
+        // (`human.{ws}.{category}.{net}.{place}`), so each stream captures a
+        // `human.*.{category}.>` wildcard across the workspace token. Phase 2
+        // may shard these per-workspace.
         let human_streams = [
-            (Subjects::STREAM_HUMAN_CANCEL, Subjects::HUMAN_CANCEL_PREFIX),
+            (
+                Subjects::STREAM_HUMAN_CANCEL,
+                Subjects::HUMAN_CANCEL_CATEGORY,
+            ),
             (
                 Subjects::STREAM_HUMAN_CANCELLED,
-                Subjects::HUMAN_CANCELLED_PREFIX,
+                Subjects::HUMAN_CANCELLED_CATEGORY,
             ),
-            (Subjects::STREAM_HUMAN_FAILED, Subjects::HUMAN_FAILED_PREFIX),
+            (
+                Subjects::STREAM_HUMAN_FAILED,
+                Subjects::HUMAN_FAILED_CATEGORY,
+            ),
         ];
-        for (stream_name, prefix) in human_streams {
+        for (stream_name, category) in human_streams {
             match jetstream
                 .get_or_create_stream(StreamConfig {
                     name: stream_name.to_string(),
-                    subjects: vec![format!("{}.>", prefix)],
+                    subjects: vec![format!("{}.*.{}.>", Subjects::HUMAN_ROOT, category)],
                     retention: RetentionPolicy::Limits,
                     max_age: Duration::from_secs(7 * 24 * 60 * 60),
                     ..Default::default()

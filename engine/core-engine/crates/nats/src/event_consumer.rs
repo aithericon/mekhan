@@ -68,23 +68,29 @@ impl EventConsumer {
 
     /// Start the consumer as a background task.
     ///
-    /// This creates an ephemeral pull consumer on `petri.events.{net_id}.>` with
-    /// `DeliverPolicy::All`, replays all historical events (hydration), signals
-    /// readiness, then continues consuming new events indefinitely.
-    /// The ephemeral consumer is automatically cleaned up by NATS on disconnect.
+    /// This creates an ephemeral pull consumer on
+    /// `petri.{ws}.{net_id}.events.>` with `DeliverPolicy::All`, replays all
+    /// historical events (hydration), signals readiness, then continues
+    /// consuming new events indefinitely. The ephemeral consumer is
+    /// automatically cleaned up by NATS on disconnect.
     ///
     /// # Arguments
     /// * `jetstream` - JetStream context
+    /// * `ws` - Workspace (tenant) identifier for subject filtering. Threaded
+    ///   per-net from `LoadScenarioRequest.workspace_id` (falling back to the
+    ///   DEFAULT_WORKSPACE sentinel) — NEVER a process-global value, as the
+    ///   engine hosts many workspaces' nets in one process.
     /// * `net_id` - Net identifier for subject filtering
     /// * `shutdown` - Cancellation token for graceful shutdown
     pub async fn start(
         mut self,
         jetstream: &jetstream::Context,
+        ws: &str,
         net_id: &str,
         shutdown: tokio_util::sync::CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let stream_name = Subjects::STREAM_GLOBAL;
-        let filter_subject = format!("{}.{}.>", Subjects::EVENTS_PREFIX, net_id);
+        let stream_name = crate::stream_for_workspace(ws);
+        let filter_subject = Subjects::net_events_filter(ws, net_id);
 
         // Get or create the stream
         let stream = match jetstream.get_stream(stream_name).await {
@@ -123,6 +129,7 @@ impl EventConsumer {
             .map_err(|e| format!("Failed to create event consumer: {e}"))?;
 
         tracing::info!(
+            ws,
             net_id,
             subject = %filter_subject,
             "Event consumer started (ephemeral)"

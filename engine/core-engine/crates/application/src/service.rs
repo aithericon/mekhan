@@ -56,6 +56,13 @@ where
     initial_tokens: RwLock<Vec<(PlaceId, TokenColor)>>,
     /// Workflow ID for this service instance.
     workflow_id: RwLock<Option<Uuid>>,
+    /// Workspace (tenant) ID for this service instance. Stamped per-NetInstance
+    /// at scenario-load time (NEVER from a process-global env var) so one engine
+    /// process hosting many tenants' nets keeps each net's NATS subjects /
+    /// durables / KV buckets hard-isolated under `petri.{ws}.{net}…`. `None`
+    /// until stamped; routing falls back to the reserved DEFAULT_WORKSPACE
+    /// sentinel.
+    workspace_id: RwLock<Option<String>>,
     /// Execution mode (Live or Replay).
     execution_mode: RwLock<ExecutionMode>,
     /// Effect handlers keyed by handler ID.
@@ -110,6 +117,7 @@ where
             executor: TransitionExecutor::new(),
             initial_tokens: RwLock::new(Vec::new()),
             workflow_id: RwLock::new(None),
+            workspace_id: RwLock::new(None),
             execution_mode: RwLock::new(ExecutionMode::Live),
             effect_handlers: RwLock::new(HashMap::new()),
             cached_state: RwLock::new(None),
@@ -265,6 +273,22 @@ where
     /// Get the current workflow ID.
     pub fn workflow_id(&self) -> Option<Uuid> {
         *self.workflow_id.read().unwrap()
+    }
+
+    /// Stamp the workspace (tenant) ID onto this service instance. Called once
+    /// at scenario-load time from the per-net `LoadScenarioRequest`. The NATS
+    /// publisher / consumer / listeners / KV buckets bound to this same service
+    /// handle read `workspace()` to namespace every subject/durable/bucket under
+    /// `petri.{ws}.{net}…`.
+    pub fn set_workspace_id(&self, workspace_id: String) {
+        *self.workspace_id.write().unwrap() = Some(workspace_id);
+    }
+
+    /// Get the current workspace (tenant) ID, if stamped. Routing callers that
+    /// need a concrete segment should fall back to the reserved
+    /// `Subjects::DEFAULT_WORKSPACE` sentinel when this is `None`.
+    pub fn workspace(&self) -> Option<String> {
+        self.workspace_id.read().unwrap().clone()
     }
 
     /// Set initial tokens to be restored on reset.

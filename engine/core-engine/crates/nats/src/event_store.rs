@@ -207,7 +207,10 @@ impl<C: EventRepository> NatsEventStore<C> {
             dedup_id,
         };
 
-        let subject = Subjects::bridge_transfer(target_net_id, target_place_name);
+        // Bridges are destination-addressed and INTRA-workspace only: we publish
+        // into our own (source) workspace's bridge inbox for the target net.
+        let subject =
+            Subjects::bridge_transfer(self.config.workspace(), target_net_id, target_place_name);
         let payload = serde_json::to_vec(&transfer).map_err(|e| {
             EventStoreError::PersistFailed(format!("Failed to serialize bridge transfer: {e}"))
         })?;
@@ -253,7 +256,11 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         let persisted = PersistedEvent::new(state.next_sequence, event, state.last_hash.clone());
 
         // 3. Publish to NATS JetStream (synchronous — wait for ACK)
-        let subject = Subjects::for_event(&persisted.event, self.config.net_id.as_deref());
+        let subject = Subjects::for_event(
+            &persisted.event,
+            self.config.workspace(),
+            self.config.net_id.as_deref(),
+        );
         let payload = serde_json::to_vec(&persisted).map_err(|e| {
             EventStoreError::PersistFailed(format!("Failed to serialize event: {e}"))
         })?;

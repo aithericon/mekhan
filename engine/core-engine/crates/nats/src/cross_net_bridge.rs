@@ -111,6 +111,11 @@ pub(crate) fn build_reply_routing(transfer: &CrossNetTokenTransfer) -> Option<Re
 pub struct CrossNetBridge {
     /// This engine's net identity
     net_id: String,
+    /// Workspace (tenant) of this net. Bridges are destination-addressed and
+    /// INTRA-workspace only, so the inbound filter is
+    /// `petri.{ws}.{net}.bridge.>`. Defaults to the reserved DEFAULT_WORKSPACE
+    /// sentinel until stamped via [`Self::with_workspace`].
+    workspace_id: String,
     /// JetStream context for subscribing
     jetstream: async_nats::jetstream::Context,
 }
@@ -122,7 +127,18 @@ impl CrossNetBridge {
     /// * `net_id` - This engine's net identity (e.g., "net-a")
     /// * `jetstream` - JetStream context for subscribing
     pub fn new(net_id: String, jetstream: async_nats::jetstream::Context) -> Self {
-        Self { net_id, jetstream }
+        Self {
+            net_id,
+            workspace_id: Subjects::DEFAULT_WORKSPACE.to_string(),
+            jetstream,
+        }
+    }
+
+    /// Stamp this net's workspace so the inbound bridge consumer filters on the
+    /// correct `petri.{ws}.{net}.bridge.>` subjects.
+    pub fn with_workspace(mut self, workspace_id: impl Into<String>) -> Self {
+        self.workspace_id = workspace_id.into();
+        self
     }
 
     /// Start the inbound listener that receives tokens from remote nets.
@@ -185,7 +201,7 @@ impl CrossNetBridge {
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await?;
-        let filter = Subjects::bridge_inbox_filter(&self.net_id);
+        let filter = Subjects::bridge_inbox_filter(&self.workspace_id, &self.net_id);
         let consumer_name = format!("bridge-inbound-{}", self.net_id);
 
         let consumer_config = ConsumerConfig {
@@ -242,7 +258,7 @@ where
         let subject = msg.subject.as_str();
 
         // Parse subject to extract target place name
-        let (_target_net_id, target_place_name) = Subjects::parse_bridge_subject(subject)
+        let (_ws, _target_net_id, target_place_name) = Subjects::parse_bridge_subject(subject)
             .ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse bridge subject: {}", subject))
             })?;

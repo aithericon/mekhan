@@ -16,7 +16,13 @@ use tracing::{debug, error, info};
 
 use crate::Subjects;
 
-pub const TIMER_KV_BUCKET: &str = "PETRI_TIMERS";
+/// Base name for the durable-timer KV bucket.
+///
+/// The live bucket is per-workspace: `KV_TIMERS_{ws}`, built via
+/// [`crate::kv_bucket_for`]. Each workspace's clockmaster watches its own
+/// bucket and fires signals on `petri.{ws}.{net}.signal.{place}`, so timers
+/// can never leak across tenants.
+pub const TIMER_KV_BUCKET: &str = "KV_TIMERS";
 
 /// Build the NATS KV key for a durable timer.
 ///
@@ -42,10 +48,14 @@ pub struct NatsTimerClient {
 }
 
 impl NatsTimerClient {
-    pub async fn new(js: &jetstream::Context) -> Result<Self, TimerError> {
-        Self::with_bucket(js, TIMER_KV_BUCKET).await
+    /// Open the timer client against a workspace's `KV_TIMERS_{ws}` bucket.
+    pub async fn new(js: &jetstream::Context, workspace_id: &str) -> Result<Self, TimerError> {
+        let bucket = crate::kv_bucket_for(TIMER_KV_BUCKET, workspace_id);
+        Self::with_bucket(js, &bucket).await
     }
 
+    /// Open the timer client against an explicit (already workspace-scoped) KV
+    /// bucket name. Prefer [`Self::new`] which derives the per-workspace name.
     pub async fn with_bucket(js: &jetstream::Context, bucket: &str) -> Result<Self, TimerError> {
         let kv = js
             .get_key_value(bucket)
@@ -114,21 +124,30 @@ impl TimerClient for NatsTimerClient {
 }
 
 /// The Clockmaster service that watches for expired timers and publishes signals.
+///
+/// One clockmaster runs per workspace: it watches that workspace's
+/// `KV_TIMERS_{ws}` bucket and fires expired timers as signals on
+/// `petri.{ws}.{net}.signal.{place}`, so timers stay tenant-isolated.
 pub struct Clockmaster {
     js: jetstream::Context,
     kv: kv::Store,
-    signal_prefix: String,
+    workspace_id: String,
 }
 
 impl Clockmaster {
-    pub async fn new(js: jetstream::Context) -> Result<Self, String> {
-        Self::with_options(js, TIMER_KV_BUCKET, Subjects::SIGNAL_PREFIX).await
+    /// Build a clockmaster scoped to a workspace, watching `KV_TIMERS_{ws}`.
+    pub async fn new(js: jetstream::Context, workspace_id: &str) -> Result<Self, String> {
+        let bucket = crate::kv_bucket_for(TIMER_KV_BUCKET, workspace_id);
+        Self::with_options(js, &bucket, workspace_id).await
     }
 
+    /// Build a clockmaster against an explicit (already workspace-scoped) KV
+    /// bucket. `workspace_id` drives the signal subject (`petri.{ws}.{net}.
+    /// signal.{place}`); prefer [`Self::new`] which derives the bucket name.
     pub async fn with_options(
         js: jetstream::Context,
         bucket: &str,
-        signal_prefix: &str,
+        workspace_id: &str,
     ) -> Result<Self, String> {
         let kv = js
             .get_key_value(bucket)
@@ -138,7 +157,7 @@ impl Clockmaster {
         Ok(Self {
             js,
             kv,
-            signal_prefix: signal_prefix.to_string(),
+            workspace_id: workspace_id.to_string(),
         })
     }
 
@@ -204,7 +223,7 @@ impl Clockmaster {
     async fn schedule_timer_execution(&self, key: String, timer: TimerValue) {
         let js = self.js.clone();
         let kv = self.kv.clone();
-        let prefix = self.signal_prefix.clone();
+        let workspace_id = self.workspace_id.clone();
 
         tokio::spawn(async move {
             let now_ms = SystemTime::now()
@@ -299,7 +318,8 @@ impl Clockmaster {
                 dedup_id: Some(format!("timer:{}", timer.correlation_id)),
             };
 
-            let signal_subject = format!("{}.{}.{}", prefix, timer.net_id, timer.place_id);
+            let signal_subject =
+                Subjects::signal_transfer(&workspace_id, &timer.net_id, &timer.place_id);
             let payload = match serde_json::to_vec(&signal) {
                 Ok(p) => p,
                 Err(e) => {

@@ -1,7 +1,9 @@
 //! Global signal listener: replaces per-net signal listeners.
 //!
-//! Subscribes to `petri.signal.>` (all nets) and routes signals to the
-//! correct net instance, waking it from hibernation if needed.
+//! Subscribes to `petri.*.*.signal.>` (all workspaces, all nets) and routes
+//! signals to the correct net instance, waking it from hibernation if needed.
+//! The two leading wildcards are `{ws}` and `{net}` per the ADR-09 subject
+//! shape `petri.{ws}.{net}.signal.{place}`.
 //!
 //! Uses a stable durable consumer with `create_consumer` (idempotent for
 //! matching configs). The durable consumer survives engine restarts, so
@@ -66,7 +68,7 @@ pub trait SignalTarget: Send + Sync {
     fn notify_eval(&self);
 }
 
-/// Global listener that subscribes to `petri.signal.>` and routes to nets.
+/// Global listener that subscribes to `petri.*.*.signal.>` and routes to nets.
 pub struct GlobalSignalListener {
     jetstream: async_nats::jetstream::Context,
     resolver: Arc<dyn NetResolver>,
@@ -122,8 +124,15 @@ impl GlobalSignalListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // Subscribe to ALL signal subjects across all nets
-        let filter = format!("{}.>", Subjects::SIGNAL_PREFIX);
+        // Subscribe to ALL signal subjects across all workspaces + nets.
+        // ADR-09 shape is `petri.{ws}.{net}.signal.{place}`, so the two
+        // leading wildcards span ws and net.
+        //
+        // TODO(phase2): per-workspace consumer split — replace this single
+        // cross-workspace consumer with one durable per workspace using
+        // `Subjects::signal_workspace_filter(ws)` (`petri.{ws}.*.signal.>`)
+        // so each tenant's signal stream is independently consumable.
+        let filter = format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::SIGNAL_CATEGORY);
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(self.consumer_name.clone()),
@@ -168,10 +177,16 @@ impl MessageHandler for GlobalSignalHandler<'_> {
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
 
-        // Parse subject: petri.signal.{net_id}.{place_name}
-        let (net_id, place_name) = Subjects::parse_signal_subject(subject).ok_or_else(|| {
-            ProcessError::Parse(format!("Could not parse signal subject: {}", subject))
-        })?;
+        // Parse subject: petri.{ws}.{net_id}.signal.{place_name}
+        //
+        // TODO(phase2): once consumers are split per workspace, the resolver
+        // should be scoped by `ws` so a signal can only wake a net in its own
+        // tenant. Today the resolver is global, so `ws` is parsed but only used
+        // for diagnostics.
+        let (ws, net_id, place_name) =
+            Subjects::parse_signal_subject(subject).ok_or_else(|| {
+                ProcessError::Parse(format!("Could not parse signal subject: {}", subject))
+            })?;
 
         // Deserialize the signal
         let signal: ExternalSignal =
@@ -219,6 +234,7 @@ impl MessageHandler for GlobalSignalHandler<'_> {
         }
 
         tracing::info!(
+            workspace_id = %ws,
             net_id = %net_id,
             source = %signal.source,
             signal_key = %signal.signal_key,

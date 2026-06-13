@@ -1,19 +1,29 @@
 //! NATS subject naming conventions.
 //!
+//! Per ADR-09, every net-scoped subject carries a leading `{ws}` (workspace)
+//! segment so a single engine process can host nets from many workspaces with
+//! hard subject-level isolation. `{ws}` is a NATS-token-safe workspace UUID
+//! string (like `{net}` ids); a net loaded without a workspace routes on the
+//! reserved [`Subjects::DEFAULT_WORKSPACE`] sentinel.
+//!
 //! Subject hierarchy:
 //! ```text
-//! petri.events.>                    # All events (wildcard)
-//! petri.events.net.initialized      # Net topology loaded
-//! petri.events.token.created        # Token injected into place
-//! petri.events.token.consumed       # Token removed from place
-//! petri.events.transition.fired     # Transition executed
-//! petri.events.transition.updated   # Script hot-reloaded
-//! petri.events.error                # Error occurred
+//! petri.{ws}.>                              # All events for a workspace (wildcard)
+//! petri.{ws}.{net}.>                        # All subjects for one net
+//! petri.{ws}.{net}.events.net.initialized   # Net topology loaded
+//! petri.{ws}.{net}.events.token.created      # Token injected into place
+//! petri.{ws}.{net}.events.token.consumed     # Token removed from place
+//! petri.{ws}.{net}.events.transition.fired   # Transition executed
+//! petri.{ws}.{net}.events.transition.updated # Script hot-reloaded
+//! petri.{ws}.{net}.events.error              # Error occurred
 //!
-//! petri.commands.inject.token       # Token injection requests
+//! petri.{ws}.{net}.commands.inject.token     # Token injection requests
 //!
-//! petri.bridge.{target_net_id}.{target_place_name}  # Cross-net bridge transfers
-//! petri.signal.{target_net_id}.{target_place_name}  # External system signals
+//! petri.{ws}.{net}.bridge.{target_place_name}  # Cross-net bridge transfers (intra-workspace)
+//! petri.{ws}.{net}.signal.{target_place_name}  # External system signals
+//!
+//! human.{ws}.request.{net}.{place}           # Human task requests (kept outside petri.>)
+//! petri-dlq.{ws}.{class}                      # Dead-letter queue
 //! ```
 
 use petri_domain::DomainEvent;
@@ -52,94 +62,125 @@ impl WorkflowContext {
 pub struct Subjects;
 
 impl Subjects {
+    // ==================== Workspace (tenant) Segment ====================
+
+    /// Root prefix shared by all petri subjects.
+    pub const PETRI_ROOT: &'static str = "petri";
+
+    /// Reserved workspace sentinel used when a net is loaded WITHOUT an explicit
+    /// `workspace_id` (legacy/SDK/demo/dev). Subjects then route on
+    /// `petri.default.{net}...`. NATS-token-safe by construction.
+    pub const DEFAULT_WORKSPACE: &'static str = "default";
+
+    /// Build a subscription filter for ALL subjects in a workspace:
+    /// `petri.{ws}.>`.
+    pub fn workspace_filter(ws: &str) -> String {
+        format!("{}.{}.>", Self::PETRI_ROOT, ws)
+    }
+
+    /// Build a subscription filter for ALL subjects of a single net within a
+    /// workspace: `petri.{ws}.{net}.>`.
+    pub fn net_filter(ws: &str, net_id: &str) -> String {
+        format!("{}.{}.{}.>", Self::PETRI_ROOT, ws, net_id)
+    }
+
     // ==================== Event Subjects ====================
 
-    /// Base prefix for all event subjects
-    pub const EVENTS_PREFIX: &'static str = "petri.events";
+    /// Category segment for event subjects (follows `petri.{ws}.{net}.`).
+    pub const EVENTS_CATEGORY: &'static str = "events";
 
-    /// Wildcard for subscribing to all events
-    pub const EVENTS_ALL: &'static str = "petri.events.>";
-
-    /// Net initialized event
-    pub const EVENT_NET_INITIALIZED: &'static str = "petri.events.net.initialized";
-
-    /// Token created event
-    pub const EVENT_TOKEN_CREATED: &'static str = "petri.events.token.created";
-
-    /// Token consumed event
-    pub const EVENT_TOKEN_CONSUMED: &'static str = "petri.events.token.consumed";
-
-    /// Token removed event (external removal)
-    pub const EVENT_TOKEN_REMOVED: &'static str = "petri.events.token.removed";
-
-    /// Token updated event (external update)
-    pub const EVENT_TOKEN_UPDATED: &'static str = "petri.events.token.updated";
-
-    /// Transition fired event
-    pub const EVENT_TRANSITION_FIRED: &'static str = "petri.events.transition.fired";
-
-    /// Transition script updated event
-    pub const EVENT_TRANSITION_UPDATED: &'static str = "petri.events.transition.updated";
-
-    /// Token bridged out event (forwarded to remote net)
-    pub const EVENT_TOKEN_BRIDGED_OUT: &'static str = "petri.events.token.bridged_out";
-
-    /// Effect transition completed event
-    pub const EVENT_EFFECT_COMPLETED: &'static str = "petri.events.effect.completed";
-
-    /// Effect transition failed event
-    pub const EVENT_EFFECT_FAILED: &'static str = "petri.events.effect.failed";
-
-    /// Error event
-    pub const EVENT_ERROR: &'static str = "petri.events.error";
-
-    // ==================== Lifecycle Event Subjects ====================
-
-    /// Net created event
-    pub const EVENT_NET_CREATED: &'static str = "petri.events.net.created";
-
-    /// Net completed event (terminal state reached)
-    pub const EVENT_NET_COMPLETED: &'static str = "petri.events.net.completed";
-
-    /// Net cancelled event
-    pub const EVENT_NET_CANCELLED: &'static str = "petri.events.net.cancelled";
+    /// Wildcard for subscribing to all events across all workspaces/nets.
+    pub const EVENTS_ALL: &'static str = "petri.>";
 
     // ==================== Command Subjects ====================
 
-    /// Base prefix for all command subjects
-    pub const COMMANDS_PREFIX: &'static str = "petri.commands";
+    /// Category segment for command subjects (follows `petri.{ws}.{net}.`).
+    pub const COMMANDS_CATEGORY: &'static str = "commands";
 
-    /// Token injection command
-    pub const COMMAND_INJECT_TOKEN: &'static str = "petri.commands.inject.token";
+    /// Token injection command suffix (appended after `commands` category).
+    pub const COMMAND_INJECT_TOKEN_SUFFIX: &'static str = "inject.token";
 
-    /// Token removal command
-    pub const COMMAND_REMOVE_TOKEN: &'static str = "petri.commands.remove.token";
+    /// Token removal command suffix.
+    pub const COMMAND_REMOVE_TOKEN_SUFFIX: &'static str = "remove.token";
 
-    /// Token update command
-    pub const COMMAND_UPDATE_TOKEN: &'static str = "petri.commands.update.token";
+    /// Token update command suffix.
+    pub const COMMAND_UPDATE_TOKEN_SUFFIX: &'static str = "update.token";
 
-    /// Create net command
-    pub const COMMAND_CREATE_NET: &'static str = "petri.commands.create_net";
+    /// Create net command suffix.
+    pub const COMMAND_CREATE_NET_SUFFIX: &'static str = "create_net";
+
+    /// Build a net-scoped command subject:
+    /// `petri.{ws}.{net}.commands.{suffix}`.
+    pub fn command(ws: &str, net_id: &str, suffix: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.{}",
+            Self::PETRI_ROOT,
+            ws,
+            net_id,
+            Self::COMMANDS_CATEGORY,
+            suffix
+        )
+    }
+
+    /// Token injection command subject for a net.
+    pub fn command_inject_token(ws: &str, net_id: &str) -> String {
+        Self::command(ws, net_id, Self::COMMAND_INJECT_TOKEN_SUFFIX)
+    }
+
+    /// Token removal command subject for a net.
+    pub fn command_remove_token(ws: &str, net_id: &str) -> String {
+        Self::command(ws, net_id, Self::COMMAND_REMOVE_TOKEN_SUFFIX)
+    }
+
+    /// Token update command subject for a net.
+    pub fn command_update_token(ws: &str, net_id: &str) -> String {
+        Self::command(ws, net_id, Self::COMMAND_UPDATE_TOKEN_SUFFIX)
+    }
+
+    /// Build the `create_net` command subject for a workspace.
+    ///
+    /// `create_net` has no target net yet, so it is workspace-scoped (no
+    /// `{net}` segment): `petri.{ws}.commands.create_net`. The listener
+    /// filters per-workspace.
+    pub fn command_create_net(ws: &str) -> String {
+        format!(
+            "{}.{}.{}.{}",
+            Self::PETRI_ROOT,
+            ws,
+            Self::COMMANDS_CATEGORY,
+            Self::COMMAND_CREATE_NET_SUFFIX
+        )
+    }
 
     // ==================== Human Task Subjects ====================
     //
-    // Human task subjects use a separate prefix (not petri.) to avoid
-    // overlap with the PETRI_GLOBAL stream that captures all petri.> subjects.
+    // Human task subjects use a separate root (`human.`, not `petri.`) to avoid
+    // JetStream subject overlap with the PETRI_GLOBAL stream that captures all
+    // `petri.>` subjects. Per ADR-09 the workspace segment is inserted right
+    // after the `human` root and BEFORE the category, so the shape is:
+    //   human.{ws}.request.{net}.{place}
+    //   human.{ws}.completed.{net}.{place}
+    //   human.{ws}.cancel.{net}.{place}
+    //   human.{ws}.cancelled.{net}.{place}
+    //   human.{ws}.failed.{net}.{place}
 
-    /// Prefix for human task requests
-    pub const HUMAN_REQUEST_PREFIX: &'static str = "human.request";
+    /// Root for human task subjects (workspace segment follows).
+    pub const HUMAN_ROOT: &'static str = "human";
 
-    /// Prefix for human task completions
-    pub const HUMAN_COMPLETED_PREFIX: &'static str = "human.completed";
+    /// Category segment for human task requests.
+    pub const HUMAN_REQUEST_CATEGORY: &'static str = "request";
 
-    /// Prefix for human task cancel requests (engine -> UI)
-    pub const HUMAN_CANCEL_PREFIX: &'static str = "human.cancel";
+    /// Category segment for human task completions.
+    pub const HUMAN_COMPLETED_CATEGORY: &'static str = "completed";
 
-    /// Prefix for human task cancel confirmations (UI -> engine)
-    pub const HUMAN_CANCELLED_PREFIX: &'static str = "human.cancelled";
+    /// Category segment for human task cancel requests (engine -> UI).
+    pub const HUMAN_CANCEL_CATEGORY: &'static str = "cancel";
 
-    /// Prefix for human task failure signals (UI -> engine)
-    pub const HUMAN_FAILED_PREFIX: &'static str = "human.failed";
+    /// Category segment for human task cancel confirmations (UI -> engine).
+    pub const HUMAN_CANCELLED_CATEGORY: &'static str = "cancelled";
+
+    /// Category segment for human task failure signals (UI -> engine).
+    pub const HUMAN_FAILED_CATEGORY: &'static str = "failed";
 
     /// Stream name for human task cancel requests
     pub const STREAM_HUMAN_CANCEL: &'static str = "HUMAN_CANCEL";
@@ -150,56 +191,97 @@ impl Subjects {
     /// Stream name for human task failures
     pub const STREAM_HUMAN_FAILED: &'static str = "HUMAN_FAILED";
 
-    /// Build a human task request subject.
-    pub fn human_request(net_id: &str, place_name: &str) -> String {
-        format!("{}.{}.{}", Self::HUMAN_REQUEST_PREFIX, net_id, place_name)
+    /// Build a human task request subject: `human.{ws}.request.{net}.{place}`.
+    pub fn human_request(ws: &str, net_id: &str, place_name: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.{}",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_REQUEST_CATEGORY,
+            net_id,
+            place_name
+        )
     }
 
-    /// Build a human task completion filter.
-    pub fn human_completed_filter(net_id: &str) -> String {
-        format!("{}.{}.>", Self::HUMAN_COMPLETED_PREFIX, net_id)
+    /// Build a human task completion filter: `human.{ws}.completed.{net}.>`.
+    pub fn human_completed_filter(ws: &str, net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_COMPLETED_CATEGORY,
+            net_id
+        )
     }
 
-    /// Build a human task cancel subject.
-    pub fn human_cancel(net_id: &str, place_name: &str) -> String {
-        format!("{}.{}.{}", Self::HUMAN_CANCEL_PREFIX, net_id, place_name)
+    /// Build a human task cancel subject: `human.{ws}.cancel.{net}.{place}`.
+    pub fn human_cancel(ws: &str, net_id: &str, place_name: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.{}",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_CANCEL_CATEGORY,
+            net_id,
+            place_name
+        )
     }
 
-    /// Build a human task cancelled filter (for engine-side consumer).
-    pub fn human_cancelled_filter(net_id: &str) -> String {
-        format!("{}.{}.>", Self::HUMAN_CANCELLED_PREFIX, net_id)
+    /// Build a human task cancelled filter (for engine-side consumer):
+    /// `human.{ws}.cancelled.{net}.>`.
+    pub fn human_cancelled_filter(ws: &str, net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_CANCELLED_CATEGORY,
+            net_id
+        )
     }
 
-    /// Build a human task failed filter (for engine-side consumer).
-    pub fn human_failed_filter(net_id: &str) -> String {
-        format!("{}.{}.>", Self::HUMAN_FAILED_PREFIX, net_id)
+    /// Build a human task failed filter (for engine-side consumer):
+    /// `human.{ws}.failed.{net}.>`.
+    pub fn human_failed_filter(ws: &str, net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_FAILED_CATEGORY,
+            net_id
+        )
     }
 
-    /// Parse a human.completed subject into (net_id, place_name).
-    pub fn parse_human_completed_subject(subject: &str) -> Option<(&str, &str)> {
+    /// Build a subscription filter for ALL human subjects of a workspace,
+    /// for a given category: `human.{ws}.{category}.>`.
+    pub fn human_workspace_filter(ws: &str, category: &str) -> String {
+        format!("{}.{}.{}.>", Self::HUMAN_ROOT, ws, category)
+    }
+
+    /// Parse a `human.{ws}.completed.{net}.{place}` subject into
+    /// `(ws, net_id, place_name)`.
+    pub fn parse_human_completed_subject(subject: &str) -> Option<(&str, &str, &str)> {
+        Self::parse_human_subject(subject, Self::HUMAN_COMPLETED_CATEGORY)
+    }
+
+    /// Parse a `human.{ws}.cancelled.{net}.{place}` subject into
+    /// `(ws, net_id, place_name)`.
+    pub fn parse_human_cancelled_subject(subject: &str) -> Option<(&str, &str, &str)> {
+        Self::parse_human_subject(subject, Self::HUMAN_CANCELLED_CATEGORY)
+    }
+
+    /// Parse a `human.{ws}.failed.{net}.{place}` subject into
+    /// `(ws, net_id, place_name)`.
+    pub fn parse_human_failed_subject(subject: &str) -> Option<(&str, &str, &str)> {
+        Self::parse_human_subject(subject, Self::HUMAN_FAILED_CATEGORY)
+    }
+
+    /// Shared parser for `human.{ws}.{category}.{net}.{place}` subjects.
+    fn parse_human_subject<'a>(
+        subject: &'a str,
+        category: &str,
+    ) -> Option<(&'a str, &'a str, &'a str)> {
         let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() == 4 && parts[0] == "human" && parts[1] == "completed" {
-            Some((parts[2], parts[3]))
-        } else {
-            None
-        }
-    }
-
-    /// Parse a human.cancelled subject into (net_id, place_name).
-    pub fn parse_human_cancelled_subject(subject: &str) -> Option<(&str, &str)> {
-        let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() == 4 && parts[0] == "human" && parts[1] == "cancelled" {
-            Some((parts[2], parts[3]))
-        } else {
-            None
-        }
-    }
-
-    /// Parse a human.failed subject into (net_id, place_name).
-    pub fn parse_human_failed_subject(subject: &str) -> Option<(&str, &str)> {
-        let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() == 4 && parts[0] == "human" && parts[1] == "failed" {
-            Some((parts[2], parts[3]))
+        if parts.len() == 5 && parts[0] == Self::HUMAN_ROOT && parts[2] == category {
+            Some((parts[1], parts[3], parts[4]))
         } else {
             None
         }
@@ -209,11 +291,11 @@ impl Subjects {
     //
     // Signals from external systems (Nomad, Slurm, K8s, webhooks).
     //
-    // Subject hierarchy:
-    //   petri.signal.{target_net_id}.{target_place_name}
+    // Subject hierarchy (ADR-09, ws-segmented + category-after-net):
+    //   petri.{ws}.{target_net_id}.signal.{target_place_name}
 
-    /// Prefix for external signal subjects
-    pub const SIGNAL_PREFIX: &'static str = "petri.signal";
+    /// Category segment for signal subjects (follows `petri.{ws}.{net}.`).
+    pub const SIGNAL_CATEGORY: &'static str = "signal";
 
     /// Build a signal subject for publishing to a net's place.
     ///
@@ -221,14 +303,16 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let subject = Subjects::signal_transfer("gpu-resource", "status_inbox");
-    /// assert_eq!(subject, "petri.signal.gpu-resource.status_inbox");
+    /// let subject = Subjects::signal_transfer("ws1", "gpu-resource", "status_inbox");
+    /// assert_eq!(subject, "petri.ws1.gpu-resource.signal.status_inbox");
     /// ```
-    pub fn signal_transfer(target_net_id: &str, target_place_name: &str) -> String {
+    pub fn signal_transfer(ws: &str, target_net_id: &str, target_place_name: &str) -> String {
         format!(
-            "{}.{}.{}",
-            Self::SIGNAL_PREFIX,
+            "{}.{}.{}.{}.{}",
+            Self::PETRI_ROOT,
+            ws,
             target_net_id,
+            Self::SIGNAL_CATEGORY,
             target_place_name
         )
     }
@@ -239,14 +323,31 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let filter = Subjects::signal_inbox_filter("gpu-resource");
-    /// assert_eq!(filter, "petri.signal.gpu-resource.>");
+    /// let filter = Subjects::signal_inbox_filter("ws1", "gpu-resource");
+    /// assert_eq!(filter, "petri.ws1.gpu-resource.signal.>");
     /// ```
-    pub fn signal_inbox_filter(own_net_id: &str) -> String {
-        format!("{}.{}.>", Self::SIGNAL_PREFIX, own_net_id)
+    pub fn signal_inbox_filter(ws: &str, own_net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::PETRI_ROOT,
+            ws,
+            own_net_id,
+            Self::SIGNAL_CATEGORY
+        )
     }
 
-    /// Parse a signal subject into (target_net_id, target_place_name).
+    /// Build a subscription filter for ALL signal messages in a workspace
+    /// (across nets): `petri.{ws}.*.signal.>`.
+    pub fn signal_workspace_filter(ws: &str) -> String {
+        format!(
+            "{}.{}.*.{}.>",
+            Self::PETRI_ROOT,
+            ws,
+            Self::SIGNAL_CATEGORY
+        )
+    }
+
+    /// Parse a signal subject into (ws, target_net_id, target_place_name).
     ///
     /// Returns `None` if the subject does not match the signal pattern.
     ///
@@ -254,13 +355,13 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let parsed = Subjects::parse_signal_subject("petri.signal.gpu-resource.status_inbox");
-    /// assert_eq!(parsed, Some(("gpu-resource", "status_inbox")));
+    /// let parsed = Subjects::parse_signal_subject("petri.ws1.gpu-resource.signal.status_inbox");
+    /// assert_eq!(parsed, Some(("ws1", "gpu-resource", "status_inbox")));
     /// ```
-    pub fn parse_signal_subject(subject: &str) -> Option<(&str, &str)> {
+    pub fn parse_signal_subject(subject: &str) -> Option<(&str, &str, &str)> {
         let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() == 4 && parts[0] == "petri" && parts[1] == "signal" {
-            Some((parts[2], parts[3]))
+        if parts.len() == 5 && parts[0] == Self::PETRI_ROOT && parts[3] == Self::SIGNAL_CATEGORY {
+            Some((parts[1], parts[2], parts[4]))
         } else {
             None
         }
@@ -268,13 +369,14 @@ impl Subjects {
 
     // ==================== Cross-Net Bridge Subjects ====================
     //
-    // Token transfer between separate Petri net engine instances.
+    // Token transfer between separate Petri nets. Bridges are destination-
+    // addressed and INTRA-workspace only (a net never bridges across tenants).
     //
-    // Subject hierarchy:
-    //   petri.bridge.{target_net_id}.{target_place_name}
+    // Subject hierarchy (ADR-09, ws-segmented + category-after-net):
+    //   petri.{ws}.{target_net_id}.bridge.{target_place_name}
 
-    /// Prefix for cross-net bridge subjects
-    pub const BRIDGE_PREFIX: &'static str = "petri.bridge";
+    /// Category segment for bridge subjects (follows `petri.{ws}.{net}.`).
+    pub const BRIDGE_CATEGORY: &'static str = "bridge";
 
     /// Build a bridge transfer subject for sending a token to a remote net's place.
     ///
@@ -282,14 +384,16 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let subject = Subjects::bridge_transfer("net-b", "inbox");
-    /// assert_eq!(subject, "petri.bridge.net-b.inbox");
+    /// let subject = Subjects::bridge_transfer("ws1", "net-b", "inbox");
+    /// assert_eq!(subject, "petri.ws1.net-b.bridge.inbox");
     /// ```
-    pub fn bridge_transfer(target_net_id: &str, target_place_name: &str) -> String {
+    pub fn bridge_transfer(ws: &str, target_net_id: &str, target_place_name: &str) -> String {
         format!(
-            "{}.{}.{}",
-            Self::BRIDGE_PREFIX,
+            "{}.{}.{}.{}.{}",
+            Self::PETRI_ROOT,
+            ws,
             target_net_id,
+            Self::BRIDGE_CATEGORY,
             target_place_name
         )
     }
@@ -300,14 +404,31 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let filter = Subjects::bridge_inbox_filter("net-b");
-    /// assert_eq!(filter, "petri.bridge.net-b.>");
+    /// let filter = Subjects::bridge_inbox_filter("ws1", "net-b");
+    /// assert_eq!(filter, "petri.ws1.net-b.bridge.>");
     /// ```
-    pub fn bridge_inbox_filter(own_net_id: &str) -> String {
-        format!("{}.{}.>", Self::BRIDGE_PREFIX, own_net_id)
+    pub fn bridge_inbox_filter(ws: &str, own_net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::PETRI_ROOT,
+            ws,
+            own_net_id,
+            Self::BRIDGE_CATEGORY
+        )
     }
 
-    /// Parse a bridge subject into (target_net_id, target_place_name).
+    /// Build a subscription filter for ALL bridge messages in a workspace
+    /// (across nets): `petri.{ws}.*.bridge.>`.
+    pub fn bridge_workspace_filter(ws: &str) -> String {
+        format!(
+            "{}.{}.*.{}.>",
+            Self::PETRI_ROOT,
+            ws,
+            Self::BRIDGE_CATEGORY
+        )
+    }
+
+    /// Parse a bridge subject into (ws, target_net_id, target_place_name).
     ///
     /// Returns `None` if the subject does not match the bridge pattern.
     ///
@@ -315,13 +436,13 @@ impl Subjects {
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// let parsed = Subjects::parse_bridge_subject("petri.bridge.net-b.inbox");
-    /// assert_eq!(parsed, Some(("net-b", "inbox")));
+    /// let parsed = Subjects::parse_bridge_subject("petri.ws1.net-b.bridge.inbox");
+    /// assert_eq!(parsed, Some(("ws1", "net-b", "inbox")));
     /// ```
-    pub fn parse_bridge_subject(subject: &str) -> Option<(&str, &str)> {
+    pub fn parse_bridge_subject(subject: &str) -> Option<(&str, &str, &str)> {
         let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() == 4 && parts[0] == "petri" && parts[1] == "bridge" {
-            Some((parts[2], parts[3]))
+        if parts.len() == 5 && parts[0] == Self::PETRI_ROOT && parts[3] == Self::BRIDGE_CATEGORY {
+            Some((parts[1], parts[2], parts[4]))
         } else {
             None
         }
@@ -344,16 +465,23 @@ impl Subjects {
     /// Stream name for dead-lettered messages
     pub const STREAM_DLQ: &'static str = "PETRI_DLQ";
 
-    /// Build a DLQ subject for an error class (`parse` | `business` | `internal`).
+    /// Build a DLQ subject for a workspace + error class
+    /// (`parse` | `business` | `internal`): `petri-dlq.{ws}.{class}`.
     ///
     /// # Example
     /// ```
     /// use petri_api_types::subjects::Subjects;
     ///
-    /// assert_eq!(Subjects::dlq_subject("parse"), "petri-dlq.parse");
+    /// assert_eq!(Subjects::dlq_subject("ws1", "parse"), "petri-dlq.ws1.parse");
     /// ```
-    pub fn dlq_subject(error_class: &str) -> String {
-        format!("{}.{}", Self::DLQ_PREFIX, error_class)
+    pub fn dlq_subject(ws: &str, error_class: &str) -> String {
+        format!("{}.{}.{}", Self::DLQ_PREFIX, ws, error_class)
+    }
+
+    /// Build a subscription filter for ALL dead-lettered messages in a
+    /// workspace: `petri-dlq.{ws}.>`.
+    pub fn dlq_workspace_filter(ws: &str) -> String {
+        format!("{}.{}.>", Self::DLQ_PREFIX, ws)
     }
 
     // ==================== JetStream Streams ====================
@@ -365,8 +493,13 @@ impl Subjects {
 
     // ==================== Utilities ====================
 
-    /// Get the appropriate subject for a domain event, optionally scoped to a net.
-    pub fn for_event(event: &DomainEvent, net_id: Option<&str>) -> String {
+    /// Get the appropriate subject for a domain event, scoped to a workspace
+    /// and optionally a net.
+    ///
+    /// Per ADR-09 the category segment (`events`) follows `{ws}.{net}`:
+    ///   - `Some(net)` → `petri.{ws}.{net}.events.{suffix}`
+    ///   - `None`      → `petri.{ws}.events.{suffix}` (workspace-scoped, no net)
+    pub fn for_event(event: &DomainEvent, ws: &str, net_id: Option<&str>) -> String {
         let suffix = match event {
             DomainEvent::NetInitialized { .. } => "net.initialized",
             DomainEvent::TokenCreated { .. } => "token.created",
@@ -390,9 +523,34 @@ impl Subjects {
         };
 
         match net_id {
-            Some(id) => format!("{}.{}.{}", Self::EVENTS_PREFIX, id, suffix),
-            None => format!("{}.{}", Self::EVENTS_PREFIX, suffix),
+            Some(id) => format!(
+                "{}.{}.{}.{}.{}",
+                Self::PETRI_ROOT,
+                ws,
+                id,
+                Self::EVENTS_CATEGORY,
+                suffix
+            ),
+            None => format!(
+                "{}.{}.{}.{}",
+                Self::PETRI_ROOT,
+                ws,
+                Self::EVENTS_CATEGORY,
+                suffix
+            ),
         }
+    }
+
+    /// Build a subscription filter for ALL events of a single net within a
+    /// workspace: `petri.{ws}.{net}.events.>`.
+    pub fn net_events_filter(ws: &str, net_id: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.>",
+            Self::PETRI_ROOT,
+            ws,
+            net_id,
+            Self::EVENTS_CATEGORY
+        )
     }
 
     /// Get a human-readable event type name.
@@ -437,12 +595,12 @@ mod tests {
             dedup_id: None,
         };
         assert_eq!(
-            Subjects::for_event(&event, None),
-            "petri.events.token.created"
+            Subjects::for_event(&event, "ws1", None),
+            "petri.ws1.events.token.created"
         );
         assert_eq!(
-            Subjects::for_event(&event, Some("net-a")),
-            "petri.events.net-a.token.created"
+            Subjects::for_event(&event, "ws1", Some("net-a")),
+            "petri.ws1.net-a.events.token.created"
         );
     }
 
@@ -451,186 +609,254 @@ mod tests {
         let event = DomainEvent::ErrorOccurred {
             message: "test".to_string(),
         };
-        assert_eq!(Subjects::for_event(&event, None), "petri.events.error");
+        assert_eq!(
+            Subjects::for_event(&event, "ws1", None),
+            "petri.ws1.events.error"
+        );
+    }
+
+    #[test]
+    fn test_default_workspace_sentinel() {
+        assert_eq!(Subjects::DEFAULT_WORKSPACE, "default");
+        let event = DomainEvent::ErrorOccurred {
+            message: "test".to_string(),
+        };
+        assert_eq!(
+            Subjects::for_event(&event, Subjects::DEFAULT_WORKSPACE, Some("net-a")),
+            "petri.default.net-a.events.error"
+        );
+    }
+
+    #[test]
+    fn test_workspace_and_net_filters() {
+        assert_eq!(Subjects::workspace_filter("ws1"), "petri.ws1.>");
+        assert_eq!(Subjects::net_filter("ws1", "net-a"), "petri.ws1.net-a.>");
+        assert_eq!(
+            Subjects::net_events_filter("ws1", "net-a"),
+            "petri.ws1.net-a.events.>"
+        );
+    }
+
+    // ==================== Command Subject Tests ====================
+
+    #[test]
+    fn test_command_subjects() {
+        assert_eq!(
+            Subjects::command_inject_token("ws1", "net-a"),
+            "petri.ws1.net-a.commands.inject.token"
+        );
+        assert_eq!(
+            Subjects::command_remove_token("ws1", "net-a"),
+            "petri.ws1.net-a.commands.remove.token"
+        );
+        assert_eq!(
+            Subjects::command_update_token("ws1", "net-a"),
+            "petri.ws1.net-a.commands.update.token"
+        );
+        assert_eq!(
+            Subjects::command_create_net("ws1"),
+            "petri.ws1.commands.create_net"
+        );
     }
 
     // ==================== Cross-Net Bridge Subject Tests ====================
 
     #[test]
     fn test_bridge_transfer_subject() {
-        let subject = Subjects::bridge_transfer("net-b", "inbox");
-        assert_eq!(subject, "petri.bridge.net-b.inbox");
+        let subject = Subjects::bridge_transfer("ws1", "net-b", "inbox");
+        assert_eq!(subject, "petri.ws1.net-b.bridge.inbox");
     }
 
     #[test]
     fn test_bridge_inbox_filter() {
-        let filter = Subjects::bridge_inbox_filter("net-b");
-        assert_eq!(filter, "petri.bridge.net-b.>");
+        let filter = Subjects::bridge_inbox_filter("ws1", "net-b");
+        assert_eq!(filter, "petri.ws1.net-b.bridge.>");
+    }
+
+    #[test]
+    fn test_bridge_workspace_filter() {
+        let filter = Subjects::bridge_workspace_filter("ws1");
+        assert_eq!(filter, "petri.ws1.*.bridge.>");
     }
 
     #[test]
     fn test_parse_bridge_subject_valid() {
-        let parsed = Subjects::parse_bridge_subject("petri.bridge.net-b.inbox");
-        assert_eq!(parsed, Some(("net-b", "inbox")));
+        let parsed = Subjects::parse_bridge_subject("petri.ws1.net-b.bridge.inbox");
+        assert_eq!(parsed, Some(("ws1", "net-b", "inbox")));
     }
 
     #[test]
     fn test_parse_bridge_subject_invalid_prefix() {
-        let parsed = Subjects::parse_bridge_subject("invalid.bridge.net-b.inbox");
+        let parsed = Subjects::parse_bridge_subject("invalid.ws1.net-b.bridge.inbox");
         assert!(parsed.is_none());
     }
 
     #[test]
     fn test_parse_bridge_subject_wrong_length() {
-        let parsed = Subjects::parse_bridge_subject("petri.bridge.net-b");
+        let parsed = Subjects::parse_bridge_subject("petri.ws1.net-b.bridge");
         assert!(parsed.is_none());
     }
 
     #[test]
     fn test_parse_bridge_subject_too_many_parts() {
-        let parsed = Subjects::parse_bridge_subject("petri.bridge.net-b.inbox.extra");
+        let parsed = Subjects::parse_bridge_subject("petri.ws1.net-b.bridge.inbox.extra");
         assert!(parsed.is_none());
     }
 
     #[test]
     fn test_roundtrip_bridge_subject() {
-        let subject = Subjects::bridge_transfer("my-net", "my-place");
+        let subject = Subjects::bridge_transfer("ws1", "my-net", "my-place");
         let parsed = Subjects::parse_bridge_subject(&subject);
-        assert_eq!(parsed, Some(("my-net", "my-place")));
+        assert_eq!(parsed, Some(("ws1", "my-net", "my-place")));
     }
 
     // ==================== External Signal Subject Tests ====================
 
     #[test]
     fn test_signal_transfer_subject() {
-        let subject = Subjects::signal_transfer("gpu-resource", "status_inbox");
-        assert_eq!(subject, "petri.signal.gpu-resource.status_inbox");
+        let subject = Subjects::signal_transfer("ws1", "gpu-resource", "status_inbox");
+        assert_eq!(subject, "petri.ws1.gpu-resource.signal.status_inbox");
     }
 
     #[test]
     fn test_signal_inbox_filter() {
-        let filter = Subjects::signal_inbox_filter("gpu-resource");
-        assert_eq!(filter, "petri.signal.gpu-resource.>");
+        let filter = Subjects::signal_inbox_filter("ws1", "gpu-resource");
+        assert_eq!(filter, "petri.ws1.gpu-resource.signal.>");
+    }
+
+    #[test]
+    fn test_signal_workspace_filter() {
+        let filter = Subjects::signal_workspace_filter("ws1");
+        assert_eq!(filter, "petri.ws1.*.signal.>");
     }
 
     #[test]
     fn test_parse_signal_subject_valid() {
-        let parsed = Subjects::parse_signal_subject("petri.signal.gpu-resource.status_inbox");
-        assert_eq!(parsed, Some(("gpu-resource", "status_inbox")));
+        let parsed = Subjects::parse_signal_subject("petri.ws1.gpu-resource.signal.status_inbox");
+        assert_eq!(parsed, Some(("ws1", "gpu-resource", "status_inbox")));
     }
 
     #[test]
     fn test_parse_signal_subject_invalid_prefix() {
-        let parsed = Subjects::parse_signal_subject("invalid.signal.gpu-resource.inbox");
+        let parsed = Subjects::parse_signal_subject("invalid.ws1.gpu-resource.signal.inbox");
         assert!(parsed.is_none());
     }
 
     #[test]
     fn test_parse_signal_subject_wrong_length() {
-        let parsed = Subjects::parse_signal_subject("petri.signal.gpu-resource");
+        let parsed = Subjects::parse_signal_subject("petri.ws1.gpu-resource.signal");
         assert!(parsed.is_none());
     }
 
     #[test]
     fn test_roundtrip_signal_subject() {
-        let subject = Subjects::signal_transfer("my-net", "my-place");
+        let subject = Subjects::signal_transfer("ws1", "my-net", "my-place");
         let parsed = Subjects::parse_signal_subject(&subject);
-        assert_eq!(parsed, Some(("my-net", "my-place")));
+        assert_eq!(parsed, Some(("ws1", "my-net", "my-place")));
     }
 
     // ==================== Human Task Subject Tests ====================
 
     #[test]
     fn test_human_request_subject() {
-        let subject = Subjects::human_request("net-a", "review");
-        assert_eq!(subject, "human.request.net-a.review");
+        let subject = Subjects::human_request("ws1", "net-a", "review");
+        assert_eq!(subject, "human.ws1.request.net-a.review");
     }
 
     #[test]
     fn test_human_completed_filter() {
-        let filter = Subjects::human_completed_filter("net-a");
-        assert_eq!(filter, "human.completed.net-a.>");
+        let filter = Subjects::human_completed_filter("ws1", "net-a");
+        assert_eq!(filter, "human.ws1.completed.net-a.>");
     }
 
     #[test]
     fn test_human_cancel_subject() {
-        let subject = Subjects::human_cancel("net-a", "review");
-        assert_eq!(subject, "human.cancel.net-a.review");
+        let subject = Subjects::human_cancel("ws1", "net-a", "review");
+        assert_eq!(subject, "human.ws1.cancel.net-a.review");
     }
 
     #[test]
     fn test_human_cancelled_filter() {
-        let filter = Subjects::human_cancelled_filter("net-a");
-        assert_eq!(filter, "human.cancelled.net-a.>");
+        let filter = Subjects::human_cancelled_filter("ws1", "net-a");
+        assert_eq!(filter, "human.ws1.cancelled.net-a.>");
     }
 
     #[test]
     fn test_human_failed_filter() {
-        let filter = Subjects::human_failed_filter("net-a");
-        assert_eq!(filter, "human.failed.net-a.>");
+        let filter = Subjects::human_failed_filter("ws1", "net-a");
+        assert_eq!(filter, "human.ws1.failed.net-a.>");
+    }
+
+    #[test]
+    fn test_human_workspace_filter() {
+        let filter = Subjects::human_workspace_filter("ws1", Subjects::HUMAN_COMPLETED_CATEGORY);
+        assert_eq!(filter, "human.ws1.completed.>");
     }
 
     #[test]
     fn test_parse_human_completed_subject_valid() {
-        let parsed = Subjects::parse_human_completed_subject("human.completed.net-a.review");
-        assert_eq!(parsed, Some(("net-a", "review")));
+        let parsed = Subjects::parse_human_completed_subject("human.ws1.completed.net-a.review");
+        assert_eq!(parsed, Some(("ws1", "net-a", "review")));
     }
 
     #[test]
     fn test_parse_human_completed_subject_invalid() {
-        assert!(Subjects::parse_human_completed_subject("human.request.net-a.review").is_none());
-        assert!(Subjects::parse_human_completed_subject("human.completed.net-a").is_none());
-        assert!(
-            Subjects::parse_human_completed_subject("human.completed.net-a.review.extra").is_none()
-        );
+        assert!(Subjects::parse_human_completed_subject("human.ws1.request.net-a.review").is_none());
+        assert!(Subjects::parse_human_completed_subject("human.ws1.completed.net-a").is_none());
+        assert!(Subjects::parse_human_completed_subject(
+            "human.ws1.completed.net-a.review.extra"
+        )
+        .is_none());
     }
 
     #[test]
     fn test_parse_human_cancelled_subject_valid() {
-        let parsed = Subjects::parse_human_cancelled_subject("human.cancelled.net-a.review");
-        assert_eq!(parsed, Some(("net-a", "review")));
+        let parsed = Subjects::parse_human_cancelled_subject("human.ws1.cancelled.net-a.review");
+        assert_eq!(parsed, Some(("ws1", "net-a", "review")));
     }
 
     #[test]
     fn test_parse_human_cancelled_subject_invalid() {
-        assert!(Subjects::parse_human_cancelled_subject("human.completed.net-a.review").is_none());
-        assert!(Subjects::parse_human_cancelled_subject("human.cancelled.net-a").is_none());
+        assert!(
+            Subjects::parse_human_cancelled_subject("human.ws1.completed.net-a.review").is_none()
+        );
+        assert!(Subjects::parse_human_cancelled_subject("human.ws1.cancelled.net-a").is_none());
     }
 
     #[test]
     fn test_parse_human_failed_subject_valid() {
-        let parsed = Subjects::parse_human_failed_subject("human.failed.net-a.review");
-        assert_eq!(parsed, Some(("net-a", "review")));
+        let parsed = Subjects::parse_human_failed_subject("human.ws1.failed.net-a.review");
+        assert_eq!(parsed, Some(("ws1", "net-a", "review")));
     }
 
     #[test]
     fn test_parse_human_failed_subject_invalid() {
-        assert!(Subjects::parse_human_failed_subject("human.completed.net-a.review").is_none());
-        assert!(Subjects::parse_human_failed_subject("human.failed.net-a").is_none());
+        assert!(Subjects::parse_human_failed_subject("human.ws1.completed.net-a.review").is_none());
+        assert!(Subjects::parse_human_failed_subject("human.ws1.failed.net-a").is_none());
     }
 
     #[test]
     fn test_roundtrip_human_completed_subject() {
-        let subject = format!(
-            "{}.{}.{}",
-            Subjects::HUMAN_COMPLETED_PREFIX,
-            "my-net",
-            "my-place"
-        );
+        let subject = Subjects::human_request("ws1", "my-net", "my-place")
+            .replace(".request.", ".completed.");
         let parsed = Subjects::parse_human_completed_subject(&subject);
-        assert_eq!(parsed, Some(("my-net", "my-place")));
+        assert_eq!(parsed, Some(("ws1", "my-net", "my-place")));
     }
 
     #[test]
     fn test_roundtrip_human_cancelled_subject() {
-        let subject = format!(
-            "{}.{}.{}",
-            Subjects::HUMAN_CANCELLED_PREFIX,
-            "my-net",
-            "my-place"
-        );
+        let subject = Subjects::human_cancel("ws1", "my-net", "my-place")
+            .replace(".cancel.", ".cancelled.");
         let parsed = Subjects::parse_human_cancelled_subject(&subject);
-        assert_eq!(parsed, Some(("my-net", "my-place")));
+        assert_eq!(parsed, Some(("ws1", "my-net", "my-place")));
+    }
+
+    // ==================== DLQ Subject Tests ====================
+
+    #[test]
+    fn test_dlq_subject() {
+        assert_eq!(Subjects::dlq_subject("ws1", "parse"), "petri-dlq.ws1.parse");
+        assert_eq!(Subjects::dlq_workspace_filter("ws1"), "petri-dlq.ws1.>");
     }
 
     // ==================== Lifecycle Event Subject Tests ====================
@@ -645,12 +871,12 @@ mod tests {
             label: None,
         };
         assert_eq!(
-            Subjects::for_event(&event, Some("net-a")),
-            "petri.events.net-a.net.created"
+            Subjects::for_event(&event, "ws1", Some("net-a")),
+            "petri.ws1.net-a.events.net.created"
         );
         assert_eq!(
-            Subjects::for_event(&event, None),
-            "petri.events.net.created"
+            Subjects::for_event(&event, "ws1", None),
+            "petri.ws1.events.net.created"
         );
     }
 
@@ -662,8 +888,8 @@ mod tests {
             exit_code: None,
         };
         assert_eq!(
-            Subjects::for_event(&event, Some("net-a")),
-            "petri.events.net-a.net.completed"
+            Subjects::for_event(&event, "ws1", Some("net-a")),
+            "petri.ws1.net-a.events.net.completed"
         );
     }
 
@@ -675,8 +901,8 @@ mod tests {
             cancelled_by: None,
         };
         assert_eq!(
-            Subjects::for_event(&event, Some("net-a")),
-            "petri.events.net-a.net.cancelled"
+            Subjects::for_event(&event, "ws1", Some("net-a")),
+            "petri.ws1.net-a.events.net.cancelled"
         );
     }
 
@@ -709,12 +935,14 @@ mod tests {
     #[test]
     fn test_roundtrip_human_failed_subject() {
         let subject = format!(
-            "{}.{}.{}",
-            Subjects::HUMAN_FAILED_PREFIX,
+            "{}.{}.{}.{}.{}",
+            Subjects::HUMAN_ROOT,
+            "ws1",
+            Subjects::HUMAN_FAILED_CATEGORY,
             "my-net",
             "my-place"
         );
         let parsed = Subjects::parse_human_failed_subject(&subject);
-        assert_eq!(parsed, Some(("my-net", "my-place")));
+        assert_eq!(parsed, Some(("ws1", "my-net", "my-place")));
     }
 }
