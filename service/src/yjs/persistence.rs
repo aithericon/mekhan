@@ -139,54 +139,85 @@ impl YjsPersistence {
         Ok(seq)
     }
 
-    /// Compact a document from DB: load all updates, encode as snapshot, delete old rows.
-    /// The yrs Doc construction and encoding happen in spawn_blocking.
+    /// Compact a document from DB: fold the snapshot + trailing updates into a
+    /// fresh snapshot and delete the rows it now covers.
+    ///
+    /// The seq the snapshot is stamped with MUST be the highest seq actually
+    /// folded into it — NOT a separately-read `MAX(seq)`. A concurrent
+    /// `store_update` (a connected editor mid-session) can land a row between the
+    /// update read and a separate `MAX(seq)`; stamping the snapshot at that
+    /// higher max and then `DELETE seq <= max` erases updates the snapshot never
+    /// encoded. The in-memory room keeps them, so the loss stays invisible until
+    /// the room is evicted and the doc reloads from this lossy persistence —
+    /// surfacing as "recent (non-published) edits vanished" on publish or
+    /// reopen. Deleting strictly `seq <= max_included_seq` leaves any racing
+    /// row in place for the next reconstruct/compaction.
     async fn compact_from_db(&self, template_id: Uuid) -> Result<(), YjsPersistenceError> {
-        let (snapshot, updates) = self.load_raw_updates(template_id).await?;
+        let snapshot: Option<(Vec<u8>, i64)> = sqlx::query_as(
+            "SELECT snapshot_data, snapshot_seq FROM yjs_snapshots WHERE template_id = $1",
+        )
+        .bind(template_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let prev_seq = snapshot.as_ref().map(|(_, s)| *s).unwrap_or(0);
+        let snapshot_data = snapshot.map(|(d, _)| d);
+
+        // Read the trailing updates WITH their seqs so the snapshot is stamped
+        // at exactly the max seq it folds in (race-safe — see the doc comment).
+        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+            "SELECT seq, update_data FROM yjs_documents WHERE template_id = $1 AND seq > $2 ORDER BY seq ASC",
+        )
+        .bind(template_id)
+        .bind(prev_seq)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Nothing new layered on the existing snapshot — leave it untouched.
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let max_included_seq = rows.last().map(|(s, _)| *s).unwrap_or(prev_seq);
+        let updates: Vec<Vec<u8>> = rows.into_iter().map(|(_, d)| d).collect();
 
         // Encode the full state in spawn_blocking (yrs types are !Send)
         let state = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, YjsPersistenceError> {
-            let doc = Self::build_doc_from_raw(snapshot.as_deref(), &updates)?;
+            let doc = Self::build_doc_from_raw(snapshot_data.as_deref(), &updates)?;
             let txn = doc.transact();
             Ok(txn.encode_state_as_update_v1(&StateVector::default()))
         })
         .await
         .map_err(|e| YjsPersistenceError::Decode(format!("spawn_blocking: {e}")))??;
 
-        // Get the current max sequence number
-        let max_seq: Option<(i64,)> =
-            sqlx::query_as("SELECT MAX(seq) FROM yjs_documents WHERE template_id = $1")
-                .bind(template_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        let snapshot_seq = max_seq.map(|r| r.0).unwrap_or(0);
-
-        // Upsert snapshot
+        // Upsert the snapshot, but only ever advance it: a concurrent compaction
+        // may have already written a snapshot covering a higher seq, and clobbering
+        // it with our lower-seq state would reintroduce the very loss this guards.
         sqlx::query(
             r#"
             INSERT INTO yjs_snapshots (template_id, snapshot_data, snapshot_seq)
             VALUES ($1, $2, $3)
             ON CONFLICT (template_id) DO UPDATE
             SET snapshot_data = $2, snapshot_seq = $3, updated_at = NOW()
+            WHERE yjs_snapshots.snapshot_seq < EXCLUDED.snapshot_seq
             "#,
         )
         .bind(template_id)
         .bind(&state)
-        .bind(snapshot_seq)
+        .bind(max_included_seq)
         .execute(&self.pool)
         .await?;
 
-        // Delete update rows covered by the snapshot
+        // Delete ONLY the rows this snapshot folded in. Rows that raced in with a
+        // higher seq survive (covered by a later compaction); if another
+        // compaction already advanced past us, these were already covered too.
         sqlx::query("DELETE FROM yjs_documents WHERE template_id = $1 AND seq <= $2")
             .bind(template_id)
-            .bind(snapshot_seq)
+            .bind(max_included_seq)
             .execute(&self.pool)
             .await?;
 
         tracing::info!(
             template_id = %template_id,
-            snapshot_seq,
+            snapshot_seq = max_included_seq,
             "compacted Yjs document"
         );
 
