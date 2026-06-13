@@ -41,3 +41,36 @@ export function timeAgo(input: string | Date | null | undefined, now: Date = new
 	const years = Math.round(days / 365);
 	return `${years}y ago`;
 }
+
+/**
+ * Recover the bare workflow-instance UUID from an engine net_id, for building
+ * `/instances/{id}` links.
+ *
+ * Multi-tenancy made instance net_ids workspace-namespaced —
+ * `mekhan-{workspace_id}-{instance_id}` (was `mekhan-{instance_id}`). Both
+ * segments are UUIDs, so the instance id is the LAST five hyphen-delimited
+ * groups (8-4-4-4-12). Slicing the trailing groups handles the new and legacy
+ * formats identically. For an execution_id (`mekhan-{ws}-{inst}-{run}`) use
+ * `instanceIdFromExecution` instead. Returns null when `net` isn't a
+ * mekhan-prefixed instance net (SDK/pool/infra nets have no owning instance).
+ */
+export function instanceIdFromNet(net: string | null | undefined): string | null {
+	if (!net || !net.startsWith('mekhan-')) return null;
+	const segs = net.slice('mekhan-'.length).split('-');
+	if (segs.length < 5) return null;
+	return segs.slice(-5).join('-');
+}
+
+/**
+ * Recover the bare instance UUID from an `execution_id`
+ * (`mekhan-{ws}-{inst}-{run}`). The instance id is the SECOND UUID, i.e. groups
+ * 5..10 of the post-prefix segments (groups 0..5 are the workspace). Returns
+ * null for anything that doesn't carry both the workspace and instance UUIDs.
+ */
+export function instanceIdFromExecution(execution: string | null | undefined): string | null {
+	if (!execution || !execution.startsWith('mekhan-')) return null;
+	const segs = execution.slice('mekhan-'.length).split('-');
+	// {ws}=5 groups, {inst}=5 groups → need at least 10.
+	if (segs.length < 10) return null;
+	return segs.slice(5, 10).join('-');
+}

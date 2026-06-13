@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { catalogueDownloadUrl, dataEntryContentUrl, type CatalogueEntry } from '$lib/api/client';
+	import { instanceIdFromNet, instanceIdFromExecution } from '$lib/utils';
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
 	import { StatusBadge } from '$lib/components/status';
 	import { CopyButton } from '$lib/components/ui/copy-button';
@@ -179,17 +180,16 @@
 	const shortHash = $derived(contentHash ? contentHash.slice(0, 10) : null);
 	// job_id == execution_id for job-net rows; collapse to one "Execution" id.
 	const executionId = $derived(entry.execution_id || entry.job_id || null);
-	const netShort = $derived(entry.source_net ? entry.source_net.replace(/^mekhan-/, '').slice(0, 8) : null);
+	const netShort = $derived(
+		instanceIdFromNet(entry.source_net)?.slice(0, 8) ?? null
+	);
 	const lineageTarget = $derived(entry.process_id ?? entry.job_id?.split(':')[0] ?? null);
-	// The producing workflow instance: net_id is `mekhan-{instance_uuid}`, and
-	// `source_net` IS the net_id. Fall back to execution_id (= net_id + a run
-	// suffix), taking the leading UUID. /instances/{id} → process view.
+	// The producing workflow instance. Multi-tenancy made net_id
+	// `mekhan-{ws}-{instance}`; `source_net` IS the net_id, so derive the bare
+	// instance UUID from it. Fall back to execution_id (`mekhan-{ws}-{inst}-{run}`),
+	// whose instance UUID is the second segment. /instances/{id} → process view.
 	const instanceId = $derived(
-		entry.source_net
-			? entry.source_net.replace(/^mekhan-/, '')
-			: entry.execution_id
-				? entry.execution_id.replace(/^mekhan-/, '').split('-').slice(0, 5).join('-')
-				: null
+		instanceIdFromNet(entry.source_net) ?? instanceIdFromExecution(entry.execution_id)
 	);
 	const Icon = $derived(fileIcon());
 

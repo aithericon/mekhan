@@ -5,6 +5,7 @@
 		catalogueDownloadUrl,
 		type LineageResponse
 	} from '$lib/api/client';
+	import { instanceIdFromNet } from '$lib/utils';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { ArtifactCard } from '$lib/components/catalogue';
@@ -25,10 +26,10 @@
 		: null;
 
 	// Producing instance: any artifact's source_net is the net_id
-	// (`mekhan-{instance_uuid}`). /instances/{id} → process view.
+	// (`mekhan-{ws}-{instance}`). /instances/{id} → process view.
 	const instanceId = $derived.by(() => {
 		const net = lineage?.steps.flatMap((s) => s.artifacts).find((a) => a.source_net)?.source_net;
-		return net ? net.replace(/^mekhan-/, '') : null;
+		return instanceIdFromNet(net);
 	});
 
 	// ── Category colours ───────────────────────────────────────────────────────

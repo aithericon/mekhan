@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { instanceIdFromNet } from '$lib/utils';
 	import { PageShell } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -17,10 +18,9 @@
 
 	const PETRI_URL = '/petri';
 	const netId = $derived($page.params.id as string);
-	// Engine nets launched from a mekhan instance are keyed "mekhan-{instanceId}".
-	const owningInstanceId = $derived(
-		netId.startsWith('mekhan-') ? netId.slice('mekhan-'.length) : null
-	);
+	// Engine nets launched from a mekhan instance are keyed
+	// "mekhan-{workspaceId}-{instanceId}" (multi-tenancy).
+	const owningInstanceId = $derived(instanceIdFromNet(netId));
 
 	async function handleDeleteNet(id: string) {
 		if (!confirm(`Delete net "${id}"?`)) return;

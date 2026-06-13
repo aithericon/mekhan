@@ -1043,9 +1043,17 @@ impl TriggerDispatcher {
             "timestamp": Utc::now().to_rfc3339(),
         });
 
+        // All running instances of this template live in the trigger's
+        // workspace, so the engine listens on `petri.{ws}.{net}.signal.>` (see
+        // the create-instance / fire_spawn_active net_id format above). The
+        // old `petri.signal.{net}.{place}` shape ACKs into PETRI_GLOBAL but
+        // matches no per-net signal consumer → the signal is silently stranded.
+        let workspace = record.workspace_id.to_string();
         let mut delivered = 0;
         for (net_id,) in &nets {
-            let subject = format!("petri.signal.{net_id}.{place_id}");
+            let subject = crate::nats::subjects::Subjects::signal_transfer(
+                &workspace, net_id, &place_id,
+            );
             let payload_bytes = match serde_json::to_vec(&payload) {
                 Ok(b) => b,
                 Err(e) => {
