@@ -3748,6 +3748,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/analytics
+         * @description Full per-template analytics: structural shape + usage / duration / node
+         *     rollups, scoped to the template's whole version chain and the requested
+         *     instance `mode` (default `live`).
+         */
+        get: operations["template_analytics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/analytics/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/analytics/timeseries
+         * @description Run-outcome points over the template chain, re-bucketed from the
+         *     hour-grained `template_run_rollup` with native `date_bin` (no TimescaleDB
+         *     dependency — the rollup is a plain table). One cell per `(bucket, outcome)`,
+         *     oldest bucket first.
+         */
+        get: operations["template_timeseries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/apply": {
         parameters: {
             query?: never;
@@ -7073,6 +7118,23 @@ export interface components {
             locations: string[];
         };
         /**
+         * @description On-demand duration percentiles computed over terminal `workflow_instances`
+         *     rows (NOT the rollup — the rollup keeps only a sum/count pair, which can't
+         *     answer a percentile). Mode-filtered, across the whole version chain.
+         */
+        DurationPercentiles: {
+            /**
+             * Format: double
+             * @description Median run wall-clock (ms). `None` when no measurable run exists.
+             */
+            p50_ms?: number | null;
+            /**
+             * Format: double
+             * @description 95th-percentile run wall-clock (ms).
+             */
+            p95_ms?: number | null;
+        };
+        /**
          * @description The element type a [`Channel`] carries. `Json` declares a schema the
          *     compiler typechecks against the `SchemaRegistry`; `Binary` carries opaque
          *     bytes tagged by `content_type`; `Any` is an untyped passthrough.
@@ -9229,6 +9291,29 @@ export interface components {
              */
             max_num_seqs?: number | null;
         };
+        /**
+         * @description One node's aggregate behaviour across every instance of the template chain
+         *     — the unit of the hot/slow-node hotspot lists.
+         */
+        NodeHotspot: {
+            /**
+             * Format: int64
+             * @description How many of those ended in `failed`.
+             */
+            failure_count: number;
+            /**
+             * Format: double
+             * @description Mean step duration (ms) over the terminal executions; `None` when none
+             *     carried a measurable duration.
+             */
+            mean_duration_ms?: number | null;
+            node_id: string;
+            /**
+             * Format: int64
+             * @description Total terminal step executions of this node (all statuses summed).
+             */
+            total_count: number;
+        };
         /** @description One live node (runner) and the base engines it is serving. */
         NodeInventory: {
             /** @description The base engines live on this node. */
@@ -11297,6 +11382,18 @@ export interface components {
             name: string;
             status: string;
         };
+        /**
+         * @description Run-outcome tallies for a template, summed across every version + hour
+         *     bucket of the requested mode.
+         */
+        RunsByOutcome: {
+            /** Format: int64 */
+            cancelled: number;
+            /** Format: int64 */
+            failure: number;
+            /** Format: int64 */
+            success: number;
+        };
         /** @description A saved catalogue query. */
         SavedQuery: {
             /** Format: date-time */
@@ -12019,6 +12116,28 @@ export interface components {
             title: string;
         };
         /**
+         * @description `GET /api/v1/templates/{id}/analytics` — the full per-template view:
+         *     structural shape (compile-time) + usage/duration/node rollups (run-time).
+         */
+        TemplateAnalytics: {
+            duration: components["schemas"]["DurationPercentiles"];
+            /** @description Echo of the resolved instance mode the usage figures are filtered to. */
+            mode: string;
+            node_hotspots: components["schemas"]["TemplateNodeHotspots"];
+            structural?: null | components["schemas"]["TemplateMetrics"];
+            /**
+             * Format: uuid
+             * @description Chain-root id the analytics were resolved against.
+             */
+            template_id: string;
+            usage: components["schemas"]["TemplateUsageSummary"];
+            /**
+             * Format: int64
+             * @description Number of versions in the template's chain.
+             */
+            version_count: number;
+        };
+        /**
          * @description Authoring bundle for a template — graph plus inline per-node files. This
          *     is the same `(graph, files)` pair the publish/new-version paths feed into
          *     the compiler, served as plain JSON so non-collaborative clients (the CLI,
@@ -12043,6 +12162,58 @@ export interface components {
         TemplateIoContract: {
             input: components["schemas"]["Port"];
             output: components["schemas"]["Port"];
+        };
+        /**
+         * @description Structural metrics of a published [`WorkflowGraph`], computed once at
+         *     publish time and persisted into the `workflow_templates.metrics` JSONB
+         *     column. Pure shape — no run data — so it can be derived from the graph
+         *     alone, before the template ever runs. The per-template analytics surface
+         *     reads it back as the "what this template is" half of the view (the
+         *     "how it ran" half comes from the run/node rollup tables).
+         */
+        TemplateMetrics: {
+            /**
+             * Format: int32
+             * @description Total edges in the graph.
+             */
+            edge_count: number;
+            /** @description Whether the graph contains any `Loop` (or `Map`) iteration node. */
+            has_loops: boolean;
+            /**
+             * Format: int32
+             * @description Deepest visual-container nesting in the graph, measured by the
+             *     `parent_id` chain (a top-level node is depth 0, a node inside one
+             *     container is depth 1, and so on).
+             */
+            max_nesting_depth: number;
+            /**
+             * Format: int32
+             * @description Total nodes in the graph.
+             */
+            node_count: number;
+            /**
+             * @description Node counts keyed by the snake-case wire kind (`WorkflowNodeData::
+             *     type_name()`): `start`, `automated_step`, `decision`, … BTreeMap for a
+             *     byte-stable JSONB serialization.
+             */
+            node_kind_counts: {
+                [key: string]: number;
+            };
+            /**
+             * Format: int32
+             * @description Number of `SubWorkflow` nodes (embedded child templates).
+             */
+            subworkflow_count: number;
+        };
+        /**
+         * @description The node-hotspot overlay: the slowest nodes and the most-failing nodes,
+         *     each capped at a small top-N.
+         */
+        TemplateNodeHotspots: {
+            /** @description Highest `failure_count` first (only nodes with ≥1 failure). */
+            most_failing: components["schemas"]["NodeHotspot"][];
+            /** @description Highest `mean_duration_ms` first. */
+            slowest: components["schemas"]["NodeHotspot"][];
         };
         /**
          * @description One declared parameter the template exposes to its consumers. Serialized as
@@ -12079,6 +12250,24 @@ export interface components {
              * @description `job_template_versions.version` — the immutable version to bind.
              */
             version: number;
+        };
+        /**
+         * @description One point of `GET /api/v1/templates/{id}/analytics/timeseries` — a single
+         *     `(bucket, outcome)` cell, mirroring the inference-timeseries point shape.
+         */
+        TemplateRunTimeseriesPoint: {
+            /** Format: date-time */
+            bucket: string;
+            /**
+             * Format: double
+             * @description Mean run wall-clock (ms) within this bucket; `None` when no run in the
+             *     bucket carried a measurable duration.
+             */
+            mean_duration_ms?: number | null;
+            /** @description `success` | `failure` | `cancelled`. */
+            outcome: string;
+            /** Format: int64 */
+            run_count: number;
         };
         /**
          * @description One template source. Carries the source bytes inline plus a label used
@@ -12166,6 +12355,40 @@ export interface components {
             template_version: number;
             /** Format: uuid */
             test_id: string;
+        };
+        /**
+         * @description "How this template ran" — the usage half of the summary, aggregated over
+         *     `template_run_rollup` (+ `template_user_runs` for the user dimensions).
+         */
+        TemplateUsageSummary: {
+            /**
+             * Format: int64
+             * @description Distinct callers that have ever run this template (any mode).
+             */
+            distinct_users: number;
+            /**
+             * Format: date-time
+             * @description Most recent run across all callers (max `template_user_runs.last_run`).
+             */
+            last_run?: string | null;
+            /**
+             * Format: double
+             * @description Mean run wall-clock (`duration_ms_sum / duration_ms_count` across
+             *     buckets). `None` when no run contributed a measurable duration.
+             */
+            mean_duration_ms?: number | null;
+            /** @description Per-outcome breakdown of `total_runs`. */
+            runs_by_outcome: components["schemas"]["RunsByOutcome"];
+            /**
+             * Format: double
+             * @description `success / total_runs` in `0.0..=1.0`; `0.0` when there are no runs.
+             */
+            success_rate: number;
+            /**
+             * Format: int64
+             * @description Total terminal runs across all versions/buckets of the requested mode.
+             */
+            total_runs: number;
         };
         /** @description The terminal disposition handed back to a WaitForResult caller. */
         TerminalOutcome: {
@@ -21744,6 +21967,105 @@ export interface operations {
             };
             /** @description Template is not published */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    template_analytics: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Instance mode the usage rollups + percentiles filter to. Defaults to
+                 *     `live`. The user-dimension counts (`distinct_users`) are mode-agnostic
+                 *     (the `template_user_runs` table carries no mode).
+                 */
+                mode?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Any template id in the version chain */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-template structural + usage analytics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateAnalytics"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    template_timeseries: {
+        parameters: {
+            query?: {
+                /** @description Instance mode to plot (default `live`). */
+                mode?: string | null;
+                /**
+                 * @description Bucket width in seconds (default 3600, clamped 60..=7d). The source
+                 *     rollup is hour-grained, so values below 3600 collapse to hourly.
+                 */
+                bucket_secs?: number | null;
+                /** @description Look-back window in seconds (default 30 days, capped at 365 days). */
+                window_secs?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Any template id in the version chain */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run-outcome points, oldest bucket first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateRunTimeseriesPoint"][];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

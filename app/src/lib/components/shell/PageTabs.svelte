@@ -10,6 +10,13 @@
 		 * its query string (matched via `pathname.startsWith`).
 		 */
 		match?: string;
+		/**
+		 * Match the pathname EXACTLY rather than by prefix. Needed when a tab's
+		 * route is a prefix of a sibling tab's route (e.g. a bare `/x` Editor tab
+		 * alongside a nested `/x/analytics` tab — without this the bare tab would
+		 * also light up on the nested route).
+		 */
+		exact?: boolean;
 		icon?: PageIcon;
 		/** Hover tooltip. */
 		title?: string;
@@ -42,7 +49,10 @@
 	} = $props();
 
 	const pathname = $derived(page.url.pathname);
-	const isActive = (tab: PageTab) => pathname.startsWith(tab.match ?? tab.href.split('?')[0]);
+	const isActive = (tab: PageTab) => {
+		const target = tab.match ?? tab.href.split('?')[0];
+		return tab.exact ? pathname === target : pathname.startsWith(target);
+	};
 </script>
 
 <nav class={cn('flex w-fit items-end gap-1', className)} data-testid={testid}>

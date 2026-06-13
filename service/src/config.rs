@@ -323,6 +323,13 @@ pub struct AnalyticsConfig {
     /// Minutes between captures (clamped to ≥1 at spawn).
     #[serde(default = "default_snapshot_interval_minutes")]
     pub snapshot_interval_minutes: u64,
+    /// Whether the one-shot template-rollup backfill runs at startup. Walks
+    /// terminal `workflow_instances` to seed `template_run_rollup` /
+    /// `template_node_rollup` for runs that predate the incremental hooks. The
+    /// backfill is idempotent (guarded by its own marker), so this is a kill
+    /// switch, not a "run again" flag.
+    #[serde(default = "default_template_rollup_backfill")]
+    pub template_rollup_backfill: bool,
 }
 
 impl Default for AnalyticsConfig {
@@ -330,6 +337,7 @@ impl Default for AnalyticsConfig {
         Self {
             snapshot_enabled: default_snapshot_enabled(),
             snapshot_interval_minutes: default_snapshot_interval_minutes(),
+            template_rollup_backfill: default_template_rollup_backfill(),
         }
     }
 }
@@ -340,6 +348,10 @@ fn default_snapshot_enabled() -> bool {
 
 fn default_snapshot_interval_minutes() -> u64 {
     60
+}
+
+fn default_template_rollup_backfill() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]

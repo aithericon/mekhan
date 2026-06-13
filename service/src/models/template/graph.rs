@@ -146,6 +146,90 @@ fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
     matches!(c, InstanceConcurrencyPolicy::Unlimited)
 }
 
+/// Structural metrics of a published [`WorkflowGraph`], computed once at
+/// publish time and persisted into the `workflow_templates.metrics` JSONB
+/// column. Pure shape — no run data — so it can be derived from the graph
+/// alone, before the template ever runs. The per-template analytics surface
+/// reads it back as the "what this template is" half of the view (the
+/// "how it ran" half comes from the run/node rollup tables).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TemplateMetrics {
+    /// Total nodes in the graph.
+    pub node_count: u32,
+    /// Total edges in the graph.
+    pub edge_count: u32,
+    /// Node counts keyed by the snake-case wire kind (`WorkflowNodeData::
+    /// type_name()`): `start`, `automated_step`, `decision`, … BTreeMap for a
+    /// byte-stable JSONB serialization.
+    pub node_kind_counts: std::collections::BTreeMap<String, u32>,
+    /// Number of `SubWorkflow` nodes (embedded child templates).
+    pub subworkflow_count: u32,
+    /// Deepest visual-container nesting in the graph, measured by the
+    /// `parent_id` chain (a top-level node is depth 0, a node inside one
+    /// container is depth 1, and so on).
+    pub max_nesting_depth: u32,
+    /// Whether the graph contains any `Loop` (or `Map`) iteration node.
+    pub has_loops: bool,
+}
+
+impl TemplateMetrics {
+    /// Derive the structural metrics from a graph. Counts every node by its
+    /// wire kind, tallies SubWorkflow/loop presence, and walks each node's
+    /// `parent_id` chain to find the deepest container nesting.
+    pub fn from_graph(graph: &WorkflowGraph) -> Self {
+        use std::collections::{BTreeMap, HashMap};
+
+        let mut node_kind_counts: BTreeMap<String, u32> = BTreeMap::new();
+        let mut subworkflow_count = 0u32;
+        let mut has_loops = false;
+
+        for node in &graph.nodes {
+            let kind = node.data.type_name();
+            *node_kind_counts.entry(kind.to_string()).or_insert(0) += 1;
+            match node.data {
+                WorkflowNodeData::SubWorkflow { .. } => subworkflow_count += 1,
+                WorkflowNodeData::Loop { .. } | WorkflowNodeData::Map { .. } => has_loops = true,
+                _ => {}
+            }
+        }
+
+        // Visual-container nesting depth: follow each node's `parent_id` chain.
+        // A `parent_of` lookup keyed by node id lets a node resolve its parent
+        // without rescanning; a guard caps the walk at the node count so a
+        // (malformed) cycle can't spin forever.
+        let parent_of: HashMap<&str, Option<&str>> = graph
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.parent_id.as_deref()))
+            .collect();
+        let node_count = graph.nodes.len();
+        let mut max_nesting_depth = 0u32;
+        for node in &graph.nodes {
+            let mut depth = 0u32;
+            let mut cursor = node.parent_id.as_deref();
+            let mut steps = 0usize;
+            while let Some(parent) = cursor {
+                depth += 1;
+                steps += 1;
+                if steps > node_count {
+                    break;
+                }
+                cursor = parent_of.get(parent).copied().flatten();
+            }
+            max_nesting_depth = max_nesting_depth.max(depth);
+        }
+
+        Self {
+            node_count: node_count as u32,
+            edge_count: graph.edges.len() as u32,
+            node_kind_counts,
+            subworkflow_count,
+            max_nesting_depth,
+            has_loops,
+        }
+    }
+}
+
 /// Template-level instance concurrency policy. Read by the trigger
 /// dispatcher on fire and the lifecycle listener on instance terminal.
 ///

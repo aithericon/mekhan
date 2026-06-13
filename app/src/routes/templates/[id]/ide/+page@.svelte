@@ -1,4 +1,8 @@
 <script lang="ts">
+	// `+page@.svelte` (layout reset to root): the IDE is a deliberately-entered
+	// full-screen workbench with its own toolbar + back button, so it bypasses
+	// the `[id]/+layout.svelte` Editor/Analytics tab strip that wraps the bare
+	// editor + analytics routes (which would otherwise be redundant second chrome).
 	import { page } from '$app/state';
 	import IdeWorkbench from '$lib/components/ide/IdeWorkbench.svelte';
 

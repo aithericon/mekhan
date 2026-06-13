@@ -23,8 +23,8 @@ use crate::compiler::{
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
-    default_subworkflow_output_port, ExecutionBackendType, Port, VersionPin, WorkflowGraph,
-    WorkflowNodeData, WorkflowTemplate,
+    default_subworkflow_output_port, ExecutionBackendType, Port, TemplateMetrics, VersionPin,
+    WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
@@ -46,6 +46,42 @@ pub struct CompiledArtifacts {
     /// uploaded by [`PublishService::upload_node_configs`] to the
     /// deterministic S3 key the compiler embedded in the AIR.
     pub node_configs: HashMap<String, serde_json::Value>,
+    /// Structural metrics ([`TemplateMetrics`]) derived from the authored
+    /// graph + compiled interface registry, serialized for the
+    /// `workflow_templates.metrics` JSONB column. Pure shape (no run data) —
+    /// the "what this template is" half of the per-template analytics surface.
+    pub metrics: serde_json::Value,
+}
+
+/// Derive the structural metrics for a published graph. Pure — no run data, so
+/// it can be computed once at publish time and read back as the static half of
+/// the per-template analytics view.
+///
+/// The counts (`node_count`, `edge_count`, `node_kind_counts`,
+/// `subworkflow_count`, `max_nesting_depth`) come from the AUTHORED `graph`, so
+/// the kind tally always sums to `node_count`. `has_loops` additionally folds
+/// in two signals the bare node scan can miss: a loop-back edge authored
+/// without an explicit `Loop`/`Map` node (mirroring the compiler's loop-edge
+/// predicate in `compiler/graph.rs`), and any node the compiler LOWERED to a
+/// `Loop`/`Map` interface (a degenerate construct can compile to an iteration
+/// kind even when the authored node kind differs).
+pub fn compute_template_metrics(
+    graph: &WorkflowGraph,
+    interfaces: &InterfaceRegistry,
+) -> TemplateMetrics {
+    let mut metrics = TemplateMetrics::from_graph(graph);
+
+    let has_loop_back_edge = graph
+        .edges
+        .iter()
+        .any(|e| e.edge_type == "loop_back" || e.target_handle.as_deref() == Some("body_out"));
+
+    let registry_has_loop = interfaces
+        .values()
+        .any(|i| matches!(i.kind, NodeKind::Loop | NodeKind::Map));
+
+    metrics.has_loops = metrics.has_loops || has_loop_back_edge || registry_has_loop;
+    metrics
 }
 
 /// Which S3 key space [`PublishService::compile_artifacts`] embeds into the
@@ -406,11 +442,22 @@ impl<'a> PublishService<'a> {
         let graph_json = serde_json::to_value(graph)
             .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
 
+        // Structural metrics for the `workflow_templates.metrics` JSONB column.
+        // Computed from the AUTHORED `graph` (so counts match what the editor
+        // shows) plus the compiled interface registry (lowered loop/map kinds).
+        // A registry that fails to decode degrades to an empty map — metrics is
+        // best-effort telemetry and must never fail a publish.
+        let registry: InterfaceRegistry =
+            serde_json::from_value(interface_json.clone()).unwrap_or_default();
+        let metrics = serde_json::to_value(compute_template_metrics(graph, &registry))
+            .map_err(|e| ApiError::internal(format!("serialize metrics: {e}")))?;
+
         Ok(CompiledArtifacts {
             air_json,
             graph_json,
             interface_json,
             node_configs,
+            metrics,
         })
     }
 

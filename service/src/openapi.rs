@@ -350,6 +350,18 @@ use utoipa::OpenApi;
             crate::analytics::model::BreakdownResponse,
             crate::analytics::model::SnapshotPoint,
             crate::analytics::model::SnapshotResult,
+            // Per-template usage analytics — the summary tree + timeseries
+            // point nest under Vec<_>/Option<_> fields that utoipa's
+            // auto-discovery doesn't fully walk; register explicitly so the
+            // frontend codegen emits matching TS types.
+            crate::models::template::TemplateMetrics,
+            crate::analytics::model::TemplateAnalytics,
+            crate::analytics::model::TemplateUsageSummary,
+            crate::analytics::model::RunsByOutcome,
+            crate::analytics::model::DurationPercentiles,
+            crate::analytics::model::NodeHotspot,
+            crate::analytics::model::TemplateNodeHotspots,
+            crate::analytics::model::TemplateRunTimeseriesPoint,
             // Normalized probe (`fmeta`) metadata view — reached only through the
             // `CatalogueEntry.metadata_view` field; register the tree explicitly
             // so frontend codegen emits matching TS types (see catalogue/metadata_view.rs).
