@@ -395,11 +395,24 @@ where
     // dispatch options against the scenario's declared transitions. Failures
     // here MUST fail-closed BEFORE any service mutation (no half-loaded
     // state on bad input).
+    // Resolve the effective workspace (tenant) for this load BEFORE
+    // destructuring — `workspace()` borrows the envelope and falls back to the
+    // reserved `DEFAULT_WORKSPACE` sentinel when no explicit `workspace_id` was
+    // supplied (legacy/SDK/demo/dev). This is the load-bearing per-net
+    // provenance: it is stamped onto THIS net's service (read per-net by the
+    // NATS publisher/consumer/listener/KV layer constructed in main.rs's
+    // store_factory + on_create), NOT taken from a process-global env — a
+    // single shared workspace would collapse all tenant isolation.
+    let workspace_id = envelope.workspace().to_string();
+
     let LoadScenarioRequest {
         scenario,
         skip_mask,
         stage_overrides,
         net_parameters,
+        // Consumed above via `envelope.workspace()`; bound here only to keep
+        // the destructure exhaustive against the ws-segmented contract.
+        workspace_id: _workspace_id,
     } = envelope;
 
     // AIR version gate — FIRST, before any interpretation of the scenario.
@@ -475,6 +488,23 @@ where
 
     // Attach groups to the topology so they survive event-sourced hydration
     net.groups = scenario.groups.clone();
+
+    // Stamp the effective workspace (tenant) onto THIS net's service BEFORE any
+    // event is appended. This is the canonical per-net workspace provenance: the
+    // NATS publisher / event-consumer / signal+bridge listeners / KV buckets for
+    // this net are constructed against the same `Arc<PetriNetService>` handle
+    // (in main.rs's store_factory + on_create) and read `service.workspace()` to
+    // namespace every subject/durable/bucket under `petri.{ws}.{net}…`. It is
+    // stored per-NetInstance (NEVER from a process-global env var) so one engine
+    // process hosting many tenants' nets keeps them hard-isolated.
+    //
+    // ORDERING (multi-tenancy linchpin / hazard #1): this MUST precede
+    // `clear()` + `initialize()`. `initialize()` appends `NetInitialized`
+    // through the publisher, which reads the shared workspace cell to pick the
+    // subject — if we stamped AFTER, `NetInitialized` would be published under
+    // the process-fallback workspace and be unhydratable under the net's real
+    // workspace. Idempotent w.r.t. the `net_load_scenario` pre-stamp (same value).
+    app_state.service.set_workspace_id(workspace_id);
 
     // Clear any existing events/state before initializing
     app_state.service.clear().await;
@@ -1344,6 +1374,20 @@ pub mod net_scoped {
         // from a previous scenario instance are ACK'd without processing.
         instance.notify_scenario_loaded().await;
 
+        // Multi-tenancy linchpin: stamp the per-net workspace and START the
+        // deferred event consumer BEFORE `load_scenario` runs `initialize()`.
+        // `initialize()` appends `NetInitialized` through the NATS publisher and
+        // BLOCKS waiting for the consumer to apply it (event_store waits on the
+        // applied watch channel); if the consumer were not yet running that
+        // append would time out. The consumer must therefore be live — and
+        // filtered on the REAL workspace, not the process fallback — before the
+        // first append. We peek the workspace off the request here (the same
+        // value `load_scenario` re-stamps idempotently below). For a FRESH net
+        // there is nothing to hydrate so `start_event_consumer` returns promptly.
+        let ws = body.workspace().to_string();
+        instance.service.set_workspace_id(ws);
+        instance.start_event_consumer().await;
+
         let response = super::load_scenario(State(instance.as_app_state()), body).await;
 
         // Run bridge validation in warn mode after deploy.
@@ -1482,18 +1526,81 @@ pub mod net_scoped {
                         targets.insert(target_net_id.clone());
                     }
                 }
+                // Multi-tenancy: bridges are destination-addressed and
+                // INTRA-workspace only — the cross-net bridge subject is
+                // `petri.{ws}.{target_net}.bridge.{place}`, where `{ws}` is the
+                // SOURCE net's workspace (we publish into our own workspace's
+                // bridge inbox and the target consumes its own inbox filter).
+                // A bridge whose target net lives in a DIFFERENT workspace would
+                // therefore route under the wrong `{ws}` segment and silently
+                // never arrive (or, worse, collide with a same-net_id tenant).
+                // Assert source-ws == target-ws here while we have both live
+                // instances. WARN-only for this phase.
+                // Workspace is stamped per-NetInstance on the service handle;
+                // fall back to the reserved DEFAULT_WORKSPACE sentinel for nets
+                // loaded without an explicit workspace.
+                let source_ws = instance.service.workspace().unwrap_or_else(|| {
+                    petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string()
+                });
+                // ENFORCED (multi-tenancy): bridges are intra-workspace only. A
+                // net entering Running with a bridge target in a DIFFERENT
+                // workspace would route under the source ws and silently never
+                // arrive (or collide with a same-net_id tenant). Collect a
+                // BRIDGE_CROSS_WORKSPACE error per such target and fail the
+                // to-Running transition with a 422, merged with the Strict
+                // bridge-topology report below.
+                let mut cross_ws_issues: Vec<petri_application::ValidationIssue> = Vec::new();
                 for target in targets {
                     // Wake-if-known; ignore errors — a tombstoned/unknown target
                     // stays unresolved and is reported by validation below.
-                    let _ = get_instance(&registry, &target).await;
+                    match get_instance(&registry, &target).await {
+                        Ok(target_instance) => {
+                            let target_ws =
+                                target_instance.service.workspace().unwrap_or_else(|| {
+                                    petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE
+                                        .to_string()
+                                });
+                            if target_ws != source_ws {
+                                tracing::error!(
+                                    net_id = %net_id,
+                                    source_workspace = %source_ws,
+                                    target_net_id = %target,
+                                    target_workspace = %target_ws,
+                                    "Cross-workspace bridge rejected: source and target nets are in \
+                                     different workspaces — bridges are intra-workspace only. \
+                                     Refusing to enter Running."
+                                );
+                                cross_ws_issues.push(petri_application::ValidationIssue {
+                                    node_id: target.clone(),
+                                    node_type: "bridge".to_string(),
+                                    level: petri_application::IssueLevel::Error,
+                                    code: "BRIDGE_CROSS_WORKSPACE".to_string(),
+                                    message: format!(
+                                        "net '{net_id}' (workspace '{source_ws}') has a bridge to \
+                                         net '{target}' in a different workspace '{target_ws}'. \
+                                         Bridges are intra-workspace only.",
+                                    ),
+                                    remote_net_id: Some(target.clone()),
+                                });
+                            }
+                        }
+                        Err(_) => { /* unresolved target reported by validation below */ }
+                    }
                 }
 
-                let report = petri_application::validate_bridges(
+                let mut report = petri_application::validate_bridges(
                     &net_id,
                     &topology,
                     registry.as_ref(),
                     petri_application::BridgeValidationMode::Strict,
                 );
+                // Merge cross-workspace errors into the Strict report so a single
+                // 422 carries both bridge-topology and cross-ws issues.
+                if !cross_ws_issues.is_empty() {
+                    report.summary.error_count += cross_ws_issues.len();
+                    report.issues.extend(cross_ws_issues);
+                    report.is_valid = false;
+                }
                 if !report.is_valid {
                     tracing::error!(
                         net_id = %net_id,

@@ -47,6 +47,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 pub struct RunContext {
     pub template_id: Uuid,
     pub template_version: i32,
+    /// Owning tenant — threaded into the launched test_run net's
+    /// `LoadScenarioRequest.workspace_id` so its engine subjects/streams carry
+    /// the `{workspace_id}` segment.
+    pub workspace_id: Uuid,
     pub air_json: Value,
     pub graph: WorkflowGraph,
     pub created_by: Uuid,
@@ -67,6 +71,7 @@ impl RunContext {
         Ok(Self {
             template_id: template.id,
             template_version: template.version,
+            workspace_id: template.workspace_id,
             air_json,
             graph,
             created_by,
@@ -130,6 +135,9 @@ pub async fn run_test(
             dispatch_options: petri_api_types::DispatchOptions::default(),
             // Template-tests don't surface a net-parameter bag today.
             net_parameters: None,
+            // First-class tenant id so the test_run net's engine
+            // subjects/streams/KV carry the owning workspace segment.
+            workspace_id: Some(ctx.workspace_id.to_string()),
         })
         .await;
 

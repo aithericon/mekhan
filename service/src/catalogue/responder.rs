@@ -62,7 +62,7 @@ pub async fn start_catalogue_responder(
                     "get" => handle_get(&repo, &msg.payload).await,
                     "lineage" => handle_lineage(&repo, &msg.payload).await,
                     "stats" => handle_stats(&repo, &msg.payload).await,
-                    "stats-by-net" => handle_stats_by_net(&repo).await,
+                    "stats-by-net" => handle_stats_by_net(&repo, &msg.payload).await,
                     "distinct" => handle_distinct(&repo, &msg.payload).await,
                     "distinct-jsonb" => handle_distinct_jsonb(&repo, &msg.payload).await,
                     unknown => {
@@ -109,8 +109,9 @@ async fn handle_list(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) -> Vec
         }
     };
 
+    let ws = resolve_workspace(req.workspace_id.as_deref());
     let params = req.into();
-    match repo.list_entries(&params).await {
+    match repo.list_entries(ws, &params).await {
         Ok(paginated) => serde_json::to_vec(&CatalogueResponse::ok(paginated)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
@@ -124,7 +125,8 @@ async fn handle_get(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) -> Vec<
         }
     };
 
-    match repo.get_entry(&req.execution_id, &req.id).await {
+    let ws = resolve_workspace(req.workspace_id.as_deref());
+    match repo.get_entry(ws, &req.execution_id, &req.id).await {
         Ok(entry) => serde_json::to_vec(&CatalogueResponse::ok(entry)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
@@ -138,7 +140,8 @@ async fn handle_lineage(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) -> 
         }
     };
 
-    match repo.lineage_grouped(&req.process_id).await {
+    let ws = resolve_workspace(req.workspace_id.as_deref());
+    match repo.lineage_grouped(ws, &req.process_id).await {
         Ok(response) => serde_json::to_vec(&CatalogueResponse::ok(response)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
@@ -152,15 +155,27 @@ async fn handle_stats(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) -> Ve
         }
     };
 
+    let ws = resolve_workspace(req.workspace_id.as_deref());
     let params = req.into();
-    match repo.stats(&params).await {
+    match repo.stats(ws, &params).await {
         Ok(stats) => serde_json::to_vec(&CatalogueResponse::ok(stats)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
 }
 
-async fn handle_stats_by_net(repo: &Arc<dyn CatalogueRepository>) -> Vec<u8> {
-    match repo.stats_by_net().await {
+async fn handle_stats_by_net(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) -> Vec<u8> {
+    // Tolerate an empty body (no scope sent) — default request resolves to the
+    // nil workspace, same as an absent `workspace_id`.
+    let req: CatalogueStatsByNetRequest = if payload.is_empty() {
+        CatalogueStatsByNetRequest::default()
+    } else {
+        match serde_json::from_slice(payload) {
+            Ok(r) => r,
+            Err(e) => return serialize_err(format!("invalid request: {e}")),
+        }
+    };
+    let ws = resolve_workspace(req.workspace_id.as_deref());
+    match repo.stats_by_net(ws).await {
         Ok(stats) => serde_json::to_vec(&CatalogueResponse::ok(stats)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
@@ -174,7 +189,8 @@ async fn handle_distinct(repo: &Arc<dyn CatalogueRepository>, payload: &[u8]) ->
         }
     };
 
-    match repo.distinct_values(&req.column).await {
+    let ws = resolve_workspace(req.workspace_id.as_deref());
+    match repo.distinct_values(ws, &req.column).await {
         Ok(values) => serde_json::to_vec(&CatalogueResponse::ok(values)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }
@@ -188,7 +204,8 @@ async fn handle_distinct_jsonb(repo: &Arc<dyn CatalogueRepository>, payload: &[u
         }
     };
 
-    match repo.distinct_jsonb_values(&req.column, &req.key).await {
+    let ws = resolve_workspace(req.workspace_id.as_deref());
+    match repo.distinct_jsonb_values(ws, &req.column, &req.key).await {
         Ok(values) => serde_json::to_vec(&CatalogueResponse::ok(values)).unwrap_or_default(),
         Err(e) => serialize_err(format!("query error: {e}")),
     }

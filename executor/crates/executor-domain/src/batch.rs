@@ -44,6 +44,7 @@ mod tests {
     fn sample_job(eid: &str) -> ExecutionJob {
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec: ExecutionSpec {
                 backend: "process".into(),
                 inputs: vec![],

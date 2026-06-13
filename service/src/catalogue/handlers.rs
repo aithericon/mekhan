@@ -6,7 +6,9 @@ use axum::{
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
+use uuid::Uuid;
 
+use crate::auth::AuthUser;
 use crate::catalogue::facets::{self, CatalogueDimension, FacetsResponse};
 use crate::catalogue::model::{CatalogueEntry, CatalogueStats, LineageResponse, NetStats};
 use crate::catalogue::queries::QueryFieldsResponse;
@@ -41,11 +43,13 @@ use crate::AppState;
 )]
 pub async fn list_entries(
     State(state): State<AppState>,
+    user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let response = state
         .catalogue_repo
-        .list_entries(&params)
+        .list_entries(ws, &params)
         .await
         .map_err(|e| {
             tracing::warn!("catalogue list: {e}");
@@ -71,9 +75,11 @@ pub async fn list_entries(
 )]
 pub async fn stats(
     State(state): State<AppState>,
+    user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<CatalogueStats>, ApiError> {
-    let stats = state.catalogue_repo.stats(&params).await.map_err(|e| {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let stats = state.catalogue_repo.stats(ws, &params).await.map_err(|e| {
         tracing::warn!("catalogue stats: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -90,8 +96,12 @@ pub async fn stats(
     ),
     tag = "catalogue",
 )]
-pub async fn stats_by_net(State(state): State<AppState>) -> Result<Json<Vec<NetStats>>, ApiError> {
-    let stats = state.catalogue_repo.stats_by_net().await.map_err(|e| {
+pub async fn stats_by_net(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Vec<NetStats>>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let stats = state.catalogue_repo.stats_by_net(ws).await.map_err(|e| {
         tracing::error!("catalogue stats_by_net: {e}");
         ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
@@ -111,11 +121,13 @@ pub async fn stats_by_net(State(state): State<AppState>) -> Result<Json<Vec<NetS
 )]
 pub async fn lineage(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
 ) -> Result<Json<LineageResponse>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let response = state
         .catalogue_repo
-        .lineage_grouped(&process_id)
+        .lineage_grouped(ws, &process_id)
         .await
         .map_err(|e| {
             tracing::error!("catalogue lineage: {e}");
@@ -142,11 +154,13 @@ pub async fn lineage(
 )]
 pub async fn distinct_values(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(column): Path<String>,
 ) -> Result<Json<Vec<String>>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let values = state
         .catalogue_repo
-        .distinct_values(&column)
+        .distinct_values(ws, &column)
         .await
         .map_err(|e| {
             tracing::warn!("catalogue distinct: {e}");
@@ -174,11 +188,13 @@ pub async fn distinct_values(
 )]
 pub async fn distinct_jsonb_values(
     State(state): State<AppState>,
+    user: AuthUser,
     Path((column, key)): Path<(String, String)>,
 ) -> Result<Json<Vec<String>>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let values = state
         .catalogue_repo
-        .distinct_jsonb_values(&column, &key)
+        .distinct_jsonb_values(ws, &column, &key)
         .await
         .map_err(|e| {
             tracing::warn!("catalogue distinct-jsonb: {e}");
@@ -218,16 +234,18 @@ pub struct FacetsQuery {
 )]
 pub async fn facets(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(q): Query<FacetsQuery>,
     params: QueryParams,
 ) -> Result<Json<FacetsResponse>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let dimension = CatalogueDimension::parse(&q.group_by).map_err(|e| {
         tracing::warn!("catalogue facets: {e}");
         ApiError::bad_request(e.to_string())
     })?;
     let limit = facets::clamp_limit(q.limit);
 
-    let response = facets::facets(&state.db, &params, dimension, limit)
+    let response = facets::facets(&state.db, ws, &params, dimension, limit)
         .await
         .map_err(|e| {
             tracing::warn!("catalogue facets: {e}");
@@ -321,11 +339,13 @@ pub async fn download_artifact(
 )]
 pub async fn get_entry(
     State(state): State<AppState>,
+    user: AuthUser,
     Path((execution_id, id)): Path<(String, String)>,
 ) -> Result<Json<CatalogueEntry>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let entry = state
         .catalogue_repo
-        .get_entry(&execution_id, &id)
+        .get_entry(ws, &execution_id, &id)
         .await
         .map_err(|e| {
             tracing::error!("catalogue get_entry: {e}");

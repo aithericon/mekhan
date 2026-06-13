@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::dlq::DlqPublisher;
 use crate::idempotency::{CachedResult, IdempotencyCache};
 use crate::message_loop::{run_message_loop_cancellable, MessageHandler, ProcessError};
+use crate::subjects::Subjects;
 
 // ============================================================================
 // Token Injection
@@ -134,7 +135,13 @@ where
         consumer: PullConsumer,
         jetstream: &async_nats::jetstream::Context,
     ) -> Result<Self, ListenerError> {
-        let cache = IdempotencyCache::durable(jetstream)
+        // Scope the durable dedup bucket to this net's workspace
+        // (`petri-idempotency-{ws}`); fall back to the reserved DEFAULT_WORKSPACE
+        // sentinel for nets loaded without an explicit workspace.
+        let workspace_id = service
+            .workspace()
+            .unwrap_or_else(|| Subjects::DEFAULT_WORKSPACE.to_string());
+        let cache = IdempotencyCache::durable(jetstream, &workspace_id)
             .await
             .map_err(ListenerError::ServiceError)?;
         Ok(Self {

@@ -10,6 +10,7 @@
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::query::builder::QueryError;
 use crate::query::extractor::QueryParams;
@@ -172,6 +173,7 @@ pub struct FacetsResponse {
 /// ([`clamp_limit`]).
 pub async fn facets(
     pool: &PgPool,
+    workspace_id: Uuid,
     params: &QueryParams,
     dimension: CatalogueDimension,
     limit: i64,
@@ -193,7 +195,7 @@ pub async fn facets(
                 lateral_from(dimension)
             ),
         });
-        let wrote_where = append_where(&mut qb, params)?;
+        let wrote_where = append_where(&mut qb, workspace_id, params)?;
         if dimension == CatalogueDimension::Classification {
             // Cheap pre-filter (the lateral CASE already guards correctness).
             qb.push(if wrote_where { " AND " } else { " WHERE " });
@@ -210,7 +212,7 @@ pub async fn facets(
         let mut qb = QueryBuilder::<Postgres>::new(
             "SELECT count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint FROM catalogue_entries",
         );
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
         let row: (i64, i64) = qb.build_query_as().fetch_one(pool).await?;
         row
     };

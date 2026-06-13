@@ -216,7 +216,12 @@ pub async fn create_instance(
         }
     };
 
-    let net_id = format!("mekhan-{instance_id}");
+    // Multi-tenancy: net_id is workspace-namespaced (`mekhan-{ws}-{instance}`)
+    // so engine subjects (`petri.{ws}.{net}.*`) and per-workspace global
+    // listeners can route by tenant. The workspace is the template's owning
+    // workspace — instances inherit their template's tenancy.
+    let workspace_id = template.workspace_id;
+    let net_id = format!("mekhan-{workspace_id}-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
     // Parameterize → insert row (before deploy, for the lifecycle listener) →
@@ -243,10 +248,15 @@ pub async fn create_instance(
             // harness drives via fire_trigger). Plain create-instance →
             // empty dispatch options.
             dispatch_options: petri_api_types::DispatchOptions::default(),
-            // Tenant propagation (D1-A) is surfaced at the trigger-fire
-            // boundary; the user POST create-instance path does not carry
-            // a net-parameter bag today.
-            net_parameters: None,
+            // Tenant propagation (D1-A): seed the net-parameter bag with the
+            // owning workspace so the engine's firing path reads
+            // `net_parameters.tenant_id` into the pre-dispatch metadata (the
+            // pre-dispatch metadata consumer). The trigger-fire boundary may
+            // carry a richer caller-supplied bag; the user POST path supplies
+            // only the tenant id.
+            net_parameters: Some(json!({ "tenant_id": workspace_id.to_string() })),
+            // First-class tenant id for engine subject/stream/KV namespacing.
+            workspace_id: Some(workspace_id.to_string()),
         })
         .await
         .map_err(|e| match e {

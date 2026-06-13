@@ -699,6 +699,9 @@ pub async fn ensure_token_pool_net_deployed(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
+        // Pool nets are cross-cutting infra, not tenant-owned — engine routes
+        // them on its reserved "default" workspace sentinel.
+        None,
     )
     .await
     {
@@ -1212,6 +1215,9 @@ pub async fn ensure_datacenter_adapter_deployed(
         &net_id,
         &air,
         petri_api_types::DispatchOptions::default(),
+        None,
+        // Pool nets are cross-cutting infra, not tenant-owned — engine routes
+        // them on its reserved "default" workspace sentinel.
         None,
     )
     .await

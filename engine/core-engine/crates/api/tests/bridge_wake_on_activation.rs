@@ -81,6 +81,13 @@ fn registry_with_topologies(topos: Vec<(String, PetriNet)>) -> (Router, Arc<Reg>
                 Arc::new(topo),
                 Arc::new(MockStateProjection::new()),
                 rx,
+                // Multi-tenancy: unstamped shared workspace cell + no-op consumer
+                // starter (mock store has no NATS consumer to defer).
+                Arc::new(std::sync::RwLock::new(None)),
+                Arc::new(|_ws: String| {
+                    Box::pin(async {})
+                        as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                }),
             )
         });
     let registry = Arc::new(NetRegistry::new(factory));
@@ -177,5 +184,94 @@ async fn activation_rejects_truly_missing_bridge_target() {
     assert!(
         codes.contains(&"BRIDGE_TARGET_NET_MISSING"),
         "expected BRIDGE_TARGET_NET_MISSING, got issues: {body}"
+    );
+}
+
+// =============================================================================
+// Cross-Workspace Bridge Enforcement (Multi-Tenancy, ADR-09)
+// =============================================================================
+//
+// Bridges are destination-addressed and INTRA-workspace only: the cross-net
+// bridge subject is `petri.{ws}.{target_net}.bridge.{place}` where `{ws}` is
+// the SOURCE net's workspace. A bridge whose target net lives in a DIFFERENT
+// workspace would route under the source ws and silently never arrive (or
+// collide with a same-net_id tenant). The activation gate in
+// `net_set_run_mode` therefore REJECTS a transition to Running when the
+// source and a bridge target are in different workspaces, with a 422 carrying
+// a `BRIDGE_CROSS_WORKSPACE` issue.
+
+/// ENFORCED: activating a net whose bridge target is in a DIFFERENT workspace
+/// must 422 with `BRIDGE_CROSS_WORKSPACE` — bridges are intra-workspace only.
+#[tokio::test]
+async fn activation_rejects_cross_workspace_bridge_target() {
+    let parent_id = "parent-net";
+    let target_id = "pool-target-net";
+
+    let (router, registry) = registry_with_topologies(vec![
+        (parent_id.to_string(), parent_net(target_id)),
+        (target_id.to_string(), target_net()),
+    ]);
+
+    // Bring both nets live and stamp DISTINCT workspaces (the multi-tenant
+    // condition: source in wsA, bridge target in wsB).
+    registry
+        .get_or_create(parent_id)
+        .service
+        .set_workspace_id("wsA".to_string());
+    registry
+        .get_or_create(target_id)
+        .service
+        .set_workspace_id("wsB".to_string());
+
+    let (status, body) = put_run_mode(router, parent_id, "running").await;
+
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "activation must reject a cross-workspace bridge target; got body: {body}"
+    );
+    let codes = body["issues"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i["code"].as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        codes.contains(&"BRIDGE_CROSS_WORKSPACE"),
+        "expected BRIDGE_CROSS_WORKSPACE, got issues: {body}"
+    );
+}
+
+/// Positive control: an INTRA-workspace bridge (source and target both in the
+/// same workspace) passes the gate and activates. This proves the rejection
+/// above is driven by the workspace mismatch, not by bridges-in-general.
+#[tokio::test]
+async fn activation_accepts_intra_workspace_bridge_target() {
+    let parent_id = "parent-net";
+    let target_id = "pool-target-net";
+
+    let (router, registry) = registry_with_topologies(vec![
+        (parent_id.to_string(), parent_net(target_id)),
+        (target_id.to_string(), target_net()),
+    ]);
+
+    // Both nets in the SAME workspace.
+    registry
+        .get_or_create(parent_id)
+        .service
+        .set_workspace_id("wsA".to_string());
+    registry
+        .get_or_create(target_id)
+        .service
+        .set_workspace_id("wsA".to_string());
+
+    let (status, body) = put_run_mode(router, parent_id, "running").await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "activation must succeed for an intra-workspace bridge; got body: {body}"
     );
 }

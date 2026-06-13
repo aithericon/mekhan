@@ -63,6 +63,11 @@ use crate::subjects::Subjects;
 pub struct SpawnNetHandler {
     jetstream: async_nats::jetstream::Context,
     parent_net_id: String,
+    /// Workspace (tenant) of the spawning parent net. Spawns are intra-workspace
+    /// — the child is created under the parent's workspace — so the create_net
+    /// command is published to `petri.{ws}.commands.create_net`. Defaults to the
+    /// reserved DEFAULT_WORKSPACE sentinel until stamped via [`Self::with_workspace`].
+    workspace_id: String,
     input_port: String,
     output_port: String,
 }
@@ -75,9 +80,17 @@ impl SpawnNetHandler {
         Self {
             jetstream,
             parent_net_id: parent_net_id.into(),
+            workspace_id: Subjects::DEFAULT_WORKSPACE.to_string(),
             input_port: "spawn_request".to_string(),
             output_port: "spawned".to_string(),
         }
+    }
+
+    /// Stamp the parent net's workspace so spawned children land in the same
+    /// tenant's `petri.{ws}.commands.create_net` subject.
+    pub fn with_workspace(mut self, workspace_id: impl Into<String>) -> Self {
+        self.workspace_id = workspace_id.into();
+        self
     }
 }
 
@@ -174,7 +187,10 @@ impl EffectHandler for SpawnNetHandler {
         })?;
 
         self.jetstream
-            .publish(Subjects::COMMAND_CREATE_NET.to_string(), payload.into())
+            .publish(
+                Subjects::command_create_net(&self.workspace_id),
+                payload.into(),
+            )
             .await
             .map_err(|e| {
                 EffectError::ExecutionFailed(format!("Failed to publish CreateNetRequest: {}", e))

@@ -87,6 +87,7 @@ pub trait FileOpsTestKit: Send + Sync {
     fn spec_to_job(&self, eid: &str, spec: ExecutionSpec) -> ExecutionJob {
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec,
             metadata: HashMap::new(),
             timeout: None,

@@ -72,6 +72,13 @@ impl TestServer {
                     Arc::new(MemoryTopologyStore::new()),
                     Arc::new(MarkingProjection::new()),
                     rx,
+                    // Multi-tenancy: unstamped shared workspace cell + no-op
+                    // consumer starter (in-memory store has no NATS consumer).
+                    Arc::new(std::sync::RwLock::new(None)),
+                    Arc::new(|_ws: String| {
+                        Box::pin(async {})
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    }),
                 )
             });
 

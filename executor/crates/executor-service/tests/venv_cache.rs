@@ -58,6 +58,7 @@ mod venv_cache_tests {
         config.script = aithericon_executor_python::INLINE_SCRIPT_NAME.into();
         ExecutionJob {
             execution_id: eid.into(),
+            workspace_id: String::new(),
             spec: config.into_spec_with_io(inputs, outputs),
             metadata: HashMap::new(),
             timeout: None,

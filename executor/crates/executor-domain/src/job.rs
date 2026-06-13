@@ -6,6 +6,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::EventCategory;
 
+/// Reserved single-workspace sentinel for the executor STATUS/EVENT back-channel.
+///
+/// A job whose `workspace_id` is empty (an in-flight envelope serialized before
+/// multi-tenancy, or a single-workspace dev/SDK load) is attributed to this
+/// tenant so its status/event subjects land on a deterministic
+/// `executor.status.default.>` / `executor.events.default.>` rather than an
+/// empty subject token. Must stay subject-token-safe (`[A-Za-z0-9_-]`) — it is
+/// run through `sanitize_subject_token` like any other segment, and a dot would
+/// split it into two subject tokens. Mirrors the engine's
+/// `Subjects::DEFAULT_WORKSPACE` (`"default"`); the engine re-exports / aligns
+/// on this value so submit-side and worker-side fall-backs agree byte-for-byte.
+pub const DEFAULT_WORKSPACE: &str = "default";
+
 /// Priority level for execution jobs, mapped to apalis priority queues.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -23,6 +36,24 @@ pub enum JobPriority {
 pub struct ExecutionJob {
     /// Caller-assigned unique identifier. Used for status updates, dedup, and correlation.
     pub execution_id: String,
+
+    /// The workspace (tenant) this job belongs to. Stamped by the engine at
+    /// submit from the firing net's workspace; the worker reads it (NOT
+    /// `WorkerIdentity.workspace_id`) and threads it onto every `StatusUpdate` /
+    /// `ExecutionEvent` / `ControlEmitEvent` so the STATUS/EVENT back-channel
+    /// subjects carry a `{ws}` segment (`executor.status.{ws}.{exec}.{status}`),
+    /// making every back-channel message tenant-attributable even though the
+    /// single `executor.status.>` stream still captures all of them.
+    ///
+    /// A first-class job attribute, NOT metadata — metadata is echoed verbatim
+    /// into `RoutingMeta`; the workspace is a separate concern (mirrors how
+    /// `wrapped_secrets` is deliberately kept out of metadata).
+    ///
+    /// `#[serde(default)]` so an in-flight envelope serialized before
+    /// multi-tenancy (no `workspace_id` key) deserializes to `""`; the worker
+    /// then falls back to [`DEFAULT_WORKSPACE`].
+    #[serde(default)]
+    pub workspace_id: String,
 
     /// What to execute.
     pub spec: ExecutionSpec,

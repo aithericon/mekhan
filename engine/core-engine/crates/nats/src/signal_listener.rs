@@ -1,8 +1,14 @@
 //! SignalListener: receives external system signals via NATS and injects tokens.
 //!
-//! Subscribes to `petri.signal.{net_id}.>` and injects tokens into the target
-//! place when an `ExternalSignal` is received. Uses [`MessageHandler`] and
-//! [`run_message_loop`] for the consume-parse-process-ack loop.
+//! Subscribes to `petri.{ws}.{net_id}.signal.>` and injects tokens into the
+//! target place when an `ExternalSignal` is received. Uses [`MessageHandler`]
+//! and [`run_message_loop`] for the consume-parse-process-ack loop.
+//!
+//! Per ADR-09 the filter and durable name are workspace-segmented: a single
+//! engine process hosts nets from many workspaces, so `ws` is threaded in at
+//! construction and NEVER read from a process-global. The durable name was
+//! already net-unique; it now carries the `{ws}` segment too so two workspaces
+//! that ever shared a net id can't collide on the consumer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -35,12 +41,17 @@ pub enum SignalListenerError {
 
 /// Listener that receives external signals via NATS and injects tokens.
 ///
-/// One instance per net. Subscribes to `petri.signal.{net_id}.>` via a
+/// One instance per net. Subscribes to `petri.{ws}.{net_id}.signal.>` via a
 /// JetStream pull consumer and injects tokens into the resolved place.
 ///
 /// Uses an epoch (NATS stream sequence number) to filter stale messages
 /// from previous scenario instances without deleting the consumer.
 pub struct SignalListener {
+    /// Workspace (tenant) this net belongs to. Threaded in at load time from
+    /// `LoadScenarioRequest::workspace()`; defaults to
+    /// [`Subjects::DEFAULT_WORKSPACE`] for legacy/SDK/demo loads. NEVER a
+    /// process-global — that would collapse tenant isolation.
+    workspace_id: String,
     net_id: String,
     jetstream: async_nats::jetstream::Context,
     /// Stream sequence number at or below which messages are stale.
@@ -49,9 +60,14 @@ pub struct SignalListener {
 }
 
 impl SignalListener {
-    /// Create a new signal listener for a specific net.
-    pub fn new(net_id: String, jetstream: async_nats::jetstream::Context) -> Self {
+    /// Create a new signal listener for a specific net within a workspace.
+    pub fn new(
+        workspace_id: String,
+        net_id: String,
+        jetstream: async_nats::jetstream::Context,
+    ) -> Self {
         Self {
+            workspace_id,
             net_id,
             jetstream,
             epoch: Arc::new(AtomicU64::new(0)),
@@ -78,6 +94,7 @@ impl SignalListener {
         let new_epoch = info.state.last_sequence;
         let old = self.epoch.swap(new_epoch, Ordering::SeqCst);
         tracing::info!(
+            workspace_id = %self.workspace_id,
             net_id = %self.net_id,
             old_epoch = old,
             new_epoch = new_epoch,
@@ -147,8 +164,10 @@ impl SignalListener {
             .get_or_create_stream(crate::stream_config())
             .await
             .map_err(|e| SignalListenerError::JetStream(e.to_string()))?;
-        let filter = Subjects::signal_inbox_filter(&self.net_id);
-        let consumer_name = format!("signal-inbound-{}", self.net_id);
+        let filter = Subjects::signal_inbox_filter(&self.workspace_id, &self.net_id);
+        // Durable name carries the workspace segment so two workspaces can
+        // never collide on the consumer if they ever shared a net id.
+        let consumer_name = format!("signal-inbound-{}-{}", self.workspace_id, self.net_id);
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(consumer_name.clone()),
@@ -165,6 +184,7 @@ impl SignalListener {
 
         let handler = SignalListenerHandler {
             epoch: &self.epoch,
+            workspace_id: &self.workspace_id,
             net_id: &self.net_id,
             service: &service,
             eval_notify: &eval_notify,
@@ -189,6 +209,7 @@ where
     S: StateProjection + 'static,
 {
     epoch: &'a AtomicU64,
+    workspace_id: &'a str,
     net_id: &'a str,
     service: &'a Arc<PetriNetService<E, T, S>>,
     eval_notify: &'a Notify,
@@ -213,6 +234,7 @@ where
                     tracing::debug!(
                         stream_sequence = info.stream_sequence,
                         epoch = current_epoch,
+                        workspace_id = %self.workspace_id,
                         net_id = %self.net_id,
                         "Signal listener: skipping stale message (pre-epoch)"
                     );
@@ -226,9 +248,10 @@ where
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
 
-        // Parse subject to extract target place name
+        // Parse subject to extract target place name. The filter already pins
+        // ws + net_id to this listener's own net, so we only need the place.
         let place_name = Subjects::parse_signal_subject(subject)
-            .map(|(_net_id, place_name)| place_name)
+            .map(|(_ws, _net_id, place_name)| place_name)
             .ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse signal subject: {}", subject))
             })?;
@@ -280,6 +303,8 @@ where
         }
 
         tracing::info!(
+            workspace_id = %self.workspace_id,
+            net_id = %self.net_id,
             source = %signal.source,
             signal_key = %signal.signal_key,
             target_place = %place_name,

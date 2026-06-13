@@ -73,6 +73,15 @@ pub struct NatsEventStore<C: EventRepository> {
     /// Configuration
     config: NatsConfig,
 
+    /// Shared per-net workspace cell (multi-tenancy linchpin). Written through by
+    /// `PetriNetService::set_workspace_id` (the service holds the SAME `Arc`), so
+    /// the publisher routes events under the net's REAL workspace as soon as the
+    /// scenario load stamps it — even though this store was constructed (with a
+    /// frozen `config.workspace_id` fallback) before the workspace was known.
+    /// `workspace()` reads this first and falls back to `config.workspace()` only
+    /// when the cell is still unstamped (`None`).
+    workspace: Arc<std::sync::RwLock<Option<String>>>,
+
     /// Serializes writes (sequence numbers + hash chain must be sequential)
     write_lock: Mutex<WriteState>,
 
@@ -91,11 +100,35 @@ impl<C: EventRepository> NatsEventStore<C> {
     /// * `jetstream` - JetStream context for publishing
     /// * `config` - NATS configuration
     /// * `applied_rx` - Watch receiver signaling the latest sequence applied by the consumer
+    ///
+    /// Uses an independent (unstamped) workspace cell — callers that need the
+    /// publisher to share the service's per-net workspace cell should use
+    /// [`new_with_workspace`].
     pub fn new(
         cache: Arc<C>,
         jetstream: jetstream::Context,
         config: NatsConfig,
         applied_rx: watch::Receiver<u64>,
+    ) -> Self {
+        Self::new_with_workspace(
+            cache,
+            jetstream,
+            config,
+            applied_rx,
+            Arc::new(std::sync::RwLock::new(None)),
+        )
+    }
+
+    /// Create a NATS event store whose workspace cell is SHARED with the owning
+    /// `PetriNetService` (multi-tenancy linchpin). `set_workspace_id` on the
+    /// service writes through this `Arc`, so the publisher picks up the net's
+    /// real workspace for every subject without re-plumbing construction order.
+    pub fn new_with_workspace(
+        cache: Arc<C>,
+        jetstream: jetstream::Context,
+        config: NatsConfig,
+        applied_rx: watch::Receiver<u64>,
+        workspace: Arc<std::sync::RwLock<Option<String>>>,
     ) -> Self {
         // Sync initial sequence from consumer's applied position.
         // After hydration, applied_rx holds the next expected sequence (N+1 where
@@ -105,6 +138,7 @@ impl<C: EventRepository> NatsEventStore<C> {
             cache,
             jetstream,
             config,
+            workspace,
             write_lock: Mutex::new(WriteState {
                 next_sequence: initial_sequence,
                 last_hash: None,
@@ -112,6 +146,17 @@ impl<C: EventRepository> NatsEventStore<C> {
             applied_rx,
             consumer_timeout: Duration::from_secs(5),
         }
+    }
+
+    /// The effective per-net workspace: the shared cell if stamped, else the
+    /// `config` fallback (which itself falls back to `DEFAULT_WORKSPACE`). This
+    /// is what every publish subject is namespaced under.
+    fn workspace(&self) -> String {
+        self.workspace
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.config.workspace().to_string())
     }
 
     /// Set the timeout for waiting on consumer confirmation.
@@ -207,7 +252,10 @@ impl<C: EventRepository> NatsEventStore<C> {
             dedup_id,
         };
 
-        let subject = Subjects::bridge_transfer(target_net_id, target_place_name);
+        // Bridges are destination-addressed and INTRA-workspace only: we publish
+        // into our own (source) workspace's bridge inbox for the target net.
+        let subject =
+            Subjects::bridge_transfer(&self.workspace(), target_net_id, target_place_name);
         let payload = serde_json::to_vec(&transfer).map_err(|e| {
             EventStoreError::PersistFailed(format!("Failed to serialize bridge transfer: {e}"))
         })?;
@@ -253,7 +301,11 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         let persisted = PersistedEvent::new(state.next_sequence, event, state.last_hash.clone());
 
         // 3. Publish to NATS JetStream (synchronous — wait for ACK)
-        let subject = Subjects::for_event(&persisted.event, self.config.net_id.as_deref());
+        let subject = Subjects::for_event(
+            &persisted.event,
+            &self.workspace(),
+            self.config.net_id.as_deref(),
+        );
         let payload = serde_json::to_vec(&persisted).map_err(|e| {
             EventStoreError::PersistFailed(format!("Failed to serialize event: {e}"))
         })?;

@@ -267,6 +267,9 @@ pub async fn trigger_staging(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
+        // Staging/materialize nets are cross-cutting infra, not tenant-owned —
+        // engine routes them on its reserved "default" workspace sentinel.
+        None,
     )
     .await
     {
@@ -451,6 +454,9 @@ pub async fn trigger_materialize_image(
         &net_id,
         &air,
         petri_api_types::DispatchOptions::default(),
+        None,
+        // Staging/materialize nets are cross-cutting infra, not tenant-owned —
+        // engine routes them on its reserved "default" workspace sentinel.
         None,
     )
     .await

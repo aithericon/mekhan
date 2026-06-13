@@ -428,6 +428,7 @@ async fn schema_facets_and_in_filter() {
     // fingerprint-less entry, over the scoped seed set.
     let by_schema = facets(
         &pool,
+        Uuid::nil(),
         &params,
         CatalogueDimension::Schema,
         clamp_limit(None),
@@ -461,7 +462,9 @@ async fn schema_facets_and_in_filter() {
         fx.exec, fx.digest_a, fx.digest_b
     ))
     .expect("parse in filter");
-    let page = list_entries(&pool, &in_params).await.expect("in filter");
+    let page = list_entries(&pool, Uuid::nil(), &in_params)
+        .await
+        .expect("in filter");
     let ids: Vec<&str> = page.items.iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, ["a1", "a2", "b1"], "f1 has no fingerprint → excluded");
     assert_eq!(page.total, 3);
@@ -472,7 +475,9 @@ async fn schema_facets_and_in_filter() {
         fx.exec, fx.digest_b
     ))
     .expect("parse eq filter");
-    let page = list_entries(&pool, &eq_params).await.expect("eq filter");
+    let page = list_entries(&pool, Uuid::nil(), &eq_params)
+        .await
+        .expect("eq filter");
     let ids: Vec<&str> = page.items.iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, ["b1"]);
 

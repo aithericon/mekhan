@@ -39,15 +39,33 @@ impl HumanNatsClient {
         }
     }
 
+    /// Resolve the workspace (tenant) segment for this client's subjects.
+    ///
+    /// The human client is constructed per-net, so its `org_id` carries the
+    /// owning workspace. Falls back to the reserved DEFAULT_WORKSPACE sentinel
+    /// when unset (legacy/SDK/dev nets).
+    fn workspace(&self) -> &str {
+        self.org_id
+            .as_deref()
+            .unwrap_or(Subjects::DEFAULT_WORKSPACE)
+    }
+
     /// Ensure the HUMAN_REQUESTS stream exists.
     async fn ensure_request_stream(&self) -> Result<(), String> {
         if self.request_stream_ensured.load(Ordering::SeqCst) {
             return Ok(());
         }
 
+        // Single global stream capturing the request subjects of ALL
+        // workspaces (`human.*.request.>`).
+        // TODO(stream-per-ws): shard per-workspace.
         let config = StreamConfig {
             name: HUMAN_STREAM_NAME.to_string(),
-            subjects: vec![format!("{}.>", Subjects::HUMAN_REQUEST_PREFIX)],
+            subjects: vec![format!(
+                "{}.*.{}.>",
+                Subjects::HUMAN_ROOT,
+                Subjects::HUMAN_REQUEST_CATEGORY
+            )],
             retention: RetentionPolicy::Limits,
             max_age: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
             ..Default::default()
@@ -69,9 +87,16 @@ impl HumanNatsClient {
             return Ok(());
         }
 
+        // Single global stream capturing the cancel subjects of ALL
+        // workspaces (`human.*.cancel.>`).
+        // TODO(stream-per-ws): shard per-workspace.
         let config = StreamConfig {
             name: HUMAN_CANCEL_STREAM_NAME.to_string(),
-            subjects: vec![format!("{}.>", Subjects::HUMAN_CANCEL_PREFIX)],
+            subjects: vec![format!(
+                "{}.*.{}.>",
+                Subjects::HUMAN_ROOT,
+                Subjects::HUMAN_CANCEL_CATEGORY
+            )],
             retention: RetentionPolicy::Limits,
             max_age: Duration::from_secs(7 * 24 * 60 * 60), // 7 days
             ..Default::default()
@@ -109,7 +134,7 @@ impl HumanTaskClient for HumanNatsClient {
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let subject = Subjects::human_request(&net_id, &place);
+        let subject = Subjects::human_request(self.workspace(), &net_id, &place);
 
         let payload = serde_json::to_vec(&request)
             .map_err(|e| format!("Failed to serialize human task request: {}", e))?;
@@ -138,7 +163,7 @@ impl HumanTaskClient for HumanNatsClient {
             cancelled_at: chrono::Utc::now(),
         };
 
-        let subject = Subjects::human_cancel(&self.net_id, place);
+        let subject = Subjects::human_cancel(self.workspace(), &self.net_id, place);
 
         let payload = serde_json::to_vec(&cancellation)
             .map_err(|e| format!("Failed to serialize cancel request: {}", e))?;

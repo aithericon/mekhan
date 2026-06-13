@@ -50,6 +50,17 @@ pub struct StatusUpdate {
     /// The execution this update belongs to.
     pub execution_id: String,
 
+    /// The workspace (tenant) this update belongs to, threaded from
+    /// `ExecutionJob.workspace_id`. Inserted as a subject segment after the
+    /// `executor.status` category root so the back-channel is tenant-attributable
+    /// (and a future per-tenant watcher can edge-filter `executor.status.{ws}.>`)
+    /// while the single `executor.status.>` stream still captures everything.
+    ///
+    /// `#[serde(default)]` so a status message published by an older worker (no
+    /// `workspace_id` key) still deserializes.
+    #[serde(default)]
+    pub workspace_id: String,
+
     /// Current status.
     pub status: ExecutionStatus,
 
@@ -69,10 +80,18 @@ pub struct StatusUpdate {
 
 impl StatusUpdate {
     /// Build the NATS subject for this update.
-    /// Pattern: `executor.status.{execution_id}.{status}`
+    /// Pattern: `executor.status.{ws}.{execution_id}.{status}`
+    ///
+    /// The `{ws}` segment sits AFTER the `executor.status` category root so the
+    /// existing stream subject `executor.status.>` (a trailing tail wildcard
+    /// matching one-or-more tokens) still captures the now-5-token subject, with
+    /// no stream-config change. `{ws}` is sanitized like `execution_id` so a
+    /// workspace UUID is byte-stable and a stray dot/wildcard cannot inject an
+    /// extra subject token.
     pub fn subject(&self) -> String {
         format!(
-            "executor.status.{}.{}",
+            "executor.status.{}.{}.{}",
+            sanitize_subject_token(&self.workspace_id),
             sanitize_subject_token(&self.execution_id),
             self.status.as_str()
         )
@@ -174,13 +193,19 @@ mod tests {
     fn status_update_subject_and_msg_id() {
         let update = StatusUpdate {
             execution_id: "train-alpha-0".into(),
+            workspace_id: "ws-acme".into(),
             status: ExecutionStatus::Completed,
             detail: serde_json::Value::Null,
             metadata: Default::default(),
             source: "exec-1".into(),
             timestamp: Utc::now(),
         };
-        assert_eq!(update.subject(), "executor.status.train-alpha-0.completed");
+        assert_eq!(
+            update.subject(),
+            "executor.status.ws-acme.train-alpha-0.completed"
+        );
+        // msg_id stays ws-free: execution_id is globally unique, so the dedup
+        // key needs no workspace segment.
         assert_eq!(update.msg_id(), "train-alpha-0-completed");
     }
 

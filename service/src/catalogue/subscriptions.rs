@@ -26,6 +26,10 @@ use crate::observability::record_silent_drop_with;
 pub struct CatalogueSubscription {
     pub subscription_id: String,
     pub net_id: String,
+    /// Owning tenant. Server-enforced scope for the backfill query. Defaults to
+    /// the nil workspace for legacy KV entries that predate the field.
+    #[serde(default)]
+    pub workspace_id: uuid::Uuid,
     pub signal_place: String,
     /// Outer key = field name, inner = `{ operator: value }`.
     /// Currently only `eq` is supported.
@@ -180,9 +184,16 @@ impl SubscriptionManager {
     ) -> Result<String, SubscriptionError> {
         let subscription_id = uuid::Uuid::new_v4().to_string();
 
+        let workspace_id = request
+            .workspace_id
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or_else(uuid::Uuid::nil);
+
         let sub = CatalogueSubscription {
             subscription_id: subscription_id.clone(),
             net_id: request.net_id.clone(),
+            workspace_id,
             signal_place: request.signal_place.clone(),
             filters: request.filters.clone(),
             backfill: request.backfill,
@@ -396,7 +407,7 @@ impl SubscriptionManager {
         // Build query params from subscription filters
         let query_params = filters_to_query_params(&sub.filters);
 
-        match repo.list_entries(&query_params).await {
+        match repo.list_entries(sub.workspace_id, &query_params).await {
             Ok(paginated) => {
                 tracing::info!(
                     subscription_id = %sub.subscription_id,

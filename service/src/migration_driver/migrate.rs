@@ -295,11 +295,17 @@ async fn insert_copied_row(
     size_bytes: Option<i64>,
 ) -> Result<(), DriverError> {
     sqlx::query(
+        // workspace_id is derived from the TARGET server (a copy belongs to the
+        // same tenant as the server it lands on); falls back to the default
+        // workspace if the server isn't registered. Conflict key is now
+        // (workspace_id, file_server_id, path).
         "INSERT INTO file_inventory \
-            (content_hash, file_server_id, path, status, is_canonical, copy_of, \
+            (workspace_id, content_hash, file_server_id, path, status, is_canonical, copy_of, \
              size_bytes, last_seen, updated_at) \
-         VALUES ($1, $2, $3, 'copied', false, $4, $5, NOW(), NOW()) \
-         ON CONFLICT (file_server_id, path) DO UPDATE SET \
+         VALUES (COALESCE((SELECT workspace_id FROM file_servers WHERE key = $2 LIMIT 1), \
+                          '00000000-0000-0000-0000-000000000000'), \
+                 $1, $2, $3, 'copied', false, $4, $5, NOW(), NOW()) \
+         ON CONFLICT (workspace_id, file_server_id, path) DO UPDATE SET \
             content_hash = EXCLUDED.content_hash, \
             status       = 'copied', \
             copy_of      = EXCLUDED.copy_of, \

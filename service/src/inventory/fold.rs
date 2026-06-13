@@ -85,6 +85,11 @@ async fn process_batch(
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let batch: FoldBatch = serde_json::from_slice(payload)?;
+    // Resolve the owning workspace from the target file server (the inventory
+    // rows belong to the same tenant that owns the server). A server row that
+    // can't be resolved (legacy / racing creation) folds under the nil
+    // workspace, matching the DEFAULT backfill on `file_inventory.workspace_id`.
+    let workspace_id = resolve_server_workspace(db, &batch.file_server_id).await?;
     let ctx = ObservationContext {
         endpoint_root: Some(batch.endpoint_root.clone()).filter(|s| !s.is_empty()),
         serve_group: batch.serve_group.clone(),
@@ -107,7 +112,9 @@ async fn process_batch(
                     metadata: i.metadata.clone(),
                 })
                 .collect();
-            let counts = reconcile::reconcile_batch(db, &batch.file_server_id, &items, &ctx).await?;
+            let counts =
+                reconcile::reconcile_batch(db, workspace_id, &batch.file_server_id, &items, &ctx)
+                    .await?;
             tracing::debug!(
                 server = %batch.file_server_id,
                 batch_idx = batch.batch_idx,
@@ -161,7 +168,13 @@ async fn process_batch(
                 .collect();
 
             let mut tx = db.begin().await?;
-            super::queries::fold_index_batch(&mut tx, &batch.file_server_id, &items).await?;
+            super::queries::fold_index_batch(
+                &mut tx,
+                workspace_id,
+                &batch.file_server_id,
+                &items,
+            )
+            .await?;
             tx.commit().await?;
             tracing::debug!(
                 server = %batch.file_server_id,
@@ -172,6 +185,25 @@ async fn process_batch(
         }
     }
     Ok(())
+}
+
+/// Resolve the workspace owning a file server, from the inventory
+/// `file_server_id` token. That token is `file_servers.key` (the SOFT join the
+/// workspace backfill migration uses: `fi.file_server_id = fs.key`); we also
+/// try `id` as a fallback so an id-keyed caller still resolves. Unresolvable →
+/// nil workspace (matches the column DEFAULT).
+async fn resolve_server_workspace(
+    db: &PgPool,
+    file_server_id: &str,
+) -> Result<uuid::Uuid, sqlx::Error> {
+    let ws: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT workspace_id FROM file_servers \
+         WHERE key = $1 OR id::text = $1 LIMIT 1",
+    )
+    .bind(file_server_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(ws.unwrap_or_else(uuid::Uuid::nil))
 }
 
 /// Parse the crawl op's RFC 3339 mtime rendering; unparseable values drop to

@@ -6,8 +6,8 @@
 //! - POST   `/api/v1/triggers/{node_id}/fire`        — manual fire (Phase 5a)
 //! - GET    `/api/v1/triggers/{node_id}/history`     — recent fire history
 //!
-//! Webhook receiver lives under `/api/triggers/webhook/{slug}` and lands in
-//! Phase 5e.
+//! Webhook receiver lives under `/api/triggers/webhook/{workspace_id}/{slug}`
+//! (Phase 5e; workspace-qualified in multi-tenancy phase 6).
 
 use std::collections::HashMap;
 
@@ -757,24 +757,32 @@ pub fn schema_exports() {
     let _ = std::any::type_name::<crate::triggers::TriggerLocator>();
 }
 
-/// POST /api/triggers/webhook/{slug}
+/// POST /api/triggers/webhook/{workspace_id}/{slug}
 ///
-/// Public webhook receiver. The handler resolves the slug to a registered
-/// webhook trigger, validates auth per the trigger's `WebhookAuth` policy,
-/// then fires with a payload of `{ payload (body), headers, query, fire_time }`.
+/// Public webhook receiver. The handler resolves the `(workspace_id, slug)`
+/// pair to a registered webhook trigger, validates auth per the trigger's
+/// `WebhookAuth` policy, then fires with a payload of
+/// `{ payload (body), headers, query, fire_time }`.
 ///
-/// Mounted outside the auth middleware — external systems POST to this URL
-/// without a Bearer token.
+/// The URL is workspace-qualified (multi-tenancy phase 6, clean break — slugs
+/// are only unique within a tenant) so an external sender can only ever reach
+/// a trigger owned by the workspace in the path. Mounted outside the auth
+/// middleware — external systems POST to this URL without a Bearer token.
 pub async fn webhook_receiver(
     State(state): State<AppState>,
     method: Method,
-    Path(slug): Path<String>,
+    Path((workspace_id, slug)): Path<(Uuid, String)>,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<FireTriggerResponse>, ApiError> {
-    let trigger = crate::triggers::sources::webhook::find_by_slug(&state.triggers, &slug)
-        .ok_or_else(|| ApiError::not_found(format!("webhook '{slug}' not found")))?;
+    let trigger =
+        crate::triggers::sources::webhook::find_by_slug(&state.triggers, workspace_id, &slug)
+            .ok_or_else(|| {
+                ApiError::not_found(format!(
+                    "webhook '{slug}' not found in workspace '{workspace_id}'"
+                ))
+            })?;
 
     let TriggerSource::Webhook(ref webhook) = trigger.source else {
         return Err(ApiError::internal("trigger source is not a webhook"));

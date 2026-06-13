@@ -73,6 +73,7 @@ pub trait BackendTestKit: Send + Sync {
     ) -> ExecutionJob {
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec,
             metadata: HashMap::new(),
             timeout,

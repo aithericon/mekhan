@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::AuthUser;
 use crate::causality::live::{LiveArtifactEvent, LiveLogEvent, LiveMetricEvent};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::{ArtifactsListResponse, LogsTailResponse};
@@ -625,13 +626,16 @@ fn default_artifact_limit() -> i64 {
 )]
 pub async fn artifacts_list(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(qp): Query<ArtifactsListQuery>,
 ) -> Result<Json<ArtifactsListResponse>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
     let categories = parse_csv(qp.categories.as_deref());
     let hints = parse_csv(qp.render_hints.as_deref());
     let entries = crate::catalogue::queries::lineage_filtered(
         &state.db,
+        ws,
         &process_id,
         &categories,
         &hints,

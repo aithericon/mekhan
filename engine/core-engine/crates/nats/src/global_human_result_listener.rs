@@ -1,8 +1,9 @@
 //! Global human result listener: replaces per-net human result listeners.
 //!
-//! Subscribes to `human.completed.>`, `human.cancelled.>`, and `human.failed.>`
-//! (all nets) and routes results to the correct net instance, waking it from
-//! hibernation if needed.
+//! Subscribes to `human.*.completed.>`, `human.*.cancelled.>`, and
+//! `human.*.failed.>` (all workspaces, all nets) and routes results to the
+//! correct net instance, waking it from hibernation if needed. The leading
+//! `*` is the `{ws}` segment per ADR-09 shape `human.{ws}.{category}.{net}.{place}`.
 //!
 //! This mirrors `GlobalSignalListener` but for human task results, solving the
 //! hibernation gap: per-net `HumanResultListener` consumers are cancelled on
@@ -98,7 +99,10 @@ impl GlobalHumanResultListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        let filter = format!("{}.>", Subjects::HUMAN_COMPLETED_PREFIX);
+        // TODO(stream-per-ws): per-workspace consumer split — replace this
+        // single cross-workspace consumer with one durable per workspace using
+        // `Subjects::human_workspace_filter(ws, HUMAN_COMPLETED_CATEGORY)`.
+        let filter = all_workspace_human_filter(Subjects::HUMAN_COMPLETED_CATEGORY);
         let consumer_name = format!("{}-completed", self.consumer_name_prefix);
 
         let consumer_config = ConsumerConfig {
@@ -129,7 +133,7 @@ impl GlobalHumanResultListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        let filter = format!("{}.>", Subjects::HUMAN_CANCELLED_PREFIX);
+        let filter = all_workspace_human_filter(Subjects::HUMAN_CANCELLED_CATEGORY);
         let consumer_name = format!("{}-cancelled", self.consumer_name_prefix);
 
         let consumer_config = ConsumerConfig {
@@ -160,7 +164,7 @@ impl GlobalHumanResultListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        let filter = format!("{}.>", Subjects::HUMAN_FAILED_PREFIX);
+        let filter = all_workspace_human_filter(Subjects::HUMAN_FAILED_CATEGORY);
         let consumer_name = format!("{}-failed", self.consumer_name_prefix);
 
         let consumer_config = ConsumerConfig {
@@ -185,13 +189,27 @@ impl GlobalHumanResultListener {
     }
 }
 
+// ==================== Workspace-spanning filter ====================
+
+/// Cross-workspace subscription/stream filter for a human-task category:
+/// `human.*.{category}.>` (the leading `*` spans `{ws}` per ADR-09).
+///
+/// TODO(stream-per-ws): per-workspace consumer split — this single
+/// cross-workspace filter is replaced by `Subjects::human_workspace_filter(ws,
+/// category)` (`human.{ws}.{category}.>`) once each tenant gets its own durable.
+fn all_workspace_human_filter(category: &str) -> String {
+    format!("{}.*.{}.>", Subjects::HUMAN_ROOT, category)
+}
+
 // ==================== Stream Configs ====================
-// Reuse the same stream configs as the per-net listener.
+// Reuse the same stream configs as the per-net listener. The stream subjects
+// span all workspaces (`human.*.{category}.>`) so a single stream captures
+// every tenant's human-task results.
 
 fn completed_stream_config() -> StreamConfig {
     StreamConfig {
         name: crate::human_result_listener::STREAM_HUMAN_COMPLETED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_COMPLETED_PREFIX)],
+        subjects: vec![all_workspace_human_filter(Subjects::HUMAN_COMPLETED_CATEGORY)],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -201,7 +219,7 @@ fn completed_stream_config() -> StreamConfig {
 fn cancelled_stream_config() -> StreamConfig {
     StreamConfig {
         name: Subjects::STREAM_HUMAN_CANCELLED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_CANCELLED_PREFIX)],
+        subjects: vec![all_workspace_human_filter(Subjects::HUMAN_CANCELLED_CATEGORY)],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -211,7 +229,7 @@ fn cancelled_stream_config() -> StreamConfig {
 fn failed_stream_config() -> StreamConfig {
     StreamConfig {
         name: Subjects::STREAM_HUMAN_FAILED.to_string(),
-        subjects: vec![format!("{}.>", Subjects::HUMAN_FAILED_PREFIX)],
+        subjects: vec![all_workspace_human_filter(Subjects::HUMAN_FAILED_CATEGORY)],
         retention: RetentionPolicy::Limits,
         max_age: Duration::from_secs(7 * 24 * 60 * 60),
         ..Default::default()
@@ -279,7 +297,7 @@ impl MessageHandler for GlobalCompletedHandler<'_> {
 
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
-        let (net_id, place_name) =
+        let (ws, net_id, place_name) =
             Subjects::parse_human_completed_subject(subject).ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse completed subject: {}", subject))
             })?;
@@ -319,6 +337,7 @@ impl MessageHandler for GlobalCompletedHandler<'_> {
         map_inject_err(inject, &target, net_id, &completion.task_id, self.activity)?;
 
         tracing::info!(
+            workspace_id = %ws,
             net_id = %net_id,
             task_id = %completion.task_id,
             target_place = %place_name,
@@ -346,7 +365,7 @@ impl MessageHandler for GlobalCancelledHandler<'_> {
 
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
-        let (net_id, place_name) =
+        let (ws, net_id, place_name) =
             Subjects::parse_human_cancelled_subject(subject).ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse cancelled subject: {}", subject))
             })?;
@@ -389,6 +408,7 @@ impl MessageHandler for GlobalCancelledHandler<'_> {
         )?;
 
         tracing::info!(
+            workspace_id = %ws,
             net_id = %net_id,
             task_id = %cancellation.task_id,
             target_place = %place_name,
@@ -416,7 +436,7 @@ impl MessageHandler for GlobalFailedHandler<'_> {
 
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
-        let (net_id, place_name) =
+        let (ws, net_id, place_name) =
             Subjects::parse_human_failed_subject(subject).ok_or_else(|| {
                 ProcessError::Parse(format!("Could not parse failed subject: {}", subject))
             })?;
@@ -456,6 +476,7 @@ impl MessageHandler for GlobalFailedHandler<'_> {
         map_inject_err(inject, &target, net_id, &failure.task_id, self.activity)?;
 
         tracing::info!(
+            workspace_id = %ws,
             net_id = %net_id,
             task_id = %failure.task_id,
             target_place = %place_name,

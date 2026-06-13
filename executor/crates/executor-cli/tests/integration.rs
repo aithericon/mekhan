@@ -55,6 +55,7 @@ async fn start_test_sidecar(socket: PathBuf, artifacts_dir: PathBuf) -> JoinHand
     start_ipc_sidecar(
         socket,
         "test-exec-id".into(),
+        "test-ws".into(),
         "test".into(),
         HashMap::new(),
         None,

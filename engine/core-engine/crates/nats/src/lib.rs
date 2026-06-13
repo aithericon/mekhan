@@ -107,6 +107,29 @@ pub use signal_listener::{SignalListener, SignalListenerError};
 pub use spawn_net_handler::SpawnNetHandler;
 pub use subjects::{Subjects, WorkflowContext};
 
+/// Resolve the JetStream stream name that captures a given workspace's
+/// subjects.
+///
+/// Per ADR-09, namespaced subjects (`petri.{ws}.{net}...`) are still under
+/// `petri.>`, so today every workspace shares the single global
+/// `PETRI_GLOBAL` stream — this returns it unconditionally. The seam exists so
+/// a future cut can shard per-workspace streams (`PETRI_{ws}`) without touching
+/// call sites; `stream_config()` is intentionally unchanged.
+pub fn stream_for_workspace(_ws: &str) -> &'static str {
+    Subjects::STREAM_GLOBAL
+}
+
+/// Build a per-workspace KV bucket name from a base bucket name and a
+/// workspace id: `{base}_{ws}`.
+///
+/// Used to namespace per-tenant KV state (net-metadata, activity, timers,
+/// idempotency) so two workspaces hosted in one engine process never share a
+/// bucket. `ws` is a NATS-token-safe workspace id; bucket names are likewise
+/// token-safe by construction.
+pub fn kv_bucket_for(base: &str, ws: &str) -> String {
+    format!("{base}_{ws}")
+}
+
 /// Returns the standard PETRI_GLOBAL stream configuration.
 ///
 /// This ensures all components use the same stream config, making stream

@@ -692,6 +692,7 @@ mod tests {
 
         let job = ExecutionJob {
             execution_id: "test-nix-noop".into(),
+            workspace_id: String::new(),
             spec: ProcessConfig {
                 command: "echo".into(),
                 args: vec!["hello".into()],

@@ -77,6 +77,34 @@ pub async fn ws_handler(
         }
     };
 
+    // Tenant isolation (multi-tenancy phase 6, defense-in-depth). The Yjs room
+    // is keyed by `{workspace_id}:{template_id}` so a collaborative session can
+    // never bleed across workspaces even if a future ACL bug let a foreign role
+    // resolve. The authoritative workspace is the *template's* own
+    // `workspace_id` (a template_id belongs to exactly one workspace); we also
+    // assert the caller's active workspace matches it, so a user who switched
+    // active workspaces but still holds a stale grant can't reattach to another
+    // tenant's room. `effective_object_role` below is the primary gate; this is
+    // the belt-and-braces check. Public templates are exempt — they're read-only
+    // and cross-workspace-visible by design.
+    let template_workspace = template.workspace_id;
+    if template.visibility != "public" {
+        if let Some(user_ws) = user.workspace_id {
+            if user_ws != template_workspace {
+                tracing::debug!(
+                    template_id = %template_id,
+                    template_workspace = %template_workspace,
+                    user_workspace = %user_ws,
+                    "yjs ws rejected: caller's active workspace does not own this template"
+                );
+                return crate::models::error::ApiError::forbidden(
+                    "template belongs to a different workspace",
+                )
+                .into_response();
+            }
+        }
+    }
+
     // Object ACL: a public template connects read-only to any authenticated
     // user (publish-immutability prevents writes anyway). Otherwise the caller's
     // effective role on the template (workspace floor + folder/object grants)
@@ -119,7 +147,14 @@ pub async fn ws_handler(
     };
 
     ws.on_upgrade(move |socket| {
-        handle_socket(socket, template_id, DocKind::Graph, readonly, state)
+        handle_socket(
+            socket,
+            template_workspace,
+            template_id,
+            DocKind::Graph,
+            readonly,
+            state,
+        )
     })
 }
 
@@ -186,11 +221,21 @@ pub async fn page_ws_handler(
         }
     };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, page_id, DocKind::Page, readonly, state))
+    ws.on_upgrade(move |socket| {
+        handle_socket(
+            socket,
+            page.workspace_id,
+            page_id,
+            DocKind::Page,
+            readonly,
+            state,
+        )
+    })
 }
 
 async fn handle_socket(
     socket: WebSocket,
+    workspace_id: Uuid,
     doc_id: Uuid,
     doc_kind: DocKind,
     readonly: bool,
@@ -198,7 +243,17 @@ async fn handle_socket(
 ) {
     let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
 
+    // Workspace-qualified room identity (multi-tenancy phase 6). The in-memory
+    // dedup + persistence key remains `doc_id` (a UUID PK that already belongs
+    // to exactly one workspace, so it is globally unique — no cross-tenant
+    // collision is possible at the storage layer), but the logical room key is
+    // `{workspace_id}:{kind}:{doc_id}` and is logged as such so room membership
+    // is auditable per tenant.
+    let room_key = format!("{workspace_id}:{}:{doc_id}", doc_kind.as_str());
+
     tracing::info!(
+        room_key = %room_key,
+        workspace_id = %workspace_id,
         doc_id = %doc_id,
         ?doc_kind,
         client_id,
@@ -325,6 +380,7 @@ async fn handle_socket(
     outbound_task.abort();
 
     tracing::info!(
+        room_key = %room_key,
         doc_id = %doc_id,
         client_id,
         "WebSocket disconnected"

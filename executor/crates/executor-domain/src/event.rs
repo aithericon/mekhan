@@ -217,6 +217,15 @@ pub struct ExecutionEvent {
     /// The execution this event belongs to.
     pub execution_id: String,
 
+    /// The workspace (tenant) this event belongs to, threaded from
+    /// `ExecutionJob.workspace_id`. Inserted as a subject segment after the
+    /// `executor.events` category root (see [`ExecutionEvent::subject`]).
+    ///
+    /// `#[serde(default)]` so an event published by an older worker still
+    /// deserializes.
+    #[serde(default)]
+    pub workspace_id: String,
+
     /// Event category (maps to NATS subject suffix).
     pub category: EventCategory,
 
@@ -239,10 +248,15 @@ pub struct ExecutionEvent {
 
 impl ExecutionEvent {
     /// Build the NATS subject for this event.
-    /// Pattern: `executor.events.{execution_id}.{category}`
+    /// Pattern: `executor.events.{ws}.{execution_id}.{category}`
+    ///
+    /// `{ws}` sits after the `executor.events` category root so the existing
+    /// `executor.events.>` stream subject still captures it (tail wildcard,
+    /// one-or-more tokens). Both `{ws}` and `execution_id` are sanitized.
     pub fn subject(&self) -> String {
         format!(
-            "executor.events.{}.{}",
+            "executor.events.{}.{}.{}",
+            crate::status::sanitize_subject_token(&self.workspace_id),
             crate::status::sanitize_subject_token(&self.execution_id),
             self.category.as_str()
         )
@@ -331,6 +345,16 @@ pub struct ControlEmitEvent {
     /// The execution this emit belongs to (correlates to the node's place).
     pub execution_id: String,
 
+    /// The workspace (tenant) this emit belongs to, threaded from
+    /// `ExecutionJob.workspace_id`. Inserted as a subject segment after the
+    /// `executor.events` category root (see [`ControlEmitEvent::subject`]); the
+    /// `.control_emit` suffix is unchanged so the watcher's
+    /// `ends_with(".control_emit")` branch still routes it.
+    ///
+    /// `#[serde(default)]` for back-compat with older publishers.
+    #[serde(default)]
+    pub workspace_id: String,
+
     /// The declared `out` channel name the token is emitted into.
     pub channel: String,
 
@@ -363,10 +387,15 @@ pub struct ControlEmitEvent {
 
 impl ControlEmitEvent {
     /// NATS subject this emit is published on.
-    /// Pattern: `executor.events.{execution_id}.control_emit`.
+    /// Pattern: `executor.events.{ws}.{execution_id}.control_emit`.
+    ///
+    /// `{ws}` is inserted near the FRONT (after the category root); the
+    /// `.control_emit` suffix stays at the tail so the watcher's
+    /// `ends_with(".control_emit")` routing branch is preserved.
     pub fn subject(&self) -> String {
         format!(
-            "executor.events.{}.control_emit",
+            "executor.events.{}.{}.control_emit",
+            crate::status::sanitize_subject_token(&self.workspace_id),
             crate::status::sanitize_subject_token(&self.execution_id)
         )
     }
@@ -499,6 +528,7 @@ mod tests {
     fn execution_event_subject_and_msg_id() {
         let event = ExecutionEvent {
             execution_id: "train-alpha-0".into(),
+            workspace_id: "ws-acme".into(),
             category: EventCategory::Artifact,
             detail: StatusDetail::ArtifactLogged {
                 artifact_id: "art-1".into(),
@@ -522,7 +552,10 @@ mod tests {
             sequence: 42,
         };
 
-        assert_eq!(event.subject(), "executor.events.train-alpha-0.artifact");
+        assert_eq!(
+            event.subject(),
+            "executor.events.ws-acme.train-alpha-0.artifact"
+        );
         // msg_id is content-addressable for artifacts so the id is stable
         // across apalis redeliveries where the per-execution sequence resets.
         assert_eq!(event.msg_id(), "train-alpha-0-artifact-art-1");
@@ -532,6 +565,7 @@ mod tests {
     fn msg_id_is_stable_for_artifact_across_sequences() {
         let make = |sequence| ExecutionEvent {
             execution_id: "exec-42".into(),
+            workspace_id: "ws-acme".into(),
             category: EventCategory::Artifact,
             detail: StatusDetail::ArtifactLogged {
                 artifact_id: "observation.json".into(),
@@ -561,6 +595,7 @@ mod tests {
     fn msg_id_is_stable_for_output_across_sequences() {
         let make = |sequence| ExecutionEvent {
             execution_id: "exec-42".into(),
+            workspace_id: "ws-acme".into(),
             category: EventCategory::Output,
             detail: StatusDetail::OutputSet {
                 name: "model_meta".into(),
@@ -578,6 +613,7 @@ mod tests {
     fn msg_id_is_unique_per_emit_for_progress() {
         let make = |sequence| ExecutionEvent {
             execution_id: "exec-42".into(),
+            workspace_id: "ws-acme".into(),
             category: EventCategory::Progress,
             detail: StatusDetail::ProgressUpdated {
                 fraction: 0.5,

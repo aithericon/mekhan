@@ -226,6 +226,26 @@ pub struct AuthConfig {
     /// (the endpoints 503 and the UI hides the section).
     #[serde(default)]
     pub broker_pat: Option<String>,
+    /// **Multi-org tenancy switch.** Default `false` (single-org behaviour,
+    /// safe for dev / the current deployed single-tenant instance).
+    ///
+    /// When `false` (the legacy default): the principal resolver auto-joins
+    /// every authenticated principal to the seeded `default` workspace as
+    /// `editor`, so migrated templates stay editable without an admin step.
+    /// This is the historical single-org fallback and is what `dev_noop` and
+    /// any single-org Zitadel deployment expect.
+    ///
+    /// When `true`: real multi-org tenancy. Each Zitadel org claim maps to
+    /// its org-bound workspace (`workspaces.zitadel_org_id`); a user may
+    /// belong to several org-workspaces at once. The auto-`default`-editor
+    /// fallback is **dropped** for any principal that carries a real org
+    /// binding (those users live in their org-workspace(s), not `default`),
+    /// and principals with **no** org binding are NOT auto-joined to
+    /// `default` either — they get only whatever explicit membership they
+    /// already hold. `dev_noop` is unaffected by this flag: the seeded
+    /// dev-user keeps its `default`-as-owner membership regardless.
+    #[serde(default)]
+    pub multi_org: bool,
 }
 
 impl Default for AuthConfig {
@@ -245,6 +265,7 @@ impl Default for AuthConfig {
             introspection_client_id: None,
             introspection_client_secret: None,
             broker_pat: None,
+            multi_org: false,
         }
     }
 }

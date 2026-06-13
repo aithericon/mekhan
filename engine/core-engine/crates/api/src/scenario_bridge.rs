@@ -2,6 +2,15 @@
 //!
 //! This module provides conversion from API-facing DTOs to the application-layer
 //! parsing types, enabling a clean separation between API concerns and domain logic.
+//!
+//! Multi-tenancy note: cross-net bridge endpoints (`bridge_out` / `bridge_in`)
+//! carry only a `target_net_id` / `source_net_id` here — NOT a workspace token.
+//! Bridges are destination-addressed and INTRA-workspace only: the runtime
+//! subject `petri.{ws}.{target_net}.bridge.{place}` is keyed off the SOURCE
+//! `NetInstance.workspace_id` (first-class on the instance, threaded at load
+//! time from `LoadScenarioRequest.workspace()`), never off a per-place field in
+//! the DTO bag. Do NOT add a workspace segment to these bridge tuples — the
+//! workspace is resolved downstream in the publisher/bridge listener.
 
 use crate::dto::{
     ScenarioArc, ScenarioPlace, ScenarioPort, ScenarioToken, ScenarioTransition, TransitionLogic,

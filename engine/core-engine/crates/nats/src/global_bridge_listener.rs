@@ -1,7 +1,12 @@
 //! Global bridge listener: replaces per-net bridge listeners.
 //!
-//! Subscribes to `petri.bridge.>` (all nets) and routes bridge tokens to the
-//! correct net instance, waking it from hibernation if needed.
+//! Subscribes to `petri.*.*.bridge.>` (all workspaces, all nets) and routes
+//! bridge tokens to the correct net instance, waking it from hibernation if
+//! needed. The two leading wildcards are `{ws}` and `{net}` per the ADR-09
+//! subject shape `petri.{ws}.{net}.bridge.{place}`. Bridges are INTRA-workspace
+//! (a net never bridges across tenants), so the source and destination always
+//! share a `{ws}` — the wildcard just lets one consumer span all tenants until
+//! the phase-2 per-workspace split.
 //!
 //! Uses a stable durable consumer with `create_consumer` (idempotent for
 //! matching configs). The durable consumer survives engine restarts, so
@@ -65,7 +70,7 @@ pub trait BridgeTarget: Send + Sync {
     fn notify_eval(&self);
 }
 
-/// Global listener that subscribes to `petri.bridge.>` and routes to nets.
+/// Global listener that subscribes to `petri.*.*.bridge.>` and routes to nets.
 pub struct GlobalBridgeListener {
     jetstream: async_nats::jetstream::Context,
     resolver: Arc<dyn BridgeResolver>,
@@ -121,8 +126,15 @@ impl GlobalBridgeListener {
             .await
             .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
-        // Subscribe to ALL bridge subjects across all nets
-        let filter = format!("{}.>", Subjects::BRIDGE_PREFIX);
+        // Subscribe to ALL bridge subjects across all workspaces + nets.
+        // ADR-09 shape is `petri.{ws}.{net}.bridge.{place}`, so the two
+        // leading wildcards span ws and net.
+        //
+        // TODO(stream-per-ws): per-workspace consumer split — replace this
+        // single cross-workspace consumer with one durable per workspace using
+        // `Subjects::bridge_workspace_filter(ws)` (`petri.{ws}.*.bridge.>`)
+        // so each tenant's bridge stream is independently consumable.
+        let filter = format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::BRIDGE_CATEGORY);
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(self.consumer_name.clone()),
@@ -167,10 +179,19 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         let subject = msg.subject.as_str();
 
-        // Parse subject: petri.bridge.{net_id}.{place_name}
-        let (net_id, place_name) = Subjects::parse_bridge_subject(subject).ok_or_else(|| {
-            ProcessError::Parse(format!("Could not parse bridge subject: {}", subject))
-        })?;
+        // Parse subject: petri.{ws}.{net_id}.bridge.{place_name}
+        //
+        // Bridges are intra-workspace by construction (the source publishes into
+        // its own ws's bridge inbox), and delivery is by net_id (globally
+        // unique), so the global resolver is correct; `ws` is parsed for
+        // diagnostics.
+        // TODO(stream-per-ws): once consumers are split per workspace, scope the
+        // resolver by `ws` so a bridge token can only land in a net in its own
+        // tenant.
+        let (ws, net_id, place_name) =
+            Subjects::parse_bridge_subject(subject).ok_or_else(|| {
+                ProcessError::Parse(format!("Could not parse bridge subject: {}", subject))
+            })?;
 
         // Deserialize the transfer message
         let transfer: CrossNetTokenTransfer =
@@ -225,6 +246,7 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
         }
 
         tracing::info!(
+            workspace_id = %ws,
             net_id = %net_id,
             source_net = %transfer.source_net_id,
             source_place = %transfer.source_place_name,

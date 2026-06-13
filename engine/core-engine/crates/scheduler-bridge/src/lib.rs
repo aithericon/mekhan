@@ -23,4 +23,7 @@ pub use meta::{
     META_EVENT_PREFIX, META_NET_ID, META_PLACE, META_SIGNAL_KEY, META_SIGNAL_PREFIX,
 };
 pub use metrics::{AllocatedTres, AllocationMetrics, RequestedTres};
-pub use signal::{signal_subject, SignalPublisher, SIGNAL_PREFIX};
+pub use signal::{
+    signal_subject, workspace_for_signal, workspace_from_net_id, SignalPublisher,
+    DEFAULT_WORKSPACE, SIGNAL_PREFIX,
+};

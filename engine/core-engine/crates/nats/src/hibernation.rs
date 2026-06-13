@@ -1,7 +1,10 @@
 //! Activity tracking and automatic hibernation for idle net instances.
 //!
-//! Uses a NATS KV bucket (`KV_NET_ACTIVITY`) to track last-active timestamps.
-//! The [`HibernationMaster`] watches for expired entries and triggers hibernation.
+//! Uses a per-workspace NATS KV bucket (`KV_NET_ACTIVITY_{ws}`, derived via
+//! [`crate::kv_bucket_for`] from [`ACTIVITY_KV_BUCKET`]) to track last-active
+//! timestamps. The [`HibernationMaster`] watches for expired entries and
+//! triggers hibernation. One tracker/master pair runs per workspace so two
+//! tenants hosted in one engine process never share an activity bucket.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +16,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-/// NATS KV bucket name for net activity tracking.
+/// Base NATS KV bucket name for net activity tracking.
+///
+/// The live bucket is per-workspace: `KV_NET_ACTIVITY_{ws}`, built with
+/// [`crate::kv_bucket_for`]. The caller opens the workspace-scoped bucket and
+/// passes the [`Store`] into [`ActivityTracker::new`].
 pub const ACTIVITY_KV_BUCKET: &str = "KV_NET_ACTIVITY";
 
 /// State stored in the activity KV entry.
@@ -38,15 +45,32 @@ pub enum ActivityState {
 pub struct ActivityTracker {
     kv: Store,
     idle_timeout: Duration,
+    /// Workspace this tracker is scoped to. The `kv` store is the workspace's
+    /// `KV_NET_ACTIVITY_{ws}` bucket; this field is retained so callers and
+    /// logs can attribute activity to a tenant.
+    workspace_id: String,
 }
 
 impl ActivityTracker {
-    pub fn new(kv: Store, idle_timeout: Duration) -> Self {
+    /// Create a tracker scoped to a workspace.
+    ///
+    /// `kv` must be the workspace's activity bucket (see [`crate::kv_bucket_for`]
+    /// with [`ACTIVITY_KV_BUCKET`]).
+    pub fn new(kv: Store, idle_timeout: Duration, workspace_id: String) -> Self {
         assert!(
             idle_timeout > Duration::ZERO,
             "idle_timeout must be positive"
         );
-        Self { kv, idle_timeout }
+        Self {
+            kv,
+            idle_timeout,
+            workspace_id,
+        }
+    }
+
+    /// The workspace this tracker is scoped to.
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
     }
 
     /// Touch the activity timestamp for a net. Resets the idle timer.

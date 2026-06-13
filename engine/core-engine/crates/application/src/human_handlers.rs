@@ -135,14 +135,25 @@ impl EffectHandler for HumanTaskHandler {
             request.org_id = self.client.org_id().map(|s| s.to_string());
         }
 
-        // Set response_subject so the UI knows where to publish results
+        // Set response_subject so the UI knows where to publish results. The
+        // result is delivered as an external signal, so the subject must be the
+        // workspace-namespaced `petri.{ws}.{net}.signal.{place}` the net's inbox
+        // listener filters (pre-multitenancy `petri.signal.{net}.{place}` is no
+        // longer routed). The workspace segment is recovered from the
+        // `mekhan-{ws}-{instance}` net_id (its authoritative source), falling
+        // back to the client's org_id (== workspace for BFF clients), else the
+        // reserved default sentinel.
         if request.response_subject.is_none() {
             let place_val = request.place.as_deref().unwrap_or("default");
-            request.response_subject = Some(format!(
-                "petri.signal.{}.{}",
-                self.client.net_id(),
-                place_val
-            ));
+            let net = self.client.net_id();
+            let ws = net
+                .strip_prefix("mekhan-")
+                .filter(|r| r.len() > 37 && r.as_bytes()[36] == b'-')
+                .map(|r| r[..36].to_string())
+                .or_else(|| self.client.org_id().map(|s| s.to_string()))
+                .unwrap_or_else(|| "default".to_string());
+            request.response_subject =
+                Some(format!("petri.{}.{}.signal.{}", ws, net, place_val));
         }
 
         let task_id = request.task_id.clone().unwrap();

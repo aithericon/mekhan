@@ -1,27 +1,45 @@
 //! Webhook trigger source (Phase 5e).
 //!
-//! Exposes `POST /api/triggers/webhook/{slug}` (no auth middleware — the
-//! handler does its own auth based on `WebhookTrigger.auth`). The receiver
-//! resolves the slug to a registered trigger, validates auth, and fires the
-//! trigger with a payload of `{ payload (body), headers, query, fire_time }`.
+//! Exposes `POST /api/triggers/webhook/{workspace_id}/{slug}` (no auth
+//! middleware — the handler does its own auth based on `WebhookTrigger.auth`).
+//! The receiver resolves the (workspace, slug) pair to a registered trigger,
+//! validates auth, and fires the trigger with a payload of
+//! `{ payload (body), headers, query, fire_time }`.
 //!
-//! Slugs are template-scoped (proposal §9.4 — they should survive version
-//! supersede), so the dispatcher serves the latest published version's
-//! trigger whenever multiple match.
+//! Slugs are per-workspace (multi-tenancy phase 6 — the migration's
+//! `uq_webhook_slug_ws UNIQUE(workspace_id, slug)` constraint enforces
+//! uniqueness only within a tenant, so two workspaces may each own the slug
+//! `orders`). They're also template-scoped (proposal §9.4 — they should
+//! survive version supersede), so within a workspace the dispatcher serves
+//! the latest published version's trigger whenever multiple match.
 
 use std::collections::HashMap;
+
+use uuid::Uuid;
 
 use crate::models::template::{TriggerSource, WebhookAuth, WebhookTrigger};
 use crate::triggers::dispatcher::TriggerDispatcher;
 use crate::triggers::model::TriggerRecord;
 
-/// Resolve a registered Webhook trigger by its slug. If multiple triggers
-/// share the same slug (different template versions), returns the one with
-/// the highest `template_version` so external URLs keep working across
-/// supersede.
-pub fn find_by_slug(dispatcher: &TriggerDispatcher, slug: &str) -> Option<TriggerRecord> {
+/// Resolve a registered Webhook trigger by its `(workspace_id, slug)` pair.
+/// The workspace filter is load-bearing for tenant isolation: an external
+/// sender hitting `/api/triggers/webhook/{workspace_id}/{slug}` can only ever
+/// resolve a trigger owned by that workspace, so a slug collision across
+/// tenants never fires the wrong tenant's workflow.
+///
+/// If multiple triggers in the same workspace share the slug (different
+/// template versions), returns the one with the highest `template_version`
+/// so external URLs keep working across supersede.
+pub fn find_by_slug(
+    dispatcher: &TriggerDispatcher,
+    workspace_id: Uuid,
+    slug: &str,
+) -> Option<TriggerRecord> {
     let mut best: Option<TriggerRecord> = None;
     for rec in dispatcher.list_all() {
+        if rec.workspace_id != workspace_id {
+            continue;
+        }
         let TriggerSource::Webhook(ref w) = rec.source else {
             continue;
         };

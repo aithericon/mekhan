@@ -95,6 +95,13 @@ fn test_registry_router() -> (
             Arc::new(MockTopologyRepository::new()),
             Arc::new(MockStateProjection::new()),
             rx,
+            // Multi-tenancy: unstamped shared workspace cell + no-op consumer
+            // starter (mock store has no NATS consumer to defer).
+            Arc::new(std::sync::RwLock::new(None)),
+            Arc::new(|_ws: String| {
+                Box::pin(async {})
+                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }),
         )
     });
     let registry = Arc::new(NetRegistry::new(factory));
@@ -322,6 +329,13 @@ fn envelope_deserialization_roundtrip_no_options() {
     assert!(
         !wire_obj.contains_key("stage_overrides"),
         "empty stage_overrides must NOT serialise"
+    );
+    // `workspace_id` is first-class but `skip_serializing_if = Option::is_none`;
+    // a `from_scenario` envelope (no explicit workspace, routes on the
+    // `"default"` sentinel) MUST NOT grow the field on the wire.
+    assert!(
+        !wire_obj.contains_key("workspace_id"),
+        "absent workspace_id must NOT serialise"
     );
 }
 

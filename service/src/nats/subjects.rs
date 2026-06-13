@@ -12,44 +12,55 @@ pub use petri_api_types::subjects::Subjects;
 //
 // Literal consts (instead of `format!` over the engine prefixes) so they can
 // be used in per-message hot paths without allocating; the tests below pin
-// each one to its canonical engine prefix.
+// each one to its canonical engine layout.
+//
+// As of the multi-tenancy refactor the engine subject layout is
+// `petri.{ws}.{net}.{category}.{suffix}` (workspace segment first, category
+// AFTER the net). Service-side cross-workspace filters therefore wildcard both
+// the workspace and net tokens: `petri.*.*.events.{suffix}`. NATS `*` matches
+// exactly one dot-delimited token; workspace ids and net ids (`mekhan-{uuid}`,
+// `default`) are single tokens.
 
-/// `petri.events.` — events prefix with separator, for `starts_with` subject
-/// dispatch.
-pub const EVENTS_PREFIX_DOT: &str = "petri.events.";
+/// `petri.` — petri root with separator, for `starts_with` subject dispatch
+/// across every workspace/net.
+pub const EVENTS_PREFIX_DOT: &str = "petri.";
 
-/// `petri.bridge.` — bridge prefix with separator, for `starts_with` subject
-/// dispatch.
-pub const BRIDGE_PREFIX_DOT: &str = "petri.bridge.";
+/// `.bridge.` — bridge category segment with separators, for `contains`
+/// subject dispatch (the category now follows `petri.{ws}.{net}.`).
+pub const BRIDGE_PREFIX_DOT: &str = ".bridge.";
 
-/// `petri.bridge.>` — every cross-net bridge transfer.
-pub const BRIDGE_ALL: &str = "petri.bridge.>";
+/// `petri.*.*.bridge.>` — every cross-net bridge transfer in any workspace.
+pub const BRIDGE_ALL: &str = "petri.*.*.bridge.>";
 
-/// `petri.events.*.net.>` — net lifecycle events (created/completed/cancelled)
-/// for every net. NATS `*` matches an entire dot-delimited token; net IDs like
-/// `mekhan-{uuid}` are single tokens (no dots), so `*` matches them.
-pub const NET_LIFECYCLE_EVENTS_FILTER: &str = "petri.events.*.net.>";
+/// `petri.*.*.events.net.>` — net lifecycle events (created/completed/cancelled)
+/// for every net in every workspace. NATS `*` matches an entire dot-delimited
+/// token; workspace ids and net ids (`mekhan-{uuid}`) are single tokens.
+pub const NET_LIFECYCLE_EVENTS_FILTER: &str = "petri.*.*.events.net.>";
 
-/// `petri.events.*.effect.completed` — every net's `EffectCompleted` events.
-pub const EFFECT_COMPLETED_EVENTS_FILTER: &str = "petri.events.*.effect.completed";
+/// `petri.*.*.events.effect.completed` — every net's `EffectCompleted` events.
+pub const EFFECT_COMPLETED_EVENTS_FILTER: &str = "petri.*.*.events.effect.completed";
 
-/// `petri.events.*.effect.failed` — every net's `EffectFailed` events.
-pub const EFFECT_FAILED_EVENTS_FILTER: &str = "petri.events.*.effect.failed";
+/// `petri.*.*.events.effect.failed` — every net's `EffectFailed` events.
+pub const EFFECT_FAILED_EVENTS_FILTER: &str = "petri.*.*.events.effect.failed";
 
-/// `petri.events.*.token.created` — every net's `TokenCreated` events.
-pub const TOKEN_CREATED_EVENTS_FILTER: &str = "petri.events.*.token.created";
+/// `petri.*.*.events.token.created` — every net's `TokenCreated` events.
+pub const TOKEN_CREATED_EVENTS_FILTER: &str = "petri.*.*.events.token.created";
 
-/// `petri.events.*.transition.fired` — every net's `TransitionFired` events.
-pub const TRANSITION_FIRED_EVENTS_FILTER: &str = "petri.events.*.transition.fired";
+/// `petri.*.*.events.transition.fired` — every net's `TransitionFired` events.
+pub const TRANSITION_FIRED_EVENTS_FILTER: &str = "petri.*.*.events.transition.fired";
 
-/// `petri.events.{net_id}.>` — every event for one net.
+/// `petri.*.{net_id}.events.>` — every event for one net, across whichever
+/// workspace owns it. Net ids are globally unique, so the `*` ws wildcard is
+/// safe for service-side purge/stream-by-net (the caller has the net id but
+/// not always the workspace).
 pub fn net_events_filter(net_id: &str) -> String {
-    format!("{}.{net_id}.>", Subjects::EVENTS_PREFIX)
+    format!("{}.*.{net_id}.{}.>", Subjects::PETRI_ROOT, Subjects::EVENTS_CATEGORY)
 }
 
-/// `petri.signal.{net_id}.>` — every external signal targeting one net.
+/// `petri.*.{net_id}.signal.>` — every external signal targeting one net,
+/// across whichever workspace owns it.
 pub fn net_signals_filter(net_id: &str) -> String {
-    Subjects::signal_inbox_filter(net_id)
+    format!("{}.*.{net_id}.{}.>", Subjects::PETRI_ROOT, Subjects::SIGNAL_CATEGORY)
 }
 
 // ==================== Service-owned streams/subjects ====================
@@ -58,11 +69,15 @@ pub fn net_signals_filter(net_id: &str) -> String {
 /// `Subjects::human_request` subjects, mekhan creates the stream and consumes.
 pub const STREAM_HUMAN_REQUESTS: &str = "HUMAN_REQUESTS";
 
-/// `human.request.>` — every human task request.
-pub const HUMAN_REQUEST_ALL: &str = "human.request.>";
+/// `human.*.request.>` — every human task request, across every workspace.
+/// Layout is now `human.{ws}.request.{net}.{place}` (workspace segment after
+/// the `human` root, category after the ws), so the cross-workspace filter
+/// wildcards the ws token.
+pub const HUMAN_REQUEST_ALL: &str = "human.*.request.>";
 
-/// `human.cancel.>` — every engine-initiated human task cancellation.
-pub const HUMAN_CANCEL_ALL: &str = "human.cancel.>";
+/// `human.*.cancel.>` — every engine-initiated human task cancellation, across
+/// every workspace.
+pub const HUMAN_CANCEL_ALL: &str = "human.*.cancel.>";
 
 /// Dead-letter stream for messages a consumer couldn't process (see
 /// `MekhanNats::ensure_silent_drops_stream`).
@@ -81,65 +96,84 @@ pub const INFERENCE_METERING_ALL: &str = "inference.metering.>";
 mod tests {
     use super::*;
 
-    /// Pin the allocation-free literals to the canonical engine constants so
-    /// a rename on the engine side fails here instead of silently desyncing.
+    /// Pin the allocation-free literals to the canonical engine layout so a
+    /// rename on the engine side fails here instead of silently desyncing.
+    ///
+    /// Layout is `petri.{ws}.{net}.{category}.{suffix}`; the cross-workspace
+    /// service filters wildcard the ws + net tokens with `*`, and the category
+    /// + suffix tokens stay engine-canonical.
     #[test]
     fn derived_consts_match_engine_prefixes() {
-        assert_eq!(EVENTS_PREFIX_DOT, format!("{}.", Subjects::EVENTS_PREFIX));
-        assert_eq!(BRIDGE_PREFIX_DOT, format!("{}.", Subjects::BRIDGE_PREFIX));
-        assert_eq!(BRIDGE_ALL, format!("{}.>", Subjects::BRIDGE_PREFIX));
+        assert_eq!(EVENTS_PREFIX_DOT, format!("{}.", Subjects::PETRI_ROOT));
+        assert_eq!(
+            BRIDGE_PREFIX_DOT,
+            format!(".{}.", Subjects::BRIDGE_CATEGORY)
+        );
+        assert_eq!(
+            BRIDGE_ALL,
+            format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::BRIDGE_CATEGORY)
+        );
         assert_eq!(
             NET_LIFECYCLE_EVENTS_FILTER,
-            format!("{}.*.net.>", Subjects::EVENTS_PREFIX)
+            format!(
+                "{}.*.*.{}.net.>",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
+            )
         );
-        // The engine's net-less subjects are `petri.events.{suffix}`; the
-        // per-net filters insert the single-token net-id wildcard after the
-        // prefix, so the suffix tokens stay engine-canonical.
         assert_eq!(
             EFFECT_COMPLETED_EVENTS_FILTER,
-            Subjects::EVENT_EFFECT_COMPLETED.replacen(
-                &format!("{}.", Subjects::EVENTS_PREFIX),
-                &format!("{}.*.", Subjects::EVENTS_PREFIX),
-                1
+            format!(
+                "{}.*.*.{}.effect.completed",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
             )
         );
         assert_eq!(
             EFFECT_FAILED_EVENTS_FILTER,
-            Subjects::EVENT_EFFECT_FAILED.replacen(
-                &format!("{}.", Subjects::EVENTS_PREFIX),
-                &format!("{}.*.", Subjects::EVENTS_PREFIX),
-                1
+            format!(
+                "{}.*.*.{}.effect.failed",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
             )
         );
         assert_eq!(
             TOKEN_CREATED_EVENTS_FILTER,
-            Subjects::EVENT_TOKEN_CREATED.replacen(
-                &format!("{}.", Subjects::EVENTS_PREFIX),
-                &format!("{}.*.", Subjects::EVENTS_PREFIX),
-                1
+            format!(
+                "{}.*.*.{}.token.created",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
             )
         );
         assert_eq!(
             TRANSITION_FIRED_EVENTS_FILTER,
-            Subjects::EVENT_TRANSITION_FIRED.replacen(
-                &format!("{}.", Subjects::EVENTS_PREFIX),
-                &format!("{}.*.", Subjects::EVENTS_PREFIX),
-                1
+            format!(
+                "{}.*.*.{}.transition.fired",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
             )
         );
         assert_eq!(
             HUMAN_REQUEST_ALL,
-            format!("{}.>", Subjects::HUMAN_REQUEST_PREFIX)
+            format!(
+                "{}.*.{}.>",
+                Subjects::HUMAN_ROOT,
+                Subjects::HUMAN_REQUEST_CATEGORY
+            )
         );
         assert_eq!(
             HUMAN_CANCEL_ALL,
-            format!("{}.>", Subjects::HUMAN_CANCEL_PREFIX)
+            format!(
+                "{}.*.{}.>",
+                Subjects::HUMAN_ROOT,
+                Subjects::HUMAN_CANCEL_CATEGORY
+            )
         );
     }
 
     #[test]
     fn per_net_filters() {
-        assert_eq!(net_events_filter("net-a"), "petri.events.net-a.>");
-        assert_eq!(net_signals_filter("net-a"), "petri.signal.net-a.>");
+        assert_eq!(net_events_filter("net-a"), "petri.*.net-a.events.>");
+        assert_eq!(net_signals_filter("net-a"), "petri.*.net-a.signal.>");
     }
 }

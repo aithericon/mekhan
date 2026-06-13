@@ -2390,6 +2390,7 @@ async fn run_publish_gate(
     let ctx = RunContext {
         template_id: existing.id,
         template_version: existing.version,
+        workspace_id: existing.workspace_id,
         air_json: air_json.clone(),
         graph: graph.clone(),
         created_by,

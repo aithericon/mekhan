@@ -168,6 +168,14 @@ async fn main() {
         ] {
             let update = StatusUpdate {
                 execution_id: job.execution_id.clone(),
+                // Echo the job's workspace onto the back-channel so the subject
+                // carries the `{ws}` segment (falls back to the sentinel for an
+                // older job envelope with an empty workspace_id).
+                workspace_id: if job.workspace_id.is_empty() {
+                    aithericon_executor_domain::DEFAULT_WORKSPACE.to_string()
+                } else {
+                    job.workspace_id.clone()
+                },
                 status,
                 detail: serde_json::json!({}),
                 metadata: job.metadata.clone(),

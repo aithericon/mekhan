@@ -116,6 +116,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
 
     let job = ExecutionJob {
         execution_id: execution_id.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),
@@ -291,6 +292,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
 
     let job = ExecutionJob {
         execution_id: execution_id.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),
@@ -417,6 +419,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
     let execution_id = format!("secrets-inline-{}", uuid_like());
     let job = ExecutionJob {
         execution_id: execution_id.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),
@@ -552,6 +555,7 @@ async fn inline_input_without_secret_template_is_not_diverted() {
     let execution_id = format!("secrets-inline-bypass-{}", uuid_like());
     let job = ExecutionJob {
         execution_id: execution_id.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),

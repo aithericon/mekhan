@@ -159,6 +159,10 @@ struct SidecarService {
     stream_ctx: Option<Arc<StreamContext>>,
     /// This execution's id, used to subject + correlate `control_emit` events.
     execution_id: String,
+    /// The job's workspace (tenant), stamped onto every `control_emit` event so
+    /// its subject carries the `{ws}` segment. Sourced from
+    /// `ExecutionJob.workspace_id` (or `DEFAULT_WORKSPACE`).
+    workspace_id: String,
     /// The job's channel manifest — `EmitControl` validates the named channel
     /// against this before publishing. Empty for jobs declaring no channels.
     channels: Vec<ChannelManifestEntry>,
@@ -305,6 +309,7 @@ impl ExecutorSidecar for SidecarService {
         let (status, error_message) = handle_emit_control(
             &req,
             &self.execution_id,
+            &self.workspace_id,
             &self.channels,
             &self.metadata,
             &self.event_emitter,
@@ -514,6 +519,7 @@ fn convert_control_kind(kind: proto::ControlKind) -> ControlKind {
 async fn handle_emit_control(
     req: &proto::EmitControlRequest,
     execution_id: &str,
+    workspace_id: &str,
     channels: &[ChannelManifestEntry],
     metadata: &HashMap<String, String>,
     event_emitter: &Option<Arc<dyn EventEmitter>>,
@@ -561,6 +567,7 @@ async fn handle_emit_control(
 
     let event = ControlEmitEvent {
         execution_id: execution_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         channel: channel.to_string(),
         kind,
         payload_json: req.payload_json.clone(),
@@ -774,6 +781,7 @@ async fn handle_retrieve_file(
 pub async fn start_ipc_sidecar(
     socket_path: PathBuf,
     execution_id: String,
+    workspace_id: String,
     source: String,
     metadata: HashMap<String, String>,
     artifact_store: Option<Arc<dyn ArtifactStore>>,
@@ -854,6 +862,7 @@ pub async fn start_ipc_sidecar(
             pending_uploads: pending_uploads.clone(),
             stream_ctx,
             execution_id,
+            workspace_id,
             channels,
             metadata: control_metadata,
             event_emitter,
@@ -2020,6 +2029,7 @@ mod tests {
         let handle = start_ipc_sidecar(
             socket_path.clone(),
             format!("exec-{idx}"),
+            "default".to_string(),
             "test".to_string(),
             HashMap::new(),
             None,

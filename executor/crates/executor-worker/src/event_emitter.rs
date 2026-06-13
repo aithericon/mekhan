@@ -161,6 +161,11 @@ pub struct StreamContext {
     pub sequence: Arc<AtomicU64>,
     /// Execution ID for this job.
     pub execution_id: String,
+    /// The job's workspace (tenant), threaded from `ExecutionJob.workspace_id`
+    /// (or the `DEFAULT_WORKSPACE` sentinel when empty). Stamped onto every
+    /// `ExecutionEvent` / `ControlEmitEvent` this context builds so the back-
+    /// channel subjects carry the `{ws}` segment.
+    pub workspace_id: String,
     /// Source executor instance name.
     pub source: String,
     /// Job metadata echoed in every event.
@@ -187,6 +192,7 @@ impl StreamContext {
         let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
         let event = ExecutionEvent {
             execution_id: self.execution_id.clone(),
+            workspace_id: self.workspace_id.clone(),
             category,
             detail,
             metadata: self.metadata.clone(),
@@ -287,6 +293,7 @@ impl EventStream for StreamContext {
         // uses for the Python SDK's episode emit).
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
+            workspace_id: self.workspace_id.clone(),
             channel,
             kind: ControlKind::Item,
             payload_json: serde_json::to_string(&payload).unwrap_or_default(),
@@ -301,6 +308,7 @@ impl EventStream for StreamContext {
     async fn close(&self, channel: String, episode_uid: String, count: u64) {
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
+            workspace_id: self.workspace_id.clone(),
             channel,
             kind: ControlKind::Close,
             payload_json: String::new(),
@@ -330,6 +338,7 @@ impl EventStream for StreamContext {
         });
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
+            workspace_id: self.workspace_id.clone(),
             channel,
             kind: ControlKind::Open,
             payload_json: descriptor.to_string(),
@@ -398,6 +407,7 @@ impl EventStream for StreamContext {
         // (`{exec}-data-{channel}-close`).
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
+            workspace_id: self.workspace_id.clone(),
             channel,
             kind: ControlKind::Close,
             payload_json: json!({ "count": count, "status": "ok" }).to_string(),

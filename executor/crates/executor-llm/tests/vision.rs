@@ -40,6 +40,7 @@ fn make_llm_spec(config: serde_json::Value) -> ExecutionSpec {
 fn make_job(spec: ExecutionSpec) -> ExecutionJob {
     ExecutionJob {
         execution_id: "vision-test".into(),
+        workspace_id: String::new(),
         spec,
         metadata: HashMap::new(),
         timeout: None,

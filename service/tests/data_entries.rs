@@ -85,6 +85,7 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
     .expect("create server");
     inv::register(
         &pool,
+        ws,
         &InventoryRegisterRequest {
             entries: vec![InventoryRegisterItem {
                 content_hash: Some(hash.clone()),
@@ -107,6 +108,7 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
     // An index-only (uncatalogued) file on an unregistered server.
     inv::index(
         &pool,
+        ws,
         &InventoryIndexRequest {
             file_server_id: unreg.clone(),
             items: vec![InventoryIndexItem {

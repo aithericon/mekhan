@@ -510,6 +510,7 @@ mod tests {
                 "kreuzberg-test-{}",
                 TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
             ),
+            workspace_id: String::new(),
             spec: spec.clone(),
             metadata: HashMap::new(),
             timeout: None,

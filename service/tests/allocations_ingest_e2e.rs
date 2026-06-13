@@ -52,9 +52,9 @@ fn effect_completed(
 }
 
 /// Publish one persisted event on the net's event subject, exactly where the
-/// engine would put it (`petri.events.{net_id}.effect.completed`).
+/// engine would put it (`petri.{ws}.{net_id}.events.effect.completed`).
 async fn publish_event(nats: &MekhanNats, net_id: &str, ev: &PersistedEvent) {
-    let subject = Subjects::for_event(&ev.event, Some(net_id));
+    let subject = Subjects::for_event(&ev.event, Subjects::DEFAULT_WORKSPACE, Some(net_id));
     let payload = serde_json::to_vec(ev).expect("serialize event");
     nats.jetstream()
         .publish(subject, payload.into())

@@ -76,6 +76,7 @@ async fn deploy_and_get_state() {
             &minimal_scenario(),
             petri_api_types::DispatchOptions::default(),
             None,
+            None,
         )
         .await
         .expect("deploy_scenario should succeed");
@@ -118,6 +119,7 @@ async fn set_run_mode_typed() {
             &minimal_scenario(),
             petri_api_types::DispatchOptions::default(),
             None,
+            None,
         )
         .await
         .expect("deploy");
@@ -154,6 +156,7 @@ async fn get_topology_typed() {
             &net_id,
             &minimal_scenario(),
             petri_api_types::DispatchOptions::default(),
+            None,
             None,
         )
         .await
@@ -198,6 +201,7 @@ async fn delete_net_is_idempotent() {
             &minimal_scenario(),
             petri_api_types::DispatchOptions::default(),
             None,
+            None,
         )
         .await
         .expect("deploy");
@@ -222,6 +226,7 @@ async fn terminate_net_stops_then_deletes() {
             &net_id,
             &minimal_scenario(),
             petri_api_types::DispatchOptions::default(),
+            None,
             None,
         )
         .await

@@ -56,6 +56,20 @@ where
     initial_tokens: RwLock<Vec<(PlaceId, TokenColor)>>,
     /// Workflow ID for this service instance.
     workflow_id: RwLock<Option<Uuid>>,
+    /// Workspace (tenant) ID for this service instance. Stamped per-NetInstance
+    /// at scenario-load time (NEVER from a process-global env var) so one engine
+    /// process hosting many tenants' nets keeps each net's NATS subjects /
+    /// durables / KV buckets hard-isolated under `petri.{ws}.{net}…`. `None`
+    /// until stamped; routing falls back to the reserved DEFAULT_WORKSPACE
+    /// sentinel.
+    ///
+    /// `Arc`-wrapped so the per-net NATS publisher (`NatsEventStore`) constructed
+    /// in main.rs's store-factory can SHARE this exact cell — `set_workspace_id`
+    /// then writes THROUGH to the publisher's view, so an event appended AFTER
+    /// the stamp (`NetInitialized`, etc.) is published under the real per-net
+    /// workspace even though the store was constructed (frozen-config) before the
+    /// workspace was known. See `new_with_workspace_cell`.
+    workspace_id: Arc<RwLock<Option<String>>>,
     /// Execution mode (Live or Replay).
     execution_mode: RwLock<ExecutionMode>,
     /// Effect handlers keyed by handler ID.
@@ -103,6 +117,27 @@ where
     S: StateProjection,
 {
     pub fn new(events: Arc<E>, topology: Arc<T>, projection: Arc<S>) -> Self {
+        Self::new_with_workspace_cell(
+            events,
+            topology,
+            projection,
+            Arc::new(RwLock::new(None)),
+        )
+    }
+
+    /// Construct a service whose workspace cell is SHARED with an external
+    /// holder (the per-net NATS publisher constructed in main.rs's store
+    /// factory). `set_workspace_id` writes through this cell so the publisher
+    /// — which reads the same `Arc` — routes events under the real per-net
+    /// workspace as soon as the scenario load stamps it, even though the store
+    /// was built before the workspace was known. See the linchpin design in the
+    /// multi-tenancy phase notes.
+    pub fn new_with_workspace_cell(
+        events: Arc<E>,
+        topology: Arc<T>,
+        projection: Arc<S>,
+        workspace_id: Arc<RwLock<Option<String>>>,
+    ) -> Self {
         Self {
             events,
             topology,
@@ -110,6 +145,7 @@ where
             executor: TransitionExecutor::new(),
             initial_tokens: RwLock::new(Vec::new()),
             workflow_id: RwLock::new(None),
+            workspace_id,
             execution_mode: RwLock::new(ExecutionMode::Live),
             effect_handlers: RwLock::new(HashMap::new()),
             cached_state: RwLock::new(None),
@@ -265,6 +301,31 @@ where
     /// Get the current workflow ID.
     pub fn workflow_id(&self) -> Option<Uuid> {
         *self.workflow_id.read().unwrap()
+    }
+
+    /// Stamp the workspace (tenant) ID onto this service instance. Called once
+    /// at scenario-load time from the per-net `LoadScenarioRequest`. The NATS
+    /// publisher / consumer / listeners / KV buckets bound to this same service
+    /// handle read `workspace()` to namespace every subject/durable/bucket under
+    /// `petri.{ws}.{net}…`.
+    pub fn set_workspace_id(&self, workspace_id: String) {
+        *self.workspace_id.write().unwrap() = Some(workspace_id);
+    }
+
+    /// Get the current workspace (tenant) ID, if stamped. Routing callers that
+    /// need a concrete segment should fall back to the reserved
+    /// `Subjects::DEFAULT_WORKSPACE` sentinel when this is `None`.
+    pub fn workspace(&self) -> Option<String> {
+        self.workspace_id.read().unwrap().clone()
+    }
+
+    /// The SHARED per-net workspace cell. Per-net effect handlers (e.g. the
+    /// timer handler) that must read the workspace LAZILY at fire time — because
+    /// they are registered before the scenario load stamps it — clone this Arc
+    /// at registration and read it inside `execute()`. Reads the same cell that
+    /// `set_workspace_id` writes and the NATS publisher consumes.
+    pub fn workspace_cell(&self) -> Arc<RwLock<Option<String>>> {
+        self.workspace_id.clone()
     }
 
     /// Set initial tokens to be restored on reset.

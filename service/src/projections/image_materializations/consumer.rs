@@ -169,7 +169,8 @@ mod tests {
         ];
 
         for event in matched_variants {
-            let subject = Subjects::for_event(&event, Some("materialize-x"));
+            let subject =
+                Subjects::for_event(&event, Subjects::DEFAULT_WORKSPACE, Some("materialize-x"));
             assert!(
                 filters().iter().any(|f| subject_matches(f, &subject)),
                 "no filter matches {subject}"

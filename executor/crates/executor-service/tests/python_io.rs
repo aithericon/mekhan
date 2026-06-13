@@ -22,6 +22,7 @@ mod python_io_tests {
     ) -> ExecutionJob {
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec: PythonConfig::inline_spec_with_io(code, inputs, outputs),
             metadata: HashMap::new(),
             timeout: None,
@@ -313,6 +314,7 @@ set_output("result", {"answer": result})
 
         let job = ExecutionJob {
             execution_id: eid.clone(),
+            workspace_id: String::new(),
             spec,
             metadata: HashMap::new(),
             timeout: None,

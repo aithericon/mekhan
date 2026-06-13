@@ -86,6 +86,7 @@ async fn test_spec_env_vars() {
 
     let job = ExecutionJob {
         execution_id: eid.clone(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), "echo $CUSTOM_VAR".into()],

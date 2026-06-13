@@ -68,7 +68,11 @@ pub struct IdempotencyCache {
 }
 
 impl IdempotencyCache {
-    /// JetStream KV bucket backing durable caches.
+    /// Base name for the JetStream KV bucket backing durable caches.
+    ///
+    /// The live bucket is per-workspace: `petri-idempotency-{ws}`, built via
+    /// [`crate::kv_bucket_for`]. Each workspace gets an isolated dedup window so
+    /// one tenant's token-command retries can never collide with another's.
     pub const KV_BUCKET: &'static str = "petri-idempotency";
 
     /// Create a new idempotency cache with default configuration.
@@ -94,22 +98,29 @@ impl IdempotencyCache {
         }
     }
 
-    /// Create a durable cache: default config, backed by the
-    /// [`Self::KV_BUCKET`] bucket (created if missing, `max_age` = TTL).
-    pub async fn durable(jetstream: &async_nats::jetstream::Context) -> Result<Self, String> {
+    /// Create a durable cache scoped to `workspace_id`: default config, backed
+    /// by the per-workspace `petri-idempotency-{ws}` bucket (created if missing,
+    /// `max_age` = TTL).
+    pub async fn durable(
+        jetstream: &async_nats::jetstream::Context,
+        workspace_id: &str,
+    ) -> Result<Self, String> {
         let config = IdempotencyCacheConfig::default();
-        let kv = Self::ensure_kv_bucket(jetstream, config.ttl).await?;
+        let kv = Self::ensure_kv_bucket(jetstream, config.ttl, workspace_id).await?;
         Ok(Self::with_kv(config, kv))
     }
 
-    /// Create or get the idempotency KV bucket with `max_age` = `ttl`.
+    /// Create or get the per-workspace idempotency KV bucket
+    /// (`petri-idempotency-{ws}`) with `max_age` = `ttl`.
     pub async fn ensure_kv_bucket(
         jetstream: &async_nats::jetstream::Context,
         ttl: Duration,
+        workspace_id: &str,
     ) -> Result<async_nats::jetstream::kv::Store, String> {
+        let bucket = crate::kv_bucket_for(Self::KV_BUCKET, workspace_id);
         match jetstream
             .create_key_value(async_nats::jetstream::kv::Config {
-                bucket: Self::KV_BUCKET.to_string(),
+                bucket: bucket.clone(),
                 max_age: ttl,
                 history: 1,
                 ..Default::default()
@@ -119,9 +130,9 @@ impl IdempotencyCache {
             Ok(kv) => Ok(kv),
             // Bucket may already exist (possibly with a different config) — reuse it.
             Err(_) => jetstream
-                .get_key_value(Self::KV_BUCKET)
+                .get_key_value(&bucket)
                 .await
-                .map_err(|e| format!("get idempotency KV bucket: {}", e)),
+                .map_err(|e| format!("get idempotency KV bucket {}: {}", bucket, e)),
         }
     }
 

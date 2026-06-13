@@ -60,7 +60,9 @@ async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size
             gid: None,
         }],
     };
-    inv::register(pool, &req).await.expect("register copy");
+    inv::register(pool, Uuid::nil(), &req)
+        .await
+        .expect("register copy");
 }
 
 /// Scoped cleanup: only rows whose key/server begins with this test's prefix.

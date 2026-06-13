@@ -26,6 +26,12 @@ pub enum TriggerKind {
 /// scanning every published template's `graph_json`.
 #[derive(Debug, Clone)]
 pub struct TriggerRecord {
+    /// Owning tenant. Copied from the producing template's `workspace_id` at
+    /// registration time. Load-bearing for per-tenant isolation: the webhook
+    /// receiver scopes `find_by_slug` by this, and the fire path namespaces
+    /// `net_id`/`tenant_id` with it so a fired instance never leaks across
+    /// workspaces. `Uuid::nil()` is the default workspace.
+    pub workspace_id: Uuid,
     pub template_id: Uuid,
     pub template_version: i32,
     pub node_id: String,

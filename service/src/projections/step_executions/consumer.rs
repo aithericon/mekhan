@@ -434,7 +434,7 @@ mod tests {
         ];
 
         for event in matched_variants {
-            let subject = Subjects::for_event(&event, Some("mekhan-x"));
+            let subject = Subjects::for_event(&event, Subjects::DEFAULT_WORKSPACE, Some("mekhan-x"));
             assert!(
                 filters().iter().any(|f| subject_matches(f, &subject)),
                 "no filter matches {subject}"

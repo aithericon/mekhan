@@ -102,6 +102,7 @@ fn make_http_run_context_with_env(
 fn dummy_job() -> ExecutionJob {
     ExecutionJob {
         execution_id: next_execution_id(),
+        workspace_id: String::new(),
         spec: ExecutionSpec {
             backend: "http".into(),
             inputs: vec![],

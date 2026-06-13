@@ -67,6 +67,24 @@ pub struct DlqEntry {
 }
 
 impl DlqEntry {
+    /// Recover the workspace (tenant) segment of the original message's subject
+    /// so the dead-letter is published under the same tenant
+    /// (`petri-dlq.{ws}.{class}`).
+    ///
+    /// Both ws-segmented roots place the workspace token at index 1:
+    /// `petri.{ws}.{net}…` and `human.{ws}.{category}.{net}.{place}`. Anything
+    /// that doesn't match (legacy/unknown shapes) falls back to the reserved
+    /// DEFAULT_WORKSPACE sentinel.
+    pub fn workspace(&self) -> &str {
+        let mut parts = self.original_subject.split('.');
+        match (parts.next(), parts.next()) {
+            (Some(Subjects::PETRI_ROOT) | Some(Subjects::HUMAN_ROOT), Some(ws)) if !ws.is_empty() => {
+                ws
+            }
+            _ => Subjects::DEFAULT_WORKSPACE,
+        }
+    }
+
     /// Build an entry from raw message parts. The payload travels as JSON
     /// when it parses, base64 otherwise.
     pub fn new(
@@ -138,7 +156,7 @@ impl DlqPublisher {
             .get_or_create_stream(dlq_stream_config())
             .await
             .map_err(|e| format!("ensure {} stream: {}", Subjects::STREAM_DLQ, e))?;
-        let subject = Subjects::dlq_subject(entry.error_class.as_str());
+        let subject = Subjects::dlq_subject(entry.workspace(), entry.error_class.as_str());
         let payload = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
         self.jetstream
             .publish(subject, payload.into())

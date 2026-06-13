@@ -151,6 +151,9 @@ pub async fn ensure_presence_pool_net_deployed(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
+        // Presence pool nets are cross-cutting infra, not tenant-owned —
+        // engine routes them on its reserved "default" workspace sentinel.
+        None,
     )
     .await
     {

@@ -29,7 +29,7 @@ SELECT hash, \
 FROM legacy_file_index \
 WHERE hash IS NOT NULL \
 GROUP BY hash \
-ON CONFLICT (content_hash) DO NOTHING";
+ON CONFLICT (workspace_id, content_hash) DO NOTHING";
 
 /// Run the dedup INSERT. Returns the number of catalogue rows actually inserted
 /// (i.e. unique hashes that did not already exist).

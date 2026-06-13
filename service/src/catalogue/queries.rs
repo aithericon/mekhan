@@ -1,4 +1,5 @@
 use sqlx::{PgPool, Postgres, QueryBuilder};
+use uuid::Uuid;
 
 use crate::query::builder::{self, FieldSpec, QueryError};
 use crate::query::extractor::QueryParams;
@@ -326,16 +327,18 @@ pub const CATALOGUE_FIELD_SPECS: &[FieldSpec] = &[
     ),
 ];
 
-/// List catalogue entries with full filter/sort/pagination support.
+/// List catalogue entries with full filter/sort/pagination support, scoped to
+/// `workspace_id` (server-enforced — never user-queryable).
 pub async fn list_entries(
     pool: &PgPool,
+    workspace_id: Uuid,
     params: &QueryParams,
 ) -> Result<Paginated<CatalogueEntry>, QueryError> {
     // -- COUNT query --
     let count = {
         let mut qb =
             QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM catalogue_entries");
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
     };
@@ -344,7 +347,7 @@ pub async fn list_entries(
     let entries = {
         let mut qb =
             QueryBuilder::<Postgres>::new(format!("SELECT {ENTRY_COLUMNS} FROM catalogue_entries"));
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
 
         // ORDER BY — sortability is gated on ALLOWED_SORT_FIELDS (names); the
         // emitted SQL comes from the matching CATALOGUE_FIELD_SPECS expr.
@@ -375,30 +378,26 @@ pub async fn list_entries(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// Append a WHERE clause combining typed filters (resolved through
-/// [`CATALOGUE_FIELD_SPECS`], so `meta.*` virtual fields work), search, and
-/// JSONB containment. Returns whether a `WHERE` was emitted, so callers
-/// composing extra conditions (e.g. facet lateral guards) know whether to
-/// continue with ` AND ` or open the clause themselves.
+/// Append a WHERE clause combining the mandatory per-workspace scope with the
+/// typed filters (resolved through [`CATALOGUE_FIELD_SPECS`], so `meta.*`
+/// virtual fields work), search, and JSONB containment. Returns whether a
+/// `WHERE` was emitted (always `true` now — the `workspace_id = $ws` guard is
+/// unconditional), so callers composing extra conditions (e.g. facet lateral
+/// guards) know whether to continue with ` AND ` or open the clause themselves.
+///
+/// `workspace_id` is SERVER-ENFORCED: it is injected exactly here, once, and is
+/// deliberately NOT a member of `CATALOGUE_FIELD_SPECS` so it can never be
+/// targeted (or escaped) by the user-facing filter DSL.
 pub(crate) fn append_where(
     qb: &mut QueryBuilder<'_, Postgres>,
+    workspace_id: Uuid,
     params: &QueryParams,
 ) -> Result<bool, QueryError> {
-    let has_filter = params
-        .filter
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false);
-    let has_search = params.search.is_some();
-    let has_metadata = params.metadata.is_some();
-    let has_file_metadata = params.file_metadata.is_some();
-
-    if !has_filter && !has_search && !has_metadata && !has_file_metadata {
-        return Ok(false);
-    }
-
-    qb.push(" WHERE ");
-    let mut need_and = false;
+    // The workspace scope is always present, so a WHERE is always opened with
+    // the tenant guard first; every subsequent clause appends with ` AND `.
+    qb.push(" WHERE workspace_id = ");
+    qb.push_bind(workspace_id);
+    let mut need_and = true;
 
     // Typed filters
     if let Some(ref filter) = params.filter {
@@ -444,15 +443,18 @@ pub(crate) fn append_where(
     Ok(true)
 }
 
-/// Get a single catalogue entry by composite key.
+/// Get a single catalogue entry by composite key, scoped to `workspace_id`.
 pub async fn get_entry(
     pool: &PgPool,
+    workspace_id: Uuid,
     execution_id: &str,
     id: &str,
 ) -> Result<Option<CatalogueEntry>, sqlx::Error> {
     sqlx::query_as::<_, CatalogueEntry>(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM catalogue_entries WHERE execution_id = $1 AND id = $2"
+        "SELECT {ENTRY_COLUMNS} FROM catalogue_entries \
+         WHERE workspace_id = $1 AND execution_id = $2 AND id = $3"
     ))
+    .bind(workspace_id)
     .bind(execution_id)
     .bind(id)
     .fetch_optional(pool)
@@ -460,14 +462,19 @@ pub async fn get_entry(
     .map(|opt| opt.map(CatalogueEntry::hydrate_view))
 }
 
-/// Aggregate statistics, optionally filtered by the same params.
-pub async fn stats(pool: &PgPool, params: &QueryParams) -> Result<CatalogueStats, QueryError> {
+/// Aggregate statistics, scoped to `workspace_id` and optionally filtered by
+/// the same params.
+pub async fn stats(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    params: &QueryParams,
+) -> Result<CatalogueStats, QueryError> {
     // Total count + size
     let (total_entries, total_size_bytes, latest_at) = {
         let mut qb = QueryBuilder::<Postgres>::new(
             "SELECT COALESCE(COUNT(*), 0)::bigint, COALESCE(SUM(size_bytes), 0)::bigint, MAX(created_at) FROM catalogue_entries",
         );
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
         let row: (i64, i64, Option<chrono::DateTime<chrono::Utc>>) =
             qb.build_query_as().fetch_one(pool).await?;
         row
@@ -478,7 +485,7 @@ pub async fn stats(pool: &PgPool, params: &QueryParams) -> Result<CatalogueStats
         let mut qb = QueryBuilder::<Postgres>::new(
             "SELECT category, COUNT(*)::bigint as count, COALESCE(SUM(size_bytes), 0)::bigint as total_bytes FROM catalogue_entries",
         );
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
         qb.push(" GROUP BY category ORDER BY count DESC");
         qb.build_query_as::<CategoryStats>().fetch_all(pool).await?
     };
@@ -491,14 +498,16 @@ pub async fn stats(pool: &PgPool, params: &QueryParams) -> Result<CatalogueStats
     })
 }
 
-/// Per-net summary statistics.
-pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
+/// Per-net summary statistics, scoped to `workspace_id`.
+pub async fn stats_by_net(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<NetStats>, sqlx::Error> {
     sqlx::query_as::<_, NetStats>(
         "SELECT source_net, COUNT(*)::bigint as total_artifacts, \
          COALESCE(SUM(size_bytes), 0)::bigint as total_bytes, \
          MIN(created_at) as first_at, MAX(created_at) as latest_at \
-         FROM catalogue_entries GROUP BY source_net ORDER BY total_artifacts DESC",
+         FROM catalogue_entries WHERE workspace_id = $1 \
+         GROUP BY source_net ORDER BY total_artifacts DESC",
     )
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
 }
@@ -511,32 +520,41 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 /// 3. Causality resolution: the entry's `signal_key` maps to a
 ///    `causality_cross_links` egress event whose consumed tokens belong
 ///    to this process (via `causality_process_tags`)
-pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
+pub async fn lineage(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    process_id: &str,
+) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
     let job_prefix = format!("{process_id}:%");
     sqlx::query_as::<_, CatalogueEntry>(&format!(
         r#"
         SELECT {ENTRY_COLUMNS} FROM catalogue_entries
-        WHERE process_id = $1
-           OR job_id LIKE $2
-           OR signal_key IN (
-               SELECT cl.signal_key
-               FROM causality_cross_links cl
-               JOIN causality_event_tokens et
-                 ON et.net_id = cl.egress_net
-                AND et.event_seq = cl.egress_seq
-               JOIN causality_process_tags pt ON pt.token_id = et.token_id
-               WHERE pt.process_id = $1
-           )
-           OR content_hash IN (
-               SELECT cp.content_hash FROM catalogue_producers cp
-               WHERE cp.process_id = $1
-                  OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1)
-           )
+        WHERE workspace_id = $3
+          AND (
+            process_id = $1
+            OR job_id LIKE $2
+            OR signal_key IN (
+                SELECT cl.signal_key
+                FROM causality_cross_links cl
+                JOIN causality_event_tokens et
+                  ON et.net_id = cl.egress_net
+                 AND et.event_seq = cl.egress_seq
+                JOIN causality_process_tags pt ON pt.token_id = et.token_id
+                WHERE pt.process_id = $1
+            )
+            OR content_hash IN (
+                SELECT cp.content_hash FROM catalogue_producers cp
+                WHERE cp.workspace_id = $3
+                  AND (cp.process_id = $1
+                       OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1))
+            )
+          )
         ORDER BY created_at ASC
         "#,
     ))
     .bind(process_id)
     .bind(&job_prefix)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
     .map(|rows| rows.into_iter().map(CatalogueEntry::hydrate_view).collect())
@@ -546,6 +564,7 @@ pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEnt
 /// Used by the live-artifact backfill endpoint. Empty slices = no filter.
 pub async fn lineage_filtered(
     pool: &PgPool,
+    workspace_id: Uuid,
     process_id: &str,
     categories: &[String],
     render_hints: &[String],
@@ -567,7 +586,8 @@ pub async fn lineage_filtered(
     sqlx::query_as::<_, CatalogueEntry>(&format!(
         r#"
         SELECT {ENTRY_COLUMNS} FROM catalogue_entries
-        WHERE (
+        WHERE workspace_id = $8
+        AND (
             process_id = $1
             OR job_id LIKE $2
             OR signal_key IN (
@@ -581,8 +601,9 @@ pub async fn lineage_filtered(
             )
             OR content_hash IN (
                 SELECT cp.content_hash FROM catalogue_producers cp
-                WHERE cp.process_id = $1
-                   OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1)
+                WHERE cp.workspace_id = $8
+                  AND (cp.process_id = $1
+                       OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = $1))
             )
         )
         AND ($3::text[] IS NULL OR category = ANY($3))
@@ -600,6 +621,7 @@ pub async fn lineage_filtered(
     .bind(since)
     .bind(until)
     .bind(limit.clamp(1, 5000))
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
     .map(|rows| rows.into_iter().map(CatalogueEntry::hydrate_view).collect())
@@ -608,9 +630,10 @@ pub async fn lineage_filtered(
 /// All artifacts for a given process, grouped by step (campaign lineage).
 pub async fn lineage_grouped(
     pool: &PgPool,
+    workspace_id: Uuid,
     process_id: &str,
 ) -> Result<LineageResponse, sqlx::Error> {
-    let entries = lineage(pool, process_id).await?;
+    let entries = lineage(pool, workspace_id, process_id).await?;
     let total_artifacts = entries.len() as i64;
 
     // Group entries by step extracted from job_id ("{process_id}:{step}") or process_step field.
@@ -681,15 +704,21 @@ pub async fn resolve_process_id_from_causality(
     .await
 }
 
-/// Distinct values for a column (for populating filter dropdowns).
-pub async fn distinct_values(pool: &PgPool, column: &str) -> Result<Vec<String>, QueryError> {
+/// Distinct values for a column (for populating filter dropdowns), scoped to
+/// `workspace_id`.
+pub async fn distinct_values(
+    pool: &PgPool,
+    workspace_id: Uuid,
+    column: &str,
+) -> Result<Vec<String>, QueryError> {
     // Validate column is allowed
     let field = builder::validate_field(column, ALLOWED_FILTER_FIELDS)?;
 
     let sql = format!(
-        "SELECT DISTINCT {field} FROM catalogue_entries WHERE {field} IS NOT NULL ORDER BY {field}"
+        "SELECT DISTINCT {field} FROM catalogue_entries \
+         WHERE workspace_id = $1 AND {field} IS NOT NULL ORDER BY {field}"
     );
-    let rows: Vec<(String,)> = sqlx::query_as(&sql).fetch_all(pool).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(&sql).bind(workspace_id).fetch_all(pool).await?;
     Ok(rows.into_iter().map(|(v,)| v).collect())
 }
 
@@ -966,6 +995,7 @@ pub fn query_fields_response() -> QueryFieldsResponse {
 /// Only allows `file_metadata` and `user_metadata` columns.
 pub async fn distinct_jsonb_values(
     pool: &PgPool,
+    workspace_id: Uuid,
     column: &str,
     key: &str,
 ) -> Result<Vec<String>, QueryError> {
@@ -977,9 +1007,13 @@ pub async fn distinct_jsonb_values(
     }
     let sql = format!(
         "SELECT DISTINCT {column}->>$1 AS val FROM catalogue_entries \
-         WHERE {column}->>$1 IS NOT NULL ORDER BY val"
+         WHERE workspace_id = $2 AND {column}->>$1 IS NOT NULL ORDER BY val"
     );
-    let rows: Vec<(String,)> = sqlx::query_as(&sql).bind(key).fetch_all(pool).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(&sql)
+        .bind(key)
+        .bind(workspace_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.into_iter().map(|(v,)| v).collect())
 }
 
@@ -1218,9 +1252,10 @@ mod tests {
         .expect("parse");
 
         let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 FROM catalogue_entries");
-        let wrote = append_where(&mut qb, &params).expect("append_where");
+        let wrote = append_where(&mut qb, Uuid::nil(), &params).expect("append_where");
         assert!(wrote);
         let sql = qb.sql().to_string();
+        assert!(sql.contains("workspace_id = "));
         assert!(sql.contains("((file_metadata->>'num_rows')::bigint) >= "));
         assert!(sql.contains("(file_metadata->>'format') = "));
 
@@ -1243,7 +1278,7 @@ mod tests {
         )
         .expect("parse");
         let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 FROM catalogue_entries");
-        append_where(&mut qb, &params).expect("append_where");
+        append_where(&mut qb, Uuid::nil(), &params).expect("append_where");
         let sql = qb.sql().to_string();
         assert!(
             sql.contains("(file_metadata->'schema_fingerprint'->>'digest') = ANY("),

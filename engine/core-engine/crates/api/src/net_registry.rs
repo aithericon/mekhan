@@ -76,6 +76,24 @@ pub trait MetadataLookup: Send + Sync {
     async fn lookup(&self, net_id: &str) -> MetadataStatus;
 }
 
+/// Resolves the persisted workspace (tenant) of a net that is being WOKEN from
+/// hibernation, so the registry can stamp it and start the per-net event
+/// consumer under the real workspace BEFORE the eval loop consults topology
+/// (multi-tenancy linchpin / hazard #2).
+///
+/// In production this is backed by the per-tenant `KV_NET_METADATA_{ws}` buckets
+/// (impl 2/2 derives the ws when materializing metadata). When unset, or when
+/// it returns `None`, the woken net falls back to `DEFAULT_WORKSPACE` — correct
+/// for the single-workspace dev path. `get_or_create` only consults this on a
+/// genuine wake (the net already has persisted history), never for a fresh
+/// HTTP-loaded net (those defer the consumer to the post-load hook).
+#[async_trait::async_trait]
+pub trait WokenWorkspaceResolver: Send + Sync {
+    /// Return the persisted workspace for `net_id`, or `None` if unknown
+    /// (caller falls back to `DEFAULT_WORKSPACE`).
+    async fn workspace_for(&self, net_id: &str) -> Option<String>;
+}
+
 /// Factory function type for creating human task clients per net.
 pub type HumanClientFactory = Arc<dyn Fn(&str) -> Arc<dyn HumanTaskClient> + Send + Sync>;
 
@@ -239,6 +257,15 @@ where
     pub on_scenario_loaded: RwLock<Vec<OnScenarioLoaded>>,
     /// Cancellation token for graceful shutdown of per-net tasks (eval loop, listeners).
     pub cancel_token: CancellationToken,
+    /// Deferred per-net event-consumer starter (multi-tenancy linchpin). For a
+    /// FRESH net, `get_or_create` stores the [`ConsumerStarter`] here instead of
+    /// starting the consumer eagerly under the process-fallback workspace; the
+    /// post-load path invokes [`start_event_consumer`](Self::start_event_consumer)
+    /// AFTER `set_workspace_id` so the consumer filters
+    /// `petri.{realws}.{net}.events.>`. Taken (set to `None`) on first start so a
+    /// re-load does not double-spawn. `None` for woken nets (started eagerly
+    /// inside `get_or_create`) and for stores without a NATS consumer.
+    pub consumer_starter: RwLock<Option<crate::net_registry::ConsumerStarter>>,
     /// Sub-phase 2.5e-γ.mekhan per-run dispatch options (skip_mask +
     /// stage_overrides). Owned here per-NetInstance so concurrent loads on
     /// distinct net_ids never collide. `as_app_state` clones the Arc into
@@ -260,6 +287,24 @@ where
         }
     }
 
+    /// Start this net's deferred event consumer under its now-stamped workspace
+    /// (multi-tenancy linchpin). Idempotent: the [`ConsumerStarter`] is `take`n
+    /// so a re-load (or a second call) is a no-op. Reads `service.workspace()`
+    /// for the real per-net workspace; the caller MUST have run
+    /// `service.set_workspace_id(...)` first, otherwise the consumer falls back
+    /// to `DEFAULT_WORKSPACE`. `await`ing blocks until hydration completes (a
+    /// fresh net has nothing to hydrate so it returns promptly).
+    pub async fn start_event_consumer(&self) {
+        let starter = self.consumer_starter.write().take();
+        if let Some(starter) = starter {
+            let ws = self
+                .service
+                .workspace()
+                .unwrap_or_else(|| petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string());
+            starter(ws).await;
+        }
+    }
+
     /// Build an `AppState` from this instance's fields, for reuse with existing handlers.
     pub fn as_app_state(&self) -> AppState<E, T, S> {
         AppState {
@@ -278,11 +323,54 @@ where
 /// Receives the `net_id` so the factory can configure per-net stores (e.g., set the
 /// net ID on a NATS publisher for correct bridge routing).
 ///
-/// Returns `(event_store, topology_store, projection, applied_rx)`.
+/// Returns `(event_store, topology_store, projection, applied_rx, workspace_cell, consumer_starter)`.
 /// The `applied_rx` watch channel ticks every time the event consumer applies
 /// an event to the in-memory cache, enabling consumer-driven eval notification.
-pub type StoreFactory<E, T, S> =
-    Arc<dyn Fn(&str) -> (Arc<E>, Arc<T>, Arc<S>, tokio::sync::watch::Receiver<u64>) + Send + Sync>;
+///
+/// Multi-tenancy (linchpin): the factory does NOT start the per-net event
+/// consumer eagerly — at factory time the net's real workspace is unknown
+/// (the process fallback would route the consumer at `petri.default.{net}…`).
+/// Instead it returns:
+///   - `workspace_cell`: the SHARED `Arc<RwLock<Option<String>>>` that the
+///     `NatsEventStore` publisher reads. `get_or_create` constructs the
+///     `PetriNetService` against THIS cell, so `set_workspace_id` (called by
+///     `load_scenario` / `create_and_load`) writes through to the publisher.
+///   - `consumer_starter`: a [`ConsumerStarter`] that the post-load hook invokes
+///     AFTER the workspace is stamped — it starts the event consumer filtered on
+///     the real per-net workspace and (for woken nets) blocks on hydration. For
+///     stores without a NATS-backed consumer (in-memory test stores) it is a
+///     no-op.
+pub type StoreFactory<E, T, S> = Arc<
+    dyn Fn(
+            &str,
+        ) -> (
+            Arc<E>,
+            Arc<T>,
+            Arc<S>,
+            tokio::sync::watch::Receiver<u64>,
+            Arc<std::sync::RwLock<Option<String>>>,
+            ConsumerStarter,
+        ) + Send
+        + Sync,
+>;
+
+/// Deferred per-net event-consumer starter returned by the [`StoreFactory`].
+///
+/// Invoked (once) by the registry AFTER `set_workspace_id` has stamped the real
+/// per-net workspace, so the consumer subscribes to
+/// `petri.{realws}.{net}.events.>` rather than the process-level fallback.
+/// `await`ing the returned future blocks until hydration completes
+/// (woken/hibernated nets replay their history before the eval loop consults
+/// topology); for a FRESH net there is nothing to hydrate so it returns
+/// promptly. A no-op starter is valid for stores without a NATS-backed consumer
+/// (e.g. in-memory test stores).
+pub type ConsumerStarter = Arc<
+    dyn Fn(
+            String, // real per-net workspace, resolved post-stamp
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Optional callback invoked after a new net instance is created (e.g., to start a bridge listener).
 pub type OnNetCreated<E, T, S> = Arc<dyn Fn(&Arc<NetInstance<E, T, S>>) + Send + Sync>;
@@ -334,6 +422,13 @@ where
     /// Optional external lookup so handlers can rehydrate hibernated nets
     /// after a cold engine boot (when `known_nets` is empty).
     metadata_lookup: Option<Arc<dyn MetadataLookup>>,
+    /// Optional resolver for a WOKEN net's persisted workspace, so `get_or_create`
+    /// can stamp it and start the per-net event consumer under the real workspace
+    /// BEFORE consulting topology (multi-tenancy linchpin / hazard #2). `None`
+    /// (or a `None` result) → woken net falls back to `DEFAULT_WORKSPACE`, which
+    /// is correct for single-workspace dev. Wrapped in `RwLock<Option<>>` + set
+    /// via `&self` so main.rs can install it after the registry is `Arc`-wrapped.
+    woken_workspace_resolver: RwLock<Option<Arc<dyn WokenWorkspaceResolver>>>,
     /// Registered builtin pre-dispatch hooks, keyed by their `name`.
     /// Resolved against the TOML-config chain at net-instantiation time.
     pre_dispatch_builtin_hooks: RwLock<HashMap<String, Arc<dyn PreDispatchHook>>>,
@@ -371,6 +466,7 @@ where
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
             metadata_lookup: None,
+            woken_workspace_resolver: RwLock::new(None),
             pre_dispatch_builtin_hooks: RwLock::new(HashMap::new()),
             pre_dispatch_chain_configs: RwLock::new(Vec::new()),
             pre_dispatch_frozen: AtomicBool::new(false),
@@ -489,6 +585,14 @@ where
     /// Returns the configured metadata lookup, if any.
     pub fn metadata_lookup(&self) -> Option<&Arc<dyn MetadataLookup>> {
         self.metadata_lookup.as_ref()
+    }
+
+    /// Install the resolver for a WOKEN net's persisted workspace (multi-tenancy
+    /// linchpin / hazard #2). Takes `&self` so main.rs can call it after the
+    /// registry is `Arc`-wrapped; must be set before the first `get_or_create`
+    /// that wakes a hibernated net.
+    pub fn set_woken_workspace_resolver(&self, resolver: Arc<dyn WokenWorkspaceResolver>) {
+        *self.woken_workspace_resolver.write() = Some(resolver);
     }
 
     /// Set the human task integration config.
@@ -618,8 +722,48 @@ where
         // hot-net creation so concurrent registration cannot slip through.
         self.pre_dispatch_frozen.store(true, Ordering::SeqCst);
 
-        // Call factory OUTSIDE any lock — this may block on hydration
-        let (event_store, topology_store, projection, applied_rx) = (self.store_factory)(net_id);
+        // Call factory OUTSIDE any lock. Multi-tenancy linchpin: the factory NO
+        // LONGER starts the per-net event consumer (it would route under the
+        // process-fallback workspace, before the net's real workspace is known).
+        // It returns the shared `workspace_cell` (written through by
+        // `set_workspace_id`, read by the NATS publisher) and a deferred
+        // `consumer_starter` we invoke under the real workspace below.
+        let (event_store, topology_store, projection, applied_rx, workspace_cell, consumer_starter) =
+            (self.store_factory)(net_id);
+
+        // WOKEN-NET PATH (hazard #2) — done OUTSIDE the registry lock (the
+        // consumer start may block on a long NATS history replay; holding the
+        // write lock across it would serialize all concurrent net creation and
+        // risk deadlock). A net with persisted history must hydrate BEFORE we
+        // consult `get_topology()` to classify it Running-vs-Stopped. Resolve its
+        // persisted workspace, write it through the SHARED cell (the publisher
+        // reads the same Arc; the service we build below shares it too), and
+        // start+hydrate the consumer synchronously. A FRESH net (no persisted
+        // history) gets no resolver hit — its consumer start is DEFERRED to the
+        // post-load hook (`start_event_consumer`), after `load_scenario` stamps
+        // the workspace.
+        let woken_resolver = self.woken_workspace_resolver.read().clone();
+        let mut consumer_started = false;
+        if let Some(resolver) = woken_resolver {
+            let net_id_owned = net_id.to_string();
+            let woken_ws = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(async { resolver.workspace_for(&net_id_owned).await })
+            });
+            if let Some(ws) = woken_ws {
+                // Write through the shared cell directly — the service that wraps
+                // it has not been constructed yet, but the publisher already
+                // holds this Arc, and the service will share it by construction.
+                *workspace_cell.write().unwrap() = Some(ws.clone());
+                let starter = consumer_starter.clone();
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        starter(ws).await;
+                    })
+                });
+                consumer_started = true;
+            }
+        }
 
         // Acquire write lock for setup + insertion
         let mut nets = self.nets.write();
@@ -628,10 +772,14 @@ where
             return instance; // Discard stores — another thread won the race
         }
 
-        let service = Arc::new(PetriNetService::new(
+        // Construct the service against the SHARED workspace cell so the
+        // publisher (NatsEventStore, holding the same Arc) routes under whatever
+        // `set_workspace_id` later stamps (or the woken-ws written above).
+        let service = Arc::new(PetriNetService::new_with_workspace_cell(
             event_store,
             topology_store,
             projection,
+            workspace_cell,
         ));
 
         // Register all effect handlers (scheduler/executor/human/process/
@@ -681,6 +829,14 @@ where
             event_tx: event_tx.clone(),
             on_scenario_loaded: RwLock::new(Vec::new()),
             cancel_token: cancel_token.clone(),
+            // FRESH net: stash the deferred starter so the post-load hook can
+            // start the consumer under the stamped workspace. WOKEN net: already
+            // started+hydrated above, so leave `None` (no double-spawn).
+            consumer_starter: RwLock::new(if consumer_started {
+                None
+            } else {
+                Some(consumer_starter)
+            }),
             dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         });
 
@@ -862,7 +1018,12 @@ where
                 ecfg.signal_routes.clone(),
                 ecfg.event_routes.clone(),
                 &ecfg.namespace,
-            );
+            )
+            // Wire the SHARED per-net workspace cell so submit() stamps the
+            // firing net's tenant onto ExecutionJob.workspace_id (read lazily at
+            // submit, after set_workspace_id has stamped it). Same cell the timer
+            // handler reads — multi-tenancy back-channel attribution.
+            .with_workspace_cell(service.workspace_cell());
 
             // Wire up secret wrapping if configured
             #[cfg(feature = "executor-vault-secrets")]
@@ -1159,12 +1320,20 @@ where
             service
                 .register_effect_handler(
                     effects::TIMER_SCHEDULE.handler_id,
-                    Arc::new(TimerScheduleHandler::new(
-                        timer_client.clone(),
-                        net_id,
-                        effects::TIMER_SCHEDULE.default_input_port,
-                        effects::TIMER_SCHEDULE.default_output_port,
-                    )),
+                    Arc::new(
+                        TimerScheduleHandler::new(
+                            timer_client.clone(),
+                            net_id,
+                            effects::TIMER_SCHEDULE.default_input_port,
+                            effects::TIMER_SCHEDULE.default_output_port,
+                        )
+                        // Multi-tenancy (hazard #4): share the service's
+                        // workspace cell so the scheduled timer records the net's
+                        // real tenant (read lazily at fire time, since this
+                        // handler is registered before the ws is stamped). The
+                        // Clockmaster then fires under that workspace.
+                        .with_workspace_cell(service.workspace_cell()),
+                    ),
                 )
                 .expect("register timer_schedule effect handler");
 
@@ -1786,6 +1955,13 @@ mod tests {
                 Arc::new(MockTopologyRepository::new()),
                 Arc::new(MockStateProjection::new()),
                 rx,
+                // Multi-tenancy: unstamped shared workspace cell + no-op consumer
+                // starter (mock store has no NATS consumer to defer).
+                Arc::new(std::sync::RwLock::new(None)),
+                Arc::new(|_ws: String| {
+                    Box::pin(async {})
+                        as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                }),
             )
         })
     }

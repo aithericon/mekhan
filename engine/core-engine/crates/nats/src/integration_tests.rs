@@ -36,27 +36,42 @@ async fn test_clockmaster_schedule_and_fire() {
         .await
         .expect("create client");
 
-    // Use test signal prefix so we can capture it in signals_stream
-    // signals_stream captures "tns.{prefix}.signals.>"
-    let signal_prefix = format!("tns.{}.signals", ctx.prefix);
+    // Multi-tenancy (phase 2): Clockmaster fires timer signals under the
+    // timer's workspace on the namespaced subject `petri.{ws}.{net}.signal.{place}`,
+    // captured by the global `PETRI_GLOBAL` stream (no longer the old
+    // `tns.{prefix}.signals.>` test stream). Use a unique per-test workspace so
+    // the filter subject can't collide with other tests sharing the NATS server.
+    let workspace_id = format!("cmws-{}", ctx.prefix);
+    let net_id = "test-net";
+    let place_id = "test-place";
+    let signal_subject = crate::Subjects::signal_transfer(&workspace_id, net_id, place_id);
 
+    // Clockmaster's 3rd arg is now the workspace_id (was a signal prefix).
     let clockmaster =
-        Clockmaster::with_options(ctx.jetstream.clone(), &bucket_name, &signal_prefix)
+        Clockmaster::with_options(ctx.jetstream.clone(), &bucket_name, &workspace_id)
             .await
             .expect("create clockmaster");
 
-    // Create consumer for signals FIRST (before anything is published)
-    let consumer = ctx
-        .create_signals_consumer("cm_test", None)
+    // Consume the fired signal from PETRI_GLOBAL, filtered to this net's
+    // workspace-scoped signal subject. Create the consumer FIRST (before the
+    // signal is published) so it sees the timer fire.
+    let global = petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure PETRI_GLOBAL");
+    let consumer = global
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            durable_name: Some(format!("cm_test_{}", ctx.prefix)),
+            filter_subject: signal_subject.clone(),
+            ..Default::default()
+        })
         .await
         .expect("consumer");
 
     let mut messages = consumer.messages().await.expect("messages");
 
-    // Schedule a timer BEFORE clockmaster starts (so hydration picks it up)
+    // Schedule a timer BEFORE clockmaster starts (so hydration picks it up).
+    // The timer carries the same workspace so it fires under `petri.{ws}…`.
     let correlation_id = uuid::Uuid::new_v4();
-    let net_id = "test-net";
-    let place_id = "test-place";
 
     timer_client
         .schedule(TimerScheduleRequest {
@@ -65,6 +80,7 @@ async fn test_clockmaster_schedule_and_fire() {
             correlation_id,
             delay_ms: 100, // Short delay
             payload: serde_json::json!({"foo": "bar"}),
+            workspace_id: workspace_id.clone(),
         })
         .await
         .expect("schedule");
@@ -124,7 +140,11 @@ async fn test_activity_touch_creates_entry() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
 
@@ -142,7 +162,11 @@ async fn test_activity_is_hot_after_touch() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.is_hot("net-1").await.expect("is_hot"));
@@ -157,7 +181,11 @@ async fn test_activity_is_hot_returns_false_for_unknown() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     assert!(!tracker.is_hot("nonexistent").await.expect("is_hot"));
 
@@ -171,7 +199,11 @@ async fn test_activity_mark_hibernating() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.is_hot("net-1").await.expect("is_hot"));
@@ -192,7 +224,11 @@ async fn test_activity_remove_deletes_entry() {
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
-    let tracker = ActivityTracker::new(kv, Duration::from_secs(300));
+    let tracker = ActivityTracker::new(
+        kv,
+        Duration::from_secs(300),
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    );
 
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.get_entry("net-1").await.expect("get").is_some());
@@ -233,7 +269,11 @@ async fn test_hibernation_triggers_on_timeout() {
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
 
     let idle_timeout = Duration::from_millis(200);
-    let activity = Arc::new(ActivityTracker::new(kv, idle_timeout));
+    let activity = Arc::new(ActivityTracker::new(
+        kv,
+        idle_timeout,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    ));
     let mock_hibernator = Arc::new(MockHibernator {
         hibernated: Mutex::new(Vec::new()),
     });
@@ -289,7 +329,11 @@ async fn test_hibernation_resets_on_retouch() {
     let kv = create_activity_kv(&ctx.jetstream, &ctx.prefix).await;
 
     let idle_timeout = Duration::from_millis(500);
-    let activity = Arc::new(ActivityTracker::new(kv, idle_timeout));
+    let activity = Arc::new(ActivityTracker::new(
+        kv,
+        idle_timeout,
+        crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
+    ));
     let mock_hibernator = Arc::new(MockHibernator {
         hibernated: Mutex::new(Vec::new()),
     });
@@ -375,6 +419,7 @@ async fn test_metadata_kv_put_and_get_roundtrip() {
     let meta = NetMetadata {
         net_id: "test-net".to_string(),
         status: NetStatus::Created,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: Some("tmpl-1".to_string()),
         parameters: Some(serde_json::json!({"gpu": 4})),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -418,6 +463,7 @@ async fn test_metadata_projection_list_all() {
         let meta = NetMetadata {
             net_id: format!("net-{}", i),
             status: NetStatus::Running,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
             template_id: None,
             parameters: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -455,6 +501,7 @@ async fn test_metadata_status_transitions() {
     let mut meta = NetMetadata {
         net_id: "lifecycle-net".to_string(),
         status: NetStatus::Created,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -511,6 +558,7 @@ async fn test_metadata_cancelled_status() {
     let meta = NetMetadata {
         net_id: "cancelled-net".to_string(),
         status: NetStatus::Cancelled,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -553,6 +601,7 @@ async fn test_metadata_tombstone_completed_net() {
     let meta = NetMetadata {
         net_id: "tombstone-net".to_string(),
         status: NetStatus::Completed,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -593,6 +642,7 @@ async fn test_metadata_tombstone_cancelled_net() {
     let meta = NetMetadata {
         net_id: "cancelled-tombstone".to_string(),
         status: NetStatus::Cancelled,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -635,6 +685,7 @@ async fn test_metadata_running_net_not_tombstone() {
     let meta = NetMetadata {
         net_id: "running-net".to_string(),
         status: NetStatus::Running,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -755,6 +806,7 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
     let completed_meta = NetMetadata {
         net_id: "completed-net".to_string(),
         status: NetStatus::Completed,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -776,6 +828,7 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
     let running_meta = NetMetadata {
         net_id: "running-net".to_string(),
         status: NetStatus::Running,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -822,7 +875,8 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("completed-net", "some_place");
+    let subject =
+        Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "completed-net", "some_place");
     let payload = serde_json::to_vec(&signal_to_completed).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -839,7 +893,7 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("running-net", "inbox");
+    let subject = Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "running-net", "inbox");
     let payload = serde_json::to_vec(&signal_to_running).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -954,6 +1008,7 @@ async fn test_global_signal_rejects_cancelled_net() {
     let meta = NetMetadata {
         net_id: "cancelled-net".to_string(),
         status: NetStatus::Cancelled,
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
         template_id: None,
         parameters: None,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -995,7 +1050,7 @@ async fn test_global_signal_rejects_cancelled_net() {
         timestamp: chrono::Utc::now(),
         dedup_id: None,
     };
-    let subject = Subjects::signal_transfer("cancelled-net", "inbox");
+    let subject = Subjects::signal_transfer(Subjects::DEFAULT_WORKSPACE, "cancelled-net", "inbox");
     let payload = serde_json::to_vec(&signal).unwrap();
     ctx.jetstream
         .publish(subject, payload.into())
@@ -1043,7 +1098,9 @@ async fn test_create_net_request_nats_publish_roundtrip() {
     let consumer = stream
         .create_consumer(async_nats::jetstream::consumer::pull::Config {
             durable_name: Some(format!("{}_create_net", ctx.prefix)),
-            filter_subject: crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            filter_subject: crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::New,
             ..Default::default()
         })
@@ -1064,7 +1121,9 @@ async fn test_create_net_request_nats_publish_roundtrip() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1103,6 +1162,7 @@ impl crate::create_net_listener::NetCreator for CapturingNetCreator {
     async fn create_and_load(
         &self,
         request: &crate::create_net_listener::CreateNetRequest,
+        _workspace: &str,
     ) -> Result<(), String> {
         self.received.lock().await.push(request.clone());
         Ok(())
@@ -1158,7 +1218,9 @@ async fn test_create_net_listener_delivers_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1247,7 +1309,9 @@ async fn test_create_net_listener_works_without_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1339,7 +1403,9 @@ async fn test_create_net_listener_multiple_initial_tokens() {
     let payload = serde_json::to_vec(&request).unwrap();
     ctx.jetstream
         .publish(
-            crate::subjects::Subjects::COMMAND_CREATE_NET.to_string(),
+            crate::subjects::Subjects::command_create_net(
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+            ),
             payload.into(),
         )
         .await
@@ -1428,7 +1494,15 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let net_id1 = net_id.clone();
     let shutdown1 = shutdown.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer1.start(&js1, &net_id1, shutdown1).await {
+        if let Err(e) = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer1 error");
         }
     });
@@ -1512,7 +1586,15 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer2.start(&js2, &net_id2, shutdown2_clone).await {
+        if let Err(e) = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer2 error");
         }
     });
@@ -1652,7 +1734,15 @@ async fn test_full_cycle_create_hibernate_wake_eval() {
     let net_id1 = net_id.clone();
     let shutdown1_clone = shutdown1.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer1.start(&js1, &net_id1, shutdown1_clone).await {
+        if let Err(e) = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer1 error");
         }
     });
@@ -1744,7 +1834,15 @@ async fn test_full_cycle_create_hibernate_wake_eval() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     tokio::spawn(async move {
-        if let Err(e) = consumer2.start(&js2, &net_id2, shutdown2_clone).await {
+        if let Err(e) = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2_clone,
+            )
+            .await
+        {
             tracing::error!(error = %e, "Consumer2 error");
         }
     });
@@ -1874,7 +1972,16 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let net_id1 = net_id.clone();
     let shutdown1_clone = shutdown1.clone();
     let handle1 =
-        tokio::spawn(async move { consumer1.start(&js1, &net_id1, shutdown1_clone).await });
+        tokio::spawn(async move {
+            consumer1
+                .start(
+                    &js1,
+                    crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                    &net_id1,
+                    shutdown1_clone,
+                )
+                .await
+        });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx1)
         .await
@@ -1951,7 +2058,16 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
     let handle2 =
-        tokio::spawn(async move { consumer2.start(&js2, &net_id2, shutdown2_clone).await });
+        tokio::spawn(async move {
+            consumer2
+                .start(
+                    &js2,
+                    crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                    &net_id2,
+                    shutdown2_clone,
+                )
+                .await
+        });
 
     // Wait for hydration — should succeed with all 3 events
     tokio::time::timeout(Duration::from_secs(5), ready_rx2)
@@ -2023,7 +2139,11 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
         let js = ctx.jetstream.clone();
         let nid = net_a.clone();
         let s = shutdown.clone();
-        tokio::spawn(async move { consumer.start(&js, &nid, s).await });
+        tokio::spawn(async move {
+            consumer
+                .start(&js, crate::subjects::Subjects::DEFAULT_WORKSPACE, &nid, s)
+                .await
+        });
 
         tokio::time::timeout(Duration::from_secs(5), ready_rx)
             .await
@@ -2068,7 +2188,11 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
         let js = ctx.jetstream.clone();
         let nid = net_b.clone();
         let s = shutdown.clone();
-        tokio::spawn(async move { consumer.start(&js, &nid, s).await });
+        tokio::spawn(async move {
+            consumer
+                .start(&js, crate::subjects::Subjects::DEFAULT_WORKSPACE, &nid, s)
+                .await
+        });
 
         tokio::time::timeout(Duration::from_secs(5), ready_rx)
             .await
@@ -2135,12 +2259,30 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
     let js_a = ctx.jetstream.clone();
     let nid_a = net_a.clone();
     let sa = shutdown_a.clone();
-    tokio::spawn(async move { consumer_a.start(&js_a, &nid_a, sa).await });
+    tokio::spawn(async move {
+        consumer_a
+            .start(
+                &js_a,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &nid_a,
+                sa,
+            )
+            .await
+    });
 
     let js_b = ctx.jetstream.clone();
     let nid_b = net_b.clone();
     let sb = shutdown_b.clone();
-    tokio::spawn(async move { consumer_b.start(&js_b, &nid_b, sb).await });
+    tokio::spawn(async move {
+        consumer_b
+            .start(
+                &js_b,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &nid_b,
+                sb,
+            )
+            .await
+    });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx_a)
         .await
@@ -2278,7 +2420,8 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
         dedup_id: None,
     };
 
-    let subject = Subjects::bridge_transfer(&target_net_id, "inbox");
+    let subject =
+        Subjects::bridge_transfer(Subjects::DEFAULT_WORKSPACE, &target_net_id, "inbox");
     ctx.jetstream
         .publish(
             subject.clone(),
@@ -2560,6 +2703,7 @@ async fn test_net_metadata_discovery_across_lifecycle() {
         let metadata = NetMetadata {
             net_id: net_id.to_string(),
             status: status.clone(),
+            workspace_id: crate::subjects::Subjects::DEFAULT_WORKSPACE.to_string(),
             template_id: None,
             parameters: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -2686,7 +2830,7 @@ mod dlq_tests {
         stream
             .create_consumer(PullConfig {
                 durable_name: Some(format!("dlq_{}_{}", class, ctx.prefix)),
-                filter_subject: Subjects::dlq_subject(class),
+                filter_subject: Subjects::dlq_subject(Subjects::DEFAULT_WORKSPACE, class),
                 deliver_policy: DeliverPolicy::New,
                 ack_policy: AckPolicy::Explicit,
                 ..Default::default()
@@ -2950,4 +3094,407 @@ async fn test_idempotency_cache_kv_survives_restart() {
     assert!(cache2.get("PETRI_GLOBAL:9999").await.is_none());
 
     jetstream.delete_key_value(&bucket).await.ok();
+}
+
+// =============================================================================
+// Per-Workspace Consume-Side Isolation (Multi-Tenancy, ADR-09)
+// =============================================================================
+//
+// These tests prove the LOAD-BEARING isolation delivered by the phase-2
+// consume-side cut: two nets hosted in ONE engine/jetstream under DISTINCT
+// workspaces (`wsA` vs `wsB`) never cross-contaminate on the read side.
+//
+// The publisher already routes per-net (events go to `petri.{ws}.{net}.events.*`,
+// signals to `petri.{ws}.{net}.signal.{place}`). What this phase fixes is the
+// CONSUMER: each net's event consumer and signal inbox filter on the net's REAL
+// workspace (from `LoadScenarioRequest.workspace_id`), not the process fallback.
+// We assert that at the NATS server edge — a workspace-B consumer subscribing
+// `petri.wsB.{net}.events.>` receives ZERO of workspace-A's events even though
+// both nets share the single `PETRI_GLOBAL` stream.
+//
+// Each test mints UNIQUE workspace ids (`wsA-{prefix}` / `wsB-{prefix}`) so the
+// per-tenant KV buckets (`KV_NET_METADATA_{ws}`) and stream subjects don't
+// collide with parallel tests on the shared NATS testcontainer.
+
+/// Publish a `PersistedEvent`-wrapped domain event onto the global stream under
+/// an explicit `petri.{ws}.{net}.events.*` subject. This is the raw publish a
+/// net's `NatsEventStore` performs once its workspace cell is stamped; doing it
+/// directly lets the test assert the server-edge consumer filter in isolation
+/// without standing up a full service.
+async fn publish_event_for(
+    jetstream: &async_nats::jetstream::Context,
+    ws: &str,
+    net_id: &str,
+    event: petri_domain::DomainEvent,
+) {
+    use crate::subjects::Subjects;
+    let subject = Subjects::for_event(&event, ws, Some(net_id));
+    let persisted = petri_domain::PersistedEvent {
+        sequence: 0,
+        event,
+        timestamp: chrono::Utc::now(),
+        hash: String::new(),
+        previous_hash: None,
+    };
+    let payload = serde_json::to_vec(&persisted).expect("serialize persisted event");
+    jetstream
+        .publish(subject, payload.into())
+        .await
+        .expect("publish event")
+        .await
+        .expect("ack event");
+}
+
+/// Drain every currently-available message from an ephemeral pull consumer
+/// (best-effort, batched with a short idle deadline). Returns the delivered
+/// subjects so the test can assert WHICH nets/workspaces leaked through.
+async fn drain_subjects(
+    consumer: &async_nats::jetstream::consumer::PullConsumer,
+    max: usize,
+) -> Vec<String> {
+    let mut subjects = Vec::new();
+    let mut batch = consumer
+        .batch()
+        .max_messages(max)
+        .expires(Duration::from_millis(750))
+        .messages()
+        .await
+        .expect("batch");
+    while let Some(Ok(msg)) = batch.next().await {
+        subjects.push(msg.subject.to_string());
+        let _ = msg.ack().await;
+    }
+    subjects
+}
+
+/// Create an ephemeral pull consumer on the global stream with an explicit
+/// filter subject and `DeliverPolicy::All` (replays everything already on the
+/// stream so ordering against the publish is not load-bearing).
+async fn global_consumer_on(
+    jetstream: &async_nats::jetstream::Context,
+    filter_subject: String,
+) -> async_nats::jetstream::consumer::PullConsumer {
+    let stream = jetstream
+        .get_stream(crate::subjects::Subjects::STREAM_GLOBAL)
+        .await
+        .expect("get global stream");
+    stream
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            filter_subject,
+            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::All,
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+            ..Default::default()
+        })
+        .await
+        .expect("create filtered consumer")
+}
+
+/// (1) + (2): Two nets in ONE jetstream under distinct workspaces. An event
+/// fired in wsA's net lands on `petri.wsA.{net}.events.*`; wsB's per-net event
+/// consumer (filtering `petri.wsB.{net}.events.>`) receives ZERO of wsA's
+/// events. (5) NEGATIVE CONTROL: a consumer that filters on wsA's subject DOES
+/// receive them — proving the workspace segment is the load-bearing
+/// discriminator, not a vacuous pass.
+#[tokio::test]
+async fn test_per_workspace_event_consumer_isolation() {
+    use crate::subjects::Subjects;
+    use petri_domain::{DomainEvent, PetriNet, Place, Token, TokenColor};
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let ws_a = format!("wsA-{}", ctx.prefix);
+    let ws_b = format!("wsB-{}", ctx.prefix);
+    // Distinct net ids (mekhan-A-i1 / mekhan-B-i1 style) so even a ws-blind
+    // (buggy) consumer could not alias the two nets by id.
+    let net_a = format!("mekhan-A-{}", ctx.prefix);
+    let net_b = format!("mekhan-B-{}", ctx.prefix);
+
+    // wsB's per-net event consumer — the REAL consume-side filter the engine
+    // builds from `net_events_filter(realws, net)`.
+    let consumer_b =
+        global_consumer_on(&ctx.jetstream, Subjects::net_events_filter(&ws_b, &net_b)).await;
+    // NEGATIVE CONTROL: a consumer scoped to wsA's net. If the workspace segment
+    // were NOT load-bearing, consumer_b would behave like this one.
+    let consumer_a =
+        global_consumer_on(&ctx.jetstream, Subjects::net_events_filter(&ws_a, &net_a)).await;
+
+    // Initialize both nets (NetInitialized) under their respective workspaces.
+    let mut topo_a = PetriNet::new();
+    topo_a.add_place(Place::internal("p"));
+    publish_event_for(
+        &ctx.jetstream,
+        &ws_a,
+        &net_a,
+        DomainEvent::NetInitialized { net: topo_a },
+    )
+    .await;
+
+    let mut topo_b = PetriNet::new();
+    topo_b.add_place(Place::internal("p"));
+    publish_event_for(
+        &ctx.jetstream,
+        &ws_b,
+        &net_b,
+        DomainEvent::NetInitialized { net: topo_b },
+    )
+    .await;
+
+    // Fire a token in wsA's net only.
+    let place_a = petri_domain::PlaceId::new();
+    publish_event_for(
+        &ctx.jetstream,
+        &ws_a,
+        &net_a,
+        DomainEvent::TokenCreated {
+            token: Token::new(TokenColor::Data(serde_json::json!({"value": 42}))),
+            place_id: place_a,
+            place_name: Some("p".to_string()),
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
+        },
+    )
+    .await;
+
+    // wsB's consumer must receive ONLY wsB's NetInitialized — never wsA's.
+    let b_subjects = drain_subjects(&consumer_b, 32).await;
+    assert!(
+        !b_subjects.is_empty(),
+        "wsB consumer should at least see wsB's own NetInitialized"
+    );
+    assert!(
+        b_subjects.iter().all(|s| s.contains(&format!(".{ws_b}."))),
+        "wsB consumer leaked a non-wsB subject: {b_subjects:?}"
+    );
+    assert!(
+        b_subjects.iter().all(|s| !s.contains(&net_a)),
+        "wsB consumer received wsA's net events — ISOLATION BREACH: {b_subjects:?}"
+    );
+    assert!(
+        b_subjects
+            .iter()
+            .all(|s| !s.ends_with("events.token.created")),
+        "wsB consumer received the token.created fired in wsA: {b_subjects:?}"
+    );
+
+    // NEGATIVE CONTROL: the wsA-scoped consumer DOES see wsA's token.created.
+    // If this fails, the publish never happened and the isolation assert above
+    // is vacuous.
+    let a_subjects = drain_subjects(&consumer_a, 32).await;
+    assert!(
+        a_subjects
+            .iter()
+            .any(|s| s.ends_with("events.token.created") && s.contains(&net_a)),
+        "negative control: wsA consumer should have received wsA's token.created, \
+         proving the event was actually published (got {a_subjects:?})"
+    );
+
+    ctx.cleanup().await.ok();
+}
+
+/// (3): An external signal injected on `petri.wsA.{net}.signal.{place}` is
+/// visible to wsA's per-net signal inbox filter and INVISIBLE to wsB's. This is
+/// the server-edge guarantee behind a net's signal-inbox listener filtering on
+/// its REAL workspace — wsB's marking can never change from a wsA signal.
+#[tokio::test]
+async fn test_per_workspace_signal_inbox_isolation() {
+    use crate::subjects::Subjects;
+    use petri_domain::ExternalSignal;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let ws_a = format!("wsA-{}", ctx.prefix);
+    let ws_b = format!("wsB-{}", ctx.prefix);
+    let net_a = format!("mekhan-A-{}", ctx.prefix);
+    let net_b = format!("mekhan-B-{}", ctx.prefix);
+
+    // Each net's signal-inbox filter: `petri.{realws}.{net}.signal.>`.
+    let inbox_a =
+        global_consumer_on(&ctx.jetstream, Subjects::signal_inbox_filter(&ws_a, &net_a)).await;
+    let inbox_b =
+        global_consumer_on(&ctx.jetstream, Subjects::signal_inbox_filter(&ws_b, &net_b)).await;
+
+    // Inject a signal addressed to wsA's net + place.
+    let signal = ExternalSignal {
+        source: "test".to_string(),
+        signal_key: "corr-iso".to_string(),
+        payload: serde_json::json!({"data": "for-wsA"}),
+        timestamp: chrono::Utc::now(),
+        dedup_id: None,
+    };
+    let subject = Subjects::signal_transfer(&ws_a, &net_a, "inbox");
+    ctx.jetstream
+        .publish(subject, serde_json::to_vec(&signal).unwrap().into())
+        .await
+        .expect("publish signal")
+        .await
+        .expect("ack signal");
+
+    // wsA's inbox receives the signal.
+    let a_subjects = drain_subjects(&inbox_a, 16).await;
+    assert_eq!(
+        a_subjects.len(),
+        1,
+        "wsA signal inbox should receive exactly the one wsA signal, got {a_subjects:?}"
+    );
+    assert_eq!(
+        a_subjects[0],
+        Subjects::signal_transfer(&ws_a, &net_a, "inbox")
+    );
+
+    // wsB's inbox receives NOTHING — its marking is unchanged.
+    let b_subjects = drain_subjects(&inbox_b, 16).await;
+    assert!(
+        b_subjects.is_empty(),
+        "wsB signal inbox must NOT receive a signal addressed to wsA — ISOLATION BREACH: {b_subjects:?}"
+    );
+
+    ctx.cleanup().await.ok();
+}
+
+/// (4): The per-tenant net-metadata KV buckets hold only their own workspace's
+/// nets. The `NetMetadataProjection` consumes the global event stream, derives
+/// the workspace from each event subject, and dual-writes a per-tenant
+/// `KV_NET_METADATA_{ws}` bucket. After publishing NetCreated for net A under
+/// wsA and net B under wsB, `KV_NET_METADATA_{wsA}` holds A and not B, and vice
+/// versa — no cross-tenant key.
+#[tokio::test]
+async fn test_per_workspace_metadata_kv_isolation() {
+    use crate::net_metadata::{NetMetadataProjection, METADATA_KV_BUCKET};
+    use petri_domain::DomainEvent;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let ws_a = format!("wsA-{}", ctx.prefix);
+    let ws_b = format!("wsB-{}", ctx.prefix);
+    let net_a = format!("mekhan-A-{}", ctx.prefix);
+    let net_b = format!("mekhan-B-{}", ctx.prefix);
+
+    // Global index bucket the projection also writes (net_id-keyed). Created
+    // here so `NetMetadataProjection::new` has a store; per-ws buckets are
+    // opened lazily by the projection as it observes each workspace.
+    let index_kv = create_metadata_kv(&ctx.jetstream, &ctx.prefix).await;
+    let projection = NetMetadataProjection::new(ctx.jetstream.clone(), index_kv);
+    let projection_handle = projection.start();
+
+    // Give the projection's consumer a moment to attach before publishing.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // NetCreated for A under wsA, B under wsB.
+    publish_event_for(
+        &ctx.jetstream,
+        &ws_a,
+        &net_a,
+        DomainEvent::NetCreated {
+            net_id: net_a.clone(),
+            template_id: None,
+            parameters: None,
+            created_by: None,
+            label: None,
+        },
+    )
+    .await;
+    publish_event_for(
+        &ctx.jetstream,
+        &ws_b,
+        &net_b,
+        DomainEvent::NetCreated {
+            net_id: net_b.clone(),
+            template_id: None,
+            parameters: None,
+            created_by: None,
+            label: None,
+        },
+    )
+    .await;
+
+    // Poll until both per-ws buckets reflect their own net (the projection runs
+    // asynchronously).
+    let bucket_a = crate::kv_bucket_for(METADATA_KV_BUCKET, &ws_a);
+    let bucket_b = crate::kv_bucket_for(METADATA_KV_BUCKET, &ws_b);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let kv_a = ctx.jetstream.get_key_value(&bucket_a).await.ok();
+        let kv_b = ctx.jetstream.get_key_value(&bucket_b).await.ok();
+        let a_has_a = match &kv_a {
+            Some(kv) => kv.get(&net_a).await.ok().flatten().is_some(),
+            None => false,
+        };
+        let b_has_b = match &kv_b {
+            Some(kv) => kv.get(&net_b).await.ok().flatten().is_some(),
+            None => false,
+        };
+        if a_has_a && b_has_b {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "metadata projection did not populate per-ws buckets in time \
+                 (a_has_a={a_has_a}, b_has_b={b_has_b})"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    let kv_a = ctx
+        .jetstream
+        .get_key_value(&bucket_a)
+        .await
+        .expect("wsA metadata bucket");
+    let kv_b = ctx
+        .jetstream
+        .get_key_value(&bucket_b)
+        .await
+        .expect("wsB metadata bucket");
+
+    // wsA's bucket holds A, NOT B. (4) No cross-tenant key.
+    assert!(
+        kv_a.get(&net_a).await.ok().flatten().is_some(),
+        "KV_NET_METADATA_{{wsA}} should hold net A"
+    );
+    assert!(
+        kv_a.get(&net_b).await.ok().flatten().is_none(),
+        "KV_NET_METADATA_{{wsA}} leaked net B — CROSS-TENANT KEY"
+    );
+    // wsB's bucket holds B, NOT A.
+    assert!(
+        kv_b.get(&net_b).await.ok().flatten().is_some(),
+        "KV_NET_METADATA_{{wsB}} should hold net B"
+    );
+    assert!(
+        kv_b.get(&net_a).await.ok().flatten().is_none(),
+        "KV_NET_METADATA_{{wsB}} leaked net A — CROSS-TENANT KEY"
+    );
+
+    // Workspace stamping is correct on the stored metadata (subject-derived).
+    let meta_a: crate::net_metadata::NetMetadata =
+        serde_json::from_slice(&kv_a.get(&net_a).await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        meta_a.workspace_id, ws_a,
+        "net A metadata must be stamped wsA"
+    );
+    let meta_b: crate::net_metadata::NetMetadata =
+        serde_json::from_slice(&kv_b.get(&net_b).await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        meta_b.workspace_id, ws_b,
+        "net B metadata must be stamped wsB"
+    );
+
+    projection_handle.abort();
+    // Per-ws buckets are uniquely named per test run; clean them up.
+    ctx.jetstream.delete_key_value(&bucket_a).await.ok();
+    ctx.jetstream.delete_key_value(&bucket_b).await.ok();
+    ctx.cleanup().await.ok();
 }

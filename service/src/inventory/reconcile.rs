@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::query::pagination::{PageQuery, Paginated};
 
@@ -129,6 +130,7 @@ pub struct ReconcileSummary {
 /// loop's last-write-wins) and are counted once.
 pub async fn reconcile_batch(
     pool: &PgPool,
+    workspace_id: Uuid,
     file_server_id: &str,
     items: &[ObservedItem],
     ctx: &ObservationContext,
@@ -183,7 +185,12 @@ pub async fn reconcile_batch(
     // so the hot path skips both coupling statements.
     if hashes.iter().any(Option::is_some) {
         super::queries::upsert_catalogue_by_hash_unnest(
-            &mut tx, &hashes, &paths, &sizes, &metadatas,
+            &mut tx,
+            workspace_id,
+            &hashes,
+            &paths,
+            &sizes,
+            &metadatas,
         )
         .await?;
 
@@ -254,14 +261,14 @@ pub async fn reconcile_batch(
         ),
         upserted AS (
             INSERT INTO file_inventory
-                (content_hash, file_server_id, path, status, provenance,
+                (workspace_id, content_hash, file_server_id, path, status, provenance,
                  size_bytes, mtime, uid, gid,
                  last_seen, last_verified, updated_at)
-            SELECT c.content_hash, $1, c.path, c.status, c.provenance,
+            SELECT $9, c.content_hash, $1, c.path, c.status, c.provenance,
                    c.size, c.mtime, c.uid, c.gid, NOW(),
                    CASE WHEN c.status <> 'orphan_disk' THEN NOW() END, NOW()
             FROM classified c
-            ON CONFLICT (file_server_id, path) DO UPDATE SET
+            ON CONFLICT (workspace_id, file_server_id, path) DO UPDATE SET
                 status        = EXCLUDED.status,
                 content_hash  = EXCLUDED.content_hash,
                 provenance    = EXCLUDED.provenance,
@@ -285,6 +292,7 @@ pub async fn reconcile_batch(
     .bind(&uids)
     .bind(&gids)
     .bind(&provenances)
+    .bind(workspace_id)
     .fetch_all(&mut *tx)
     .await?;
 

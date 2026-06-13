@@ -207,6 +207,7 @@ impl TriggerDispatcher {
             // directly on the node. Spawn-kind by construction.
             if let Some(place_id) = air_target_place_id {
                 let record = TriggerRecord {
+                    workspace_id: template.workspace_id,
                     template_id: template.id,
                     template_version: template.version,
                     node_id: node.id.clone(),
@@ -247,6 +248,7 @@ impl TriggerDispatcher {
                 .unwrap_or_else(|| "in".to_string());
 
             let record = TriggerRecord {
+                workspace_id: template.workspace_id,
                 template_id: template.id,
                 template_version: template.version,
                 node_id: node.id.clone(),
@@ -289,6 +291,7 @@ impl TriggerDispatcher {
                 continue;
             };
             let filters = cat.filters.clone();
+            let workspace_id = rec.workspace_id;
             let dispatcher = Arc::clone(self);
             let db = self.db.clone();
             tracing::info!(
@@ -297,7 +300,8 @@ impl TriggerDispatcher {
                 "scheduling catalog trigger backfill"
             );
             tokio::spawn(async move {
-                super::sources::catalog::backfill_one(dispatcher, node_id, filters, db).await;
+                super::sources::catalog::backfill_one(dispatcher, node_id, workspace_id, filters, db)
+                    .await;
             });
         }
 
@@ -857,13 +861,37 @@ impl TriggerDispatcher {
         // Synthetic principal — see proposal §9.3. Stable per trigger so audit
         // queries can attribute fires.
         let created_by = synthetic_principal_for_trigger(&record.node_id);
-        let net_id = format!("mekhan-{instance_id}");
+        // Per-tenant net id (phase 3): `mekhan-{workspace}-{instance}`. The
+        // engine's subjects are `petri.{ws}.{net}.*`, so the net_id must carry
+        // the workspace to keep a fired instance's stream off other tenants'
+        // listeners. Keep this format in lockstep with the create-instance /
+        // p3 deploy path (plain inline format!, no cross-bucket helper).
+        let workspace_id = record.workspace_id;
+        let net_id = format!("mekhan-{workspace_id}-{instance_id}");
 
         // Audit metadata: who triggered this and which template version.
         let metadata = json!({
             "triggered_by": record.node_id,
             "trigger_kind": record.source.kind(),
         });
+
+        // Tenant propagation (phase 3 / D1-A): stamp `tenant_id` into the
+        // net-level parameter bag so the engine's firing path and pre-dispatch
+        // metadata see the owning workspace. Merge onto any caller-supplied
+        // parameters without clobbering other keys; the trigger's own
+        // workspace always wins for `tenant_id` (the fired instance is owned
+        // by the template's tenant regardless of what a caller passed).
+        let net_parameters = {
+            let mut obj = match net_parameters {
+                Some(Value::Object(m)) => m,
+                _ => serde_json::Map::new(),
+            };
+            obj.insert(
+                "tenant_id".to_string(),
+                Value::String(workspace_id.to_string()),
+            );
+            Some(Value::Object(obj))
+        };
 
         // Same parameterize → insert → deploy → rollback sequence as the user
         // POST path, owned by the launcher. A spawn folds every launch failure
@@ -878,6 +906,7 @@ impl TriggerDispatcher {
                     .launch(LaunchSpec::PreAir {
                         instance_id,
                         net_id,
+                        workspace_id: Some(workspace_id.to_string()),
                         template_id: template.id,
                         template_version: template.version,
                         created_by,
@@ -899,6 +928,7 @@ impl TriggerDispatcher {
                     .launch(LaunchSpec::Templated {
                         instance_id,
                         net_id,
+                        workspace_id: Some(workspace_id.to_string()),
                         template_id: template.id,
                         template_version: template.version,
                         created_by,

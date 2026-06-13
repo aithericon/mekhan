@@ -16,9 +16,26 @@ use crate::query::extractor::QueryParams;
 use crate::query::filter::{Filter, FilterCondition, FilterValue};
 use crate::query::pagination::{PageQuery, Sort};
 
+/// Resolve an optional wire `workspace_id` string into the scoping `Uuid`.
+///
+/// Job nets carry their owning workspace as a string in every catalogue query
+/// request (mirrors the engine's `LoadScenarioRequest.workspace_id`). An
+/// absent / unparseable value falls back to the nil workspace, matching the
+/// `DEFAULT '00000000-...'` backfill on the catalogue columns — so a legacy
+/// caller that doesn't yet send a workspace still resolves to the shared
+/// default tenant rather than erroring.
+pub(crate) fn resolve_workspace(raw: Option<&str>) -> uuid::Uuid {
+    raw.and_then(|s| uuid::Uuid::parse_str(s.trim()).ok())
+        .unwrap_or_else(uuid::Uuid::nil)
+}
+
 /// Request for `catalogue.query.list` and `catalogue.query.stats`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CatalogueQueryRequest {
+    /// Owning workspace of the requesting job net (string form of the scoping
+    /// `Uuid`). Server-enforced — absent resolves to the nil workspace.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     #[serde(default)]
     pub filters: Option<HashMap<String, HashMap<String, String>>>,
     #[serde(default)]
@@ -38,6 +55,8 @@ pub struct CatalogueQueryRequest {
 /// Request for `catalogue.query.get`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CatalogueGetRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub execution_id: String,
     pub id: String,
 }
@@ -45,18 +64,32 @@ pub struct CatalogueGetRequest {
 /// Request for `catalogue.query.lineage`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CatalogueLineageRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub process_id: String,
+}
+
+/// Request for `catalogue.query.stats-by-net` (no body fields besides the
+/// scope).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct CatalogueStatsByNetRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 /// Request for `catalogue.query.distinct`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CatalogueDistinctRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub column: String,
 }
 
 /// Request for `catalogue.query.distinct-jsonb`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CatalogueDistinctJsonbRequest {
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub column: String,
     pub key: String,
 }
@@ -66,6 +99,10 @@ pub struct CatalogueDistinctJsonbRequest {
 pub struct SubscribeRequest {
     pub net_id: String,
     pub signal_place: String,
+    /// Owning tenant. Server-enforced scope for the backfill query; `None`
+    /// (legacy/SDK/dev) resolves to the nil workspace.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     #[serde(default)]
     pub filters: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
