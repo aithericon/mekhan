@@ -4,6 +4,7 @@
 	import Check from '@lucide/svelte/icons/check';
 	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 	import Cog from '@lucide/svelte/icons/cog';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		DropdownMenu,
@@ -13,6 +14,9 @@
 		DropdownMenuSeparator
 	} from '$lib/components/ui/dropdown-menu';
 	import { workspaces } from '$lib/workspaces/store.svelte';
+	import CreateWorkspaceDialog from '$lib/workspaces/CreateWorkspaceDialog.svelte';
+
+	let createOpen = $state(false);
 
 	onMount(() => {
 		workspaces.load();
@@ -69,8 +73,12 @@
 				</div>
 			</DropdownMenuItem>
 		{/each}
+		<DropdownMenuSeparator />
+		<DropdownMenuItem onclick={() => (createOpen = true)} data-testid="workspace-create-item">
+			<Plus class="mr-2 size-3.5" />
+			<span class="text-sm">New workspace</span>
+		</DropdownMenuItem>
 		{#if active}
-			<DropdownMenuSeparator />
 			<DropdownMenuItem onclick={() => (window.location.href = `/workspaces/${active.id}`)}>
 				<Cog class="mr-2 size-3.5" />
 				<span class="text-sm">Manage workspace</span>
@@ -78,3 +86,5 @@
 		{/if}
 	</DropdownMenuContent>
 </DropdownMenu>
+
+<CreateWorkspaceDialog bind:open={createOpen} />

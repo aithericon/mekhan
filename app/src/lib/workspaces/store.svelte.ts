@@ -9,7 +9,9 @@
 import { auth } from '$lib/auth/store.svelte';
 import {
 	listWorkspaces,
+	createWorkspace as createWorkspaceApi,
 	setActiveWorkspace as setActiveWorkspaceApi,
+	type CreateWorkspaceRequest,
 	type WorkspaceSummary
 } from '$lib/api/client';
 
@@ -56,6 +58,18 @@ class WorkspaceStore {
 	async refresh(): Promise<void> {
 		this.#loaded = false;
 		await this.load();
+	}
+
+	/**
+	 * Create a new standalone workspace; the caller becomes its owner. Returns
+	 * the created summary — the UI typically follows with `switchTo(ws.id)` to
+	 * drop the user into their new tenant. Throws `ApiError` (409 slug taken,
+	 * 400 unsluggable) on failure so the form can surface it.
+	 */
+	async create(body: CreateWorkspaceRequest): Promise<WorkspaceSummary> {
+		const ws = await createWorkspaceApi(body);
+		await this.refresh();
+		return ws;
 	}
 
 	/**

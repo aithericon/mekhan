@@ -150,6 +150,7 @@ export type CreateTokenRequest = components['schemas']['CreateTokenRequest'];
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 export type WorkspaceMember = components['schemas']['WorkspaceMember'];
 export type AddMemberRequest = components['schemas']['AddMemberRequest'];
+export type CreateWorkspaceRequest = components['schemas']['CreateWorkspaceRequest'];
 export type Folder = components['schemas']['Folder'];
 export type CreateFolderRequest = components['schemas']['CreateFolderRequest'];
 export type UpdateFolderRequest = components['schemas']['UpdateFolderRequest'];
@@ -1219,6 +1220,13 @@ export async function getWorkspace(id: string): Promise<WorkspaceSummary> {
 	return unwrap(
 		await client.GET('/api/v1/workspaces/{id}', { params: { path: { id } } })
 	);
+}
+
+/// POST /api/v1/workspaces — self-serve create; caller becomes owner.
+export async function createWorkspace(
+	body: CreateWorkspaceRequest
+): Promise<WorkspaceSummary> {
+	return unwrap(await client.POST('/api/v1/workspaces', { body }));
 }
 
 export async function listWorkspaceMembers(id: string): Promise<WorkspaceMember[]> {

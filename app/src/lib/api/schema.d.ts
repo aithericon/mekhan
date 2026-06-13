@@ -4793,7 +4793,17 @@ export interface paths {
          */
         get: operations["list_workspaces"];
         put?: never;
-        post?: never;
+        /**
+         * POST /api/v1/workspaces
+         * @description Self-serve workspace (tenant) creation. Any authenticated principal may
+         *     create a workspace; they become its `owner` in the same transaction. The
+         *     workspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is
+         *     FALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with
+         *     membership (not an IdP org) as the source of truth. An operator can later
+         *     bind it to a Zitadel org out-of-band; the auth resolver is purely additive
+         *     and never prunes the owner membership minted here.
+         */
+        post: operations["create_workspace"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6928,6 +6938,24 @@ export interface components {
             max_uses?: number | null;
             /** @description Defaults to `true` (reusable) when omitted. */
             reusable?: boolean | null;
+        };
+        /**
+         * @description Body for `POST /workspaces` — self-serve workspace creation.
+         *
+         *     `display_name` is required. `slug` is optional: when omitted (or empty
+         *     after sanitization) the server derives one from `display_name`. Either way
+         *     the value is run through the same slugifier so the stored slug is always
+         *     URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —
+         *     `zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its
+         *     `owner` in the same transaction.
+         */
+        CreateWorkspaceRequest: {
+            display_name: string;
+            /**
+             * @description Optional explicit slug. Sanitized server-side; if it sanitizes to empty
+             *     the slug is derived from `display_name` instead.
+             */
+            slug?: string | null;
         };
         /**
          * @description Response for a freshly-minted registration token. `token` is the full
@@ -24492,6 +24520,48 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Workspace created; caller is owner */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Empty name / unsluggable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Slug already taken */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
