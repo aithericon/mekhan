@@ -494,12 +494,40 @@ pub async fn delete_folder(
     .execute(&mut *tx)
     .await?;
 
+    // Free pages homed in THIS folder are cascade-deleted by the `pages.folder_id`
+    // FK when the folder row goes, but their Yjs doc/snapshot rows have no FK —
+    // clean those explicitly. Gather the page ids first so each in-memory room
+    // can be closed after commit (a still-connected editor would otherwise keep
+    // failing `store_update` on the deleted rows). Reparented child folders keep
+    // their own pages.
+    let folder_page_ids: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM pages WHERE folder_id = $1")
+            .bind(folder_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    for (pid,) in &folder_page_ids {
+        sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
+            .bind(pid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
+            .bind(pid)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     sqlx::query("DELETE FROM folders WHERE id = $1")
         .bind(folder_id)
         .execute(&mut *tx)
         .await?;
 
     tx.commit().await?;
+
+    // Evict the deleted pages' rooms after commit (in-memory, not a DB op).
+    for (pid,) in &folder_page_ids {
+        state.yjs.close_room(*pid).await;
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 

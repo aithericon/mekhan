@@ -722,8 +722,57 @@ pub async fn delete_template(
         state.triggers.forget_template(vid);
         // Kick any collaborator still connected to a deleted version's Yjs
         // room — their socket would otherwise keep accepting edits whose
-        // persistence INSERTs fail on the now-dangling FK.
+        // persistence INSERTs fail on the now-deleted rows.
         state.yjs.close_room(vid).await;
+        // Cascade replacement: the migration that generalized the Yjs tables
+        // (doc_id + doc_kind) DROPPED the `workflow_templates` FK, so the old
+        // `ON DELETE CASCADE` no longer reaps these rows. Delete them
+        // explicitly (the graph doc is keyed on the version id).
+        if let Err(e) =
+            sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
+                .bind(vid)
+                .execute(&state.db)
+                .await
+        {
+            tracing::error!("failed to delete yjs_documents for template version {vid}: {e}");
+        }
+        if let Err(e) =
+            sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
+                .bind(vid)
+                .execute(&state.db)
+                .await
+        {
+            tracing::error!("failed to delete yjs_snapshots for template version {vid}: {e}");
+        }
+    }
+
+    // Clean attached pages (polymorphic `pages.attached_id` has no FK): the
+    // template's chain-root "Notes" page plus any deleted instance's "Report"
+    // page. Each page's Yjs doc rows (no FK on `doc_id`) and in-memory room go
+    // too. Page ids are gathered first so the rooms can be closed after the
+    // rows are gone.
+    let instance_ids: Vec<uuid::Uuid> = instances.iter().map(|(id, _)| *id).collect();
+    let page_ids: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM pages \
+          WHERE (attached_kind = 'template' AND attached_id = $1) \
+             OR (attached_kind = 'instance' AND attached_id = ANY($2))",
+    )
+    .bind(base_id)
+    .bind(&instance_ids)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    for (pid,) in &page_ids {
+        for stmt in [
+            "DELETE FROM yjs_documents WHERE doc_id = $1",
+            "DELETE FROM yjs_snapshots WHERE doc_id = $1",
+            "DELETE FROM pages WHERE id = $1",
+        ] {
+            if let Err(e) = sqlx::query(stmt).bind(pid).execute(&state.db).await {
+                tracing::error!("failed to clean attached page {pid} for template chain: {e}");
+            }
+        }
+        state.yjs.close_room(*pid).await;
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -850,6 +899,31 @@ pub async fn discard_draft(
     .execute(&mut *tx)
     .await?;
 
+    // Clean attached "Report" pages on the test-run instances about to vanish
+    // (polymorphic `pages.attached_id` has no FK → no cascade). Gather the page
+    // ids so their in-memory rooms can be closed after commit.
+    let instance_ids: Vec<uuid::Uuid> = instances.iter().map(|(iid, _)| *iid).collect();
+    let draft_page_ids: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM pages WHERE attached_kind = 'instance' AND attached_id = ANY($1)",
+    )
+    .bind(&instance_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (pid,) in &draft_page_ids {
+        sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
+            .bind(pid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
+            .bind(pid)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM pages WHERE id = $1")
+            .bind(pid)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     sqlx::query("DELETE FROM workflow_instances WHERE template_id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -883,8 +957,31 @@ pub async fn discard_draft(
 
     // Kick any collaborator still connected to the draft's Yjs room — their
     // socket would otherwise keep accepting edits whose persistence INSERTs
-    // fail on the now-dangling FK, silently losing their work.
+    // fail on the now-deleted rows, silently losing their work.
     state.yjs.close_room(id).await;
+    // Same for any attached-page rooms whose rows were deleted above.
+    for (pid,) in &draft_page_ids {
+        state.yjs.close_room(*pid).await;
+    }
+
+    // Cascade replacement: the Yjs-table generalization (doc_id + doc_kind)
+    // DROPPED the `workflow_templates` FK, so the discarded draft's graph doc
+    // rows are no longer reaped by `ON DELETE CASCADE`. Delete them explicitly
+    // (the doc is keyed on the draft's own id).
+    if let Err(e) = sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::error!("failed to delete yjs_documents for discarded draft {id}: {e}");
+    }
+    if let Err(e) = sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::error!("failed to delete yjs_snapshots for discarded draft {id}: {e}");
+    }
 
     // Drafts have no registered triggers, but mirror delete_template's
     // dispatcher hygiene in case of drift.

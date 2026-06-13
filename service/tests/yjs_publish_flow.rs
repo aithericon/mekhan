@@ -74,7 +74,7 @@ async fn publish_reads_from_ydoc() {
 
     // Store the full state as an update
     persistence
-        .store_update(template_id, &update)
+        .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &update)
         .await
         .unwrap();
 
@@ -133,12 +133,12 @@ async fn publish_falls_back_to_db_graph() {
     let template_id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
 
     // Delete all Y.Doc rows to simulate legacy template without Y.Doc
-    sqlx::query("DELETE FROM yjs_documents WHERE template_id = $1")
+    sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
         .bind(template_id)
         .execute(&db)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM yjs_snapshots WHERE template_id = $1")
+    sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
         .bind(template_id)
         .execute(&db)
         .await
@@ -198,7 +198,7 @@ async fn create_template_seeds_ydoc() {
 
     // Verify Y.Doc row exists
     let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
             .bind(template_id)
             .fetch_one(&db)
             .await

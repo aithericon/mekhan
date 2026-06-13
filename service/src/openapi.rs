@@ -410,6 +410,7 @@ use utoipa::OpenApi;
         (name = "health", description = "Liveness probe."),
         (name = "workspaces", description = "Tenant boundaries — membership + member admin (Phase A2)."),
         (name = "folders", description = "Workspace-scoped hierarchical template grouping (single-parent tree) + tag/visibility surface + per-folder OpenAPI bundle."),
+        (name = "pages", description = "Free-form collaborative rich-text documents — singleton tabs on a template/instance host or free pages in a folder. Permissions inherit from the host; rich content rides the Yjs CRDT stack."),
         (name = "me", description = "Per-session preferences — active workspace switcher."),
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),

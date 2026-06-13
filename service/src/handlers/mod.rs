@@ -27,6 +27,7 @@ pub mod node_types;
 pub mod object_grants;
 pub mod observability;
 pub mod openapi_bundle;
+pub mod pages;
 pub mod process_live;
 pub mod resources;
 pub mod roster;

@@ -10,6 +10,7 @@ pub mod invite;
 pub mod job_template;
 pub mod model_pool;
 pub mod model_replicas;
+pub mod page;
 pub mod resource;
 pub mod responses;
 pub mod roster;

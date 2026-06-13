@@ -105,7 +105,7 @@ async fn send_update_and_count(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws.close(None).await.ok();
     let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
             .bind(template_id)
             .fetch_one(db)
             .await
@@ -313,7 +313,7 @@ async fn update_persisted_to_db() {
 
     // Check that an extra row was persisted (init had 1, update adds 1 = 2 total)
     let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
             .bind(template_id)
             .fetch_one(&db)
             .await

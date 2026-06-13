@@ -8,6 +8,7 @@ use yrs::{Any, Array, Doc, Map, ReadTxn, StateVector, Transact, Update};
 
 use crate::models::template::WorkflowGraph;
 use crate::yjs::doc_ops;
+use crate::yjs::DocKind;
 
 const COMPACTION_THRESHOLD: i64 = 100;
 
@@ -35,25 +36,25 @@ impl YjsPersistence {
         &self.pool
     }
 
-    /// Load all raw update data from the database for a template.
+    /// Load all raw update data from the database for a document.
     /// Returns (optional_snapshot_data, incremental_updates_after_snapshot).
     pub async fn load_raw_updates(
         &self,
-        template_id: Uuid,
+        doc_id: Uuid,
     ) -> Result<(Option<Vec<u8>>, Vec<Vec<u8>>), YjsPersistenceError> {
         let snapshot: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "SELECT snapshot_data, snapshot_seq FROM yjs_snapshots WHERE template_id = $1",
+            "SELECT snapshot_data, snapshot_seq FROM yjs_snapshots WHERE doc_id = $1",
         )
-        .bind(template_id)
+        .bind(doc_id)
         .fetch_optional(&self.pool)
         .await?;
 
         let after_seq = snapshot.as_ref().map(|(_, seq)| *seq).unwrap_or(0);
 
         let updates: Vec<(Vec<u8>,)> = sqlx::query_as(
-            "SELECT update_data FROM yjs_documents WHERE template_id = $1 AND seq > $2 ORDER BY seq ASC",
+            "SELECT update_data FROM yjs_documents WHERE doc_id = $1 AND seq > $2 ORDER BY seq ASC",
         )
-        .bind(template_id)
+        .bind(doc_id)
         .bind(after_seq)
         .fetch_all(&self.pool)
         .await?;
@@ -95,43 +96,50 @@ impl YjsPersistence {
 
     /// Load a Yjs Doc from the database.
     /// Returns the Doc -- caller must use it in a sync context (or spawn_blocking).
-    pub async fn load_doc(&self, template_id: Uuid) -> Result<Doc, YjsPersistenceError> {
-        let (snapshot, updates) = self.load_raw_updates(template_id).await?;
+    pub async fn load_doc(&self, doc_id: Uuid) -> Result<Doc, YjsPersistenceError> {
+        let (snapshot, updates) = self.load_raw_updates(doc_id).await?;
         Self::build_doc_from_raw(snapshot.as_deref(), &updates)
     }
 
     /// Store an incremental update. Returns the sequence number.
     /// Triggers compaction when the update count exceeds the threshold.
+    ///
+    /// `doc_kind` is stamped on the inserted row (and threaded into any
+    /// triggered compaction's snapshot upsert) so page/graph docs land with the
+    /// correct discriminator — the kind is known at the route boundary and
+    /// immutable per doc ("plan A").
     pub async fn store_update(
         &self,
-        template_id: Uuid,
+        doc_id: Uuid,
+        doc_kind: DocKind,
         update: &[u8],
     ) -> Result<i64, YjsPersistenceError> {
         let (seq,): (i64,) = sqlx::query_as(
-            "INSERT INTO yjs_documents (template_id, update_data) VALUES ($1, $2) RETURNING seq",
+            "INSERT INTO yjs_documents (doc_id, doc_kind, update_data) VALUES ($1, $2, $3) RETURNING seq",
         )
-        .bind(template_id)
+        .bind(doc_id)
+        .bind(doc_kind.as_str())
         .bind(update)
         .fetch_one(&self.pool)
         .await?;
 
         // Check if compaction is needed
         let (count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
-                .bind(template_id)
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
+                .bind(doc_id)
                 .fetch_one(&self.pool)
                 .await?;
 
         if count > COMPACTION_THRESHOLD {
             tracing::info!(
-                template_id = %template_id,
+                doc_id = %doc_id,
                 count,
                 "triggering Yjs doc compaction"
             );
             let persistence = self.clone();
             tokio::spawn(async move {
-                if let Err(e) = persistence.compact_from_db(template_id).await {
-                    tracing::error!(template_id = %template_id, "compaction failed: {e}");
+                if let Err(e) = persistence.compact_from_db(doc_id, doc_kind).await {
+                    tracing::error!(doc_id = %doc_id, "compaction failed: {e}");
                 }
             });
         }
@@ -152,11 +160,15 @@ impl YjsPersistence {
     /// surfacing as "recent (non-published) edits vanished" on publish or
     /// reopen. Deleting strictly `seq <= max_included_seq` leaves any racing
     /// row in place for the next reconstruct/compaction.
-    async fn compact_from_db(&self, template_id: Uuid) -> Result<(), YjsPersistenceError> {
+    async fn compact_from_db(
+        &self,
+        doc_id: Uuid,
+        doc_kind: DocKind,
+    ) -> Result<(), YjsPersistenceError> {
         let snapshot: Option<(Vec<u8>, i64)> = sqlx::query_as(
-            "SELECT snapshot_data, snapshot_seq FROM yjs_snapshots WHERE template_id = $1",
+            "SELECT snapshot_data, snapshot_seq FROM yjs_snapshots WHERE doc_id = $1",
         )
-        .bind(template_id)
+        .bind(doc_id)
         .fetch_optional(&self.pool)
         .await?;
         let prev_seq = snapshot.as_ref().map(|(_, s)| *s).unwrap_or(0);
@@ -165,9 +177,9 @@ impl YjsPersistence {
         // Read the trailing updates WITH their seqs so the snapshot is stamped
         // at exactly the max seq it folds in (race-safe — see the doc comment).
         let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-            "SELECT seq, update_data FROM yjs_documents WHERE template_id = $1 AND seq > $2 ORDER BY seq ASC",
+            "SELECT seq, update_data FROM yjs_documents WHERE doc_id = $1 AND seq > $2 ORDER BY seq ASC",
         )
-        .bind(template_id)
+        .bind(doc_id)
         .bind(prev_seq)
         .fetch_all(&self.pool)
         .await?;
@@ -193,14 +205,15 @@ impl YjsPersistence {
         // it with our lower-seq state would reintroduce the very loss this guards.
         sqlx::query(
             r#"
-            INSERT INTO yjs_snapshots (template_id, snapshot_data, snapshot_seq)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (template_id) DO UPDATE
-            SET snapshot_data = $2, snapshot_seq = $3, updated_at = NOW()
+            INSERT INTO yjs_snapshots (doc_id, doc_kind, snapshot_data, snapshot_seq)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (doc_id) DO UPDATE
+            SET snapshot_data = $3, snapshot_seq = $4, updated_at = NOW()
             WHERE yjs_snapshots.snapshot_seq < EXCLUDED.snapshot_seq
             "#,
         )
-        .bind(template_id)
+        .bind(doc_id)
+        .bind(doc_kind.as_str())
         .bind(&state)
         .bind(max_included_seq)
         .execute(&self.pool)
@@ -209,14 +222,14 @@ impl YjsPersistence {
         // Delete ONLY the rows this snapshot folded in. Rows that raced in with a
         // higher seq survive (covered by a later compaction); if another
         // compaction already advanced past us, these were already covered too.
-        sqlx::query("DELETE FROM yjs_documents WHERE template_id = $1 AND seq <= $2")
-            .bind(template_id)
+        sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1 AND seq <= $2")
+            .bind(doc_id)
             .bind(max_included_seq)
             .execute(&self.pool)
             .await?;
 
         tracing::info!(
-            template_id = %template_id,
+            doc_id = %doc_id,
             snapshot_seq = max_included_seq,
             "compacted Yjs document"
         );
@@ -232,10 +245,10 @@ impl YjsPersistence {
     ///   Y.Map("viewport") ← { x, y, zoom }
     pub async fn init_doc_from_graph(
         &self,
-        template_id: Uuid,
+        doc_id: Uuid,
         graph: &WorkflowGraph,
     ) -> Result<(), YjsPersistenceError> {
-        self.init_doc_from_graph_with_files(template_id, graph, &HashMap::new())
+        self.init_doc_from_graph_with_files(doc_id, graph, &HashMap::new())
             .await
     }
 
@@ -244,7 +257,7 @@ impl YjsPersistence {
     /// (showcase, GitOps imports) land ready-to-publish.
     pub async fn init_doc_from_graph_with_files(
         &self,
-        template_id: Uuid,
+        doc_id: Uuid,
         graph: &WorkflowGraph,
         files: &HashMap<String, HashMap<String, String>>,
     ) -> Result<(), YjsPersistenceError> {
@@ -261,21 +274,23 @@ impl YjsPersistence {
             .await
             .map_err(|e| YjsPersistenceError::Decode(format!("spawn_blocking: {e}")))??;
 
-        self.store_update(template_id, &update).await?;
+        // `init_doc_from_graph*` is GRAPH-only by construction — it folds a
+        // `WorkflowGraph` into the doc — so the seed update is always `Graph`.
+        self.store_update(doc_id, DocKind::Graph, &update).await?;
 
         tracing::info!(
-            template_id = %template_id,
+            doc_id = %doc_id,
             "initialized Y.Doc from graph"
         );
 
         Ok(())
     }
 
-    /// Check whether a Yjs document exists for a template.
-    pub async fn has_doc(&self, template_id: Uuid) -> Result<bool, YjsPersistenceError> {
+    /// Check whether a Yjs document exists for a doc id.
+    pub async fn has_doc(&self, doc_id: Uuid) -> Result<bool, YjsPersistenceError> {
         let (count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
-                .bind(template_id)
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
+                .bind(doc_id)
                 .fetch_one(&self.pool)
                 .await?;
 
@@ -284,8 +299,8 @@ impl YjsPersistence {
         }
 
         let (snap_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM yjs_snapshots WHERE template_id = $1")
-                .bind(template_id)
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_snapshots WHERE doc_id = $1")
+                .bind(doc_id)
                 .fetch_one(&self.pool)
                 .await?;
 

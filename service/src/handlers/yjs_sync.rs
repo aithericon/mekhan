@@ -14,8 +14,24 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::auth::{effective_object_role, ObjectRef, Role};
+use crate::models::page::Page;
 use crate::models::template::WorkflowTemplate;
+use crate::yjs::DocKind;
 use crate::AppState;
+
+/// Map a page to its host object reference, mirroring
+/// [`crate::handlers::pages::page_host_ref`]. The `pages_placement_xor` CHECK
+/// guarantees exactly one arm is reachable for a persisted row; a page's
+/// effective role IS its host's. The published-template read-only gate does
+/// NOT apply here — page read-only is a pure ACL floor (`role < Editor`).
+fn page_object_ref(page: &Page) -> ObjectRef {
+    match (page.attached_kind.as_deref(), page.attached_id, page.folder_id) {
+        (Some("template"), Some(id), _) => ObjectRef::template(id),
+        (Some("instance"), Some(id), _) => ObjectRef::instance(id),
+        (_, _, Some(fid)) => ObjectRef::folder(fid),
+        _ => unreachable!("pages_placement_xor guarantees exactly one placement arm"),
+    }
+}
 
 /// Global client ID counter for uniquely identifying WebSocket connections.
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -102,24 +118,101 @@ pub async fn ws_handler(
         }
     };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, template_id, readonly, state))
+    ws.on_upgrade(move |socket| {
+        handle_socket(socket, template_id, DocKind::Graph, readonly, state)
+    })
 }
 
-async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, state: AppState) {
+/// GET /api/yjs/page/{page_id} -> WebSocket upgrade
+///
+/// The page collaboration socket. Authentication is identical to
+/// [`ws_handler`] (the `mekhan_session` cookie rides the same-origin upgrade).
+/// Unlike the graph handler, there is **no published-template gate**: a page's
+/// read-only flag is a pure ACL floor — `host_role < Editor` connects
+/// read-only, `None` is rejected. A page's host (attached template/instance, or
+/// folder) is resolved via [`page_object_ref`] and its effective role gates the
+/// socket.
+pub async fn page_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(page_id): Path<Uuid>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    // Auth identical to the graph handler.
+    let user = match state.authenticator.authenticate(&headers, &jar).await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(page_id = %page_id, "yjs page ws auth rejected: {e}");
+            return crate::models::error::ApiError::new(StatusCode::FORBIDDEN, "unauthenticated")
+                .into_response();
+        }
+    };
+
+    // Verify the page exists.
+    let existing = sqlx::query_as::<_, Page>("SELECT * FROM pages WHERE id = $1")
+        .bind(page_id)
+        .fetch_optional(&state.db)
+        .await;
+
+    let page = match existing {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return crate::models::error::ApiError::not_found("page not found").into_response();
+        }
+        Err(e) => {
+            tracing::error!("failed to check page for WS: {e}");
+            return crate::models::error::ApiError::internal(e.to_string()).into_response();
+        }
+    };
+
+    // Read-only is a PURE ACL floor — NO published gate. The caller's effective
+    // role on the page's HOST (template/instance/folder) must be ≥ Viewer to
+    // connect; sub-Editor gets a read-only socket (writes dropped in
+    // `handle_socket`); no role at all is forbidden (the upgrade is rejected).
+    let readonly = match effective_object_role(&state.db, &user, page_object_ref(&page)).await {
+        Ok(Some(role)) => role < Role::Editor,
+        Ok(None) => {
+            tracing::debug!(
+                page_id = %page_id,
+                "yjs page ws rejected: no effective role on host"
+            );
+            return crate::models::error::ApiError::forbidden("not authorized for this page")
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("yjs page ws role resolution failed: {e}");
+            return crate::models::error::ApiError::internal(e.to_string()).into_response();
+        }
+    };
+
+    ws.on_upgrade(move |socket| handle_socket(socket, page_id, DocKind::Page, readonly, state))
+}
+
+async fn handle_socket(
+    socket: WebSocket,
+    doc_id: Uuid,
+    doc_kind: DocKind,
+    readonly: bool,
+    state: AppState,
+) {
     let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
 
     tracing::info!(
-        template_id = %template_id,
+        doc_id = %doc_id,
+        ?doc_kind,
         client_id,
         "WebSocket connected"
     );
 
-    // Get or create the room
-    let room = match state.yjs.get_or_create_room(template_id).await {
+    // Get or create the room. `doc_kind` (Graph for templates, Page for pages)
+    // stamps any freshly-created room and thus its persisted updates. The
+    // protocol below is kind-agnostic; only the DB write seam consults the kind.
+    let room = match state.yjs.get_or_create_room(doc_id, doc_kind).await {
         Ok(room) => room,
         Err(e) => {
             tracing::error!(
-                template_id = %template_id,
+                doc_id = %doc_id,
                 "failed to get/create room: {e}"
             );
             return;
@@ -182,8 +275,8 @@ async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, sta
             _ = closed.changed() => {
                 tracing::info!(
                     client_id,
-                    template_id = %template_id,
-                    "room closed (template deleted); disconnecting client"
+                    doc_id = %doc_id,
+                    "room closed (doc deleted); disconnecting client"
                 );
                 break;
             }
@@ -216,7 +309,7 @@ async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, sta
             Err(e) => {
                 tracing::warn!(
                     client_id,
-                    template_id = %template_id,
+                    doc_id = %doc_id,
                     "error handling message: {e}"
                 );
             }
@@ -226,13 +319,13 @@ async fn handle_socket(socket: WebSocket, template_id: Uuid, readonly: bool, sta
     // Cleanup
     let remaining = room.remove_client(client_id).await;
     if remaining == 0 {
-        state.yjs.remove_room_if_empty(template_id);
+        state.yjs.remove_room_if_empty(doc_id);
     }
 
     outbound_task.abort();
 
     tracing::info!(
-        template_id = %template_id,
+        doc_id = %doc_id,
         client_id,
         "WebSocket disconnected"
     );

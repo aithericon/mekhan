@@ -534,7 +534,7 @@ async fn new_version_forks_authored_ydoc_graph() {
     })
     .await
     .unwrap();
-    persistence.store_update(v1_id, &update).await.unwrap();
+    persistence.store_update(v1_id, mekhan_service::yjs::DocKind::Graph, &update).await.unwrap();
 
     // Publish v1 (reconstructs AIR from the Y.Doc but does not write the
     // `graph` column back).

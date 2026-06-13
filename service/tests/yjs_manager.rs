@@ -53,7 +53,7 @@ async fn creates_room_on_first_call() {
     let (manager, persistence) = setup().await;
     let template_id = seed_template(&persistence).await;
 
-    let room = manager.get_or_create_room(template_id).await.unwrap();
+    let room = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
     let state = room.encode_full_state().await;
     assert!(!state.is_empty(), "room should have non-empty state");
 }
@@ -67,8 +67,8 @@ async fn returns_same_room_on_reuse() {
     let (manager, persistence) = setup().await;
     let template_id = seed_template(&persistence).await;
 
-    let room1 = manager.get_or_create_room(template_id).await.unwrap();
-    let room2 = manager.get_or_create_room(template_id).await.unwrap();
+    let room1 = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
+    let room2 = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
 
     assert!(
         Arc::ptr_eq(&room1, &room2),
@@ -98,7 +98,7 @@ async fn empty_template_gets_empty_room() {
     .await
     .unwrap();
 
-    let room = manager.get_or_create_room(template_id).await.unwrap();
+    let room = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
     // Room should exist even without pre-seeded data (empty doc)
     let state = room.encode_full_state().await;
     // The state may be a minimal yrs encoding of an empty doc, which is still non-empty bytes
@@ -117,10 +117,10 @@ async fn remove_evicts_room() {
     let (manager, persistence) = setup().await;
     let template_id = seed_template(&persistence).await;
 
-    let room1 = manager.get_or_create_room(template_id).await.unwrap();
+    let room1 = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
     manager.remove_room_if_empty(template_id);
 
-    let room2 = manager.get_or_create_room(template_id).await.unwrap();
+    let room2 = manager.get_or_create_room(template_id, mekhan_service::yjs::DocKind::Graph).await.unwrap();
 
     assert!(
         !Arc::ptr_eq(&room1, &room2),

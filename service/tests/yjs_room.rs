@@ -48,7 +48,7 @@ async fn setup_room() -> (Arc<YjsRoom>, YjsPersistence, Uuid) {
 
     let persistence_clone = persistence.clone();
     let room = tokio::task::spawn_blocking(move || {
-        Arc::new(YjsRoom::from_doc(template_id, &doc, persistence_clone))
+        Arc::new(YjsRoom::from_doc(template_id, mekhan_service::yjs::DocKind::Graph, &doc, persistence_clone))
     })
     .await
     .unwrap();
@@ -176,7 +176,7 @@ async fn sync_step2_applies_and_persists() {
 
     // Check that a new row was persisted
     let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
             .bind(template_id)
             .fetch_one(persistence.pool())
             .await

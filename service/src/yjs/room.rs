@@ -6,6 +6,7 @@ use yrs::updates::decoder::Decode;
 use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
 use crate::yjs::persistence::{YjsPersistence, YjsPersistenceError};
+use crate::yjs::DocKind;
 
 /// Yjs sync protocol message types.
 const MSG_SYNC_STEP1: u8 = 0;
@@ -25,27 +26,37 @@ pub enum RoomError {
 }
 
 pub struct YjsRoom {
-    template_id: Uuid,
+    doc_id: Uuid,
+    /// Immutable per-doc discriminator, stamped at the route boundary and
+    /// threaded into every `store_update` so persisted rows carry the right
+    /// `doc_kind` ("plan A").
+    doc_kind: DocKind,
     /// The full document state encoded as bytes. Updated after each mutation.
     state: RwLock<Vec<u8>>,
     clients: RwLock<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>,
     persistence: YjsPersistence,
-    /// Flipped to `true` when the backing template row is deleted out from
-    /// under the room (discard draft / delete template). Connected WS handlers
-    /// watch this and disconnect — otherwise their edits keep hitting the
-    /// dangling `yjs_documents` FK and are silently dropped.
+    /// Flipped to `true` when the backing row is deleted out from under the
+    /// room (discard draft / delete template / delete page). Connected WS
+    /// handlers watch this and disconnect — otherwise their edits keep hitting
+    /// the dangling `yjs_documents` rows and are silently dropped.
     closed_tx: watch::Sender<bool>,
 }
 
 impl YjsRoom {
     /// Create a room from an already-loaded Doc.
     /// Encodes the doc state immediately (must be called from sync or spawn_blocking context).
-    pub fn from_doc(template_id: Uuid, doc: &Doc, persistence: YjsPersistence) -> Self {
+    pub fn from_doc(
+        doc_id: Uuid,
+        doc_kind: DocKind,
+        doc: &Doc,
+        persistence: YjsPersistence,
+    ) -> Self {
         let txn = doc.transact();
         let state = txn.encode_state_as_update_v1(&StateVector::default());
         let (closed_tx, _) = watch::channel(false);
         Self {
-            template_id,
+            doc_id,
+            doc_kind,
             state: RwLock::new(state),
             clients: RwLock::new(HashMap::new()),
             persistence,
@@ -71,7 +82,7 @@ impl YjsRoom {
     pub async fn add_client(&self, client_id: u64, sender: mpsc::UnboundedSender<Vec<u8>>) {
         self.clients.write().await.insert(client_id, sender);
         tracing::debug!(
-            template_id = %self.template_id,
+            doc_id = %self.doc_id,
             client_id,
             "client joined room"
         );
@@ -83,7 +94,7 @@ impl YjsRoom {
         clients.remove(&client_id);
         let remaining = clients.len();
         tracing::debug!(
-            template_id = %self.template_id,
+            doc_id = %self.doc_id,
             client_id,
             remaining,
             "client left room"
@@ -148,7 +159,7 @@ impl YjsRoom {
                 let new_state = self.apply_update(&payload).await?;
                 *self.state.write().await = new_state;
                 self.persistence
-                    .store_update(self.template_id, &payload)
+                    .store_update(self.doc_id, self.doc_kind, &payload)
                     .await?;
                 Ok(None)
             }
@@ -158,7 +169,7 @@ impl YjsRoom {
                 let new_state = self.apply_update(&payload).await?;
                 *self.state.write().await = new_state;
                 self.persistence
-                    .store_update(self.template_id, &payload)
+                    .store_update(self.doc_id, self.doc_kind, &payload)
                     .await?;
                 self.broadcast(client_id, &msg).await;
                 Ok(None)
@@ -210,7 +221,7 @@ impl YjsRoom {
         for (&id, tx) in clients.iter() {
             if id != sender_id && tx.send(msg.to_vec()).is_err() {
                 tracing::warn!(
-                    template_id = %self.template_id,
+                    doc_id = %self.doc_id,
                     client_id = id,
                     "failed to send broadcast, client likely disconnected"
                 );

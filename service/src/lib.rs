@@ -737,6 +737,20 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Per-folder OpenAPI bundle — synthesized trigger spec for SDK
         // generators + API doc viewers, gathered across the folder subtree.
         .routes(routes!(handlers::openapi_bundle::folder_openapi_bundle))
+        // Pages — free-form collaborative rich-text docs (Edra + Yjs). Either
+        // ride a host 1:1 (template/instance singleton tab) or live free in a
+        // folder. Permissions inherit from the host (no per-page ACL); the
+        // rich content rides the generalized Yjs stack (doc_kind = 'page').
+        .routes(routes!(handlers::pages::create_page))
+        .routes(routes!(handlers::pages::upsert_attached_page))
+        .routes(routes!(
+            handlers::pages::get_page,
+            handlers::pages::update_page,
+            handlers::pages::delete_page
+        ))
+        .routes(routes!(handlers::pages::list_folder_pages))
+        .routes(routes!(handlers::pages::get_template_page))
+        .routes(routes!(handlers::pages::get_instance_page))
         // Active-workspace switcher (Phase B) — per-session override cookie.
         .routes(routes!(
             handlers::me::set_active_workspace,
@@ -814,6 +828,14 @@ pub fn build_router(state: AppState) -> Router {
     let public: Router = public_router.with_state(state.clone());
 
     let ws_router: Router = Router::new()
+        // The `page` literal out-specifies the `{template_id}` capture in
+        // matchit, so `/api/yjs/page/{id}` routes to the page handler and every
+        // other `/api/yjs/{uuid}` falls through to the graph handler — no
+        // shadowing. Both are unmodeled binary WS (no OpenAPI).
+        .route(
+            "/api/yjs/page/{page_id}",
+            get(handlers::yjs_sync::page_ws_handler),
+        )
         .route(
             "/api/yjs/{template_id}",
             get(handlers::yjs_sync::ws_handler),
