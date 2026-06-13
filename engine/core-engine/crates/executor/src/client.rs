@@ -15,14 +15,13 @@
 //! so it works regardless of whether the executor started first.
 
 use std::collections::HashMap;
-#[cfg(feature = "vault-secrets")]
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bytes::Bytes;
 use chrono::Utc;
 
-use aithericon_executor_domain::{ExecutionJob, ExecutionSpec, JobPriority};
+use aithericon_executor_domain::{ExecutionJob, ExecutionSpec, JobPriority, DEFAULT_WORKSPACE};
 use petri_domain::executor::{
     ExecutionSubmitRequest, ExecutionSubmitResult, ExecutorClient, ExecutorError,
 };
@@ -130,6 +129,16 @@ pub struct ExecutorNatsClient {
     signal_routes: HashMap<String, String>,
     event_routes: HashMap<String, String>,
     namespace: String,
+    /// SHARED per-net workspace cell. The executor effect handler is registered
+    /// (and this client constructed) BEFORE the scenario load stamps the net's
+    /// workspace, so the workspace cannot be a plain field set at construction —
+    /// it is read LAZILY at submit time from the same `Arc<RwLock<Option<String>>>`
+    /// that `set_workspace_id` writes (mirrors the timer handler's
+    /// `with_workspace_cell`). `None` when not wired (SDK/test paths) → falls back
+    /// to [`DEFAULT_WORKSPACE`]. The resolved workspace is stamped onto
+    /// `ExecutionJob.workspace_id` so the executor's status/event back-channel is
+    /// tenant-attributable.
+    workspace_cell: Option<Arc<RwLock<Option<String>>>>,
     /// Names of streams ensured this session, keyed by `{ns}_{prio}`. A leased
     /// body targets a per-job namespace (`lease-<grant_id>`) whose stream
     /// differs from the fixed-namespace daemon path, so the ensure cache is
@@ -175,6 +184,7 @@ impl ExecutorNatsClient {
             signal_routes,
             event_routes,
             namespace: namespace.to_string(),
+            workspace_cell: None,
             streams_ensured: std::sync::Mutex::new(std::collections::HashSet::new()),
             #[cfg(feature = "vault-secrets")]
             secret_store: None,
@@ -206,6 +216,29 @@ impl ExecutorNatsClient {
     #[cfg(feature = "vault-secrets")]
     pub fn set_wrap_ttl(&mut self, ttl_secs: u64) {
         self.wrap_ttl_secs = ttl_secs;
+    }
+
+    /// Wire the SHARED per-net workspace cell so submit() stamps the firing net's
+    /// tenant onto `ExecutionJob.workspace_id`. The registry calls this at
+    /// handler registration with `service.workspace_cell()` — the same cell
+    /// `set_workspace_id` writes at scenario load, read lazily here.
+    pub fn with_workspace_cell(mut self, cell: Arc<RwLock<Option<String>>>) -> Self {
+        self.workspace_cell = Some(cell);
+        self
+    }
+
+    /// Resolve the effective workspace at submit time. Reads the shared cell
+    /// (written by `set_workspace_id`); falls back to the [`DEFAULT_WORKSPACE`]
+    /// sentinel when the cell is absent (SDK/test paths) or unstamped. The
+    /// sentinel agrees byte-for-byte with the worker's empty-`workspace_id`
+    /// fall-back, so an unstamped job and an empty-`workspace_id` job land on the
+    /// same `executor.status.default.>` back-channel.
+    fn workspace_or_default(&self) -> String {
+        self.workspace_cell
+            .as_ref()
+            .and_then(|c| c.read().ok().and_then(|g| g.clone()))
+            .filter(|ws| !ws.is_empty())
+            .unwrap_or_else(|| DEFAULT_WORKSPACE.to_string())
     }
 
     /// Build routing metadata to stamp into the execution job.
@@ -315,6 +348,13 @@ impl ExecutorNatsClient {
 
         Ok(ExecutionJob {
             execution_id,
+            // Stamp the firing net's workspace (tenant) so the executor's
+            // status/event back-channel subjects carry the `{ws}` segment. The
+            // PUBLISH subject is unchanged — dispatch isolation (the runner-jobs
+            // partition) already routes the job; `workspace_id` is purely for
+            // back-channel attribution. Falls back to DEFAULT_WORKSPACE when the
+            // net's workspace is unstamped (SDK/test) → `executor.status.default.>`.
+            workspace_id: self.workspace_or_default(),
             spec,
             metadata: routing_meta.clone(),
             timeout,
@@ -553,6 +593,7 @@ mod tests {
     fn test_nats_job_envelope_serialization() {
         let job = ExecutionJob {
             execution_id: "test-exec-1".into(),
+            workspace_id: "ws-acme".into(),
             spec: serde_json::from_value(serde_json::json!({
                 "backend": "process",
                 "config": { "command": "echo" }
@@ -581,6 +622,8 @@ mod tests {
         assert_eq!(json["namespace"], "executor_jobs");
         assert_eq!(json["attempts"], 0);
         assert_eq!(json["data"]["execution_id"], "test-exec-1");
+        // workspace_id rides inside the `data` (serialized job) envelope.
+        assert_eq!(json["data"]["workspace_id"], "ws-acme");
     }
 
     #[test]

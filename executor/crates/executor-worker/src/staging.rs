@@ -851,6 +851,7 @@ mod tests {
     fn test_job() -> ExecutionJob {
         ExecutionJob {
             execution_id: "test-staging".into(),
+            workspace_id: String::new(),
             spec: ProcessConfig {
                 command: "echo".into(),
                 args: vec!["hello".into()],

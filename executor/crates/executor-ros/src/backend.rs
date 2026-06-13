@@ -1892,7 +1892,7 @@ mod tests {
         let job = job_stub(&c.spec);
         let prepared = backend.prepare(&job, c).await.unwrap();
         let resolved: ResolvedRosConfig =
-            serde_json::from_value(prepared.backend_state).unwrap();
+            serde_json::from_value(prepared.backend_state.clone()).unwrap();
         assert_eq!(resolved.operation, RosOperation::RecordTopics);
         assert_eq!(
             resolved.record_topics,
@@ -1929,7 +1929,7 @@ mod tests {
         let job = job_stub(&c.spec);
         let prepared = backend.prepare(&job, c).await.unwrap();
         let resolved: ResolvedRosConfig =
-            serde_json::from_value(prepared.backend_state).unwrap();
+            serde_json::from_value(prepared.backend_state.clone()).unwrap();
         assert!(resolved.record_topics.is_empty());
     }
 }

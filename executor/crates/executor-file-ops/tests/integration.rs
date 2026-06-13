@@ -110,6 +110,7 @@ fn make_spec(config: Value) -> ExecutionSpec {
 fn make_job(spec: &ExecutionSpec) -> ExecutionJob {
     ExecutionJob {
         execution_id: "test-file-ops".into(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: None,

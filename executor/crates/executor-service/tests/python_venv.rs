@@ -31,6 +31,7 @@ mod python_venv_tests {
         };
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec: PythonConfig {
                 script: "__script__.py".into(),
                 python: "python3".into(),

@@ -334,6 +334,7 @@ mod probes {
     fn bash_job(eid: &str, script: &str, timeout: Option<std::time::Duration>) -> ExecutionJob {
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec: ProcessConfig {
                 command: "bash".into(),
                 args: vec!["-c".into(), script.into()],
@@ -472,6 +473,7 @@ mod probes {
         use aithericon_executor_python::PythonConfig;
         ExecutionJob {
             execution_id: eid.to_string(),
+            workspace_id: String::new(),
             spec: PythonConfig::inline_spec_with_io(
                 r#"set_output("result", {"answer": 42, "via": "ipc.sock"})"#,
                 vec![],

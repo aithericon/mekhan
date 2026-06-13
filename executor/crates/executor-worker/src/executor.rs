@@ -69,12 +69,25 @@ impl JobExecutor {
     /// Execution failures are application outcomes, not infrastructure errors.
     pub async fn execute(&self, job: &ExecutionJob) -> ExecutionStatus {
         let execution_id = &job.execution_id;
-        info!(%execution_id, spec = ?job.spec, "handling execution job");
+        // The job's workspace (tenant) is the authoritative source for the
+        // status/event back-channel `{ws}` subject segment (NOT
+        // `WorkerIdentity.workspace_id` — the job field travels with the message
+        // and works for every worker mode, including daemon/lease/manifest which
+        // have no identity). Empty → the `DEFAULT_WORKSPACE` sentinel, which is
+        // subject-token-safe and agrees byte-for-byte with the engine submit-side
+        // fall-back.
+        let ws = if job.workspace_id.is_empty() {
+            aithericon_executor_domain::DEFAULT_WORKSPACE
+        } else {
+            job.workspace_id.as_str()
+        };
+        info!(%execution_id, %ws, spec = ?job.spec, "handling execution job");
 
         // Report Accepted
         self.reporter
             .report(
                 execution_id,
+                ws,
                 ExecutionStatus::Accepted,
                 json!({}),
                 &job.metadata,
@@ -91,6 +104,7 @@ impl JobExecutor {
                     self.reporter
                         .report(
                             execution_id,
+                            ws,
                             ExecutionStatus::Failed,
                             json!({ "error": format!("unsupported spec type: {spec_type}") }),
                             &job.metadata,
@@ -164,6 +178,7 @@ impl JobExecutor {
                 self.reporter
                     .report(
                         execution_id,
+                        ws,
                         ExecutionStatus::Failed,
                         json!({ "error": format!("staging failed: {e}") }),
                         &job.metadata,
@@ -194,6 +209,7 @@ impl JobExecutor {
                 emitter: self.reporter.event_emitter(),
                 sequence: shared_sequence.clone(),
                 execution_id: execution_id.clone(),
+                workspace_id: ws.to_string(),
                 source: self.reporter.source().to_string(),
                 metadata: job.metadata.clone(),
                 transports: self.transports.clone(),
@@ -225,6 +241,7 @@ impl JobExecutor {
         let sidecar_handle = match start_ipc_sidecar(
             run_context.run_dir.ipc_socket.clone(),
             execution_id.clone(),
+            ws.to_string(),
             self.reporter.source().to_string(),
             job.metadata.clone(),
             self.artifact_store.clone(),
@@ -247,9 +264,9 @@ impl JobExecutor {
             }
         };
 
-        let status_cb = self
-            .reporter
-            .callback_for(execution_id.clone(), job.metadata.clone());
+        let status_cb =
+            self.reporter
+                .callback_for(execution_id.clone(), ws.to_string(), job.metadata.clone());
 
         // Execute
         let result = backend
@@ -619,6 +636,7 @@ impl JobExecutor {
                     for artifact in &manifest.artifacts {
                         let event = ExecutionEvent {
                             execution_id: execution_id.clone(),
+                            workspace_id: ws.to_string(),
                             category: EventCategory::Artifact,
                             detail: StatusDetail::ArtifactLogged {
                                 artifact_id: artifact.id.clone(),
@@ -652,6 +670,7 @@ impl JobExecutor {
                 if let Some(ref progress) = exec_result.progress {
                     let event = ExecutionEvent {
                         execution_id: execution_id.clone(),
+                        workspace_id: ws.to_string(),
                         category: EventCategory::Progress,
                         detail: StatusDetail::ProgressUpdated {
                             fraction: progress.fraction,
@@ -670,6 +689,7 @@ impl JobExecutor {
                 for (name, value) in &exec_result.outputs {
                     let event = ExecutionEvent {
                         execution_id: execution_id.clone(),
+                        workspace_id: ws.to_string(),
                         category: EventCategory::Output,
                         detail: StatusDetail::OutputSet {
                             name: name.clone(),
@@ -688,6 +708,7 @@ impl JobExecutor {
                     if metrics.total_points > 0 {
                         let event = ExecutionEvent {
                             execution_id: execution_id.clone(),
+                            workspace_id: ws.to_string(),
                             category: EventCategory::Metric,
                             detail: StatusDetail::MetricsLogged {
                                 count: metrics.total_points,
@@ -764,7 +785,7 @@ impl JobExecutor {
                 );
 
                 self.reporter
-                    .report(execution_id, terminal_status, detail, &job.metadata)
+                    .report(execution_id, ws, terminal_status, detail, &job.metadata)
                     .await;
             }
             Err(ExecutorError::SpawnFailed(e)) => {
@@ -772,6 +793,7 @@ impl JobExecutor {
                 self.reporter
                     .report(
                         execution_id,
+                        ws,
                         ExecutionStatus::Failed,
                         json!({ "error": format!("spawn failed: {e}") }),
                         &job.metadata,
@@ -783,6 +805,7 @@ impl JobExecutor {
                 self.reporter
                     .report(
                         execution_id,
+                        ws,
                         ExecutionStatus::Failed,
                         json!({ "error": e.to_string() }),
                         &job.metadata,

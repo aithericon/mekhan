@@ -98,15 +98,23 @@ impl StatusReporter {
     }
 
     /// Report a status transition for the given execution.
+    ///
+    /// `workspace_id` is the JOB's workspace (`ExecutionJob.workspace_id`, or the
+    /// `DEFAULT_WORKSPACE` sentinel when empty) — passed per-call because the
+    /// reporter is process-wide (shared across jobs of different workspaces), so
+    /// the tenant cannot be baked into it. It is stamped onto the `StatusUpdate`
+    /// and surfaces as the `{ws}` segment of its subject.
     pub async fn report(
         &self,
         execution_id: &str,
+        workspace_id: &str,
         status: ExecutionStatus,
         detail: Value,
         metadata: &HashMap<String, String>,
     ) {
         let update = StatusUpdate {
             execution_id: execution_id.to_string(),
+            workspace_id: workspace_id.to_string(),
             status,
             detail,
             metadata: metadata.clone(),
@@ -172,19 +180,25 @@ impl StatusReporter {
     }
 
     /// Build a StatusCallback closure that reports via this reporter.
+    ///
+    /// `workspace_id` (the job's tenant) is captured into the closure so every
+    /// backend-driven status report carries the same `{ws}` subject segment as
+    /// the executor's own lifecycle reports.
     pub fn callback_for(
         &self,
         execution_id: String,
+        workspace_id: String,
         metadata: HashMap<String, String>,
     ) -> aithericon_executor_backend::StatusCallback {
         let reporter = self.clone();
         Box::new(move |status, detail| {
             let reporter = reporter.clone();
             let execution_id = execution_id.clone();
+            let workspace_id = workspace_id.clone();
             let metadata = metadata.clone();
             Box::pin(async move {
                 reporter
-                    .report(&execution_id, status, detail, &metadata)
+                    .report(&execution_id, &workspace_id, status, detail, &metadata)
                     .await;
             })
         })

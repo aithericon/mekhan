@@ -126,6 +126,23 @@ impl ExecutorWatcher {
 
     /// Main event processing loop — subscribes to both streams concurrently.
     async fn stream_events(&self) -> Result<(), WatcherError> {
+        // SINGLE subscription, ALL workspaces. The status/event subjects now
+        // carry a `{ws}` segment (`executor.status.{ws}.{exec}.{status}`), but
+        // the `>` tail wildcard matches the extra token, so this filter captures
+        // every workspace's messages exactly as the old 4-token form did — no
+        // stream-config / consumer-filter change is required for capture. The
+        // watcher routes by RoutingMeta read from the message BODY (net_id +
+        // signal_key), NOT the subject, so the inserted token cannot break
+        // correlation; every status it sees is now ws-attributable from the
+        // subject (and, redundantly, from `update.workspace_id` in the body).
+        //
+        // TODO(stream-per-ws): a future per-TENANT watcher deployment would
+        // narrow these filters to `executor.status.{ws}.>` / `executor.events.{ws}.>`
+        // (and use a per-ws durable consumer name) to PHYSICALLY isolate the
+        // back-channel — consistent with the engine's "subject + edge-filter
+        // first, single stream" decision. Do NOT split now: stream NAMES stay
+        // EXECUTOR_STATUS / EXECUTOR_EVENTS and one consumer serves all tenants.
+
         // Ensure streams exist (create if missing, no-op if already exists).
         self.ensure_stream(&self.config.status_stream, "executor.status.>")
             .await?;
@@ -133,6 +150,8 @@ impl ExecutorWatcher {
             .await?;
 
         // Create durable pull consumers.
+        // TODO(stream-per-ws): narrow to `executor.status.{ws}.>` here for a
+        // per-tenant watcher (with a `{ws}`-suffixed durable name).
         let status_consumer = self
             .create_consumer(
                 &self.config.status_stream,
@@ -141,6 +160,7 @@ impl ExecutorWatcher {
             )
             .await?;
 
+        // TODO(stream-per-ws): narrow to `executor.events.{ws}.>` for per-tenant.
         let events_consumer = self
             .create_consumer(
                 &self.config.events_stream,
@@ -676,6 +696,7 @@ mod tests {
     fn item_emit(exec: &str, channel: &str, episode_uid: &str, idx: u64) -> ControlEmitEvent {
         ControlEmitEvent {
             execution_id: exec.to_string(),
+            workspace_id: "default".to_string(),
             channel: channel.to_string(),
             kind: ControlKind::Item,
             payload_json: format!(r#"{{"v":{idx}}}"#),
@@ -710,6 +731,7 @@ mod tests {
     fn translates_close_count_and_map_id() {
         let emit = ControlEmitEvent {
             execution_id: "exec-1".into(),
+            workspace_id: "default".into(),
             channel: "items".into(),
             kind: ControlKind::Close,
             payload_json: String::new(),
@@ -735,6 +757,7 @@ mod tests {
     fn translates_item_with_empty_payload_to_null() {
         let emit = ControlEmitEvent {
             execution_id: "exec-1".into(),
+            workspace_id: "default".into(),
             channel: "events".into(),
             kind: ControlKind::Item,
             payload_json: String::new(),
@@ -758,6 +781,7 @@ mod tests {
     fn translates_data_plane_close_keeps_payload() {
         let emit = ControlEmitEvent {
             execution_id: "exec-1".into(),
+            workspace_id: "default".into(),
             channel: "frames".into(),
             kind: ControlKind::Close,
             payload_json: r#"{"count":12,"status":"ok"}"#.into(),

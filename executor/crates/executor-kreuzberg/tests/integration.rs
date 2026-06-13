@@ -65,6 +65,7 @@ fn make_job(spec: &ExecutionSpec) -> ExecutionJob {
             "kreuzberg-integ-{}",
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
         ),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: None,

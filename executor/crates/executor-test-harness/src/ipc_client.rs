@@ -83,6 +83,7 @@ pub fn ipc_client_job(
 
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), script],

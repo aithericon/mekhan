@@ -10,6 +10,7 @@ use aithericon_executor_process::ProcessConfig;
 pub fn echo_job(eid: &str) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "echo".into(),
             args: vec!["hello".into()],
@@ -32,6 +33,7 @@ pub fn echo_job(eid: &str) -> ExecutionJob {
 pub fn failing_job(eid: &str) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "false".into(),
             args: vec![],
@@ -54,6 +56,7 @@ pub fn failing_job(eid: &str) -> ExecutionJob {
 pub fn sleep_job(eid: &str, secs: u64, timeout_secs: u64) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "sleep".into(),
             args: vec![secs.to_string()],
@@ -76,6 +79,7 @@ pub fn sleep_job(eid: &str, secs: u64, timeout_secs: u64) -> ExecutionJob {
 pub fn job_with_metadata(eid: &str, metadata: HashMap<String, String>) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "echo".into(),
             args: vec!["hello".into()],
@@ -98,6 +102,7 @@ pub fn job_with_metadata(eid: &str, metadata: HashMap<String, String>) -> Execut
 pub fn bash_job(eid: &str, script: &str) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), script.into()],
@@ -124,6 +129,7 @@ pub fn job_with_inline_inputs(
 ) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), script.into()],
@@ -146,6 +152,7 @@ pub fn job_with_inline_inputs(
 pub fn job_with_outputs(eid: &str, script: &str, outputs: Vec<OutputDeclaration>) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), script.into()],
@@ -173,6 +180,7 @@ pub fn job_with_io(
 ) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec!["-c".into(), script.into()],
@@ -195,6 +203,7 @@ pub fn job_with_io(
 pub fn nonexistent_command_job(eid: &str) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "nonexistent_cmd_xyz_12345".into(),
             args: vec![],
@@ -217,6 +226,7 @@ pub fn nonexistent_command_job(eid: &str) -> ExecutionJob {
 pub fn large_output_job(eid: &str, byte_count: usize) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "bash".into(),
             args: vec![
@@ -242,6 +252,7 @@ pub fn large_output_job(eid: &str, byte_count: usize) -> ExecutionJob {
 pub fn long_running_job(eid: &str, sleep_secs: u64) -> ExecutionJob {
     ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: ProcessConfig {
             command: "sleep".into(),
             args: vec![sleep_secs.to_string()],

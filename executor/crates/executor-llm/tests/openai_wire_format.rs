@@ -122,6 +122,7 @@ async fn run_spec(spec: ExecutionSpec, tmp: std::path::PathBuf, eid: &str) -> Ex
     );
     let job = ExecutionJob {
         execution_id: eid.to_string(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),

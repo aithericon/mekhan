@@ -1018,7 +1018,12 @@ where
                 ecfg.signal_routes.clone(),
                 ecfg.event_routes.clone(),
                 &ecfg.namespace,
-            );
+            )
+            // Wire the SHARED per-net workspace cell so submit() stamps the
+            // firing net's tenant onto ExecutionJob.workspace_id (read lazily at
+            // submit, after set_workspace_id has stamped it). Same cell the timer
+            // handler reads — multi-tenancy back-channel attribution.
+            .with_workspace_cell(service.workspace_cell());
 
             // Wire up secret wrapping if configured
             #[cfg(feature = "executor-vault-secrets")]

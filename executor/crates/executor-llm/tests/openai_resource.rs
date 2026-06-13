@@ -179,6 +179,7 @@ async fn openai_resource_secret_is_resolved_into_bearer_token() {
     let eid = format!("openai-resource-{}", cheap_unique());
     let job = ExecutionJob {
         execution_id: eid.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),
@@ -304,6 +305,7 @@ async fn openai_env_secret_is_resolved_into_bearer_token() {
     let eid = format!("openai-env-{}", cheap_unique());
     let job = ExecutionJob {
         execution_id: eid.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),
@@ -410,6 +412,7 @@ async fn missing_openai_secret_fails_at_staging_not_at_adapter() {
     let eid = format!("openai-missing-{}", cheap_unique());
     let job = ExecutionJob {
         execution_id: eid.clone(),
+        workspace_id: String::new(),
         spec: spec.clone(),
         metadata: HashMap::new(),
         timeout: Some(Duration::from_secs(30)),

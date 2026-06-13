@@ -24,7 +24,7 @@ pub use execute_contract::{ExecuteRequest, ExecuteResponse};
 pub use fold::{FoldBatch, FoldItem, FoldMode, INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 pub use job::{
     ChannelManifestEntry, ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority,
-    OutputDeclaration, OutputUploadConfig,
+    OutputDeclaration, OutputUploadConfig, DEFAULT_WORKSPACE,
 };
 pub use llm::{LlmStopReason, LlmToolCall, LlmTurnResult, LlmUsage, ToolSchema};
 pub use logs::{LogBatch, LogEntry, LogLevel, LogSummary};
@@ -89,6 +89,7 @@ mod tests {
     fn execution_job_serde_roundtrip() {
         let job = ExecutionJob {
             execution_id: "test-123".into(),
+            workspace_id: String::new(),
             spec: ExecutionSpec {
                 backend: "process".into(),
                 inputs: vec![],
@@ -130,6 +131,7 @@ mod tests {
     fn execution_job_with_inputs_outputs() {
         let job = ExecutionJob {
             execution_id: "test-io".into(),
+            workspace_id: String::new(),
             spec: ExecutionSpec {
                 backend: "process".into(),
                 inputs: vec![InputDeclaration {
@@ -188,6 +190,7 @@ mod tests {
     fn execution_job_stream_events_roundtrip() {
         let job = ExecutionJob {
             execution_id: "stream-test".into(),
+            workspace_id: String::new(),
             spec: ExecutionSpec {
                 backend: "process".into(),
                 inputs: vec![],
@@ -401,6 +404,7 @@ mod tests {
         };
         let job = ExecutionJob {
             execution_id: "multi-storage-test".into(),
+            workspace_id: String::new(),
             spec: ExecutionSpec {
                 backend: "process".into(),
                 inputs: vec![
