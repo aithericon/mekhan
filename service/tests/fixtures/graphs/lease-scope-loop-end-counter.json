@@ -17,7 +17,7 @@
 			"data": {
 				"type": "lease_scope",
 				"label": "GPU Lease",
-				"lease": { "scheduler": "prod_dc", "request": { "gpu_count": 1 } }
+				"lease": { "pool": "prod_dc", "request": { "gpu_count": 1 } }
 			}
 		},
 		{

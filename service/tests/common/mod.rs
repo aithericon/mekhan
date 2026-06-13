@@ -38,6 +38,103 @@ use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use mekhan_service::{build_router, AppState};
 
+/// Per-process-unique durable-consumer prefix for every `MekhanNats` the test
+/// harness builds.
+///
+/// Every helper below connects a `MekhanNats` and stuffs it into `AppState`.
+/// That handle is publish-only today (the in-router `TriggerDispatcher`
+/// publishes trigger signals to `PETRI_GLOBAL`; nothing here binds a durable
+/// consumer off `state.nats`). But a test's in-process mekhan that DID pull a
+/// consumer off a bare handle would bind the SAME durable (`mekhan-lifecycle`,
+/// `mekhan-causality-ingest`, …) as a running `just dev` daemon — JetStream
+/// then load-balances completion events across both, and the test misses
+/// `NetCompleted` (the "instance did not complete/finish" timeouts).
+///
+/// `with_consumer_prefix` renames only the durable (see
+/// `MekhanNats::durable_name`) and flips fresh durables to
+/// `DeliverPolicy::New`; publishing is by subject and is unaffected, and the
+/// engine/executor never reference mekhan's durable names. So scoping every
+/// harness handle to a unique prefix is safe and lets the suite run alongside
+/// a live stack. The suffix is per-test-binary-process (one `OnceLock` per
+/// test crate) so all handles a single test builds share one cursor namespace
+/// while different processes stay isolated.
+fn harness_consumer_prefix() -> &'static str {
+    use std::sync::OnceLock;
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    PREFIX.get_or_init(|| format!("test_harness_{}", uuid::Uuid::new_v4().simple()))
+}
+
+/// Connect a `MekhanNats` for the test harness, scoped to a unique
+/// per-process durable-consumer prefix so the in-process mekhan never shares a
+/// durable cursor on `PETRI_GLOBAL` with a live `just dev` daemon. Use this in
+/// place of a bare `MekhanNats::connect(url, None)` in every harness helper.
+async fn connect_harness_nats(nats_url: &str) -> Result<MekhanNats, mekhan_service::nats::NatsError> {
+    Ok(MekhanNats::connect(nats_url, None)
+        .await?
+        .with_consumer_prefix(harness_consumer_prefix()))
+}
+
+/// Re-point the nil "Default Workspace" `default` worker group to the partition
+/// the live dev executor is already bound to — the OTHER half of running the
+/// executor-completion e2e suite against the shared `just dev` stack.
+///
+/// Every executor job routes through a *group partition* whose token is the
+/// workspace's `default` worker-group capacity-resource id (the compiler stamps
+/// `executor_namespace = executor-<wire>-grp/<id>`). The dev executor enrolls
+/// ONCE against the dev DB and binds that DB's id. A fresh `create_test_db()`
+/// runs migration `20240144_default_worker_group`, which seeds a `default`
+/// capacity with a fresh **`gen_random_uuid()`** id — a partition NO running
+/// worker is bound to. So the compiler stamps that random id and the job lands
+/// on a subject nobody drains → the instance hangs at `running`.
+///
+/// We can't just create-if-missing (the migration already created it, so the
+/// idempotent seeder no-ops). Instead DELETE the migration's nil-workspace
+/// `default` capacity (FKs cascade to its version/acl/audit rows) and re-create
+/// it through the normal seed path pinned to the executor's `routing_partition`
+/// — so the test's compiler stamps the SAME partition the running executor
+/// drains. Templates with no workspace land in the nil workspace
+/// (`user.workspace_id.unwrap_or_else(Uuid::nil)`), the one the dev executor
+/// enrolled against, so the nil workspace is the only one we need to fix.
+///
+/// The partition comes from `TEST_WORKER_DEFAULT_PARTITION` — set it to the
+/// slot's `.dev/.../executor/worker/identity.json` `routing_partition`
+/// (`just dev::e2e-partition` does this). UNSET → no-op (offline/unit runs are
+/// untouched; the completion tests simply remain unrunnable, as before).
+pub async fn seed_dev_worker_partition(state: &AppState) {
+    let Some(partition) = std::env::var("TEST_WORKER_DEFAULT_PARTITION")
+        .ok()
+        .and_then(|s| uuid::Uuid::parse_str(s.trim()).ok())
+    else {
+        return;
+    };
+    let ws = uuid::Uuid::nil();
+    // Drop the migration-seeded random-id default capacity (cascade removes its
+    // resource_versions / resource_acl / resource_audit rows). A fresh test DB
+    // has no enrolled workers, so nothing references its id.
+    if let Err(e) = sqlx::query(
+        "DELETE FROM resources \
+         WHERE workspace_id = $1 AND path = 'default' AND resource_type = 'capacity'",
+    )
+    .bind(ws)
+    .execute(&state.db)
+    .await
+    {
+        eprintln!("seed_dev_worker_partition: delete migration default failed: {e:?}");
+        return;
+    }
+    if let Err(e) = mekhan_service::worker_groups::ensure_default_worker_group(
+        state,
+        ws,
+        Some(partition),
+    )
+    .await
+    {
+        // Best-effort: a failure here just leaves the test to surface the hang
+        // with its own (clearer) "instance did not complete" timeout.
+        eprintln!("seed_dev_worker_partition({partition}) failed: {e:?}");
+    }
+}
+
 /// Build a `TriggerDispatcher` for tests. The dispatcher's `hydrate()` is
 /// skipped here — tests that exercise trigger behavior should call it
 /// explicitly after seeding template rows.
@@ -164,7 +261,7 @@ pub async fn test_app_with_authenticator(
     let db = create_test_db().await;
     let config = test_config();
     let petri = PetriClient::new(&config.petri_lab_url);
-    let nats = MekhanNats::connect(&config.nats_url, None)
+    let nats = connect_harness_nats(&config.nats_url)
         .await
         .expect("failed to connect to NATS — run test infra");
     let yjs_persistence = YjsPersistence::new(db.clone());
@@ -225,7 +322,7 @@ pub async fn test_app_with_introspection(
     let db = create_test_db().await;
     let config = test_config();
     let petri = PetriClient::new(&config.petri_lab_url);
-    let nats = MekhanNats::connect(&config.nats_url, None)
+    let nats = connect_harness_nats(&config.nats_url)
         .await
         .expect("failed to connect to NATS — run test infra");
     let yjs_persistence = YjsPersistence::new(db.clone());
@@ -284,7 +381,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
     let db = create_test_db().await;
     let config = test_config();
     let petri = PetriClient::new(&config.petri_lab_url);
-    let nats = MekhanNats::connect(&config.nats_url, None)
+    let nats = connect_harness_nats(&config.nats_url)
         .await
         .expect("failed to connect to NATS — run test infra");
     let yjs_persistence = YjsPersistence::new(db.clone());
@@ -344,7 +441,7 @@ pub async fn test_app() -> (Router, PgPool) {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    let nats = MekhanNats::connect(&config.nats_url, None)
+    let nats = connect_harness_nats(&config.nats_url)
         .await
         .expect("failed to connect to NATS — run: just -f aithericon-test-infra/justfile up");
 
@@ -391,6 +488,7 @@ pub async fn test_app() -> (Router, PgPool) {
         user_provisioner: None,
     };
 
+    seed_dev_worker_partition(&state).await;
     let router = build_router(state);
     (router, db)
 }
@@ -404,7 +502,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
 
     let petri = PetriClient::new(&config.petri_lab_url);
 
-    let nats = MekhanNats::connect(nats_url, None)
+    let nats = connect_harness_nats(nats_url)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 
@@ -451,6 +549,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         user_provisioner: None,
     };
 
+    seed_dev_worker_partition(&state).await;
     let router = build_router(state);
     (router, db)
 }
@@ -466,7 +565,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
 
     let petri = PetriClient::new(petri_url);
 
-    let nats = MekhanNats::connect(nats_url, None)
+    let nats = connect_harness_nats(nats_url)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 
@@ -513,6 +612,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         user_provisioner: None,
     };
 
+    seed_dev_worker_partition(&state).await;
     let router = build_router(state);
     (router, db)
 }
@@ -537,7 +637,7 @@ pub async fn test_app_waiters(
 
     let petri = PetriClient::new(petri_url);
 
-    let nats = MekhanNats::connect(nats_url, None)
+    let nats = connect_harness_nats(nats_url)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 
@@ -585,6 +685,7 @@ pub async fn test_app_waiters(
         user_provisioner: None,
     };
 
+    seed_dev_worker_partition(&state).await;
     let router = build_router(state);
     (router, db, result_waiters)
 }
@@ -610,7 +711,7 @@ pub async fn test_app_with_petri_url_and_triggers(
 
     let petri = PetriClient::new(petri_url);
 
-    let nats = MekhanNats::connect(nats_url, None)
+    let nats = connect_harness_nats(nats_url)
         .await
         .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
 
@@ -657,6 +758,7 @@ pub async fn test_app_with_petri_url_and_triggers(
         user_provisioner: None,
     };
 
+    seed_dev_worker_partition(&state).await;
     let router = build_router(state);
     (router, db, triggers)
 }

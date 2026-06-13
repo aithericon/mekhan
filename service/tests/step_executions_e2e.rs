@@ -176,7 +176,8 @@ async fn step_executions_materialize_for_completed_instance() {
     // these consumers get unique durable names and start at DeliverPolicy::New.
     let listener_nats = MekhanNats::connect(&engine_nats_url, None)
         .await
-        .expect("nats");
+        .expect("nats")
+        .with_consumer_prefix(format!("test_lifecycle_{}", Uuid::new_v4().simple()));
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await

@@ -99,6 +99,11 @@ where
         let id = net_id.or(Some(name));
         upload_staged_files(&staged_files, &url);
         deploy_scenario(&scenario, &url, id);
+    } else {
+        // Default (no --deploy): emit the compiled AIR JSON to stdout so
+        // callers (tests, pipelines) can capture it. `cargo run --example`
+        // consumers rely on this — see causality_e2e::compile_sdk_example.
+        println!("{}", scenario.to_json().unwrap());
     }
 }
 
@@ -162,9 +167,13 @@ fn deploy_scenario(scenario: &ScenarioDefinition, url: &str, net_id: Option<&str
     let endpoint = format!("{}/api/nets/{}/scenario", url, id);
     println!("Deploying to {}...", endpoint);
 
+    // The engine's load endpoint expects the `LoadScenarioRequest` envelope
+    // (`{ "scenario": <air>, ... }`), which replaced the bare `ScenarioDefinition`
+    // wire shape. Wrap the compiled AIR before posting.
+    let body = format!("{{\"scenario\":{}}}", scenario.to_json().unwrap());
     match ureq::post(&endpoint)
         .set("Content-Type", "application/json")
-        .send_string(&scenario.to_json().unwrap())
+        .send_string(&body)
     {
         Ok(response) => {
             if response.status() == 200 {

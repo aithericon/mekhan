@@ -361,18 +361,18 @@ async fn faf_default_has_no_outcome_and_polls() {
     let (app, db, waiters, _c, _l) = setup(success_graph(), 30).await;
 
     let resp = app.clone().oneshot(fire_req("", None)).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "FAF fire is 200");
+    assert_eq!(
+        resp.status(),
+        StatusCode::ACCEPTED,
+        "FAF spawn is 202 Accepted"
+    );
     let body = body_json(resp.into_body()).await;
 
     assert!(
         body.get("outcome").is_none(),
         "FAF response must omit `outcome` entirely (byte-compat): {body}"
     );
-    assert_eq!(
-        body["result"]["outcome"]["outcome"], "spawned",
-        "FAF still spawns an instance: {body}"
-    );
-    let iid = Uuid::parse_str(body["result"]["outcome"]["instance_id"].as_str().unwrap()).unwrap();
+    let iid = Uuid::parse_str(body["instance_id"].as_str().unwrap()).unwrap();
 
     // Poll path: the shared lifecycle consumer drives it to terminal + persists
     // the same envelope the WaitForResult caller would have received.
@@ -385,12 +385,12 @@ async fn faf_default_has_no_outcome_and_polls() {
     eprintln!("  ✓ faf_default_has_no_outcome_and_polls");
 }
 
-/// `?reply=wait` blocks until terminal, returns `200` with the
+/// `/invoke` (WaitForResult) blocks until terminal, returns `200` with the
 /// `outcome:{status,result}` superset; the envelope equals the persisted row;
 /// the registry is empty afterward (resolve removed the entry — no leak).
-/// Also asserts SSE-on-fire returns `text/event-stream` inline (same publish,
-/// cheap): leading `fire` event carries the FireResult, then the instance's
-/// domain events flow through to a terminal `result` envelope.
+/// Also asserts SSE consumption: after an async `/fire` (202 `{instance_id}`),
+/// opening `GET /api/v1/instances/{id}/stream` replays the instance's domain
+/// events through to a terminal `result` envelope.
 #[tokio::test]
 #[serial_test::serial]
 async fn wait_for_result_returns_envelope_no_leak() {
@@ -400,20 +400,32 @@ async fn wait_for_result_returns_envelope_no_leak() {
     }
     let (app, db, waiters, _c, _l) = setup(success_graph(), 30).await;
 
-    // SSE on /fire is delivered inline: response is text/event-stream, the
-    // first event (`fire`) carries the FireResult, then the JetStream-backed
-    // instance events flow through to a terminal `result`. Same semantics
-    // regardless of whether SSE was selected via Accept or ?reply=stream.
-    for (q, accept, label) in [
-        ("", Some("text/event-stream"), "Accept: text/event-stream"),
-        ("?reply=stream", None, "?reply=stream"),
-    ] {
-        let resp = app.clone().oneshot(fire_req(q, accept)).await.unwrap();
+    // SSE is consumed off the instance stream route (the `/fire` reply-mode
+    // negotiation was split out: `/fire` is async-only 202, inline wait moved
+    // to `/invoke`, and SSE moved to `GET /api/v1/instances/{id}/stream`).
+    // Fire async, grab the instance id, then open its stream and drain it to a
+    // terminal `result` carrying the success envelope.
+    {
+        let resp = app.clone().oneshot(fire_req("", None)).await.unwrap();
         assert_eq!(
             resp.status(),
-            StatusCode::OK,
-            "{label}: SSE on /fire is 200"
+            StatusCode::ACCEPTED,
+            "async /fire spawn is 202"
         );
+        let iid = Uuid::parse_str(body_json(resp.into_body()).await["instance_id"].as_str().unwrap())
+            .expect("202 body carries the instance id");
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/instances/{iid}/stream"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "instance stream is 200");
         let ct = resp
             .headers()
             .get("content-type")
@@ -422,50 +434,42 @@ async fn wait_for_result_returns_envelope_no_leak() {
             .to_string();
         assert!(
             ct.starts_with("text/event-stream"),
-            "{label}: content-type is SSE, got {ct:?}"
+            "content-type is SSE, got {ct:?}"
         );
         let body = body_string(resp.into_body()).await;
         let events = parse_sse(&body);
-        // 1) Leading `fire` event with the FireResult (locator + outcome).
-        let (kind, data) = events
+        // Leading `connected` event.
+        let (kind, _) = events
             .first()
-            .unwrap_or_else(|| panic!("{label}: empty SSE body: {body:?}"));
-        assert_eq!(
-            kind, "fire",
-            "{label}: first SSE event is `fire`: {events:?}"
-        );
-        let fire_v: Value = serde_json::from_str(data)
-            .unwrap_or_else(|e| panic!("{label}: fire data not JSON: {e}: {data:?}"));
-        let iid = fire_v["outcome"]["instance_id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{label}: fire event missing instance_id: {fire_v}"));
-        Uuid::parse_str(iid).expect("instance_id is a uuid");
-        // 2) Domain events appear (NetInitialized at minimum).
-        assert!(
-            events.iter().any(|(k, _)| k == "NetInitialized"),
-            "{label}: stream replayed NetInitialized: {events:?}"
-        );
-        // 3) Stream closed on a terminal `result` carrying the success envelope.
+            .unwrap_or_else(|| panic!("empty SSE body: {body:?}"));
+        assert_eq!(kind, "connected", "first SSE event is `connected`: {events:?}");
+        // Stream closed on a terminal `result` carrying the success envelope.
         let (rkind, rdata) = events
             .last()
-            .unwrap_or_else(|| panic!("{label}: no terminal event: {events:?}"));
-        assert_eq!(
-            rkind, "result",
-            "{label}: stream ends with `result`: {events:?}"
-        );
+            .unwrap_or_else(|| panic!("no terminal event: {events:?}"));
+        assert_eq!(rkind, "result", "stream ends with `result`: {events:?}");
         let envelope: Value = serde_json::from_str(rdata)
-            .unwrap_or_else(|e| panic!("{label}: result data not JSON: {e}: {rdata:?}"));
+            .unwrap_or_else(|e| panic!("result data not JSON: {e}: {rdata:?}"));
         assert_eq!(
             envelope,
             SUCCESS_ENVELOPE(),
-            "{label}: terminal envelope matches the persisted row"
+            "terminal envelope matches the persisted row"
         );
     }
 
-    // WaitForResult.
+    // WaitForResult via /invoke.
     let resp = app
         .clone()
-        .oneshot(fire_req("?reply=wait", None))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/triggers/trig/invoke")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({ "payload": { "amount": 42 } })).unwrap(),
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -498,7 +502,7 @@ async fn wait_for_result_returns_envelope_no_leak() {
     eprintln!("  ✓ wait_for_result_returns_envelope_no_leak");
 }
 
-/// `?reply=wait` on a workflow that never terminates, with a 1s server cap,
+/// `/invoke` on a workflow that never terminates, with a 1s server cap,
 /// degrades to `202 { instance_id }` and **deregisters** the waiter (no leak);
 /// a later resolve is then a harmless no-op.
 #[tokio::test]
@@ -512,7 +516,16 @@ async fn wait_for_result_times_out_202_and_deregisters() {
 
     let resp = app
         .clone()
-        .oneshot(fire_req("?reply=wait", None))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/triggers/trig/invoke")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&json!({ "payload": { "amount": 42 } })).unwrap(),
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -557,9 +570,9 @@ async fn sse_already_terminal_emits_result_and_404() {
     let (app, db, _w, _c, _l) = setup(success_graph(), 30).await;
 
     let resp = app.clone().oneshot(fire_req("", None)).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let iid = Uuid::parse_str(
-        body_json(resp.into_body()).await["result"]["outcome"]["instance_id"]
+        body_json(resp.into_body()).await["instance_id"]
             .as_str()
             .unwrap(),
     )

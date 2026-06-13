@@ -950,6 +950,26 @@ pub(crate) async fn create_resource_internal(
     workspace_id: Uuid,
     principal_id: Uuid,
 ) -> Result<ResourceSummary, ApiError> {
+    create_resource_internal_with_id(state, req, workspace_id, principal_id, None).await
+}
+
+/// As [`create_resource_internal`], but with an OPTIONAL explicit resource id.
+///
+/// `id_override = None` is the normal path (a fresh `Uuid::new_v4()`). The
+/// override exists for ONE narrow case: pinning a seeded resource's id to a
+/// value resolved out-of-band. The only caller that uses it is
+/// [`crate::worker_groups::ensure_default_worker_group`] under the e2e test
+/// harness, which needs the workspace's `default` worker-group capacity id to
+/// equal the partition the live dev executor is already bound to (so a
+/// fresh-DB test's compiler stamps a partition a worker actually drains). It is
+/// never set in production — the boot seeder always passes `None`.
+pub(crate) async fn create_resource_internal_with_id(
+    state: &AppState,
+    req: &CreateResourceRequest,
+    workspace_id: Uuid,
+    principal_id: Uuid,
+    id_override: Option<Uuid>,
+) -> Result<ResourceSummary, ApiError> {
     if !IDENT_REGEX.is_match(&req.path) {
         return Err(ApiError::bad_request(format!(
             "path '{}' must be a snake_case identifier (e.g. `local_pg`): \
@@ -973,7 +993,7 @@ pub(crate) async fn create_resource_internal(
         tracing::warn!(path = %req.path, "capacity axes warning: {w}");
     }
 
-    let resource_id = Uuid::new_v4();
+    let resource_id = id_override.unwrap_or_else(Uuid::new_v4);
     let version = 1;
     let vault_path = vault_path_for(workspace_id, resource_id, version);
     let display_name = req
@@ -1161,6 +1181,13 @@ pub(crate) async fn reprovision_resource_secret(
     workspace_id: Uuid,
 ) -> Result<(), ApiError> {
     let descriptor = descriptor_or_400(&req.resource_type)?;
+    // No-secret types (e.g. `capacity`, whose only config is the `preset`
+    // shorthand the create path expands) carry nothing to re-provision. Bail
+    // BEFORE split_config — it doesn't expand the `preset` sugar and would
+    // 400 on the stray key, turning a guaranteed no-op into seed noise.
+    if !descriptor.dynamic_fields && descriptor.secret_fields.is_empty() {
+        return Ok(());
+    }
     let (_public, secret) = split_config(descriptor, req.config.clone())?;
     if secret.is_empty() {
         return Ok(());

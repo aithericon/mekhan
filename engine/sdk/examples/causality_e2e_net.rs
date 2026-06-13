@@ -197,11 +197,26 @@ fn definition(ctx: &mut Context) {
         .auto_input("signal", &sig_review)
         .guard(r#"signal.data.approved == "yes""#)
         .auto_output("job", &exec_queue)
-        .logic(
+        .logic({
+            // Under the unified worker-dispatch model EVERY executor job routes
+            // through a GROUP partition (`executor-<wire>-grp/<uuid>`); a job
+            // token with no `executor_namespace` lands on the construction-time
+            // default namespace, which a grouped-only worker (the dev executor)
+            // never drains. So stamp the namespace from `EXECUTOR_NAMESPACE` when
+            // set (e.g. `executor-python-grp/<default-group-uuid>`); empty/unset
+            // keeps the legacy unpartitioned shape for a non-partitioned/mock
+            // executor.
+            let exec_ns = std::env::var("EXECUTOR_NAMESPACE").unwrap_or_default();
+            let ns_field = if exec_ns.trim().is_empty() {
+                String::new()
+            } else {
+                format!("executor_namespace: \"{}\",", exec_ns.trim())
+            };
             r#"
             #{
                 job: #{
                     job_id: "e2e-" + state.workflow_id,
+                    /*__EXEC_NS__*/
                     run: 0,
                     retries: 0,
                     max_retries: 1,
@@ -225,8 +240,9 @@ fn definition(ctx: &mut Context) {
                     }
                 }
             }
-            "#,
-        );
+            "#
+            .replace("/*__EXEC_NS__*/", &ns_field)
+        });
 
     // ── Phase 4: Executor lifecycle → terminal ───────────────────────────
 
