@@ -137,6 +137,14 @@ async fn main() -> anyhow::Result<()> {
     // AppState) and the lifecycle consumer that resolves terminal outcomes.
     let result_waiters = mekhan_service::triggers::ResultWaiters::new();
 
+    // One-time per-template usage rollup backfill (migration 20240175). Awaited
+    // BEFORE the lifecycle listener + step-executions projector start so the
+    // full TRUNCATE+rebuild from the durable source tables can't race the
+    // incremental maintainers (which then resume folding new terminals on top).
+    // Self-guarded: skips once the rollups hold any row, so it only runs on the
+    // first boot after the migration. Best-effort — never fatal.
+    mekhan_service::analytics::template::backfill_template_rollups_if_empty(db.clone()).await;
+
     tokio::spawn(lifecycle::start_lifecycle_listener(
         mekhan_nats.clone(),
         db.clone(),

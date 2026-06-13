@@ -254,6 +254,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
         .routes(routes!(handlers::templates::analyze_graph))
+        // Per-template usage analytics (rollup-backed summary + timeseries)
+        .routes(routes!(analytics::template::template_analytics))
+        .routes(routes!(analytics::template::template_timeseries))
         // Admin: remove / reseed built-in demos
         .routes(routes!(handlers::demos::reset_demos))
         .routes(routes!(handlers::demos::reseed_demos))

@@ -2,9 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use sqlx::PgPool;
 use tracing;
+use uuid::Uuid;
 
 use petri_domain::{DomainEvent, PersistedEvent};
 
@@ -63,6 +65,109 @@ const MAX_ORPHAN_EVENT_DELIVERIES: i64 = 10;
 /// Returns `true` if the message was already ack'd/NAK'd here (caller should
 /// `continue` the outer loop), or `false` if the update landed and the caller
 /// should fall through to the outer ack.
+/// Instance metadata returned by the terminal-status UPDATE, used to fold the
+/// run into the per-template usage rollups within the same transaction.
+#[derive(sqlx::FromRow)]
+struct TerminalInstanceMeta {
+    template_id: Uuid,
+    template_version: i32,
+    /// `live` | `draft` | `test_run` — bucketed verbatim into the rollup.
+    mode: String,
+    /// The principal that launched the run (`workflow_instances.created_by`,
+    /// NOT NULL) — the `template_user_runs` key.
+    created_by: Uuid,
+    /// Run identity timestamp; `bucket_hour` truncates this (NOT `now()`), so
+    /// the rollup reflects WHEN the run happened even if it terminates much
+    /// later (long-running / replayed instances).
+    created_at: DateTime<Utc>,
+    started_at: Option<DateTime<Utc>>,
+    /// Just-set `NOW()` from this UPDATE (terminal wall-clock).
+    completed_at: Option<DateTime<Utc>>,
+}
+
+/// The single derived terminal outcome for the run rollup. Mirrors the SQL CASE
+/// in the analytics reader: a `completed` net is a `success` unless its result
+/// envelope explicitly carries `ok: false`; `failed` (or an explicit
+/// `ok: false`) is a `failure`; `cancelled` stays `cancelled`.
+fn derive_outcome(status: &str, result: Option<&serde_json::Value>) -> &'static str {
+    let explicit_ok_false = result
+        .and_then(|v| v.get("ok"))
+        .and_then(|v| v.as_bool())
+        .map(|ok| !ok)
+        .unwrap_or(false);
+    match status {
+        "failed" => "failure",
+        "cancelled" => "cancelled",
+        "completed" if explicit_ok_false => "failure",
+        "completed" => "success",
+        // `handle_terminal_event` is only reached for the three terminal
+        // statuses above; treat any other as a benign success rather than
+        // panicking on the rollup path.
+        _ => "success",
+    }
+}
+
+/// Fold one terminal transition into the per-template usage rollups
+/// (`template_run_rollup` + `template_user_runs`) inside the caller's
+/// transaction. Fires exactly once per running→terminal transition — the
+/// caller's `WHERE status = 'running'` gate matches only the single delivery
+/// that flips the row, and this runs in the same tx as that flip.
+async fn record_terminal_rollups(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    meta: &TerminalInstanceMeta,
+    outcome: &str,
+) -> Result<(), sqlx::Error> {
+    // Wall-clock duration; NULL endpoints (instance never started, or a row
+    // that somehow lacks completed_at) contribute 0 to BOTH sum and count so
+    // the reader's mean (`sum / count`) excludes them rather than skewing low.
+    let duration_ms: Option<i64> = match (meta.started_at, meta.completed_at) {
+        (Some(s), Some(c)) => Some((c - s).num_milliseconds().max(0)),
+        _ => None,
+    };
+    let (dur_sum, dur_count) = match duration_ms {
+        Some(ms) => (ms, 1i64),
+        None => (0i64, 0i64),
+    };
+
+    sqlx::query(
+        "INSERT INTO template_run_rollup \
+           (template_id, template_version, bucket_hour, mode, outcome, \
+            run_count, duration_ms_sum, duration_ms_count) \
+         VALUES ($1, $2, date_trunc('hour', $3::timestamptz), $4, $5, 1, $6, $7) \
+         ON CONFLICT (template_id, template_version, bucket_hour, mode, outcome) \
+         DO UPDATE SET \
+            run_count = template_run_rollup.run_count + 1, \
+            duration_ms_sum = template_run_rollup.duration_ms_sum + EXCLUDED.duration_ms_sum, \
+            duration_ms_count = template_run_rollup.duration_ms_count + EXCLUDED.duration_ms_count",
+    )
+    .bind(meta.template_id)
+    .bind(meta.template_version)
+    .bind(meta.created_at)
+    .bind(&meta.mode)
+    .bind(outcome)
+    .bind(dur_sum)
+    .bind(dur_count)
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO template_user_runs \
+           (template_id, user_id, run_count, first_run, last_run) \
+         VALUES ($1, $2, 1, $3, $3) \
+         ON CONFLICT (template_id, user_id) DO UPDATE SET \
+            run_count = template_user_runs.run_count + 1, \
+            first_run = LEAST(template_user_runs.first_run, EXCLUDED.first_run), \
+            last_run = GREATEST(template_user_runs.last_run, EXCLUDED.last_run)",
+    )
+    .bind(meta.template_id)
+    .bind(meta.created_by)
+    .bind(meta.created_at)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 async fn handle_terminal_event(
     db: &PgPool,
     msg: &async_nats::jetstream::Message,
@@ -73,23 +178,42 @@ async fn handle_terminal_event(
     status: &str,
     result_envelope: Option<serde_json::Value>,
 ) -> bool {
-    let result = sqlx::query(
+    // Single transaction: the terminal status flip AND the per-template usage
+    // rollup fold commit together, so the rollup can never double-count (a
+    // redelivery after commit no longer matches `status = 'running'`) nor drift
+    // from the status it summarizes.
+    let mut tx = match db.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("failed to begin terminal tx for {net_id} ({status}): {e}");
+            let _ = msg
+                .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
+                .await;
+            return true;
+        }
+    };
+
+    let updated: Result<Option<TerminalInstanceMeta>, sqlx::Error> = sqlx::query_as(
         // Projector-driven transition: advance `updated_at` but NULL `updated_by`
         // — this is the engine acting, not a request principal (FE renders
-        // "System"). See Phase 2 audit/provenance design.
+        // "System"). See Phase 2 audit/provenance design. RETURNING the rollup
+        // dimensions so the fold below reads them without a second round-trip.
         "UPDATE workflow_instances \
          SET status = $2, completed_at = NOW(), result = COALESCE($3::jsonb, result), \
              updated_at = NOW(), updated_by = NULL \
-         WHERE net_id = $1 AND status = 'running'",
+         WHERE net_id = $1 AND status = 'running' \
+         RETURNING template_id, template_version, mode, created_by, created_at, \
+                   started_at, completed_at",
     )
     .bind(net_id)
     .bind(status)
     .bind(result_envelope.clone())
-    .execute(db)
+    .fetch_optional(&mut *tx)
     .await;
 
-    match result {
-        Ok(r) if r.rows_affected() == 0 => {
+    let meta = match updated {
+        Ok(None) => {
+            let _ = tx.rollback().await;
             let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
             if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
                 tracing::warn!(
@@ -109,13 +233,32 @@ async fn handle_terminal_event(
             return true;
         }
         Err(e) => {
+            let _ = tx.rollback().await;
             tracing::error!("failed to update instance status for {net_id} ({status}): {e}");
             let _ = msg
                 .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
                 .await;
             return true;
         }
-        Ok(_) => {}
+        Ok(Some(meta)) => meta,
+    };
+
+    let outcome = derive_outcome(status, result_envelope.as_ref());
+    if let Err(e) = record_terminal_rollups(&mut tx, &meta, outcome).await {
+        let _ = tx.rollback().await;
+        tracing::error!("failed to fold terminal rollups for {net_id} ({status}): {e}");
+        let _ = msg
+            .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
+            .await;
+        return true;
+    }
+
+    if let Err(e) = tx.commit().await {
+        tracing::error!("failed to commit terminal tx for {net_id} ({status}): {e}");
+        let _ = msg
+            .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
+            .await;
+        return true;
     }
 
     resolve_waiter(db, waiters, net_id, status, result_envelope).await;
