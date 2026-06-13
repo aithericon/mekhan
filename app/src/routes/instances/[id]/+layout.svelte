@@ -11,7 +11,6 @@
 	import { authFetch } from '$lib/auth/fetch';
 	import { connectSse, type SseConnection } from '$lib/net/sse';
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
 	import {
 		PageShell,
 		PageHeader,
@@ -37,6 +36,8 @@
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import CornerLeftUp from '@lucide/svelte/icons/corner-left-up';
+	import Clock from '@lucide/svelte/icons/clock';
+	import { CopyButton } from '$lib/components/ui/copy-button';
 
 	let saveAsTestOpen = $state(false);
 	let shareOpen = $state(false);
@@ -94,15 +95,80 @@
 
 	provideInstanceContext(ctx);
 
-	const statusColors: Record<string, string> = {
-		created: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		cancelled: 'bg-slate-100 text-slate-700'
+	// Per-status pill styling: a leading status dot + a soft pill, both with
+	// dark-mode variants. Hardcoded so the JIT keeps the classes.
+	const statusMeta: Record<string, { dot: string; pill: string }> = {
+		created: {
+			dot: 'bg-gray-400',
+			pill: 'bg-gray-100 text-gray-700 dark:bg-gray-500/15 dark:text-gray-300'
+		},
+		running: {
+			dot: 'bg-blue-500 animate-pulse',
+			pill: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
+		},
+		completed: {
+			dot: 'bg-green-500',
+			pill: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300'
+		},
+		failed: {
+			dot: 'bg-red-500',
+			pill: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+		},
+		cancelled: {
+			dot: 'bg-slate-400',
+			pill: 'bg-slate-100 text-slate-700 dark:bg-slate-500/15 dark:text-slate-300'
+		}
 	};
+	const statusStyle = $derived(statusMeta[ctx.instance?.status ?? ''] ?? statusMeta.created);
 
-	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '-');
+	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
+
+	// Compact, human duration ("320ms", "4.2s", "4m 12s", "1h 3m").
+	function formatDuration(ms: number): string {
+		if (ms < 1000) return `${Math.round(ms)}ms`;
+		if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+		if (ms < 3_600_000) {
+			const m = Math.floor(ms / 60_000);
+			const s = Math.round((ms % 60_000) / 1000);
+			return s ? `${m}m ${s}s` : `${m}m`;
+		}
+		const h = Math.floor(ms / 3_600_000);
+		const m = Math.round((ms % 3_600_000) / 60_000);
+		return m ? `${h}h ${m}m` : `${h}h`;
+	}
+
+	// A run is "live" while it can still advance — the duration counter ticks.
+	const isLive = $derived(
+		ctx.instance?.status === 'running' || ctx.instance?.status === 'created'
+	);
+
+	// `now` advances once a second only while the run is live, so a running
+	// instance shows a ticking elapsed time; terminal runs read it from the
+	// recorded start/finish timestamps and never tick.
+	let now = $state(Date.now());
+	$effect(() => {
+		if (!isLive) return;
+		const id = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(id);
+	});
+
+	// Wall-clock run duration: finished runs use completed_at; live runs measure
+	// against the ticking `now`. Null until the run has actually started.
+	const durationMs = $derived.by(() => {
+		const i = ctx.instance;
+		if (!i?.started_at) return null;
+		const start = new Date(i.started_at).getTime();
+		const end = i.completed_at ? new Date(i.completed_at).getTime() : isLive ? now : null;
+		if (end == null || Number.isNaN(start)) return null;
+		return Math.max(0, end - start);
+	});
+
+	// The full net_id (`mekhan-<uuid>`) is long and rarely read in full; surface
+	// the leading UUID segment (matches the short id shown on the Process card),
+	// with copy/hover-title carrying the full value.
+	const shortNetId = $derived(
+		ctx.instance?.net_id ? ctx.instance.net_id.replace(/^mekhan-/, '').slice(0, 8) : null
+	);
 
 	const hasNet = $derived(
 		!!ctx.instance && ctx.instance.status !== 'created' && !!ctx.instance.net_id
@@ -350,30 +416,8 @@
 						</a>
 					{/if}
 					<PageHeader title={processName ?? 'Run'} variant="detail" class="mb-0">
-						<div
-							class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm text-muted-foreground"
-						>
-							<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
-								{instance.status}
-							</Badge>
-							<span class="font-mono truncate">{instance.net_id}</span>
-						</div>
-						<div class="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-muted-foreground">
-							<span>started {formatDate(instance.started_at ?? null)}</span>
-							<span>completed {formatDate(instance.completed_at ?? null)}</span>
-							{#if instance.current_step}
-								<span class="text-foreground">step: {instance.current_step}</span>
-							{/if}
-						</div>
-						<AuthorshipChips
-							class="mt-1"
-							createdBy={instance.created_by}
-							createdAt={instance.created_at}
-							updatedBy={instance.updated_by}
-							updatedAt={instance.updated_at}
-						/>
 						{#snippet actions()}
-							<Button variant="ghost" size="sm" href="/templates/{instance.template_id}">
+							<Button variant="warm" size="sm" href="/templates/{instance.template_id}">
 								<FileText class="size-3.5" />
 								Template v{instance.template_version}
 							</Button>
@@ -424,8 +468,65 @@
 						{/snippet}
 					</PageHeader>
 
+					<!-- Run facts — one full-width fluent strip (status · duration · timeline ·
+					     authorship) so the meta spans the header instead of crowding the
+					     left under the title. The short run id sits flush right. -->
+					<div
+						class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted-foreground"
+					>
+						<span
+							class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-medium capitalize {statusStyle.pill}"
+						>
+							<span class="size-1.5 rounded-full {statusStyle.dot}"></span>
+							{instance.status}
+						</span>
+						{#if durationMs != null}
+							<span
+								class="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 font-medium text-foreground/80"
+								title={isLive ? 'Elapsed so far' : 'Total run duration'}
+							>
+								<Clock class="size-3.5" />
+								<span class="tabular-nums">{formatDuration(durationMs)}</span>
+							</span>
+						{/if}
+
+						{#if instance.started_at}
+							<span class="text-border">·</span>
+							<span>Started {formatDate(instance.started_at)}</span>
+						{/if}
+						{#if instance.completed_at}
+							<span class="text-border">·</span>
+							<span>Finished {formatDate(instance.completed_at)}</span>
+						{:else if isLive && instance.current_step}
+							<span class="text-border">·</span>
+							<span class="text-foreground">Working on {instance.current_step}</span>
+						{/if}
+
+						{#if instance.created_by || instance.created_at}
+							<span class="text-border">·</span>
+							<AuthorshipChips
+								size="sm"
+								inline
+								createdBy={instance.created_by}
+								createdAt={instance.created_at}
+								updatedBy={instance.updated_by}
+								updatedAt={instance.updated_at}
+							/>
+						{/if}
+
+						{#if shortNetId}
+							<span
+								class="group ml-auto inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-0.5 font-mono"
+								title={instance.net_id}
+							>
+								<span>{shortNetId}</span>
+								<CopyButton text={instance.net_id} title="Copy run id" iconClass="size-3.5" />
+							</span>
+						{/if}
+					</div>
+
 					{#if primaryProcess || hasNet}
-						<div class="-mb-px mt-1">
+						<div class="-mb-px mt-3">
 							<PageTabs testid="instance-tabs" {tabs} />
 						</div>
 					{:else}

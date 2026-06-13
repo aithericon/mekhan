@@ -19,6 +19,7 @@
 		updatedBy,
 		updatedAt,
 		size = 'xs',
+		inline = false,
 		class: className
 	}: {
 		createdBy?: string | null;
@@ -26,6 +27,8 @@
 		updatedBy?: string | null;
 		updatedAt?: string | null;
 		size?: 'xs' | 'sm';
+		/** Lay created/updated out on one wrapping row (· separated) instead of stacked. */
+		inline?: boolean;
 		class?: string;
 	} = $props();
 
@@ -40,7 +43,12 @@
 </script>
 
 <div
-	class={['flex flex-col gap-0.5 text-xs text-muted-foreground', className]}
+	class={[
+		'flex text-muted-foreground',
+		size === 'sm' ? 'text-sm' : 'text-xs',
+		inline ? 'flex-row flex-wrap items-center gap-x-2.5 gap-y-1' : 'flex-col gap-0.5',
+		className
+	]}
 	data-testid="authorship-chips"
 >
 	{#if createdBy || createdAt}
@@ -55,6 +63,7 @@
 		</span>
 	{/if}
 	{#if showUpdated}
+		{#if inline && (createdBy || createdAt)}<span class="text-border">·</span>{/if}
 		<span class="inline-flex items-center gap-1.5" data-testid="authorship-updated">
 			<span>Updated by</span>
 			{#if updatedBy}
