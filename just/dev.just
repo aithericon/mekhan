@@ -184,6 +184,49 @@ logs name:
 psql:
     psql "{{database_url}}"
 
+# Run a live-executor e2e test against THIS slot's running `just dev` stack.
+#
+# These tests (automated_step_e2e, http_borrow_e2e, step_executions_e2e,
+# causality_e2e, …) submit a job to the real executor and wait for the instance
+# to COMPLETE. Every executor job routes through a worker-group *partition*
+# whose token is the workspace's `default` capacity-resource id; the live
+# executor binds the dev DB's id, but each test uses a fresh `create_test_db()`
+# with no `default` group, so without help the compiler stamps the literal
+# "default" token and the job lands on a subject no worker pulls → hang at
+# `running` (see .dev/sweep/REPORT.md §D3).
+#
+# This recipe bridges that: it reads the executor's bound `routing_partition`
+# from its identity.json and exports it as TEST_WORKER_DEFAULT_PARTITION, so the
+# test harness seeds its fresh DB's nil-workspace `default` group with the SAME
+# id the running executor drains. It also points the test at this slot's NATS /
+# engine / pg / S3 endpoints (the test defaults assume the separate test-infra
+# NATS on :4333, not the dev stack). The stack must be up (`just dev up`).
+#
+#   just dev::e2e-partition                    # default: automated_step_e2e
+#   just dev::e2e-partition http_borrow_e2e    # a specific test binary
+e2e-partition test="automated_step_e2e":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    idfile="{{work_dir}}/executor/worker/identity.json"
+    if [ ! -s "$idfile" ]; then
+      echo "no executor identity at $idfile — is this slot's stack up? (just dev up-executor)" >&2
+      exit 1
+    fi
+    partition="$(jq -r '.routing_partition // empty' "$idfile")"
+    if [ -z "$partition" ]; then
+      echo "$idfile has no routing_partition — worker not enrolled yet" >&2
+      exit 1
+    fi
+    echo "▶ live e2e against slot stack — partition=$partition  test={{test}}"
+    export TEST_WORKER_DEFAULT_PARTITION="$partition"
+    export TEST_NATS_URL="{{nats_url}}"
+    export ENGINE_NATS_URL="{{nats_url}}"
+    export TEST_ENGINE_URL="{{engine_url}}"
+    export TEST_PETRI_URL="{{engine_url}}"
+    export TEST_POSTGRES_URL="{{database_url}}"
+    export TEST_S3_ENDPOINT="{{s3_endpoint}}"
+    cargo test -p mekhan-service --test {{test}} -- --nocapture --test-threads=1
+
 # Configure this worktree to use sccache as cargo's rustc wrapper, so
 # compiled crates are content-addressed in ~/Library/Caches/Mozilla.sccache
 # and reused across worktrees without sharing target/ dirs (which would

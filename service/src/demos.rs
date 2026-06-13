@@ -1047,7 +1047,7 @@ async fn seed_demo_roster(state: &crate::AppState, root: &Path) {
             "INSERT INTO roster_members \
              (workspace_id, capacity_id, member_user_id, caps, concurrency, availability, available, enrolled_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (workspace_id, capacity_id, member_user_id) DO NOTHING",
+             ON CONFLICT (workspace_id, capacity_id, member_user_id) WHERE revoked_at IS NULL DO NOTHING",
         )
         .bind(DEMO_WORKSPACE_ID)
         .bind(capacity_id)

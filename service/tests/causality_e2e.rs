@@ -84,10 +84,12 @@ async fn deploy_scenario(net_id: &str, air_json: &Value) {
     let client = reqwest::Client::new();
     let base = engine_url();
 
-    // Deploy scenario
+    // Deploy scenario. The engine's load endpoint takes the `LoadScenarioRequest`
+    // envelope (`{ "scenario": <air>, ... }`, the γ.mekhan shape that replaced the
+    // bare `ScenarioDefinition`), so wrap the SDK-emitted AIR before posting.
     let resp = client
         .post(format!("{base}/api/nets/{net_id}/scenario"))
-        .json(air_json)
+        .json(&json!({ "scenario": air_json }))
         .send()
         .await
         .expect("deploy scenario");
@@ -290,7 +292,7 @@ async fn causality_full_pipeline() {
         petri.clone(),
         nats.clone(),
     ));
-    let app = mekhan_service::build_router(mekhan_service::AppState {
+    let state = mekhan_service::AppState {
         db: db.clone(),
         petri,
         nats: nats.clone(),
@@ -327,7 +329,14 @@ async fn causality_full_pipeline() {
         )),
         email: Arc::new(mekhan_service::notify::email::LogEmailSender),
         user_provisioner: None,
-    });
+    };
+    // Re-point the nil workspace's `default` worker group to the live executor's
+    // bound partition (no-op unless TEST_WORKER_DEFAULT_PARTITION is set) so the
+    // executor-completion legs of this pipeline land on a subject a worker
+    // drains. This test builds AppState inline rather than via a `test_app*`
+    // helper, so it must call the seed itself.
+    common::seed_dev_worker_partition(&state).await;
+    let app = mekhan_service::build_router(state);
 
     // ── 2. Spawn Mekhan consumers ────────────────────────────────────────
     //
@@ -379,6 +388,21 @@ async fn causality_full_pipeline() {
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 
+    // The SDK net's `t_dispatch` step dispatches a python executor job. The dev
+    // executor is grouped-only (binds `executor-python-grp/<partition>`), so the
+    // baked AIR must target that partition or the job never gets drained. Pass
+    // the executor's bound partition (same `TEST_WORKER_DEFAULT_PARTITION` the
+    // worker-group seed uses) to the example via `EXECUTOR_NAMESPACE`. Unset →
+    // legacy unpartitioned shape (offline/mock executor), unchanged.
+    if let Some(partition) = std::env::var("TEST_WORKER_DEFAULT_PARTITION")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        std::env::set_var(
+            "EXECUTOR_NAMESPACE",
+            format!("executor-python-grp/{}", partition.trim()),
+        );
+    }
     let air_json = compile_sdk_example("causality_e2e_net");
     let net_id = format!("mekhan-{}", Uuid::new_v4().simple());
     let instance_id = Uuid::new_v4();
@@ -1052,13 +1076,26 @@ async fn rrv_failure_precedence_over_end() {
 }
 
 #[tokio::test]
-async fn rrv_bare_end_result_is_null() {
+async fn rrv_bare_end_result_is_full_token_body() {
     if !engine_available().await {
         eprintln!("SKIP: engine not available — just dev up");
         return;
     }
-    // Start → End, no resultMapping, no Failure: backward-compat contract —
-    // no exit_code stamped → NetCompleted.exit_code None → result stays NULL.
+    // Start → End, no resultMapping, no Failure: the compiler's bare-End path
+    // stamps no `exit_code` envelope (see compiler/lower/end.rs — the Rhai
+    // shape transition is skipped for bare End), so the terminal token is the
+    // Start token passed straight through. The engine's `check_terminal_state`
+    // then falls back to the WHOLE terminal-token body as the run result when
+    // no `exit_code` key is present (engine commit 71c2a2aa — "fall back to
+    // full terminal token body as run result when no exit_code envelope",
+    // covered by `check_terminal_data_token_without_exit_code_falls_back_to_full_body`).
+    //
+    // That body is the seeded Start token: the supplied field (`x`) plus the
+    // five provenance fields `parameterize_air` injects into every Start token
+    // (`_instance_id`, `_template_id`, `_template_version`, `_created_at`,
+    // `_created_by`). So a bare End now surfaces `{ x, _instance_id, ... }`,
+    // NOT NULL. This is the current authoritative engine contract; the prior
+    // "result stays NULL" assertion predated the full-body fallback.
     let graph = json!({
         "nodes": [
             start_with_fields(json!([
@@ -1074,10 +1111,31 @@ async fn rrv_bare_end_result_is_null() {
     });
     let (_app, db, id, _c, _l) = rrv_publish_and_create(graph, json!({ "x": 1 })).await;
     wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
+    let result = fetch_result(&db, id)
+        .await
+        .expect("bare End surfaces the full terminal-token body as result (full-body fallback)");
+    // The supplied Start field survives verbatim.
+    assert_eq!(result["x"], json!(1), "Start field carried through: {result}");
+    // The provenance fields stamped at instance creation are present (their
+    // exact values are per-run / non-deterministic, so we assert presence and
+    // the one we can pin — `_instance_id` == this instance).
     assert_eq!(
-        fetch_result(&db, id).await,
-        None,
-        "bare End must leave result NULL (unchanged legacy behavior)"
+        result["_instance_id"],
+        json!(id.to_string()),
+        "_instance_id stamped: {result}"
     );
-    eprintln!("  ✓ rrv_bare_end_result_is_null passed");
+    for k in ["_template_id", "_template_version", "_created_at", "_created_by"] {
+        assert!(
+            result.get(k).is_some(),
+            "provenance field {k} present in bare-End result: {result}"
+        );
+    }
+    // A bare End carries no success/failure envelope — `exit_code` is never
+    // stamped (that's the whole point of the bare path), so the body is the
+    // raw token, not `{ ok, value }`.
+    assert!(
+        result.get("ok").is_none() && result.get("exit_code").is_none(),
+        "bare End body is the raw token, no envelope: {result}"
+    );
+    eprintln!("  ✓ rrv_bare_end_result_is_full_token_body passed");
 }

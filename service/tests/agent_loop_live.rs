@@ -247,6 +247,10 @@ async fn publish_and_fire(app: &axum::Router, customer_message: &str) -> Uuid {
         }
     }
 
+    // The agent node binds `internal_pool_router` (demos moved agent nodes onto
+    // the internal LLM pool) — define it in this workspace or publish 400s.
+    ensure_internal_pool_router(app).await;
+
     let parent_id = create_and_publish(
         app,
         &format!("Agent Loop E2E {}", Uuid::new_v4().simple()),
@@ -482,6 +486,10 @@ async fn publish_both_and_fire(app: &axum::Router, message: &str) -> Uuid {
             }
         }
     }
+
+    // The agent node binds `internal_pool_router` (demos moved agent nodes onto
+    // the internal LLM pool) — define it in this workspace or publish 400s.
+    ensure_internal_pool_router(app).await;
 
     let parent_id = create_and_publish(
         app,
@@ -737,6 +745,56 @@ async fn create_and_publish<G: serde::Serialize, F: serde::Serialize>(
     let pub_body = body_json(resp.into_body()).await;
     assert_eq!(status, StatusCode::OK, "publish '{name}': {pub_body}");
     template_id
+}
+
+/// Provision the `internal_pool_router` resource the agent node binds.
+///
+/// Demos moved their Agent nodes onto the internal LLM pool: the agent
+/// compiler emits a `provider: internal` LLM step with
+/// `resource_alias: "internal_pool_router"` (see
+/// `compiler/lower/agent.rs`), and the publish handler rejects any
+/// declared `resource_alias` that the workspace does not define
+/// (`CompileError::ResourceAliasNotDefined`). These live tests build an
+/// isolated workspace and do NOT run the demo seeder, so the alias would
+/// be undefined and publish would 400 before any LLM round-trip.
+///
+/// This mirrors the on-disk fixture `demos/resources/internal_pool_router.json`
+/// (resource_type `internal_llm`, `config.base_url` → the router) — the same
+/// shape `demos::seed_resources` provisions in the dev stack — so publish
+/// resolves the alias and reaches 200. Idempotent within a workspace via the
+/// random `Uuid`-free fixed `path`: each test gets a fresh workspace, so the
+/// resource is created exactly once per test.
+async fn ensure_internal_pool_router(app: &axum::Router) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/resources")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "path": "internal_pool_router",
+                        "resource_type": "internal_llm",
+                        "display_name": "Internal Model Pool Router (e2e)",
+                        "config": {
+                            "base_url": std::env::var("MEKHAN_ROUTER_URL")
+                                .unwrap_or_else(|_| "http://127.0.0.1:13200".to_string())
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create internal_pool_router resource: {body}"
+    );
 }
 
 async fn fire_customer_message(app: &axum::Router, template_id: Uuid, message: &str) -> Uuid {

@@ -175,7 +175,8 @@ async fn automated_step_python_runs_through_executor() {
 
     let listener_nats = MekhanNats::connect(&engine_nats_url, None)
         .await
-        .expect("nats");
+        .expect("nats")
+        .with_consumer_prefix(format!("test_lifecycle_{}", Uuid::new_v4().simple()));
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -322,7 +323,8 @@ async fn automated_step_python_native_assignment_reaches_step_executions() {
 
     let listener_nats = MekhanNats::connect(&engine_nats_url, None)
         .await
-        .expect("nats");
+        .expect("nats")
+        .with_consumer_prefix(format!("test_lifecycle_{}", Uuid::new_v4().simple()));
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await

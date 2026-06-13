@@ -77,7 +77,8 @@ async fn seed_template_with_webhook(
         "nodes": [
             {
                 "id": "trig1",
-                "node_type": "trigger",
+                "type": "trigger",
+                "position": { "x": 0.0, "y": 0.0 },
                 "data": {
                     "type": "trigger",
                     "label": format!("{name} webhook"),
@@ -92,7 +93,7 @@ async fn seed_template_with_webhook(
                     "enabled": true,
                 }
             },
-            { "id": "start", "node_type": "start", "data": { "type": "start" } }
+            { "id": "start", "type": "start", "position": { "x": 0.0, "y": 0.0 }, "data": { "type": "start", "label": "Start" } }
         ],
         "edges": []
     });
@@ -203,14 +204,38 @@ async fn openapi_bundle_lists_attached_webhooks() {
         .unwrap()
         .iter()
         .any(|t| t == "webhooks"));
-    let auth_param = op["parameters"][0].clone();
-    assert_eq!(auth_param["name"], "X-Webhook-Token");
+    // Shared-secret auth is modelled the idiomatic OpenAPI way: an
+    // apiKey-in-header `securityScheme` plus a `security` requirement on the
+    // operation, not a bare `parameters` entry.
+    let scheme_name = "webhookAuth_invoice-received";
+    let scheme = &doc["components"]["securitySchemes"][scheme_name];
+    assert_eq!(scheme["type"], "apiKey");
+    assert_eq!(scheme["in"], "header");
+    assert_eq!(scheme["name"], "X-Webhook-Token");
+    assert!(
+        op["security"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|req| req.get(scheme_name).is_some()),
+        "operation must require the webhook auth scheme"
+    );
 
-    let schema_name = "Webhook_invoice-received";
-    let schema = &doc["components"]["schemas"][schema_name];
-    let props = schema["properties"].as_object().expect("hinted props");
-    assert!(props.contains_key("invoice_id"));
-    assert!(props.contains_key("amount"));
+    // The request-body schema is the webhook's raw inbound scope
+    // (`payload`/`headers`/`query`/`fire_time`, additionalProperties:true) —
+    // the external sender posts that, and `payloadMapping` is applied
+    // server-side to derive the start token. It is NOT the mapped target fields.
+    let body_schema_name = "Webhook_invoice-received_Request";
+    let schema = &doc["components"]["schemas"][body_schema_name];
+    let props = schema["properties"].as_object().expect("scope props");
+    assert!(props.contains_key("payload"));
+    assert!(props.contains_key("headers"));
+    assert!(props.contains_key("query"));
+    assert_eq!(schema["additionalProperties"], true);
+    assert_eq!(
+        op["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        format!("#/components/schemas/{body_schema_name}")
+    );
 }
 
 #[tokio::test]
@@ -302,7 +327,8 @@ async fn openapi_bundle_method_defaults_to_post_when_unset() {
     let graph = json!({
         "nodes": [{
             "id": "trig1",
-            "node_type": "trigger",
+            "type": "trigger",
+            "position": { "x": 0.0, "y": 0.0 },
             "data": {
                 "type": "trigger",
                 "label": "ping",
@@ -310,7 +336,8 @@ async fn openapi_bundle_method_defaults_to_post_when_unset() {
                 "payloadMapping": [],
                 "enabled": true,
             }
-        }]
+        }],
+        "edges": []
     });
     sqlx::query(
         "INSERT INTO workflow_templates (id, name, description, version, is_latest, graph, author_id, workspace_id, visibility, published) \

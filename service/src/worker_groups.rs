@@ -75,9 +75,19 @@ pub async fn resolve_worker_group_uuid(
 /// Best-effort: a create race (two boots seeding the same workspace) surfaces
 /// as a `409` from the unique `(workspace_id, path)` constraint — we treat that
 /// as "already present" and re-resolve.
+///
+/// `id_override` pins the seeded capacity's id to a specific UUID. Production
+/// and the boot seeder always pass `None` (a fresh random id per workspace).
+/// The ONLY caller that sets it is the e2e test harness
+/// (`tests/common::seed_dev_worker_partition`): a fresh-DB test must seed its
+/// `default` group with the id the live dev executor is already bound to, so
+/// the compiler stamps a partition a worker actually drains. It is a
+/// single-workspace test affordance — within one fresh DB only one workspace is
+/// seeded with the fixed id, so the resource PK stays unique.
 pub async fn ensure_default_worker_group(
     state: &AppState,
     workspace_id: Uuid,
+    id_override: Option<Uuid>,
 ) -> Result<Uuid, ApiError> {
     // Fast path: already seeded.
     if let Some(id) =
@@ -99,11 +109,12 @@ pub async fn ensure_default_worker_group(
         restricted: None,
     };
 
-    match crate::handlers::resources::create_resource_internal(
+    match crate::handlers::resources::create_resource_internal_with_id(
         state,
         &req,
         workspace_id,
         WORKER_GROUP_SEEDER_AUTHOR_ID,
+        id_override,
     )
     .await
     {
@@ -141,7 +152,8 @@ pub async fn ensure_default_worker_group_all_workspaces(state: &AppState) {
 
     let mut seeded = 0usize;
     for (workspace_id,) in workspaces {
-        match ensure_default_worker_group(state, workspace_id).await {
+        // Boot path always uses a fresh random id per workspace (no override).
+        match ensure_default_worker_group(state, workspace_id, None).await {
             Ok(_) => seeded += 1,
             Err(e) => tracing::warn!(
                 workspace_id = %workspace_id,
