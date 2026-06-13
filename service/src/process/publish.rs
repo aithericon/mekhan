@@ -23,8 +23,8 @@ use crate::compiler::{
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
-    default_subworkflow_output_port, ExecutionBackendType, Port, TemplateMetrics, VersionPin,
-    WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    default_subworkflow_output_port, ExecutionBackendType, Port, Presentation, TemplateMetrics,
+    VersionPin, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
@@ -439,7 +439,13 @@ impl<'a> PublishService<'a> {
             }
         }
 
-        let graph_json = serde_json::to_value(graph)
+        // Persist the AUTHOR's graph, but with library-node branding stamped
+        // onto each SubWorkflow node from its resolved child (decision 12). This
+        // is display-only and the single source of truth for the frozen
+        // snapshot — it doesn't depend on the editor having frozen it on a
+        // draft, and it self-heals seeded/GitOps graphs that carry no snapshot.
+        let persisted_graph = stamp_subworkflow_presentation(graph, &sub_air);
+        let graph_json = serde_json::to_value(&persisted_graph)
             .map_err(|e| ApiError::internal(format!("serialize graph: {e}")))?;
 
         // Structural metrics for the `workflow_templates.metrics` JSONB column.
@@ -1501,6 +1507,33 @@ fn reconcile_subworkflow_outputs(graph: &WorkflowGraph, sub_air: &SubWorkflowAir
     g
 }
 
+/// Stamp each SubWorkflow node's library-node branding (`sourceCoordinate` +
+/// `presentation`) onto the persisted graph from its resolved child (decision
+/// 12). Publish is the source of truth: the editor's io-contract live-freeze
+/// only persists on an editable draft (public+published templates are
+/// Yjs-read-only), and a seeded/GitOps/CLI graph may carry no snapshot at all —
+/// so we re-derive from the frozen child here. A non-library child (or an
+/// unresolved node) clears any stale snapshot so the card never shows orphaned
+/// branding. Display-only — never feeds compilation.
+fn stamp_subworkflow_presentation(graph: &WorkflowGraph, sub_air: &SubWorkflowAir) -> WorkflowGraph {
+    let mut g = graph.clone();
+    for node in &mut g.nodes {
+        if let WorkflowNodeData::SubWorkflow {
+            source_coordinate,
+            presentation,
+            ..
+        } = &mut node.data
+        {
+            let child = sub_air.get(&node.id);
+            *source_coordinate = child.and_then(|c| c.coordinate.clone());
+            *presentation = child
+                .and_then(|c| c.presentation.as_ref())
+                .and_then(|v| serde_json::from_value::<Presentation>(v.clone()).ok());
+        }
+    }
+    g
+}
+
 pub async fn resolve_subworkflow_air(
     state: &AppState,
     publishing_family: Option<Uuid>,
@@ -1649,6 +1682,16 @@ pub async fn resolve_subworkflow_air(
                 .map(|g| derive_child_io(&g))
                 .unwrap_or_else(|| (Port::empty_input(), default_subworkflow_output_port()));
 
+        // Library-node branding (decisions 7/9/12): carry the child's coordinate
+        // + presentation so the publish path can stamp them onto the embedding
+        // node's persisted graph. Only library nodes brand; a plain child leaves
+        // these None and the stamp clears any stale snapshot.
+        let (coordinate, presentation) = if child.template_kind == "library_node" {
+            (child.coordinate.clone(), child.presentation.clone())
+        } else {
+            (None, None)
+        };
+
         out.insert(
             node.id.clone(),
             ResolvedChild {
@@ -1657,6 +1700,8 @@ pub async fn resolve_subworkflow_air(
                 template_id: child.id.to_string(),
                 input_contract,
                 output_contract,
+                coordinate,
+                presentation,
             },
         );
     }

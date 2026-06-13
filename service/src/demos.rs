@@ -1739,10 +1739,18 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     // executor will run. Non-fatal on failure (the executor reads AIR
     // from S3, not the Y.Doc) but a missing Y.Doc means the editor opens
     // an empty workspace.
+    //
+    // Init from the PERSISTED (stamped) graph, not the raw `demo.graph`, so the
+    // seeded editor matches the row — in particular it carries the library-node
+    // branding `stamp_subworkflow_presentation` froze onto embedding SubWorkflow
+    // nodes at compile time (decision 12). Falls back to the raw graph if the
+    // persisted JSON somehow won't reparse.
+    let seeded_graph: crate::models::template::WorkflowGraph =
+        serde_json::from_value(graph_json.clone()).unwrap_or_else(|_| demo.graph.clone());
     if let Err(e) = state
         .yjs
         .persistence
-        .init_doc_from_graph_with_files(template_id, &demo.graph, &files)
+        .init_doc_from_graph_with_files(template_id, &seeded_graph, &files)
         .await
     {
         tracing::warn!(template_id = %template_id, error = %e, "y.doc init failed for seeded demo");
@@ -2861,6 +2869,8 @@ mod tests {
                 template_id: "00000000-0000-0000-0000-00000000008a".to_string(),
                 input_contract: crate::models::template::Port::empty_input(),
                 output_contract: crate::models::template::Port::empty_input(),
+                coordinate: None,
+                presentation: None,
             },
         );
         // Second tool: the `collect_feedback` HumanTask-form SubWorkflow (09b).
@@ -2878,6 +2888,8 @@ mod tests {
                 template_id: "00000000-0000-0000-0000-00000000009b".to_string(),
                 input_contract: crate::models::template::Port::empty_input(),
                 output_contract: crate::models::template::Port::empty_input(),
+                coordinate: None,
+                presentation: None,
             },
         );
 

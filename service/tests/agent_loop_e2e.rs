@@ -1416,6 +1416,8 @@ fn sub_air_with_contract(
             template_id: child_template_id.to_string(),
             input_contract,
             output_contract: Port::empty_input(),
+            coordinate: None,
+            presentation: None,
         },
     );
     sa
