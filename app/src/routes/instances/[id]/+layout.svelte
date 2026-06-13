@@ -417,10 +417,6 @@
 					{/if}
 					<PageHeader title={processName ?? 'Run'} variant="detail" class="mb-0">
 						{#snippet actions()}
-							<Button variant="warm" size="sm" href="/templates/{instance.template_id}">
-								<FileText class="size-3.5" />
-								Template v{instance.template_version}
-							</Button>
 							{#if roleAtLeast(instance.my_effective_role, 'admin')}
 								<Button
 									variant="outline"
@@ -465,6 +461,10 @@
 									Save as test
 								</Button>
 							{/if}
+							<Button variant="warm" size="sm" href="/templates/{instance.template_id}">
+								<FileText class="size-3.5" />
+								Template v{instance.template_version}
+							</Button>
 						{/snippet}
 					</PageHeader>
 
@@ -507,6 +507,7 @@
 							<AuthorshipChips
 								size="sm"
 								inline
+								showTime={false}
 								createdBy={instance.created_by}
 								createdAt={instance.created_at}
 								updatedBy={instance.updated_by}

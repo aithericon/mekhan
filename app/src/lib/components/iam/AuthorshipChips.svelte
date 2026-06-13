@@ -20,6 +20,7 @@
 		updatedAt,
 		size = 'xs',
 		inline = false,
+		showTime = true,
 		class: className
 	}: {
 		createdBy?: string | null;
@@ -29,6 +30,13 @@
 		size?: 'xs' | 'sm';
 		/** Lay created/updated out on one wrapping row (· separated) instead of stacked. */
 		inline?: boolean;
+		/**
+		 * Show the "· <relative time>" suffix. Off when a sibling already shows
+		 * the same timestamps (e.g. the instance header's started/finished line),
+		 * so the row reads "Created by <user>" without the redundant age. The
+		 * timestamps are still used to decide whether the Updated line renders.
+		 */
+		showTime?: boolean;
 		class?: string;
 	} = $props();
 
@@ -59,7 +67,7 @@
 			{:else}
 				<span class="italic">unknown</span>
 			{/if}
-			{#if createdAt}<span>· {timeAgo(createdAt)}</span>{/if}
+			{#if createdAt && showTime}<span>· {timeAgo(createdAt)}</span>{/if}
 		</span>
 	{/if}
 	{#if showUpdated}
@@ -71,7 +79,7 @@
 			{:else}
 				<span class="font-medium">System</span>
 			{/if}
-			{#if updatedAt}<span>· {timeAgo(updatedAt)}</span>{/if}
+			{#if updatedAt && showTime}<span>· {timeAgo(updatedAt)}</span>{/if}
 		</span>
 	{/if}
 </div>
