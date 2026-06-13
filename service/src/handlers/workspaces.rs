@@ -1,10 +1,11 @@
-//! Workspaces CRUD — list, detail, member admin.
+//! Workspaces CRUD — create, list, detail, member admin.
 //!
-//! Workspace creation is NOT a self-serve action in Phase A: workspaces are
-//! seeded (`default`, `demos`) or auto-provisioned from a Zitadel org claim
-//! by `DbPrincipalResolver`. The endpoints here let an authenticated user
-//! see which workspaces they belong to, inspect a single workspace, and
-//! (with the admin role) manage its membership roster.
+//! Any authenticated principal may **create** a standalone workspace
+//! (`create_workspace`) and becomes its `owner`; workspaces also arrive
+//! out-of-band (seeded `default`/`demos`, or Zitadel-org auto-provisioned by
+//! `DbPrincipalResolver`). The remaining endpoints let a member see which
+//! workspaces they belong to, inspect a single workspace, and (with the admin
+//! role) manage its membership roster.
 
 use axum::{
     extract::{Path, State},
@@ -17,9 +18,115 @@ use crate::auth::model::SUBJECT_UUID_NAMESPACE;
 use crate::auth::{map_to_api_error, require_member, require_role, AuthUser, Role};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
-    AddMemberRequest, UpdateMemberRoleRequest, WorkspaceMember, WorkspaceSummary,
+    AddMemberRequest, CreateWorkspaceRequest, UpdateMemberRoleRequest, WorkspaceMember,
+    WorkspaceSummary,
 };
 use crate::AppState;
+
+/// Maximum slug length. Comfortably under any DB/identifier limit and keeps
+/// derived net subjects (`petri.{ws}.…`) and S3 prefixes sane.
+const MAX_SLUG_LEN: usize = 63;
+
+/// Lower-case, hyphenate, and strip a free-text string down to a
+/// URL/NATS-token-safe slug (`[a-z0-9-]`, no leading/trailing/repeated
+/// hyphens). Returns an empty string if nothing slug-worthy survives (e.g. an
+/// all-emoji name) — the caller treats that as "derive from display_name" or
+/// 400.
+fn slugify(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_dash = false;
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !out.is_empty() && !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+        if out.len() >= MAX_SLUG_LEN {
+            break;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// POST /api/v1/workspaces
+///
+/// Self-serve workspace (tenant) creation. Any authenticated principal may
+/// create a workspace; they become its `owner` in the same transaction. The
+/// workspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is
+/// FALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with
+/// membership (not an IdP org) as the source of truth. An operator can later
+/// bind it to a Zitadel org out-of-band; the auth resolver is purely additive
+/// and never prunes the owner membership minted here.
+#[utoipa::path(
+    post,
+    path = "/api/v1/workspaces",
+    request_body = CreateWorkspaceRequest,
+    responses(
+        (status = 201, description = "Workspace created; caller is owner", body = WorkspaceSummary),
+        (status = 400, description = "Empty name / unsluggable", body = ErrorResponse),
+        (status = 409, description = "Slug already taken", body = ErrorResponse),
+    ),
+    tag = "workspaces",
+)]
+pub async fn create_workspace(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<CreateWorkspaceRequest>,
+) -> Result<(StatusCode, Json<WorkspaceSummary>), ApiError> {
+    let display_name = req.display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err(ApiError::bad_request("display_name must not be empty"));
+    }
+
+    // An explicit slug is sanitized through the same slugifier as the derived
+    // one, so the stored value is always token-safe regardless of input. Fall
+    // back to deriving from the display name when none survives.
+    let slug = req
+        .slug
+        .as_deref()
+        .map(slugify)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| slugify(&display_name));
+    if slug.is_empty() {
+        return Err(ApiError::bad_request(
+            "could not derive a slug — provide a name with letters or digits",
+        ));
+    }
+
+    let owner_id = user.subject_as_uuid();
+
+    let mut tx = state.db.begin().await?;
+    let row: WorkspaceSummary = match sqlx::query_as(
+        "INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) \
+         RETURNING id, slug, display_name, is_system, created_at",
+    )
+    .bind(&slug)
+    .bind(&display_name)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+            return Err(ApiError::conflict(format!(
+                "a workspace with slug '{slug}' already exists"
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(row.id)
+    .bind(owner_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
 
 /// GET /api/v1/workspaces
 ///
@@ -317,5 +424,27 @@ mod tests {
     fn unknown_role_string_rejected() {
         assert!(Role::from_db("ceo").is_none());
         assert!(Role::from_db("owner").is_some());
+    }
+
+    #[test]
+    fn slugify_basic_and_edge_cases() {
+        assert_eq!(slugify("Acme Robotics"), "acme-robotics");
+        assert_eq!(slugify("  Mixed__Case--Name  "), "mixed-case-name");
+        assert_eq!(slugify("Über Café 42"), "ber-caf-42");
+        // Collapses runs and trims edge hyphens.
+        assert_eq!(slugify("---a   b---"), "a-b");
+        // Nothing slug-worthy survives → empty (caller maps to 400).
+        assert_eq!(slugify("🚀🚀🚀"), "");
+        assert_eq!(slugify("   "), "");
+    }
+
+    #[test]
+    fn slugify_respects_max_len_and_trims_trailing_dash() {
+        let long = "a".repeat(100);
+        assert_eq!(slugify(&long).len(), MAX_SLUG_LEN);
+        // A name whose truncation lands on a hyphen must not keep it.
+        let s = slugify(&format!("{} z", "a".repeat(MAX_SLUG_LEN)));
+        assert!(!s.ends_with('-'));
+        assert!(s.len() <= MAX_SLUG_LEN);
     }
 }

@@ -48,6 +48,23 @@ pub struct WorkspaceMember {
     pub avatar_url: Option<String>,
 }
 
+/// Body for `POST /workspaces` — self-serve workspace creation.
+///
+/// `display_name` is required. `slug` is optional: when omitted (or empty
+/// after sanitization) the server derives one from `display_name`. Either way
+/// the value is run through the same slugifier so the stored slug is always
+/// URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —
+/// `zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its
+/// `owner` in the same transaction.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateWorkspaceRequest {
+    pub display_name: String,
+    /// Optional explicit slug. Sanitized server-side; if it sanitizes to empty
+    /// the slug is derived from `display_name` instead.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AddMemberRequest {
     /// OIDC `sub` claim — the server derives `user_id` via

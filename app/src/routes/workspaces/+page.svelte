@@ -2,9 +2,14 @@
 	import { onMount } from 'svelte';
 	import Building from '@lucide/svelte/icons/building';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 	import { workspaces } from '$lib/workspaces/store.svelte';
+	import CreateWorkspaceDialog from '$lib/workspaces/CreateWorkspaceDialog.svelte';
+
+	let createOpen = $state(false);
 
 	onMount(() => workspaces.load());
 
@@ -16,14 +21,27 @@
 		<PageHeader
 			title="Workspaces"
 			subtitle="Every workspace you're a member of. Click one to manage members, projects, and tags."
-		/>
+		>
+			{#snippet actions()}
+				<Button size="sm" onclick={() => (createOpen = true)} data-testid="workspaces-new-button">
+					<Plus class="mr-1.5 size-4" />
+					New workspace
+				</Button>
+			{/snippet}
+		</PageHeader>
 	{/snippet}
 
 	{#if !workspaces.loaded}
 		<div class="text-sm text-muted-foreground">Loading…</div>
 	{:else if list.length === 0}
-		<div class="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-			You don't belong to any workspace yet. Ask an admin to add you.
+		<div
+			class="flex flex-col items-start gap-3 rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground"
+		>
+			<p>You don't belong to any workspace yet. Create one to get started.</p>
+			<Button size="sm" onclick={() => (createOpen = true)} data-testid="workspaces-empty-new-button">
+				<Plus class="mr-1.5 size-4" />
+				New workspace
+			</Button>
 		</div>
 	{:else}
 		<div class="space-y-2" data-testid="workspaces-list">
@@ -49,3 +67,5 @@
 		</div>
 	{/if}
 </PageShell>
+
+<CreateWorkspaceDialog bind:open={createOpen} />
