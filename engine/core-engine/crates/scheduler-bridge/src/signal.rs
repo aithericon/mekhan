@@ -154,4 +154,56 @@ mod tests {
             "petri.ws1.nomad-batch.signal.sig_running"
         );
     }
+
+    #[test]
+    fn workspace_from_mekhan_net_id() {
+        let ws = "00000000-0000-0000-0000-000000000000";
+        let inst = "5da51fac-215b-48bb-8207-c5a763d2c45a";
+        let net = format!("mekhan-{ws}-{inst}");
+        assert_eq!(workspace_from_net_id(&net).as_deref(), Some(ws));
+    }
+
+    #[test]
+    fn workspace_from_non_mekhan_net_id_is_none() {
+        // SDK / resource-pool nets aren't workspace-qualified.
+        assert_eq!(workspace_from_net_id("gpu-resource"), None);
+        assert_eq!(workspace_from_net_id("nomad-batch"), None);
+        // A bare mekhan-{uuid} (no second segment) is not the 3-segment form.
+        assert_eq!(
+            workspace_from_net_id("mekhan-5da51fac-215b-48bb-8207-c5a763d2c45a"),
+            None
+        );
+    }
+
+    #[test]
+    fn workspace_for_signal_precedence() {
+        let ws = "11111111-1111-1111-1111-111111111111";
+        let net = format!("mekhan-{ws}-5da51fac-215b-48bb-8207-c5a763d2c45a");
+        // 1. An explicit (phase-5 status body) workspace wins outright.
+        assert_eq!(workspace_for_signal("explicit-ws", &net), "explicit-ws");
+        // 2. Empty explicit → recover from the mekhan net_id.
+        assert_eq!(workspace_for_signal("", &net), ws);
+        // 3. Empty explicit + non-mekhan net → the default sentinel.
+        assert_eq!(workspace_for_signal("", "gpu-resource"), DEFAULT_WORKSPACE);
+    }
+
+    /// Regression guard: a full status→signal subject for a mekhan net with no
+    /// explicit workspace must land on `petri.{ws}.{net}.signal.{place}` — the
+    /// exact subject the net's inbox listener filters. The pre-multitenancy
+    /// `petri.signal.{net}.{place}` form (which silently stranded every signal)
+    /// must never be produced again.
+    #[test]
+    fn status_signal_subject_is_workspace_namespaced() {
+        let ws = "00000000-0000-0000-0000-000000000000";
+        let net = format!("mekhan-{ws}-5da51fac-215b-48bb-8207-c5a763d2c45a");
+        let subject = signal_subject(&workspace_for_signal("", &net), &net, "greet/sig_completed");
+        assert_eq!(
+            subject,
+            format!("petri.{ws}.{net}.signal.greet/sig_completed")
+        );
+        assert!(
+            !subject.starts_with("petri.signal."),
+            "must not regress to the pre-multitenancy flat signal subject"
+        );
+    }
 }
