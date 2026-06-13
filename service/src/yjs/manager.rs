@@ -54,6 +54,19 @@ impl YjsManager {
         Ok(room)
     }
 
+    /// Return the live in-memory room for a template WITHOUT creating one.
+    ///
+    /// `get_or_create_room` would spin up (and leak) a room as a side effect —
+    /// wrong for read-only reconstruction. This is the seam the graph
+    /// reconstruction uses to prefer the authoritative collaborative state
+    /// (what every connected editor sees) over the persisted `yjs_documents`
+    /// rows, which can lag the room across a background compaction.
+    pub fn get_room_if_exists(&self, template_id: Uuid) -> Option<Arc<YjsRoom>> {
+        self.rooms
+            .get(&template_id)
+            .map(|room| Arc::clone(room.value()))
+    }
+
     /// Remove a room from the manager if it has no connected clients.
     pub fn remove_room_if_empty(&self, template_id: Uuid) {
         self.rooms.remove_if(&template_id, |_, _| true);

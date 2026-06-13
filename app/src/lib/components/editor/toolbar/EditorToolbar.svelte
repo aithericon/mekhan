@@ -42,8 +42,6 @@
 		runsFamilyId?: string;
 		onsave?: () => void;
 		onpublish: () => void;
-		/** Publish, then open the run dialog on success (drafts only). */
-		onpublishrun?: () => void;
 		onpreview: () => void;
 		/** Fork a published template into a fresh editable draft version. */
 		onnewversion?: () => void;
@@ -84,7 +82,6 @@
 		provider,
 		onsave,
 		onpublish,
-		onpublishrun,
 		onpreview,
 		onnewversion,
 		ondiscard,
@@ -304,18 +301,6 @@
 				<Rocket class="size-3.5" />
 				Run
 			</Button>
-		{:else if !published && onrundraft}
-			<Button
-				variant="outline"
-				size="sm"
-				data-testid="btn-run-draft"
-				disabled={saving}
-				onclick={onrundraft}
-				title="Run this draft without publishing (compiled per-run; creates a draft instance)"
-			>
-				<FlaskConical class="size-3.5" />
-				Run draft
-			</Button>
 		{/if}
 
 		{#if published && onnewversion}
@@ -342,16 +327,17 @@
 					Discard
 				</Button>
 			{/if}
-			{#if onpublishrun}
+			{#if onrundraft}
 				<Button
-					variant="outline"
+					variant="warm"
 					size="sm"
-					data-testid="btn-publish-run"
-					disabled={published || saving}
-					onclick={onpublishrun}
+					data-testid="btn-run-draft"
+					disabled={saving}
+					onclick={onrundraft}
+					title="Run this draft without publishing (compiled per-run from the live canvas; creates a draft instance)"
 				>
-					<Rocket class="size-3.5" />
-					Publish & Run
+					<FlaskConical class="size-3.5" />
+					Run draft
 				</Button>
 			{/if}
 			<Button

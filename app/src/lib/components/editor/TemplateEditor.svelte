@@ -135,51 +135,25 @@
 		}
 	}
 
-	// "Publish & Run" handoff. Plain (non-rune) on purpose — nothing renders
-	// off it; it only routes publish success into opening the run dialog. It
-	// survives the publish-gate modal so Force/Retry from the gate still
-	// completes the run; closing the gate or any hard failure aborts it.
-	let runAfterPublish = false;
-
 	async function handlePublish(force = false) {
-		if (!template || template.published) {
-			runAfterPublish = false;
-			return;
-		}
+		if (!template || template.published) return;
 		try {
 			saving = true;
 			template = await publishTemplate(template.id, force);
 			compileErrors.clear();
 			publishGate = null;
-			if (runAfterPublish) {
-				// `template` is the published row now, so the dialog opens in the
-				// same state handleRun() would require (a stale draft-run lock
-				// from an earlier "Run draft" must not force mode 'draft').
-				runAfterPublish = false;
-				runDraftLocked = false;
-				runDialogOpen = true;
-			}
 		} catch (e) {
 			if (e instanceof PublishGateError) {
-				// Keep runAfterPublish: the gate modal's Force publish / Retry
-				// re-enter handlePublish and can still finish the handoff.
 				publishGate = e.failingTests;
 			} else if (e instanceof CompileApiError) {
-				runAfterPublish = false;
 				compileErrors.set(e.compileErrors);
 				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 			} else {
-				runAfterPublish = false;
 				error = e instanceof Error ? e.message : 'Failed to publish';
 			}
 		} finally {
 			saving = false;
 		}
-	}
-
-	function handlePublishAndRun() {
-		runAfterPublish = true;
-		void handlePublish(false);
 	}
 
 	async function handleNewVersion() {
@@ -567,7 +541,6 @@
 				awareness={session.awareness}
 				provider={session.provider}
 				onpublish={() => handlePublish(false)}
-				onpublishrun={template && !template.published ? handlePublishAndRun : undefined}
 				onpreview={handlePreview}
 				onnewversion={handleNewVersion}
 				ondiscard={template && !template.published
@@ -686,8 +659,6 @@
 	failingTests={publishGate ?? []}
 	onclose={() => {
 		publishGate = null;
-		// Abandoning the gate abandons a pending Publish & Run handoff too.
-		runAfterPublish = false;
 	}}
 	onforce={async () => {
 		publishGate = null;

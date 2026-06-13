@@ -1061,6 +1061,43 @@ async fn reconstruct_graph_from_ydoc(
     state: &AppState,
     template_id: Uuid,
 ) -> Result<Option<(WorkflowGraph, HashMap<String, HashMap<String, String>>)>, String> {
+    // Prefer the LIVE in-memory room when an editor session is open. The room
+    // holds the authoritative collaborative state — every connected canvas sees
+    // it, and it's updated synchronously on each WS message. The persisted
+    // `yjs_documents` rows can lag it: most acutely across a background
+    // compaction (a COMPACTION_THRESHOLD crossing snapshots + deletes update
+    // rows, and any edit that races that pass is dropped from the DB while the
+    // room keeps the full state). Publish AND the draft dev-run both reconstruct
+    // through here, so reading the live room is what lets "Run draft" capture
+    // the canvas exactly as authored instead of a stale snapshot. Only adopt it
+    // when it actually carries nodes — a just-connected (not-yet-seeded) or
+    // emptied room must still fall through to persistence / the legacy `graph`
+    // column rather than compile an empty graph.
+    if let Some(room) = state.yjs.get_room_if_exists(template_id) {
+        let full_state = room.encode_full_state().await;
+        let live = tokio::task::spawn_blocking(
+            move || -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), String> {
+                use crate::yjs::doc_ops;
+                use crate::yjs::persistence::YjsPersistence;
+
+                // `encode_full_state` is `encode_state_as_update_v1`, which
+                // decodes like any persisted snapshot — feed it as the snapshot
+                // with no trailing incremental updates.
+                let doc = YjsPersistence::build_doc_from_raw(Some(&full_state), &[])
+                    .map_err(|e| e.to_string())?;
+                let graph = doc_ops::doc_to_graph(&doc)?;
+                let files = doc_ops::extract_files_from_doc(&doc);
+                Ok((graph, files))
+            },
+        )
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??;
+
+        if !live.0.nodes.is_empty() {
+            return Ok(Some(live));
+        }
+    }
+
     let has_doc = state
         .yjs
         .persistence
