@@ -268,6 +268,29 @@ impl ArtifactStore {
         Ok(key)
     }
 
+    /// Namespace an object-store key under its owning workspace so two tenants'
+    /// byte-identical artifacts never collide in the flat bucket.
+    ///
+    /// The bucket is one flat keyspace shared by every workspace; catalogue
+    /// `storage_path`s are executor-set and opaque, so without a prefix two
+    /// tenants uploading the same `templates/.../out.csv` (or any colliding
+    /// key) would clobber each other's bytes. This wraps a key as
+    /// `ws/{workspace_id}/{key}`. Idempotent: a key already carrying the
+    /// `ws/{workspace_id}/` prefix is returned unchanged, so re-registering an
+    /// already-prefixed path (redelivery) doesn't double-nest. The nil
+    /// workspace (pool/infra/legacy) is left UNPREFIXED to preserve existing
+    /// keys for already-stored artifacts.
+    pub fn workspace_scoped_key(workspace_id: Uuid, key: &str) -> String {
+        if workspace_id.is_nil() {
+            return key.to_string();
+        }
+        let prefix = format!("ws/{workspace_id}/");
+        if key.starts_with(&prefix) {
+            return key.to_string();
+        }
+        format!("{prefix}{}", key.trim_start_matches('/'))
+    }
+
     /// Retrieve a file from S3 by key. Returns (bytes, content_type).
     pub async fn get_file(&self, key: &str) -> Result<(Vec<u8>, String), ArtifactStoreError> {
         let resp = self
@@ -392,6 +415,39 @@ mod draft_run_key_tests {
         assert_eq!(
             config,
             format!("instances/{iid}/draft-artifacts/node_1/node-config.json")
+        );
+    }
+}
+
+#[cfg(test)]
+mod workspace_scoped_key_tests {
+    use super::ArtifactStore;
+    use uuid::Uuid;
+
+    #[test]
+    fn nil_workspace_is_unprefixed() {
+        let key = "templates/abc/v1/node_1/out.csv";
+        assert_eq!(ArtifactStore::workspace_scoped_key(Uuid::nil(), key), key);
+    }
+
+    #[test]
+    fn real_workspace_prefixes_once_and_is_idempotent() {
+        let ws = Uuid::from_u128(0x1234);
+        let key = "templates/abc/v1/node_1/out.csv";
+        let scoped = ArtifactStore::workspace_scoped_key(ws, key);
+        assert_eq!(scoped, format!("ws/{ws}/{key}"));
+        // Re-scoping an already-prefixed key (redelivery) must not double-nest.
+        assert_eq!(ArtifactStore::workspace_scoped_key(ws, &scoped), scoped);
+    }
+
+    #[test]
+    fn two_tenants_same_bytes_get_disjoint_keys() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let key = "templates/shared/v1/n/out.csv";
+        assert_ne!(
+            ArtifactStore::workspace_scoped_key(a, key),
+            ArtifactStore::workspace_scoped_key(b, key),
         );
     }
 }

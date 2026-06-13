@@ -1,7 +1,9 @@
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
+use crate::auth::AuthUser;
 use crate::inventory::model::{
     InventoryEntry, InventoryIndexRequest, InventoryIndexResponse, InventoryRegisterRequest,
     InventoryRegisterResponse, InventoryStats,
@@ -40,9 +42,11 @@ fn repo(state: &AppState) -> PgInventoryRepository {
 )]
 pub async fn register(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<InventoryRegisterRequest>,
 ) -> Result<Json<InventoryRegisterResponse>, ApiError> {
-    let counts = repo(&state).register(&req).await.map_err(|e| {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let counts = repo(&state).register(ws, &req).await.map_err(|e| {
         tracing::warn!("inventory register: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -68,9 +72,11 @@ pub async fn register(
 )]
 pub async fn index(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<InventoryIndexRequest>,
 ) -> Result<Json<InventoryIndexResponse>, ApiError> {
-    let counts = repo(&state).index(&req).await.map_err(|e| {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let counts = repo(&state).index(ws, &req).await.map_err(|e| {
         tracing::warn!("inventory index: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -93,9 +99,11 @@ pub async fn index(
 )]
 pub async fn list_entries(
     State(state): State<AppState>,
+    user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let response = repo(&state).list_entries(&params).await.map_err(|e| {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let response = repo(&state).list_entries(ws, &params).await.map_err(|e| {
         tracing::warn!("inventory list: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -115,8 +123,12 @@ pub async fn list_entries(
     ),
     tag = "inventory",
 )]
-pub async fn stats(State(state): State<AppState>) -> Result<Json<InventoryStats>, ApiError> {
-    let stats = repo(&state).stats().await.map_err(|e| {
+pub async fn stats(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<InventoryStats>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let stats = repo(&state).stats(ws).await.map_err(|e| {
         tracing::warn!("inventory stats: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -167,13 +179,15 @@ pub struct MarkCanonicalResponse {
 )]
 pub async fn reconcile_batch(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<ReconcileBatchRequest>,
 ) -> Result<Json<ReconcileCounts>, ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
     let ctx = reconcile::ObservationContext {
         endpoint_root: req.endpoint_root.clone(),
         serve_group: req.serve_group.clone(),
     };
-    let counts = reconcile::reconcile_batch(&state.db, &req.file_server_id, &req.items, &ctx)
+    let counts = reconcile::reconcile_batch(&state.db, ws, &req.file_server_id, &req.items, &ctx)
         .await
         .map_err(|e| {
             tracing::warn!("reconcile-batch: {e}");

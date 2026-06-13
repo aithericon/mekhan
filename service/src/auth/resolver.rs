@@ -8,6 +8,28 @@
 //! workspace when the user is a member there. Membership is auto-provisioned
 //! on the matching-org path so first login from a known Zitadel org grants
 //! workspace access without an explicit admin step.
+//!
+//! ## Multi-org tenancy (flag-gated, `auth.multi_org`)
+//!
+//! With `multi_org = false` (the default — dev_noop and single-org Zitadel
+//! deployments) the resolver auto-joins the seeded `default` workspace as
+//! `editor` and, if the principal carries one resolvable org, returns that
+//! org-workspace directly (the legacy single-org path).
+//!
+//! With `multi_org = true` the resolver instead:
+//!   - maps **every** Zitadel org claim to its bound workspace and auto-
+//!     provisions membership in each (a principal can belong to several
+//!     org-workspaces at once);
+//!   - **drops** the auto-join-`default`-as-editor fallback entirely — org-
+//!     bound users live in their org-workspace(s); users with no org binding
+//!     are NOT silently granted the shared `default` tenant;
+//!   - picks the active workspace from the principal's full membership set
+//!     (the `active_workspace` cookie override, applied downstream, can swap
+//!     to any other membership).
+//!
+//! The flag never touches `dev_noop`: the dev-user's seeded `default`-as-owner
+//! `workspace_members` row pre-dates resolution, so it is honoured in either
+//! mode (the flag governs auto-JOIN, not pre-existing membership).
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -21,6 +43,28 @@ use super::port::PrincipalResolver;
 /// `{ "<role>": { "<org_id>": "<org_domain>" } }`. We flatten to the set of
 /// role names and adopt the first org_id we encounter as the user's org.
 const ZITADEL_ROLES_CLAIM: &str = "urn:zitadel:iam:org:project:roles";
+
+/// Extract the full **set** of Zitadel org ids referenced anywhere in the
+/// roles claim. A principal granted roles in several orgs (the multi-org
+/// case) shows up here as multiple ids; the single-org case yields one (or
+/// zero). Order is deterministic-ish (BTreeMap iteration) but callers should
+/// not depend on it for tenant selection — that's the membership-preference
+/// query's job.
+fn org_ids_from_claims(claims: &VerifiedClaims) -> Vec<String> {
+    let Some(Value::Object(roles_obj)) = claims.extra.get(ZITADEL_ROLES_CLAIM) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for orgs in roles_obj.values().filter_map(|v| v.as_object()) {
+        for org_id in orgs.keys() {
+            if seen.insert(org_id.clone()) {
+                out.push(org_id.clone());
+            }
+        }
+    }
+    out
+}
 
 /// Default `workspace_members` role when auto-provisioning a Zitadel-bound
 /// user. Conservative on first contact; admins can promote later via the
@@ -40,18 +84,15 @@ impl PrincipalResolver for StaticPrincipalResolver {
         // Mirrored into `user_profiles.avatar_url` by the extractor upsert.
         let avatar_url = string_claim(&claims, "picture");
 
-        let (roles, org_id) = match claims.extra.get(ZITADEL_ROLES_CLAIM) {
-            Some(Value::Object(roles_obj)) => {
-                let roles: Vec<String> = roles_obj.keys().cloned().collect();
-                let org_id = roles_obj
-                    .values()
-                    .filter_map(|orgs| orgs.as_object())
-                    .flat_map(|m| m.keys().cloned())
-                    .next();
-                (roles, org_id)
-            }
-            _ => (Vec::new(), None),
+        let roles: Vec<String> = match claims.extra.get(ZITADEL_ROLES_CLAIM) {
+            Some(Value::Object(roles_obj)) => roles_obj.keys().cloned().collect(),
+            _ => Vec::new(),
         };
+        // `org_id` is metadata only (the authoritative tenant is
+        // `workspace_id`). Keep the legacy "first org id" semantics here; the
+        // multi-org path in `DbPrincipalResolver` reads the full set via
+        // `org_ids_from_claims`.
+        let org_id = org_ids_from_claims(&claims).into_iter().next();
 
         Ok(AuthUser {
             subject: claims.subject,
@@ -83,13 +124,27 @@ fn string_claim(claims: &VerifiedClaims, key: &str) -> Option<String> {
 pub struct DbPrincipalResolver {
     inner: StaticPrincipalResolver,
     db: PgPool,
+    /// Mirrors `AuthConfig.multi_org`. `false` (default) keeps the legacy
+    /// single-org behaviour: auto-join `default` as `editor`. `true` enables
+    /// real multi-org tenancy — see the gated branches in [`Self::resolve`].
+    multi_org: bool,
 }
 
 impl DbPrincipalResolver {
+    /// Construct with the legacy single-org behaviour (multi-org OFF).
+    /// Kept as the zero-config constructor so existing call sites / tests
+    /// that don't care about tenancy are unaffected.
     pub fn new(db: PgPool) -> Self {
+        Self::with_multi_org(db, false)
+    }
+
+    /// Construct with the multi-org flag wired from `AuthConfig.multi_org`.
+    /// The composition root (`main.rs`) uses this; pass `config.auth.multi_org`.
+    pub fn with_multi_org(db: PgPool, multi_org: bool) -> Self {
         Self {
             inner: StaticPrincipalResolver,
             db,
+            multi_org,
         }
     }
 }
@@ -97,6 +152,10 @@ impl DbPrincipalResolver {
 #[async_trait]
 impl PrincipalResolver for DbPrincipalResolver {
     async fn resolve(&self, claims: VerifiedClaims) -> Result<AuthUser, AuthError> {
+        // Extract the full org-id set BEFORE delegating (the inner resolver
+        // consumes `claims` and only keeps the first org id as metadata).
+        let org_ids = org_ids_from_claims(&claims);
+
         let mut user = self.inner.resolve(claims).await?;
         let user_id = user.subject_as_uuid();
 
@@ -105,24 +164,53 @@ impl PrincipalResolver for DbPrincipalResolver {
         // of demos — not merely to see demo templates via `visibility='public'`
         // — so the demos workspace appears in their workspace picker and
         // project listings without an admin step. Viewer role: read-only.
+        // Orthogonal to multi-org: demos is a shared system namespace.
         ensure_system_workspace_membership(&self.db, user_id).await?;
 
-        // Auto-membership in the `default` workspace as editor. The deployed
-        // instance is single-org: migration 20240124 backfilled every
+        // Resolve every org claim to its bound workspace and auto-provision
+        // membership. A multi-org principal lands in several workspaces here;
+        // a single-org one in (at most) one. `primary_org_workspace` keeps the
+        // first resolvable one for the single-org fast path below.
+        let mut primary_org_workspace: Option<Uuid> = None;
+        for zitadel_org_id in &org_ids {
+            if let Some(ws_id) = lookup_workspace_by_zitadel_org(&self.db, zitadel_org_id).await? {
+                upsert_member(&self.db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
+                // First resolvable org id seeds the "primary" pick — mirrors
+                // the legacy `user.org_id` (which the static resolver set to
+                // the first org). The membership-preference query below makes
+                // the real choice in multi-org mode; this is only the
+                // single-org fast path.
+                if primary_org_workspace.is_none() {
+                    primary_org_workspace = Some(ws_id);
+                }
+            }
+        }
+
+        // `default` workspace auto-editor membership.
+        //
+        // multi_org OFF (legacy single-org, the dev default): auto-join the
+        // `default` workspace as editor. Migration 20240124 backfilled every
         // pre-existing (non-demo) template into `default`, but 20240123 seeded
         // only the dev-noop user as a member there. Without this step real
         // (Zitadel) principals land in `demos` alone (viewer) and get a 403
         // editing any migrated template. Editor — not owner/admin — so write
-        // access to templates is granted while tenancy actions (visibility,
-        // member admin) stay gated. A future multi-org cut would scope this to
-        // the org-bound workspace instead.
-        ensure_default_workspace_membership(&self.db, user_id).await?;
+        // access is granted while tenancy actions stay gated.
+        //
+        // multi_org ON (real tenancy): do NOT auto-join `default`. Org-bound
+        // users live in their org-workspace(s); users with no org binding get
+        // only their explicit memberships — they are not silently granted the
+        // shared `default` tenant. (`dev_noop`'s dev-user keeps its seeded
+        // `default`-as-owner row regardless — this only governs auto-JOIN, not
+        // pre-existing membership, so dev_noop is unaffected.)
+        if !self.multi_org {
+            ensure_default_workspace_membership(&self.db, user_id).await?;
+        }
 
-        // Path 1: known Zitadel org → look up the bound workspace, auto-
-        // provision membership idempotently, return that workspace.
-        if let Some(ref zitadel_org_id) = user.org_id {
-            if let Some(ws_id) = lookup_workspace_by_zitadel_org(&self.db, zitadel_org_id).await? {
-                upsert_member(&self.db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
+        // Single-org fast path (multi_org OFF): if exactly the legacy behaviour
+        // applies — one resolvable org — return that workspace directly,
+        // preserving the prior `Path 1` semantics and its role re-read.
+        if !self.multi_org {
+            if let Some(ws_id) = primary_org_workspace {
                 user.workspace_id = Some(ws_id);
                 // Re-read rather than trust DEFAULT_AUTOPROVISION_ROLE: the
                 // upsert is `DO NOTHING`, so an existing member keeps whatever
@@ -132,11 +220,17 @@ impl PrincipalResolver for DbPrincipalResolver {
             }
         }
 
-        // Path 2: no org claim or no binding — fall back to the default
-        // workspace, but only if the user is already a member there
-        // (dev-noop user is seeded as such; arbitrary Zitadel principals
-        // are not). Prefer a non-system workspace so the picker doesn't
-        // land on `demos` for users who *also* belong to a real tenant.
+        // Active-workspace pick (covers BOTH modes' fall-through):
+        //   - multi_org ON: choose among ALL memberships (org-workspaces +
+        //     any explicit grants); the per-session cookie override applied
+        //     downstream in `active_workspace::apply_override` can swap to any
+        //     other membership.
+        //   - multi_org OFF with no resolvable org: the legacy `Path 2` —
+        //     prefer `default`, then non-system, then by age.
+        // In every case `membership_workspace` returns `None` when the user
+        // holds no membership at all (the multi_org "no org binding, no grant"
+        // case), leaving `workspace_id = None` — handlers reject rather than
+        // grant ambient access.
         user.workspace_id = membership_workspace(&self.db, user_id).await?;
         if let Some(ws_id) = user.workspace_id {
             user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
@@ -282,5 +376,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(user.avatar_url, None);
+    }
+
+    /// Build a Zitadel roles claim: `{ role: { org_id: "domain" } }`, with
+    /// every `(role, org_id)` pair from the input mapped in.
+    fn roles_claim(pairs: &[(&str, &str)]) -> Value {
+        let mut roles = serde_json::Map::new();
+        for (role, org) in pairs {
+            let entry = roles
+                .entry((*role).to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Value::Object(orgs) = entry {
+                orgs.insert((*org).to_string(), Value::String(format!("{org}.example")));
+            }
+        }
+        Value::Object(roles)
+    }
+
+    #[test]
+    fn org_ids_empty_when_no_roles_claim() {
+        assert!(org_ids_from_claims(&claims_with(BTreeMap::new())).is_empty());
+    }
+
+    #[test]
+    fn org_ids_single_org() {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            ZITADEL_ROLES_CLAIM.into(),
+            roles_claim(&[("editor", "org-a"), ("viewer", "org-a")]),
+        );
+        assert_eq!(org_ids_from_claims(&claims_with(extra)), vec!["org-a"]);
+    }
+
+    #[test]
+    fn org_ids_multi_org_deduped() {
+        // Roles spread across two orgs → both ids, each once, deterministic order.
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            ZITADEL_ROLES_CLAIM.into(),
+            roles_claim(&[
+                ("editor", "org-a"),
+                ("admin", "org-b"),
+                ("viewer", "org-b"),
+            ]),
+        );
+        let ids = org_ids_from_claims(&claims_with(extra));
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"org-a".to_string()));
+        assert!(ids.contains(&"org-b".to_string()));
+    }
+
+    #[tokio::test]
+    async fn static_resolver_keeps_first_org_as_metadata() {
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            ZITADEL_ROLES_CLAIM.into(),
+            roles_claim(&[("editor", "org-a"), ("admin", "org-b")]),
+        );
+        let user = StaticPrincipalResolver
+            .resolve(claims_with(extra))
+            .await
+            .unwrap();
+        // `org_id` is the first of the sorted set — metadata only.
+        assert!(user.org_id.is_some());
+        assert!(user.roles.contains(&"editor".to_string()));
     }
 }

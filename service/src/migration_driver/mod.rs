@@ -431,10 +431,12 @@ async fn register_hashed(
 ) -> Result<(), DriverError> {
     let mut tx = pool.begin().await?;
 
-    // Catalogue row keyed on content_hash (dedup across copies).
+    // Catalogue row keyed on (workspace_id, content_hash) (dedup across copies).
+    // This legacy disk-migration driver has no per-tenant context, so rows land
+    // in the default workspace (workspace_id defaults to Uuid::nil()).
     sqlx::query(
         "INSERT INTO catalogue_entries (content_hash, category, size_bytes) \
-         VALUES ($1, $2, $3) ON CONFLICT (content_hash) DO NOTHING",
+         VALUES ($1, $2, $3) ON CONFLICT (workspace_id, content_hash) DO NOTHING",
     )
     .bind(digest)
     .bind(category)

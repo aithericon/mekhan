@@ -68,6 +68,7 @@ fn load_scenario_request_wire_carries_skip_mask_and_stage_overrides() {
 
     let envelope = LoadScenarioRequest {
         scenario,
+        workspace_id: None,
         skip_mask: vec!["t_skip".to_string()],
         stage_overrides: overrides,
         net_parameters: None,

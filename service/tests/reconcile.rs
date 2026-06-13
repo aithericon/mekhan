@@ -178,6 +178,7 @@ async fn reconcile_classifies_every_class() {
     // --- reconcile_batch on `server` (orphan_db path deliberately omitted) -
     let counts = reconcile::reconcile_batch(
         &pool,
+        Uuid::nil(),
         &server,
         &[
             ObservedItem {
@@ -234,6 +235,7 @@ async fn reconcile_classifies_every_class() {
     // Second copy of dup on server_b.
     let counts_b = reconcile::reconcile_batch(
         &pool,
+        Uuid::nil(),
         &server_b,
         &[ObservedItem {
             path: "/data/dup.bin".into(),
@@ -485,6 +487,7 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     // LAST occurrence and count once).
     let counts = reconcile::reconcile_batch(
         &pool,
+        Uuid::nil(),
         &server,
         &[
             ObservedItem {
@@ -623,6 +626,7 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     // Empty batch is a no-op with zero counts.
     let empty = reconcile::reconcile_batch(
         &pool,
+        Uuid::nil(),
         &server,
         &[],
         &reconcile::ObservationContext::default(),

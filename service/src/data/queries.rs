@@ -115,7 +115,7 @@ pub async fn list_entries(
     params: &QueryParams,
 ) -> Result<DataEntriesResponse, QueryError> {
     // 1. Page of logical entries — reuse the catalogue list filters/pagination.
-    let page = crate::catalogue::queries::list_entries(pool, params).await?;
+    let page = crate::catalogue::queries::list_entries(pool, workspace_id, params).await?;
     let servers = server_lookup(pool, workspace_id).await?;
 
     // 2. Physical copies for this page's content hashes, grouped by hash.

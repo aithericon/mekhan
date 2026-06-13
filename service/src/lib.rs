@@ -788,7 +788,8 @@ pub fn build_router(state: AppState) -> Router {
     //     version directly).
     //   - `/healthz` sits at the root, outside auth, k8s-conventional.
     //   - The unversioned siblings (`/api/auth/*` OAuth bootstrap,
-    //     `/api/yjs/{template_id}` WS, `/api/triggers/webhook/{slug}`) are
+    //     `/api/yjs/{template_id}` WS,
+    //     `/api/triggers/webhook/{workspace_id}/{slug}`) are
     //     NOT OpenAPI-modeled and have external contracts mekhan does not
     //     control.
     //
@@ -859,7 +860,7 @@ pub fn build_router(state: AppState) -> Router {
     // inside the handler based on the trigger's `WebhookAuth` policy.
     let webhook_router: Router = Router::new()
         .route(
-            "/api/triggers/webhook/{slug}",
+            "/api/triggers/webhook/{workspace_id}/{slug}",
             axum::routing::post(handlers::triggers::webhook_receiver)
                 .get(handlers::triggers::webhook_receiver)
                 .put(handlers::triggers::webhook_receiver)

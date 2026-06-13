@@ -304,10 +304,17 @@ pub async fn deploy_instance(
     air_json: &Value,
     dispatch_options: petri_api_types::DispatchOptions,
     net_parameters: Option<Value>,
+    workspace_id: Option<String>,
 ) -> Result<(), PetriError> {
     // Deploy the scenario
     client
-        .deploy_scenario(net_id, air_json, dispatch_options, net_parameters)
+        .deploy_scenario(
+            net_id,
+            air_json,
+            dispatch_options,
+            net_parameters,
+            workspace_id,
+        )
         .await?;
 
     // Start execution

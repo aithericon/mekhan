@@ -50,6 +50,7 @@ impl PetriClient {
         air_json: &Value,
         dispatch_options: DispatchOptions,
         net_parameters: Option<Value>,
+        workspace_id: Option<String>,
     ) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/scenario", self.base_url, net_id);
         // The engine consumes a typed `ScenarioDefinition`; the launcher's
@@ -66,8 +67,17 @@ impl PetriClient {
         // the firing path reads `net_parameters.tenant_id` into the pre-dispatch
         // metadata. Serialize-skips when `None`, so a fire without parameters
         // renders byte-identically to the prior wire shape.
+        //
+        // Multi-tenancy: `workspace_id` is the FIRST-CLASS tenant identifier the
+        // engine ascribes routing semantics to — every NATS subject/stream/KV/
+        // durable it creates for this net carries the `{workspace_id}` segment
+        // (ADR-09). Distinct from the opaque `net_parameters.tenant_id` (which
+        // the firing path reads for pre-dispatch metadata): the engine routes on
+        // THIS field. Serialize-skips when `None` ⇒ the engine falls back to its
+        // reserved `"default"` workspace sentinel for legacy/SDK/demo loads.
         let envelope = LoadScenarioRequest {
             scenario,
+            workspace_id,
             skip_mask: dispatch_options.skip_mask,
             stage_overrides: dispatch_options.stage_overrides,
             net_parameters,

@@ -69,11 +69,14 @@ pub async fn start_causality_ingest(
 
         let subject = msg.subject.as_str();
 
-        let result = if subject.starts_with(BRIDGE_PREFIX_DOT) {
-            // Bridge transfer message: petri.bridge.{target_net_id}.{place_name}
+        // Layout is `petri.{ws}.{net}.{category}.{suffix}` — both bridge and
+        // event subjects share the `petri.` root, so the bridge category is now
+        // matched as an interior `.bridge.` token rather than a prefix.
+        let result = if subject.contains(BRIDGE_PREFIX_DOT) {
+            // Bridge transfer message: petri.{ws}.{target_net_id}.bridge.{place_name}
             process_bridge_transfer(&db, subject, &msg.payload).await
         } else if subject.starts_with(EVENTS_PREFIX_DOT) {
-            // Domain event: petri.events.{net_id}.{event_type...}
+            // Domain event: petri.{ws}.{net_id}.events.{event_type...}
             process_domain_event(
                 &db,
                 subject,
@@ -127,7 +130,7 @@ async fn process_bridge_transfer(
         }
     };
 
-    // Extract target net from subject: petri.bridge.{target_net_id}.{place_name}
+    // Extract target net from subject: petri.{ws}.{target_net_id}.bridge.{place_name}
     let parts: Vec<&str> = subject.split('.').collect();
     let target_net = parts.get(2).unwrap_or(&"unknown");
 
@@ -153,6 +156,28 @@ async fn process_bridge_transfer(
     Ok(())
 }
 
+/// Resolve the workspace that owns a running net via
+/// `net_id -> workflow_instances -> workflow_templates.workspace_id`.
+///
+/// Pool/infra/legacy nets have no `workflow_instances` row (or it isn't yet
+/// linked to a template) — those resolve to the nil workspace, matching the
+/// `DEFAULT '00000000-...'` backfill on the catalogue/inventory `workspace_id`
+/// columns. This is the single source of truth for the projector context, so
+/// every catalogue/inventory write lands under one consistent tenant.
+async fn resolve_net_workspace(db: &PgPool, net_id: &str) -> Result<uuid::Uuid, sqlx::Error> {
+    let ws: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT t.workspace_id \
+         FROM workflow_instances i \
+         JOIN workflow_templates t ON t.id = i.template_id \
+         WHERE i.net_id = $1",
+    )
+    .bind(net_id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    Ok(ws.unwrap_or_else(uuid::Uuid::nil))
+}
+
 async fn process_domain_event(
     db: &PgPool,
     subject: &str,
@@ -162,7 +187,7 @@ async fn process_domain_event(
     triggers: Option<&TriggerDispatcher>,
     object_store_id: &str,
 ) -> Result<(), sqlx::Error> {
-    // Extract net_id from subject: petri.events.{net_id}.{event_type...}
+    // Extract net_id from subject: petri.{ws}.{net_id}.events.{event_type...}
     let net_id = match subject.split('.').nth(2) {
         Some(id) => id,
         None => {
@@ -406,9 +431,17 @@ async fn process_domain_event(
             // The registry owns the id→projector mapping; an unknown id is a
             // visible no-op (`None`), not a silently-missing ladder arm.
             if let Some(projector) = projector_for(effect_handler_id) {
+                // Resolve the owning workspace ONCE per EffectCompleted from the
+                // net's instance → template. Pool/infra/legacy nets with no
+                // instance row fall back to the nil workspace (DEFAULT on the
+                // catalogue/inventory columns). Threaded into every projector so
+                // catalogue + inventory writes land under the right tenant and
+                // hit the now per-workspace unique keys.
+                let workspace_id = resolve_net_workspace(db, net_id).await?;
                 let ctx = ProjectorCtx {
                     db,
                     net_id,
+                    workspace_id,
                     seq,
                     transition_id: &transition_id.0,
                     consumed_ids: &consumed_ids,
@@ -803,6 +836,13 @@ async fn process_domain_event(
 struct ProjectorCtx<'a> {
     db: &'a PgPool,
     net_id: &'a str,
+    /// The owning workspace, resolved ONCE per EffectCompleted from
+    /// `net_id -> workflow_instances -> workflow_templates.workspace_id`.
+    /// Falls back to the nil workspace for pool/infra/legacy nets that have no
+    /// instance row. Threaded into every catalogue/inventory write so two
+    /// tenants' rows never collide on the (now per-workspace) unique keys, and
+    /// so reads can scope by workspace.
+    workspace_id: uuid::Uuid,
     seq: i64,
     /// The firing transition's id (e.g. `t_{node_id}_spawn`). Carried so the
     /// `spawn_net` projector can recover which SubWorkflow node spawned a child
@@ -980,6 +1020,7 @@ impl Projector for CatalogueRegister {
         register_catalogue_entry(
             ctx.db,
             ctx.net_id,
+            ctx.workspace_id,
             ctx.seq,
             ctx.consumed_ids,
             ctx.read_ids,
@@ -2158,6 +2199,7 @@ fn extract_task_status_from_token(color: &petri_domain::TokenColor) -> String {
 async fn register_catalogue_entry(
     db: &PgPool,
     net_id: &str,
+    workspace_id: uuid::Uuid,
     event_seq: i64,
     consumed_ids: &[String],
     read_ids: &[String],
@@ -2310,16 +2352,16 @@ async fn register_catalogue_entry(
             source_net, source_place, signal_key, process_id, process_step,
             source_event_sequence,
             file_metadata, user_metadata, created_at, nats_msg_id,
-            content_hash, created_by
+            content_hash, created_by, workspace_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9,
             $10, $11, $12, $13, $14,
             $15,
             $16, $17, $18, $19,
-            $20, $21
+            $20, $21, $22
         )
-        ON CONFLICT (content_hash) DO NOTHING
+        ON CONFLICT (workspace_id, content_hash) DO NOTHING
         "#,
     )
     .bind(&cmd.artifact_id)
@@ -2343,6 +2385,7 @@ async fn register_catalogue_entry(
     .bind(&nats_msg_id)
     .bind(&content_hash)
     .bind(created_by)
+    .bind(workspace_id)
     .execute(&mut *tx)
     .await;
 
@@ -2396,6 +2439,7 @@ async fn register_catalogue_entry(
     }
     crate::inventory::queries::upsert_inventory_copy(
         &mut tx,
+        workspace_id,
         Some(&content_hash),
         &inv_file_server,
         &inv_path,
@@ -2420,16 +2464,17 @@ async fn register_catalogue_entry(
     sqlx::query(
         r#"
         INSERT INTO catalogue_producers (
-            content_hash, source_net, execution_id, job_id, process_id,
+            workspace_id, content_hash, source_net, execution_id, job_id, process_id,
             process_step, signal_key, source_event_sequence, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT (content_hash, execution_id) DO UPDATE SET
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (workspace_id, content_hash, execution_id) DO UPDATE SET
             source_net   = EXCLUDED.source_net,
             process_id   = COALESCE(EXCLUDED.process_id, catalogue_producers.process_id),
             process_step = COALESCE(EXCLUDED.process_step, catalogue_producers.process_step),
             signal_key   = COALESCE(EXCLUDED.signal_key, catalogue_producers.signal_key)
         "#,
     )
+    .bind(workspace_id)
     .bind(&content_hash)
     .bind(net_id)
     .bind(&cmd.execution_id)

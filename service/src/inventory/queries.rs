@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use uuid::Uuid;
 
 use crate::query::builder::{self, QueryError};
 use crate::query::extractor::QueryParams;
@@ -39,15 +40,17 @@ const ALLOWED_SORT_FIELDS: &[&str] = &[
     "extension",
 ];
 
-/// List inventory entries with filter/sort/pagination support.
+/// List inventory entries with filter/sort/pagination support, scoped to
+/// `workspace_id`.
 pub async fn list_entries(
     pool: &PgPool,
+    workspace_id: Uuid,
     params: &QueryParams,
 ) -> Result<Paginated<InventoryEntry>, QueryError> {
     // -- COUNT query --
     let count = {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM file_inventory");
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
     };
@@ -55,7 +58,7 @@ pub async fn list_entries(
     // -- SELECT query --
     let entries = {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM file_inventory");
-        append_where(&mut qb, params)?;
+        append_where(&mut qb, workspace_id, params)?;
 
         if let Some(ref sort) = params.sort {
             builder::build_order_by(&mut qb, sort, ALLOWED_SORT_FIELDS)?;
@@ -71,27 +74,22 @@ pub async fn list_entries(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// Append a WHERE clause combining typed filters + free-text search on `path`.
+/// Append a WHERE clause combining the mandatory per-workspace scope with the
+/// typed filters + free-text search on `path`. The `workspace_id = $ws` guard
+/// is server-enforced (never a user-facing filter field) and always opens the
+/// clause, so a WHERE is always present.
 fn append_where(
     qb: &mut QueryBuilder<'_, Postgres>,
+    workspace_id: Uuid,
     params: &QueryParams,
 ) -> Result<(), QueryError> {
-    let has_filter = params
-        .filter
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false);
-    let has_search = params.search.is_some();
-
-    if !has_filter && !has_search {
-        return Ok(());
-    }
-
-    qb.push(" WHERE ");
-    let mut need_and = false;
+    qb.push(" WHERE workspace_id = ");
+    qb.push_bind(workspace_id);
+    let mut need_and = true;
 
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
+            qb.push(" AND ");
             builder::build_where_conditions(qb, filter, ALLOWED_FILTER_FIELDS)?;
             need_and = true;
         }
@@ -112,23 +110,27 @@ fn append_where(
     Ok(())
 }
 
-/// Counts grouped by status and by file_server_id.
-pub async fn stats(pool: &PgPool) -> Result<InventoryStats, sqlx::Error> {
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM file_inventory")
-        .fetch_one(pool)
-        .await?;
+/// Counts grouped by status and by file_server_id, scoped to `workspace_id`.
+pub async fn stats(pool: &PgPool, workspace_id: Uuid) -> Result<InventoryStats, sqlx::Error> {
+    let total: (i64,) =
+        sqlx::query_as("SELECT COUNT(*)::bigint FROM file_inventory WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_one(pool)
+            .await?;
 
     let by_status = sqlx::query_as::<_, InventoryCount>(
         "SELECT status AS key, COUNT(*)::bigint AS count \
-         FROM file_inventory GROUP BY status ORDER BY count DESC",
+         FROM file_inventory WHERE workspace_id = $1 GROUP BY status ORDER BY count DESC",
     )
+    .bind(workspace_id)
     .fetch_all(pool)
     .await?;
 
     let by_server = sqlx::query_as::<_, InventoryCount>(
         "SELECT file_server_id AS key, COUNT(*)::bigint AS count \
-         FROM file_inventory GROUP BY file_server_id ORDER BY count DESC",
+         FROM file_inventory WHERE workspace_id = $1 GROUP BY file_server_id ORDER BY count DESC",
     )
+    .bind(workspace_id)
     .fetch_all(pool)
     .await?;
 
@@ -159,6 +161,7 @@ pub async fn stats(pool: &PgPool) -> Result<InventoryStats, sqlx::Error> {
 /// Returns rows newly inserted (`ON CONFLICT (content_hash) DO NOTHING`).
 pub async fn upsert_catalogue_by_hash(
     tx: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
     content_hash: &str,
     category: &str,
     name: Option<&str>,
@@ -168,11 +171,12 @@ pub async fn upsert_catalogue_by_hash(
     let r = sqlx::query(
         r#"
         INSERT INTO catalogue_entries
-            (content_hash, category, name, size_bytes, mime_type)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (content_hash) DO NOTHING
+            (workspace_id, content_hash, category, name, size_bytes, mime_type)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (workspace_id, content_hash) DO NOTHING
         "#,
     )
+    .bind(workspace_id)
     .bind(content_hash)
     .bind(category)
     .bind(name)
@@ -192,6 +196,7 @@ pub async fn upsert_catalogue_by_hash(
 /// is deliberately never named here. Returns rows inserted-or-updated.
 pub async fn upsert_inventory_copy(
     tx: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
     content_hash: Option<&str>,
     file_server_id: &str,
     path: &str,
@@ -203,10 +208,10 @@ pub async fn upsert_inventory_copy(
     let r = sqlx::query(
         r#"
         INSERT INTO file_inventory
-            (content_hash, file_server_id, path, status, is_canonical, provenance,
+            (workspace_id, content_hash, file_server_id, path, status, is_canonical, provenance,
              size_bytes, mtime, uid, gid, last_seen, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-        ON CONFLICT (file_server_id, path) DO UPDATE SET
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        ON CONFLICT (workspace_id, file_server_id, path) DO UPDATE SET
             status       = EXCLUDED.status,
             content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
             provenance   = EXCLUDED.provenance,
@@ -218,6 +223,7 @@ pub async fn upsert_inventory_copy(
             updated_at   = NOW()
         "#,
     )
+    .bind(workspace_id)
     .bind(content_hash)
     .bind(file_server_id)
     .bind(path)
@@ -249,6 +255,7 @@ pub async fn upsert_inventory_copy(
 /// row twice in a statement). Returns rows inserted-or-updated.
 pub async fn upsert_catalogue_by_hash_unnest(
     tx: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
     hashes: &[Option<String>],
     paths: &[String],
     sizes: &[i64],
@@ -257,9 +264,9 @@ pub async fn upsert_catalogue_by_hash_unnest(
     let r = sqlx::query(
         r#"
         INSERT INTO catalogue_entries
-            (content_hash, category, name, size_bytes, mime_type, file_metadata)
+            (workspace_id, content_hash, category, name, size_bytes, mime_type, file_metadata)
         SELECT DISTINCT ON (t.hash)
-               t.hash, 'file',
+               $5, t.hash, 'file',
                NULLIF(regexp_replace(t.path, '^.*/', ''), ''),
                t.size,
                t.metadata->>'mime_type',
@@ -268,7 +275,7 @@ pub async fn upsert_catalogue_by_hash_unnest(
              WITH ORDINALITY AS t(hash, path, size, metadata, ord)
         WHERE t.hash IS NOT NULL
         ORDER BY t.hash, t.ord
-        ON CONFLICT (content_hash) DO UPDATE SET
+        ON CONFLICT (workspace_id, content_hash) DO UPDATE SET
             name          = COALESCE(catalogue_entries.name, EXCLUDED.name),
             size_bytes    = COALESCE(catalogue_entries.size_bytes, EXCLUDED.size_bytes),
             mime_type     = COALESCE(catalogue_entries.mime_type, EXCLUDED.mime_type),
@@ -281,6 +288,7 @@ pub async fn upsert_catalogue_by_hash_unnest(
     .bind(paths)
     .bind(sizes)
     .bind(metadatas)
+    .bind(workspace_id)
     .execute(&mut **tx)
     .await?;
     Ok(r.rows_affected())
@@ -311,6 +319,7 @@ pub struct FoldIndexItem {
 /// batch collapse to the LAST occurrence (the loop's last-write-wins).
 pub async fn fold_index_batch(
     tx: &mut Transaction<'_, Postgres>,
+    workspace_id: Uuid,
     file_server_id: &str,
     items: &[FoldIndexItem],
 ) -> Result<u64, sqlx::Error> {
@@ -339,15 +348,16 @@ pub async fn fold_index_batch(
     }
 
     if hashes.iter().any(Option::is_some) {
-        upsert_catalogue_by_hash_unnest(tx, &hashes, &paths, &sizes, &metadatas).await?;
+        upsert_catalogue_by_hash_unnest(tx, workspace_id, &hashes, &paths, &sizes, &metadatas)
+            .await?;
     }
 
     let r = sqlx::query(
         r#"
         INSERT INTO file_inventory
-            (content_hash, file_server_id, path, status, is_canonical, provenance,
+            (workspace_id, content_hash, file_server_id, path, status, is_canonical, provenance,
              size_bytes, mtime, uid, gid, last_seen, updated_at)
-        SELECT t.hash, $1, t.path, 'indexed', false, t.provenance,
+        SELECT $9, t.hash, $1, t.path, 'indexed', false, t.provenance,
                t.size, t.mtime, t.uid, t.gid, NOW(), NOW()
         FROM (
             SELECT DISTINCT ON (u.path)
@@ -357,7 +367,7 @@ pub async fn fold_index_batch(
                  WITH ORDINALITY AS u(path, size, mtime, hash, uid, gid, provenance, ord)
             ORDER BY u.path, u.ord DESC
         ) t
-        ON CONFLICT (file_server_id, path) DO UPDATE SET
+        ON CONFLICT (workspace_id, file_server_id, path) DO UPDATE SET
             status       = EXCLUDED.status,
             content_hash = COALESCE(EXCLUDED.content_hash, file_inventory.content_hash),
             provenance   = EXCLUDED.provenance,
@@ -377,6 +387,7 @@ pub async fn fold_index_batch(
     .bind(&uids)
     .bind(&gids)
     .bind(&provenances)
+    .bind(workspace_id)
     .execute(&mut **tx)
     .await?;
     Ok(r.rows_affected())
@@ -393,6 +404,7 @@ pub async fn fold_index_batch(
 /// the hash. Hashless observation goes through [`index`].
 pub async fn register(
     pool: &PgPool,
+    workspace_id: Uuid,
     req: &InventoryRegisterRequest,
 ) -> Result<InventoryRegisterResponse, QueryError> {
     // Validate the invariant up front so a bad item rejects the batch cleanly
@@ -423,6 +435,7 @@ pub async fn register(
         let hash = item.content_hash.as_deref().expect("validated above");
         catalogue_inserted += upsert_catalogue_by_hash(
             &mut tx,
+            workspace_id,
             hash,
             "file",
             item.name.as_deref(),
@@ -432,6 +445,7 @@ pub async fn register(
         .await? as i64;
         inventory_upserted += upsert_inventory_copy(
             &mut tx,
+            workspace_id,
             Some(hash),
             &item.file_server_id,
             &item.path,
@@ -460,6 +474,7 @@ pub async fn register(
 /// which couples it to a logical catalogue row.
 pub async fn index(
     pool: &PgPool,
+    workspace_id: Uuid,
     req: &InventoryIndexRequest,
 ) -> Result<InventoryIndexResponse, sqlx::Error> {
     let mut tx = pool.begin().await?;
@@ -468,6 +483,7 @@ pub async fn index(
     for item in &req.items {
         inventory_upserted += upsert_inventory_copy(
             &mut tx,
+            workspace_id,
             None,
             &req.file_server_id,
             &item.path,

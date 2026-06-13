@@ -112,6 +112,12 @@ pub enum LaunchSpec<'a> {
         /// `$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).
         /// `None` when the caller surfaces no parameters.
         net_parameters: Option<Value>,
+        /// First-class tenant (workspace) identifier for this net instance
+        /// (multi-tenancy). Threaded into the engine's
+        /// `LoadScenarioRequest.workspace_id` so every NATS subject/stream/KV
+        /// the engine creates for this net carries a `{workspace_id}` segment.
+        /// `None` ⇒ the engine routes on its reserved `"default"` sentinel.
+        workspace_id: Option<String>,
     },
     PreAir {
         instance_id: Uuid,
@@ -138,6 +144,9 @@ pub enum LaunchSpec<'a> {
         /// D1-A). Threaded into the engine's `LoadScenarioRequest.net_parameters`.
         /// See the `Templated` variant for full semantics.
         net_parameters: Option<Value>,
+        /// First-class tenant (workspace) identifier for this net instance.
+        /// See the `Templated` variant for full semantics.
+        workspace_id: Option<String>,
     },
 }
 
@@ -177,6 +186,7 @@ impl<'a> InstanceLauncher<'a> {
             metadata,
             dispatch_options,
             net_parameters,
+            workspace_id,
             mode,
             test_id,
         ) = match spec {
@@ -194,6 +204,7 @@ impl<'a> InstanceLauncher<'a> {
                 test_id,
                 dispatch_options,
                 net_parameters,
+                workspace_id,
             } => {
                 let parameterized = parameterize_air(
                     air_json,
@@ -214,6 +225,7 @@ impl<'a> InstanceLauncher<'a> {
                     metadata,
                     dispatch_options,
                     net_parameters,
+                    workspace_id,
                     mode,
                     test_id,
                 )
@@ -230,6 +242,7 @@ impl<'a> InstanceLauncher<'a> {
                 token,
                 dispatch_options,
                 net_parameters,
+                workspace_id,
             } => {
                 let parameterized = parameterize_for_place(
                     air_json,
@@ -250,6 +263,7 @@ impl<'a> InstanceLauncher<'a> {
                     metadata,
                     dispatch_options,
                     net_parameters,
+                    workspace_id,
                     // Pre-AIR triggers are headless service calls — no
                     // template-test runner / experiment-mode framing applies.
                     None,
@@ -301,6 +315,7 @@ impl<'a> InstanceLauncher<'a> {
             &parameterized,
             dispatch_options,
             net_parameters,
+            workspace_id,
         )
         .await
         {

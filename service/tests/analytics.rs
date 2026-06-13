@@ -107,7 +107,9 @@ async fn breakdown_per_dimension_and_directory_descent() {
             item("data/raw/h.nostat", None, None, None),
         ],
     };
-    let res = index(&pool, &req).await.expect("seed via /index writer");
+    let res = index(&pool, Uuid::nil(), &req)
+        .await
+        .expect("seed via /index writer");
     assert_eq!(res.inventory_upserted, 8, "all seed rows upserted");
 
     let params = scoped(&server);
@@ -262,7 +264,9 @@ async fn snapshot_twice_dedupes_in_timeseries() {
             item("b/z.log", Some(3000), Some(1), None),
         ],
     };
-    index(&pool, &req).await.expect("seed inventory");
+    index(&pool, Uuid::nil(), &req)
+        .await
+        .expect("seed inventory");
 
     // Two captures back-to-back — they land in the same (wide) time bucket, so
     // the reader must dedupe to ONE point (last capture wins).
@@ -313,6 +317,7 @@ async fn backfill_forward_invariant_native_columns_and_provenance() {
     let mtime = Utc::now() - Duration::days(3);
     reconcile::reconcile_batch(
         &pool,
+        Uuid::nil(),
         &server,
         &[ObservedItem {
             path: "inv/file.dat".into(),

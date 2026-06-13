@@ -108,7 +108,7 @@ async fn register_rejects_hashless_and_writes_nothing() {
     let req = InventoryRegisterRequest {
         entries: vec![reg_item(&server, path, None)],
     };
-    let err = queries::register(&pool, &req)
+    let err = queries::register(&pool, Uuid::nil(), &req)
         .await
         .expect_err("hashless register must be rejected");
     assert!(
@@ -138,7 +138,9 @@ async fn register_fills_both_halves() {
     let req = InventoryRegisterRequest {
         entries: vec![reg_item(&server, path, Some(&hash))],
     };
-    let resp = queries::register(&pool, &req).await.expect("register");
+    let resp = queries::register(&pool, Uuid::nil(), &req)
+        .await
+        .expect("register");
     assert_eq!(resp.inventory_upserted, 1);
     assert_eq!(resp.catalogue_inserted, 1);
 
@@ -181,7 +183,9 @@ async fn two_copies_one_hash_make_one_catalogue_two_inventory() {
             reg_item(&server, p2, Some(&hash)),
         ],
     };
-    let resp = queries::register(&pool, &req).await.expect("register");
+    let resp = queries::register(&pool, Uuid::nil(), &req)
+        .await
+        .expect("register");
     assert_eq!(resp.inventory_upserted, 2, "two physical copies");
     // ON CONFLICT (content_hash) DO NOTHING — only the first insert counts.
     assert_eq!(resp.catalogue_inserted, 1, "one logical row");
@@ -215,7 +219,9 @@ async fn index_writes_inventory_only() {
             gid: None,
         }],
     };
-    let resp = queries::index(&pool, &req).await.expect("index");
+    let resp = queries::index(&pool, Uuid::nil(), &req)
+        .await
+        .expect("index");
     assert_eq!(resp.inventory_upserted, 1);
 
     // Inventory row exists with NO content identity (hashless observation).

@@ -117,6 +117,7 @@ pub async fn evaluate(dispatcher: &TriggerDispatcher, entry: &CatalogueEntry) {
 pub async fn backfill_one(
     dispatcher: Arc<TriggerDispatcher>,
     node_id: String,
+    workspace_id: uuid::Uuid,
     filters: HashMap<String, HashMap<String, String>>,
     db: PgPool,
 ) {
@@ -125,7 +126,7 @@ pub async fn backfill_one(
     params.sort = Some(Sort::new("catalogued_at", SortDirection::Asc));
 
     let repo = PgCatalogueRepository::new(db);
-    let paginated = match repo.list_entries(&params).await {
+    let paginated = match repo.list_entries(workspace_id, &params).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(node_id = %node_id, "catalog trigger backfill query failed: {e}");
