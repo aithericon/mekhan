@@ -20,8 +20,8 @@ use tokio::sync::RwLock;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, AllocatedTres,
-    AllocationMetrics, CheckpointStore, RequestedTres, RoutingMeta, SignalPublisher,
+    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, workspace_for_signal,
+    AllocatedTres, AllocationMetrics, CheckpointStore, RequestedTres, RoutingMeta, SignalPublisher,
     DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
@@ -545,7 +545,8 @@ impl SlurmWatcher {
             dedup_id: Some(msg_id.to_string()),
         };
 
-        let subject = signal_subject(&routing.net_id, target_place);
+        let ws = workspace_for_signal("", &routing.net_id);
+        let subject = signal_subject(&ws, &routing.net_id, target_place);
         self.signal_publisher
             .publish(&subject, &signal, msg_id)
             .await;

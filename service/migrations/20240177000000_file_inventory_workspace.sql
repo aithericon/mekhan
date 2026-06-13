@@ -20,12 +20,13 @@ ALTER TABLE file_inventory
         NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000';
 
 -- 2. Backfill from the owning file server (soft join key == file_servers.key).
---    MIN(workspace_id) is deterministic and collapses the (in-practice single)
---    workspace per key without fanning rows out.
+--    Postgres has no MIN(uuid) aggregate, so aggregate on the text form and cast
+--    back: deterministic (lexicographically smallest uuid) and, since key is
+--    single-workspace in practice, a no-op collapse with no row fan-out.
 UPDATE file_inventory fi
    SET workspace_id = fs.ws
   FROM (
-        SELECT key, MIN(workspace_id) AS ws
+        SELECT key, MIN(workspace_id::text)::uuid AS ws
           FROM file_servers
          GROUP BY key
        ) fs

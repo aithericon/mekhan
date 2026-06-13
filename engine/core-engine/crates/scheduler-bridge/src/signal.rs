@@ -8,14 +8,65 @@ use bytes::Bytes;
 
 use petri_domain::ExternalSignal;
 
-/// NATS subject prefix for external system signals.
+/// Legacy (pre-multitenancy) NATS subject prefix for external system signals.
+/// Retained for reference only — signals are now published on the
+/// workspace-namespaced `petri.{ws}.{net}.signal.{place}` layout; see
+/// [`signal_subject`].
 pub const SIGNAL_PREFIX: &str = "petri.signal";
 
-/// Build a signal subject for publishing.
+/// Build a workspace-namespaced signal subject for publishing.
 ///
-/// Example: `signal_subject("gpu-resource", "status_inbox")` -> `"petri.signal.gpu-resource.status_inbox"`
-pub fn signal_subject(net_id: &str, place_name: &str) -> String {
-    format!("{}.{}.{}", SIGNAL_PREFIX, net_id, place_name)
+/// Matches `petri_api_types::subjects::Subjects::signal_transfer`:
+/// `petri.{workspace_id}.{net_id}.signal.{place_name}`. The `{workspace_id}`
+/// segment is REQUIRED — the per-net signal inbox listener filters
+/// `petri.{ws}.{net}.signal.>`, so the pre-multitenancy
+/// `petri.signal.{net}.{place}` form is no longer routed to any net.
+///
+/// Example: `signal_subject("ws1", "gpu-resource", "status_inbox")`
+/// -> `"petri.ws1.gpu-resource.signal.status_inbox"`
+pub fn signal_subject(workspace_id: &str, net_id: &str, place_name: &str) -> String {
+    format!("petri.{}.{}.signal.{}", workspace_id, net_id, place_name)
+}
+
+/// Reserved default-workspace sentinel (mirrors `petri_api_types`
+/// `Subjects::DEFAULT_WORKSPACE` and `aithericon_executor_domain::DEFAULT_WORKSPACE`).
+/// Used when a signal source carries no explicit workspace and its net_id is not
+/// workspace-qualified.
+pub const DEFAULT_WORKSPACE: &str = "default";
+
+/// Resolve the workspace segment for a back-channel status/event signal so it
+/// lands on `petri.{ws}.{net}.signal.>` — the exact subject the target net's
+/// inbox listener filters.
+///
+/// Precedence: the explicit `workspace_id` stamped on the executor status/event
+/// body (phase 5) → the workspace recovered from a `mekhan-{ws}-{instance}`
+/// net_id → the default sentinel. Scheduler watchers (Nomad/Slurm) whose status
+/// carries no explicit workspace rely on the net_id-derived value.
+pub fn workspace_for_signal(explicit: &str, net_id: &str) -> String {
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    workspace_from_net_id(net_id).unwrap_or_else(|| DEFAULT_WORKSPACE.to_string())
+}
+
+/// Extract the workspace UUID from a `mekhan-{ws-uuid}-{instance-uuid}` net_id.
+/// Returns `None` for net_ids that don't follow the mekhan convention
+/// (SDK/demo/resource-pool nets), letting the caller fall back to the default.
+pub fn workspace_from_net_id(net_id: &str) -> Option<String> {
+    let rest = net_id.strip_prefix("mekhan-")?;
+    let b = rest.as_bytes();
+    // ws is a 36-char UUID (hyphens at 8/13/18/23) followed by '-' then the
+    // instance UUID.
+    if b.len() > 37
+        && b[36] == b'-'
+        && b[8] == b'-'
+        && b[13] == b'-'
+        && b[18] == b'-'
+        && b[23] == b'-'
+    {
+        return Some(rest[..36].to_string());
+    }
+    None
 }
 
 /// Publishes [`ExternalSignal`] messages to NATS JetStream with deduplication.
@@ -91,16 +142,16 @@ mod tests {
     #[test]
     fn test_signal_subject() {
         assert_eq!(
-            signal_subject("gpu-resource", "status_inbox"),
-            "petri.signal.gpu-resource.status_inbox"
+            signal_subject("ws1", "gpu-resource", "status_inbox"),
+            "petri.ws1.gpu-resource.signal.status_inbox"
         );
     }
 
     #[test]
     fn test_signal_subject_multi_segment() {
         assert_eq!(
-            signal_subject("nomad-batch", "sig_running"),
-            "petri.signal.nomad-batch.sig_running"
+            signal_subject("ws1", "nomad-batch", "sig_running"),
+            "petri.ws1.nomad-batch.signal.sig_running"
         );
     }
 }

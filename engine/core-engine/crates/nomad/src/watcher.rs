@@ -23,8 +23,8 @@ use tokio_util::io::StreamReader;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    nomad_event_index_key, signal_subject, AllocatedTres, AllocationMetrics, CheckpointStore,
-    RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
+    nomad_event_index_key, signal_subject, workspace_for_signal, AllocatedTres, AllocationMetrics,
+    CheckpointStore, RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
 use crate::config::NomadConfig;
@@ -447,7 +447,8 @@ impl NomadWatcher {
                         dedup_id: Some(msg_id.clone()),
                     };
 
-                    let subject = signal_subject(&meta.net_id, target_place);
+                    let ws = workspace_for_signal("", &meta.net_id);
+                    let subject = signal_subject(&ws, &meta.net_id, target_place);
                     self.signal_publisher
                         .publish(&subject, &signal, &msg_id)
                         .await;
@@ -489,7 +490,8 @@ impl NomadWatcher {
                         dedup_id: Some(msg_id.clone()),
                     };
 
-                    let subject = signal_subject(&meta.net_id, target_place);
+                    let ws = workspace_for_signal("", &meta.net_id);
+                    let subject = signal_subject(&ws, &meta.net_id, target_place);
                     self.signal_publisher
                         .publish(&subject, &signal, &msg_id)
                         .await;

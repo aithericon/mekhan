@@ -27,7 +27,9 @@ use aithericon_executor_domain::{
     ControlEmitEvent, ControlKind, ExecutionEvent, StatusDetail, StatusUpdate,
 };
 use petri_domain::ExternalSignal;
-use petri_scheduler_bridge::{signal_subject, CheckpointStore, RoutingMeta, SignalPublisher};
+use petri_scheduler_bridge::{
+    signal_subject, workspace_for_signal, CheckpointStore, RoutingMeta, SignalPublisher,
+};
 
 use crate::config::ExecutorConfig;
 
@@ -346,7 +348,8 @@ impl ExecutorWatcher {
 
         let status_str = update.status.as_str();
         let target_place = routing.place_for_status(status_str);
-        let subject = signal_subject(&routing.net_id, target_place);
+        let ws = workspace_for_signal(&update.workspace_id, &routing.net_id);
+        let subject = signal_subject(&ws, &routing.net_id, target_place);
 
         // Build signal payload with executor-specific detail.
         let payload = serde_json::json!({
@@ -437,7 +440,8 @@ impl ExecutorWatcher {
 
         // Publish signal to Petri net if there's a configured route for this event category.
         if let Some(target_place) = routing.place_for_event(category_str) {
-            let subject = signal_subject(&routing.net_id, target_place);
+            let ws = workspace_for_signal(&event.workspace_id, &routing.net_id);
+            let subject = signal_subject(&ws, &routing.net_id, target_place);
 
             let payload = serde_json::json!({
                 "execution_id": event.execution_id,
@@ -561,7 +565,8 @@ impl ExecutorWatcher {
             return;
         };
 
-        let subject = signal_subject(&routing.net_id, target_place);
+        let ws = workspace_for_signal(&emit.workspace_id, &routing.net_id);
+        let subject = signal_subject(&ws, &routing.net_id, target_place);
         let (payload, dedup_id) = control_emit_token(&emit);
 
         let signal = ExternalSignal {

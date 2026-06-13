@@ -21,7 +21,8 @@ ALTER TABLE inventory_snapshots
 UPDATE inventory_snapshots ivs
    SET workspace_id = fs.ws
   FROM (
-        SELECT key, MIN(workspace_id) AS ws
+        -- Postgres has no MIN(uuid) aggregate; aggregate text + cast back.
+        SELECT key, MIN(workspace_id::text)::uuid AS ws
           FROM file_servers
          GROUP BY key
        ) fs
