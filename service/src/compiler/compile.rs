@@ -4508,6 +4508,8 @@ mod tests {
                     }],
                 },
                 input_contract: crate::models::template::Port::empty_input(),
+                source_coordinate: None,
+                presentation: None,
             },
             parent_id: None,
             width: None,

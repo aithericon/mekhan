@@ -73,6 +73,8 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         version_pin,
         input_mapping,
         output,
+        source_coordinate,
+        presentation,
         ..
     } = data
     else {
@@ -88,4 +90,13 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     }
     let out_val = serde_json::to_value(output).unwrap_or_default();
     config.insert(txn, "output", json_value_to_any(&out_val));
+    // Frozen library-node branding snapshot (decision 12) — emit so a seeded
+    // graph.json → ydoc round-trip preserves it for the editor to render.
+    if let Some(coord) = source_coordinate {
+        config.insert(txn, "sourceCoordinate", coord.clone());
+    }
+    if let Some(pres) = presentation {
+        let p_val = serde_json::to_value(pres).unwrap_or_default();
+        config.insert(txn, "presentation", json_value_to_any(&p_val));
+    }
 }

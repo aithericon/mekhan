@@ -577,6 +577,8 @@ mod tests {
             input_mapping: vec![],
             output: default_subworkflow_output_port(),
             input_contract: default_subworkflow_input_contract(),
+            source_coordinate: None,
+            presentation: None,
         };
         let decl = lookup_by_variant(&data).expect("sub_workflow registered");
         assert_eq!(decl.wire_name, "sub_workflow");

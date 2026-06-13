@@ -3,7 +3,10 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 47 },
+      "position": {
+        "x": 0,
+        "y": 47
+      },
       "data": {
         "type": "start",
         "label": "Start",
@@ -12,7 +15,12 @@
           "id": "in",
           "label": "Caller Input",
           "fields": [
-            { "name": "name", "label": "Name to greet (via child workflow)", "kind": "text", "required": true }
+            {
+              "name": "name",
+              "label": "Name to greet (via child workflow)",
+              "kind": "text",
+              "required": true
+            }
           ]
         }
       }
@@ -20,40 +28,79 @@
     {
       "id": "call_greet",
       "type": "sub_workflow",
-      "position": { "x": 290, "y": 0 },
+      "position": {
+        "x": 290,
+        "y": 0
+      },
       "data": {
         "type": "sub_workflow",
         "label": "Call Hello-World",
         "description": "Embeds the 01-hello-world demo as a child. Resolved at publish time via templateId + Latest pin; the parent's published AIR freezes a concrete child version.",
         "templateId": "00000000-0000-0000-0000-000000000011",
-        "versionPin": { "mode": "latest" },
+        "versionPin": {
+          "mode": "latest"
+        },
         "inputMapping": [
-          { "targetField": "name", "expression": "input.name" }
+          {
+            "targetField": "name",
+            "expression": "input.name"
+          }
         ],
         "output": {
           "id": "out",
           "label": "Child Result",
           "fields": [
-            { "name": "greeting", "label": "Greeting", "kind": "text", "required": true }
+            {
+              "name": "greeting",
+              "label": "Greeting",
+              "kind": "text",
+              "required": true
+            }
           ]
+        },
+        "sourceCoordinate": "aithericon/hello-world",
+        "presentation": {
+          "icon": "hand-helping",
+          "color": "#14b8a6",
+          "vendor": "Aithericon",
+          "category": "Examples",
+          "badge": "demo"
         }
       }
     },
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 600, "y": 47 },
+      "position": {
+        "x": 600,
+        "y": 47
+      },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "greeting", "expression": "call_greet.greeting" }
+          {
+            "targetField": "greeting",
+            "expression": "call_greet.greeting"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e_start_call", "source": "start",      "target": "call_greet", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_call_end",   "source": "call_greet", "target": "end",        "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e_start_call",
+      "source": "start",
+      "target": "call_greet",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_call_end",
+      "source": "call_greet",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
   ]
 }

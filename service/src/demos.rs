@@ -90,6 +90,27 @@ pub struct DemoMetadata {
     /// (they're hidden from the catalogue and never filed into a folder).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// Library-node intent (decision 1). Absent ⇒ `workflow`. Set
+    /// `"library_node"` to surface this demo as a branded, reusable palette
+    /// node (e.g. an OpenFOAM integration). `"private_child"` is implied by
+    /// `visibility: private` and need not be set explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_kind: Option<String>,
+    /// Trust/provenance axis for a library node (decision 3). Absent on a
+    /// library-node demo ⇒ `system` (platform-shipped, read-only), since demos
+    /// are seeded by the platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Stable `vendor/slug` coordinate (decision 7), e.g.
+    /// `openfoam/solid-displacement`. Required for a library node so embeds and
+    /// the upgrade prompt can resolve it by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate: Option<String>,
+    /// Branding blob (`{icon, color, vendor, category, badge}`, decision 9) for
+    /// a library node. Raw JSON, stored verbatim into the row's `presentation`
+    /// JSONB column and frozen onto embedding nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<serde_json::Value>,
 }
 
 /// One parsed demo directory.
@@ -1569,6 +1590,23 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         (other, _) => return Err(DemoSeedError::InvalidVisibility(other.to_string())),
     };
 
+    // Library-node metadata (decisions 1/3/7/9). A demo is a plain `workflow`
+    // unless it declares `templateKind: library_node`; private children are
+    // stamped `private_child` so the intent enum stays exclusive. Seeded
+    // library nodes default to `origin: system` (platform-shipped, read-only).
+    let template_kind: &str = match (demo.metadata.template_kind.as_deref(), visibility) {
+        (Some(k), _) => k,
+        (None, "private") => "private_child",
+        (None, _) => "workflow",
+    };
+    let origin: Option<&str> = if template_kind == "library_node" {
+        Some(demo.metadata.origin.as_deref().unwrap_or("system"))
+    } else {
+        demo.metadata.origin.as_deref()
+    };
+    let coordinate: Option<&str> = demo.metadata.coordinate.as_deref();
+    let presentation: Option<&serde_json::Value> = demo.metadata.presentation.as_ref();
+
     // Idempotency: the stable id is the contract with the rest of the
     // platform (frontend lookup, e2e tests, hand-edited copies). If a
     // row already exists under it — whether seeded last boot or
@@ -1670,8 +1708,9 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, author_id, workspace_id, visibility, owner_template_id,
-             metrics)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10, $11)
+             metrics, template_kind, origin, coordinate, presentation)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15)
         RETURNING *
         "#,
     )
@@ -1686,6 +1725,10 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .bind(visibility)
     .bind(owner_template_id)
     .bind(&metrics)
+    .bind(template_kind)
+    .bind(origin)
+    .bind(coordinate)
+    .bind(presentation)
     .fetch_one(&state.db)
     .await?;
 

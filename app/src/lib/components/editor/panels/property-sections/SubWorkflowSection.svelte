@@ -192,6 +192,21 @@
 					if (!portsEqual(data.inputContract, c.input)) {
 						patch.inputContract = c.input;
 					}
+					// Freeze the child's library-node branding (decision 12) onto the
+					// node, symmetric with the contract snapshot above. Clears when
+					// re-pointed at a non-library template (c.* undefined). Display
+					// only — never feeds compilation.
+					const nextPresentation = c.presentation ?? undefined;
+					const nextCoordinate = c.coordinate ?? undefined;
+					if (
+						JSON.stringify(data.presentation ?? null) !==
+						JSON.stringify(nextPresentation ?? null)
+					) {
+						patch.presentation = nextPresentation;
+					}
+					if ((data.sourceCoordinate ?? undefined) !== nextCoordinate) {
+						patch.sourceCoordinate = nextCoordinate;
+					}
 					if (!readonly) {
 						const valid = new Set(inputFields.map((f) => f.name));
 						const pruned = mappings.filter((m) => valid.has(m.targetField));

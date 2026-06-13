@@ -10256,14 +10256,29 @@ export interface components {
                 author_id: string;
                 /** Format: uuid */
                 base_template_id?: string | null;
+                /**
+                 * @description Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),
+                 *     unique within `origin`. NULL for plain workflows.
+                 */
+                coordinate?: string | null;
                 /** Format: date-time */
                 created_at: string;
                 description: string;
+                /**
+                 * @description Fork provenance (`{coordinate, template_id, version}`) for a workspace
+                 *     copy forked from an upstream library node. Raw JSONB.
+                 */
+                forked_from?: unknown;
                 graph: unknown;
                 /** Format: uuid */
                 id: string;
                 interface_json?: unknown;
                 is_latest: boolean;
+                /**
+                 * @description Lifecycle of a library node: `active` (default) | `deprecated` |
+                 *     `retired`. Never gates resolution of an already-pinned embed.
+                 */
+                lifecycle_status?: string;
                 /**
                  * @description The caller's effective role (`owner|admin|editor|viewer`) on this
                  *     template — annotated by `list_templates`/`get_template` so the SPA can
@@ -10273,6 +10288,11 @@ export interface components {
                 my_effective_role?: string | null;
                 name: string;
                 /**
+                 * @description Provenance/trust axis for library nodes: `system` (platform-seeded,
+                 *     read-only) | `workspace` | `community`. NULL for plain workflows.
+                 */
+                origin?: string | null;
+                /**
                  * Format: uuid
                  * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
                  *     only when `visibility == "private"`. A private sub-workflow may be
@@ -10281,12 +10301,26 @@ export interface components {
                 owner_template_id?: string | null;
                 /** Format: uuid */
                 parent_id?: string | null;
+                /**
+                 * @description Branding blob (`{icon, color, vendor, category, badge}`) for a library
+                 *     node; raw JSONB to match the `graph`/`air_json` convention. NULL for
+                 *     plain workflows.
+                 */
+                presentation?: unknown;
                 published: boolean;
                 /** Format: date-time */
                 published_at?: string | null;
                 /** Format: uuid */
                 published_by?: string | null;
                 source_ref?: unknown;
+                /** @description Successor `vendor/slug` coordinate for a deprecated/retired node. */
+                superseded_by?: string | null;
+                /**
+                 * @description Exclusive intent: `workflow` (default), `library_node` (a curated
+                 *     reusable integration surfaced in the palette), or `private_child` (a
+                 *     private sub-workflow). Drives palette/catalogue/ACL branching.
+                 */
+                template_kind?: string;
                 /** Format: date-time */
                 updated_at: string;
                 /**
@@ -10533,6 +10567,28 @@ export interface components {
              *     them identically once the trigger is registered.
              */
             source: components["schemas"]["TriggerSource"];
+        };
+        /**
+         * @description Branding for a library node — surfaced in the palette and frozen onto an
+         *     embedding `SubWorkflow` node so the canvas renders a vendor-branded card
+         *     (decisions 9, 13). `icon` is a key into the frontend icon registry (never
+         *     raw SVG); `color` is a hex/token accent. Stored as JSONB on the template
+         *     row; this typed shape feeds the OpenAPI surface (io-contract + node data).
+         */
+        Presentation: {
+            /** @description Optional short badge (e.g. a version tag `v2406`). */
+            badge?: string | null;
+            /** @description Palette grouping category (controlled vocab, e.g. `CFD`). */
+            category?: string | null;
+            /** @description Accent color (hex like `#1a73e8`, or a design-token name). */
+            color?: string | null;
+            /**
+             * @description Icon registry key (e.g. `openfoam`). Falls back to a generic icon when
+             *     unknown to the frontend registry.
+             */
+            icon?: string | null;
+            /** @description Vendor / publisher display name (e.g. `OpenFOAM`). */
+            vendor?: string | null;
         };
         PreviewView: {
             columns: string[];
@@ -12359,8 +12415,21 @@ export interface components {
          *     ports and one input-mapping row per child Start field.
          */
         TemplateIoContract: {
+            /**
+             * @description Stable `vendor/slug` coordinate when the child is a library node
+             *     (decision 7). Frozen onto the embedding node so the canvas can brand the
+             *     card and the upgrade prompt can track the source. Absent for plain
+             *     (non-library) sub-workflows.
+             */
+            coordinate?: string | null;
             input: components["schemas"]["Port"];
+            /**
+             * @description Child's display name — lets the editor brand a sub-workflow card with
+             *     the real template name instead of a truncated UUID.
+             */
+            name?: string | null;
             output: components["schemas"]["Port"];
+            presentation?: null | components["schemas"]["Presentation"];
         };
         /**
          * @description Structural metrics of a published [`WorkflowGraph`], computed once at
@@ -13716,6 +13785,15 @@ export interface components {
              *     child's End `terminal` port.
              */
             output?: components["schemas"]["Port"];
+            presentation?: null | components["schemas"]["Presentation"];
+            /**
+             * @description Stable `vendor/slug` coordinate of the child when it is a library
+             *     node (decision 7). Frozen onto the node by the editor's io-contract
+             *     fetch alongside `input_contract`/`output`; lets the canvas brand the
+             *     card and the upgrade prompt track the source. Absent ⇒ a plain
+             *     (non-library) sub-workflow embed.
+             */
+            sourceCoordinate?: string | null;
             /**
              * Format: uuid
              * @description Stable identity of the child template family (any version row's
@@ -13761,14 +13839,29 @@ export interface components {
             author_id: string;
             /** Format: uuid */
             base_template_id?: string | null;
+            /**
+             * @description Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),
+             *     unique within `origin`. NULL for plain workflows.
+             */
+            coordinate?: string | null;
             /** Format: date-time */
             created_at: string;
             description: string;
+            /**
+             * @description Fork provenance (`{coordinate, template_id, version}`) for a workspace
+             *     copy forked from an upstream library node. Raw JSONB.
+             */
+            forked_from?: unknown;
             graph: unknown;
             /** Format: uuid */
             id: string;
             interface_json?: unknown;
             is_latest: boolean;
+            /**
+             * @description Lifecycle of a library node: `active` (default) | `deprecated` |
+             *     `retired`. Never gates resolution of an already-pinned embed.
+             */
+            lifecycle_status?: string;
             /**
              * @description The caller's effective role (`owner|admin|editor|viewer`) on this
              *     template — annotated by `list_templates`/`get_template` so the SPA can
@@ -13778,6 +13871,11 @@ export interface components {
             my_effective_role?: string | null;
             name: string;
             /**
+             * @description Provenance/trust axis for library nodes: `system` (platform-seeded,
+             *     read-only) | `workspace` | `community`. NULL for plain workflows.
+             */
+            origin?: string | null;
+            /**
              * Format: uuid
              * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
              *     only when `visibility == "private"`. A private sub-workflow may be
@@ -13786,12 +13884,26 @@ export interface components {
             owner_template_id?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
+            /**
+             * @description Branding blob (`{icon, color, vendor, category, badge}`) for a library
+             *     node; raw JSONB to match the `graph`/`air_json` convention. NULL for
+             *     plain workflows.
+             */
+            presentation?: unknown;
             published: boolean;
             /** Format: date-time */
             published_at?: string | null;
             /** Format: uuid */
             published_by?: string | null;
             source_ref?: unknown;
+            /** @description Successor `vendor/slug` coordinate for a deprecated/retired node. */
+            superseded_by?: string | null;
+            /**
+             * @description Exclusive intent: `workflow` (default), `library_node` (a curated
+             *     reusable integration surfaced in the palette), or `private_child` (a
+             *     private sub-workflow). Drives palette/catalogue/ACL branching.
+             */
+            template_kind?: string;
             /** Format: date-time */
             updated_at: string;
             /**

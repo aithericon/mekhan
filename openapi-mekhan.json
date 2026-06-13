@@ -26945,12 +26945,22 @@
                   ],
                   "format": "uuid"
                 },
+                "coordinate": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),\nunique within `origin`. NULL for plain workflows."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
                 },
                 "description": {
                   "type": "string"
+                },
+                "forked_from": {
+                  "description": "Fork provenance (`{coordinate, template_id, version}`) for a workspace\ncopy forked from an upstream library node. Raw JSONB."
                 },
                 "graph": {},
                 "id": {
@@ -26961,6 +26971,10 @@
                 "is_latest": {
                   "type": "boolean"
                 },
+                "lifecycle_status": {
+                  "type": "string",
+                  "description": "Lifecycle of a library node: `active` (default) | `deprecated` |\n`retired`. Never gates resolution of an already-pinned embed."
+                },
                 "my_effective_role": {
                   "type": [
                     "string",
@@ -26970,6 +26984,13 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "origin": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Provenance/trust axis for library nodes: `system` (platform-seeded,\nread-only) | `workspace` | `community`. NULL for plain workflows."
                 },
                 "owner_template_id": {
                   "type": [
@@ -26985,6 +27006,9 @@
                     "null"
                   ],
                   "format": "uuid"
+                },
+                "presentation": {
+                  "description": "Branding blob (`{icon, color, vendor, category, badge}`) for a library\nnode; raw JSONB to match the `graph`/`air_json` convention. NULL for\nplain workflows."
                 },
                 "published": {
                   "type": "boolean"
@@ -27004,6 +27028,17 @@
                   "format": "uuid"
                 },
                 "source_ref": {},
+                "superseded_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Successor `vendor/slug` coordinate for a deprecated/retired node."
+                },
+                "template_kind": {
+                  "type": "string",
+                  "description": "Exclusive intent: `workflow` (default), `library_node` (a curated\nreusable integration surfaced in the palette), or `private_child` (a\nprivate sub-workflow). Drives palette/catalogue/ACL branching."
+                },
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
@@ -27328,6 +27363,47 @@
           "source": {
             "$ref": "#/components/schemas/TriggerSource",
             "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
+          }
+        }
+      },
+      "Presentation": {
+        "type": "object",
+        "description": "Branding for a library node — surfaced in the palette and frozen onto an\nembedding `SubWorkflow` node so the canvas renders a vendor-branded card\n(decisions 9, 13). `icon` is a key into the frontend icon registry (never\nraw SVG); `color` is a hex/token accent. Stored as JSONB on the template\nrow; this typed shape feeds the OpenAPI surface (io-contract + node data).",
+        "properties": {
+          "badge": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional short badge (e.g. a version tag `v2406`)."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Palette grouping category (controlled vocab, e.g. `CFD`)."
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Accent color (hex like `#1a73e8`, or a design-token name)."
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Icon registry key (e.g. `openfoam`). Falls back to a generic icon when\nunknown to the frontend registry."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Vendor / publisher display name (e.g. `OpenFOAM`)."
           }
         }
       },
@@ -30691,11 +30767,36 @@
           "output"
         ],
         "properties": {
+          "coordinate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable `vendor/slug` coordinate when the child is a library node\n(decision 7). Frozen onto the embedding node so the canvas can brand the\ncard and the upgrade prompt can track the source. Absent for plain\n(non-library) sub-workflows."
+          },
           "input": {
             "$ref": "#/components/schemas/Port"
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Child's display name — lets the editor brand a sub-workflow card with\nthe real template name instead of a truncated UUID."
+          },
           "output": {
             "$ref": "#/components/schemas/Port"
+          },
+          "presentation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Presentation",
+                "description": "Child's branding (decisions 9, 12) when it is a library node. Frozen onto\nthe embedding node alongside the contract; display-only."
+              }
+            ]
           }
         }
       },
@@ -33607,6 +33708,24 @@
                 "$ref": "#/components/schemas/Port",
                 "description": "Declared shape of the child's terminal result, mapped back onto the\nworkflow token at the join. Empty fields ⇒ pass the child result\nthrough unchanged (Json). Authoring can prefill this from the\nchild's End `terminal` port."
               },
+              "presentation": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Presentation",
+                    "description": "Frozen branding snapshot copied from the library-node child\n(decisions 9, 12). Display-only — never feeds compilation. Refreshed\nlike `input_contract` from the io-contract fetch. Absent ⇒ render the\ngeneric sub-workflow card."
+                  }
+                ]
+              },
+              "sourceCoordinate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Stable `vendor/slug` coordinate of the child when it is a library\nnode (decision 7). Frozen onto the node by the editor's io-contract\nfetch alongside `input_contract`/`output`; lets the canvas brand the\ncard and the upgrade prompt track the source. Absent ⇒ a plain\n(non-library) sub-workflow embed."
+              },
               "templateId": {
                 "type": "string",
                 "format": "uuid",
@@ -33719,12 +33838,22 @@
             ],
             "format": "uuid"
           },
+          "coordinate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),\nunique within `origin`. NULL for plain workflows."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
           "description": {
             "type": "string"
+          },
+          "forked_from": {
+            "description": "Fork provenance (`{coordinate, template_id, version}`) for a workspace\ncopy forked from an upstream library node. Raw JSONB."
           },
           "graph": {},
           "id": {
@@ -33735,6 +33864,10 @@
           "is_latest": {
             "type": "boolean"
           },
+          "lifecycle_status": {
+            "type": "string",
+            "description": "Lifecycle of a library node: `active` (default) | `deprecated` |\n`retired`. Never gates resolution of an already-pinned embed."
+          },
           "my_effective_role": {
             "type": [
               "string",
@@ -33744,6 +33877,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provenance/trust axis for library nodes: `system` (platform-seeded,\nread-only) | `workspace` | `community`. NULL for plain workflows."
           },
           "owner_template_id": {
             "type": [
@@ -33759,6 +33899,9 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "presentation": {
+            "description": "Branding blob (`{icon, color, vendor, category, badge}`) for a library\nnode; raw JSONB to match the `graph`/`air_json` convention. NULL for\nplain workflows."
           },
           "published": {
             "type": "boolean"
@@ -33778,6 +33921,17 @@
             "format": "uuid"
           },
           "source_ref": {},
+          "superseded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Successor `vendor/slug` coordinate for a deprecated/retired node."
+          },
+          "template_kind": {
+            "type": "string",
+            "description": "Exclusive intent: `workflow` (default), `library_node` (a curated\nreusable integration surfaced in the palette), or `private_child` (a\nprivate sub-workflow). Drives palette/catalogue/ACL branching."
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
