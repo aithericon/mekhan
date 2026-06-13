@@ -20,7 +20,6 @@
 	let lineage = $state<LineageResponse | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let expandedId = $state<string | null>(null);
 	const highlightArtifact = browser
 		? new URLSearchParams(window.location.search).get('artifact')
 		: null;
@@ -199,8 +198,6 @@
 										<ArtifactCard
 											entry={artifact}
 											highlighted={highlightArtifact === artifact.id}
-											expanded={expandedId === artifact.id}
-											onToggle={() => { expandedId = expandedId === artifact.id ? null : artifact.id; }}
 										/>
 									</div>
 								{/each}

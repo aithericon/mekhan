@@ -3,6 +3,7 @@
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
 	import { Badge } from '$lib/components/ui/badge';
 	import { CopyButton } from '$lib/components/ui/copy-button';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Download from '@lucide/svelte/icons/download';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
@@ -10,7 +11,7 @@
 	import Activity from '@lucide/svelte/icons/activity';
 	import Server from '@lucide/svelte/icons/server';
 	import Star from '@lucide/svelte/icons/star';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Info from '@lucide/svelte/icons/info';
 	// File-type icons
 	import File from '@lucide/svelte/icons/file';
 	import FileText from '@lucide/svelte/icons/file-text';
@@ -35,12 +36,19 @@
 		expanded = false,
 		highlighted = false,
 		copies = undefined,
-		onToggle,
+		detailsOpen = undefined,
+		onDetailsOpenChange,
 		onSchemaClick,
 		onNetClick,
 		onViewServer
 	}: {
 		entry: CatalogueEntry;
+		/**
+		 * Render the detail sections inline, statically (no dialog, no toggle).
+		 * For embedding contexts that are already an overlay (e.g. the
+		 * provenance event sheet). List views leave this off — details live in
+		 * a dialog opened from the row.
+		 */
 		expanded?: boolean;
 		highlighted?: boolean;
 		/**
@@ -50,7 +58,12 @@
 		 * provenance) get the same Download affordance without plumbing copies.
 		 */
 		copies?: DataCopy[];
-		onToggle?: () => void;
+		/**
+		 * Controlled open state for the details dialog (e.g. ?inspect= deep
+		 * links). Omit for internal, uncontrolled state.
+		 */
+		detailsOpen?: boolean;
+		onDetailsOpenChange?: (open: boolean) => void;
 		onSchemaClick?: (digest: string) => void;
 		onNetClick?: (net: string) => void;
 		/** Jump to a file server (Servers tab) by its inventory key. */
@@ -213,10 +226,34 @@
 		attributes.length > 0 || !!preview || !!dataQuality || unixMode != null ||
 		!!entry.storage_path || Object.keys(um).length > 0
 	);
-	const canToggle = $derived(hasDetails && !!onToggle);
+	// Details live in a dialog unless the caller asked for static inline render.
+	const canOpenDetails = $derived(hasDetails && !expanded);
 
-	function toggle() {
-		if (canToggle) onToggle?.();
+	// Controlled (detailsOpen prop) with uncontrolled fallback.
+	let internalOpen = $state(false);
+	const dialogOpen = $derived(detailsOpen ?? internalOpen);
+	function setDialogOpen(open: boolean) {
+		if (detailsOpen === undefined) internalOpen = open;
+		onDetailsOpenChange?.(open);
+	}
+
+	function openDetails() {
+		if (canOpenDetails) setDialogOpen(true);
+	}
+
+	// Filter / navigation actions inside the dialog dismiss it — the result of
+	// the action (filtered list, Servers tab) is behind the overlay.
+	function handleSchemaClick(digest: string) {
+		setDialogOpen(false);
+		onSchemaClick?.(digest);
+	}
+	function handleNetClick(net: string) {
+		setDialogOpen(false);
+		onNetClick?.(net);
+	}
+	function handleViewServer(key: string) {
+		setDialogOpen(false);
+		onViewServer?.(key);
 	}
 </script>
 
@@ -225,7 +262,7 @@
 		? 'border-primary ring-1 ring-primary/30'
 		: 'border-border'} {!expanded ? 'hover:bg-accent/30' : ''}"
 >
-	<!-- Header (whole region toggles when collapsible) -->
+	<!-- Header (whole region opens the details dialog when available) -->
 	<div class="flex items-start gap-3 p-3.5">
 		<!-- File-type icon -->
 		<div class="mt-0.5 shrink-0 {cat.fg}">
@@ -234,13 +271,13 @@
 
 		<!-- Title + metadata breadcrumb -->
 		<div class="min-w-0 flex-1">
-			<!-- Line 1: name · category · format — the toggle target -->
+			<!-- Line 1: name · category · format — opens the details dialog -->
 			<div
-				class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 {canToggle ? 'cursor-pointer' : ''}"
-				onclick={toggle}
-				onkeydown={(e) => { if (canToggle && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}
+				class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 {canOpenDetails ? 'cursor-pointer' : ''}"
+				onclick={openDetails}
+				onkeydown={(e) => { if (canOpenDetails && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetails(); } }}
 				role="button"
-				tabindex={canToggle ? 0 : -1}
+				tabindex={canOpenDetails ? 0 : -1}
 			>
 				<span class="truncate text-sm font-semibold text-foreground" title={entry.name}>{entry.name}</span>
 				<span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium capitalize {cat.pill}">{entry.category}</span>
@@ -394,21 +431,31 @@
 				</Tooltip.Root>
 			{/if}
 
-			{#if canToggle}
-				<button
-					class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					onclick={toggle}
-					aria-label={expanded ? 'Hide details' : 'Show details'}
-				>
-					<ChevronDown class="size-4 transition-transform duration-200 {expanded ? 'rotate-180' : ''}" />
-				</button>
+			{#if canOpenDetails}
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						onclick={openDetails}
+						aria-label="Show details"
+					>
+						<Info class="size-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content>Details &amp; provenance</Tooltip.Content>
+				</Tooltip.Root>
 			{/if}
 		</div>
 	</div>
 
-	<!-- Expanded details -->
+	<!-- Static inline details (embedding contexts that are already an overlay) -->
 	{#if expanded && hasDetails}
 		<div class="space-y-4 border-t border-border bg-muted/20 px-4 py-3.5">
+			{@render detailSections()}
+		</div>
+	{/if}
+</div>
+
+<!-- Detail sections — rendered inline (static `expanded`) or in the dialog. -->
+{#snippet detailSections()}
 			<!-- Location: where the bytes physically live -->
 			{#if allCopies.length > 0 || entry.storage_path}
 				<section>
@@ -427,7 +474,7 @@
 								{#if onViewServer}
 									<button
 										class="inline-flex shrink-0 items-center gap-1 font-medium text-foreground hover:text-primary"
-										onclick={() => onViewServer?.(c.file_server_id)}
+										onclick={() => handleViewServer(c.file_server_id)}
 										title="View server {c.file_server_id}"
 									>
 										<Server class="size-3.5" />{c.server_display_name ?? c.file_server_id}
@@ -486,7 +533,7 @@
 						{#if schema?.digest}
 							<button
 								class="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs hover:border-primary hover:text-primary"
-								onclick={() => onSchemaClick?.(schema!.digest)}
+								onclick={() => handleSchemaClick(schema!.digest)}
 								title="Filter by this schema fingerprint (v{schema.version})"
 							>schema {schema.digest}</button>
 						{/if}
@@ -594,7 +641,7 @@
 						<dt class="text-muted-foreground">Net</dt>
 						<dd class="flex min-w-0 items-center gap-1.5">
 							{#if onNetClick}
-								<button class="truncate font-mono text-xs hover:text-primary" onclick={() => onNetClick?.(entry.source_net!)} title="Filter by net">{entry.source_net}</button>
+								<button class="truncate font-mono text-xs hover:text-primary" onclick={() => handleNetClick(entry.source_net!)} title="Filter by net">{entry.source_net}</button>
 							{:else}
 								<span class="truncate font-mono text-xs text-muted-foreground">{entry.source_net}</span>
 							{/if}
@@ -616,6 +663,28 @@
 					<pre class="overflow-x-auto rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground">{JSON.stringify(um, null, 2)}</pre>
 				</section>
 			{/if}
-		</div>
-	{/if}
-</div>
+{/snippet}
+
+<!-- Details & provenance dialog (list contexts) -->
+{#if canOpenDetails}
+	<Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
+		<Dialog.Content class="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+			<Dialog.Header class="border-b border-border px-6 py-4">
+				<Dialog.Title class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-left">
+					<span class="shrink-0 {cat.fg}"><Icon class="size-5" /></span>
+					<span class="min-w-0 truncate" title={entry.name}>{entry.name}</span>
+					<span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium capitalize {cat.pill}">{entry.category}</span>
+					{#if formatLabel}
+						<span class="shrink-0 font-mono text-[11px] uppercase text-muted-foreground">{formatLabel}</span>
+					{/if}
+				</Dialog.Title>
+				<Dialog.Description class="text-left">
+					{#if entry.size_bytes != null}{formatBytes(entry.size_bytes)} · {/if}created {fullDate(entry.created_at)}
+				</Dialog.Description>
+			</Dialog.Header>
+			<div class="space-y-4 overflow-y-auto px-6 py-4">
+				{@render detailSections()}
+			</div>
+		</Dialog.Content>
+	</Dialog.Root>
+{/if}

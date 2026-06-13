@@ -66,7 +66,6 @@
 	let artifactsTotalPages = $state(0);
 	let artifactsHasNext = $state(false);
 	let artifactsLoading = $state(false);
-	let expandedArtifact = $state<string | null>(null);
 
 	// Metrics tab
 	let metricsSummary = $state<HpiMetricSummary[]>([]);
@@ -732,14 +731,7 @@
 		{:else}
 			<div class="space-y-2">
 				{#each artifacts as entry (`${entry.execution_id}/${entry.id}`)}
-					<ArtifactCard
-						{entry}
-						expanded={expandedArtifact === entry.id}
-						highlighted={false}
-						onToggle={() => {
-							expandedArtifact = expandedArtifact === entry.id ? null : entry.id;
-						}}
-					/>
+					<ArtifactCard {entry} />
 				{/each}
 			</div>
 

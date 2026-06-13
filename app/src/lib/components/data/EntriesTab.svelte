@@ -86,8 +86,8 @@
 	const entryKey = (e: DataEntry) =>
 		e.entry_id ?? e.content_hash ?? `${e.execution_id}/${e.id}`;
 
-	function toggleInspect(id: string) {
-		inspectId = inspectId === id ? null : id;
+	function setInspect(id: string | null) {
+		inspectId = id;
 		if (browser) {
 			const url = new URL(window.location.href);
 			if (inspectId) url.searchParams.set('inspect', inspectId);
@@ -191,9 +191,9 @@
 			<ArtifactCard
 				{entry}
 				copies={entry.copies}
-				expanded={inspectId === key}
+				detailsOpen={inspectId === key}
 				highlighted={inspectId === key}
-				onToggle={() => toggleInspect(key)}
+				onDetailsOpenChange={(open) => setInspect(open ? key : null)}
 				onSchemaClick={(digest) => {
 					const dt = datatypes.byDigest.get(digest);
 					entries.addTerm(dt ? `datatype:${quoteIfNeeded(dt.name)}` : `meta.schema:${digest}`);
