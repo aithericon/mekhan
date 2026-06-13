@@ -231,6 +231,8 @@
 
 	// Controlled (detailsOpen prop) with uncontrolled fallback.
 	let internalOpen = $state(false);
+	// Scroll container — focus target on open (see onOpenAutoFocus below).
+	let scrollEl = $state<HTMLDivElement | null>(null);
 	const dialogOpen = $derived(detailsOpen ?? internalOpen);
 	function setDialogOpen(open: boolean) {
 		if (detailsOpen === undefined) internalOpen = open;
@@ -668,7 +670,17 @@
 <!-- Details & provenance dialog (list contexts) -->
 {#if canOpenDetails}
 	<Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
-		<Dialog.Content class="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+		<Dialog.Content
+			class="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+			onOpenAutoFocus={(e) => {
+				// Default auto-focus lands on the first focusable child — the
+				// canonical-copy Star's tooltip trigger — which then opens its
+				// tooltip on focus. Redirect focus to the non-interactive scroll
+				// container so focus still enters the dialog without that flash.
+				e.preventDefault();
+				scrollEl?.focus();
+			}}
+		>
 			<Dialog.Header class="border-b border-border px-6 py-4">
 				<Dialog.Title class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-8 text-left">
 					<span class="shrink-0 {cat.fg}"><Icon class="size-5" /></span>
@@ -682,7 +694,7 @@
 					{#if entry.size_bytes != null}{formatBytes(entry.size_bytes)} · {/if}created {fullDate(entry.created_at)}
 				</Dialog.Description>
 			</Dialog.Header>
-			<div class="space-y-4 overflow-y-auto px-6 py-4">
+			<div bind:this={scrollEl} tabindex="-1" class="space-y-4 overflow-y-auto px-6 py-4 outline-none">
 				{@render detailSections()}
 			</div>
 		</Dialog.Content>
