@@ -4,6 +4,7 @@
 	import { PageShell, PageHeader, FilterPills, type FilterPill } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
 	import Activity from '@lucide/svelte/icons/activity';
@@ -56,14 +57,6 @@
 		{ value: 'test_run', label: 'Test runs', href: `/instances?${baseQuery}mode=test_run` },
 		{ value: 'any', label: 'All', href: `/instances?${baseQuery}mode=any` }
 	]);
-
-	const statusColors: Record<string, string> = {
-		created: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		cancelled: 'bg-slate-100 text-slate-700'
-	};
 
 	async function handleCancel(id: string) {
 		if (!confirm('Cancel this instance?')) return;
@@ -148,9 +141,7 @@
 							<Badge variant="secondary">
 								v{instance.template_version}
 							</Badge>
-							<Badge class={statusColors[instance.status] ?? ''} variant="secondary">
-								{instance.status}
-							</Badge>
+							<StatusBadge domain="workflow" status={instance.status} />
 							{#if instance.mode && instance.mode !== 'live'}
 								<Badge
 									class={modeBadgeClass[instance.mode] ?? ''}

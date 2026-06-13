@@ -2,6 +2,7 @@
 	import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetClose } from '$lib/components/ui/sheet';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from 'bits-ui';
 	import X from '@lucide/svelte/icons/x';
@@ -121,14 +122,6 @@
 		return nodeInterface?.borrowed_paths?.[producerNodeId] ?? [];
 	}
 
-	const statusColor: Record<string, string> = {
-		pending: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		skipped: 'bg-slate-100 text-slate-500'
-	};
-
 	// The node kind from the template's WorkflowNode (`type` is the AIR-side
 	// kind, also snake_case) or from the step row (snake_case from the
 	// projection). Prefer the step's kind since that's what the projection
@@ -148,23 +141,6 @@
 	const showAllocationPanel = $derived(
 		(kind === 'scheduled' || kind === 'lease_scope') && allocationRows.length > 0
 	);
-
-	// Status palette for allocation rows — mirrors the allocation status values
-	// from the schema (`pending | held | released | failed | expired`).
-	const allocStatusColor: Record<string, string> = {
-		pending:  'bg-amber-100 text-amber-700',
-		held:     'bg-green-100 text-green-700',
-		released: 'bg-slate-100 text-slate-600',
-		failed:   'bg-red-100 text-red-700',
-		expired:  'bg-orange-100 text-orange-700'
-	};
-	const childStatusColor: Record<string, string> = {
-		created: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		cancelled: 'bg-slate-100 text-slate-500'
-	};
 
 	const nodeLabel = $derived<string>(
 		(node?.data?.label ?? '') || step?.node_id || 'Step'
@@ -341,7 +317,6 @@
 		</h3>
 		<div class="divide-y divide-border rounded-md border border-border">
 			{#each rows as row (row.id)}
-				{@const statusCls = allocStatusColor[row.status] ?? 'bg-gray-100 text-gray-700'}
 				<div class="px-3 py-2 text-sm">
 					<!-- Row header: alloc_id + flavor + status pill + cluster back-link -->
 					<div class="mb-1.5 flex flex-wrap items-center gap-1.5">
@@ -353,7 +328,7 @@
 						{#if row.scheduler_flavor}
 							<Badge variant="outline" class="font-mono text-sm font-normal">{row.scheduler_flavor}</Badge>
 						{/if}
-						<Badge class="{statusCls} font-normal" variant="secondary">{row.status}</Badge>
+						<StatusBadge domain="lease" status={row.status} />
 						{#if row.cluster_resource_id}
 							<a
 								href="/clusters/{row.cluster_resource_id}"
@@ -432,9 +407,7 @@
 
 			<InspectorShell kind={kind} label={nodeLabel} nodeId={step.node_id} description={nodeDescription}>
 				{#snippet status()}
-					<Badge class={statusColor[step.status] ?? ''} variant="secondary">
-						{step.status}
-					</Badge>
+					<StatusBadge domain="step" status={step.status} />
 					{#if step.iteration_index > 0 || iterations.length > 1}
 						<Badge variant="outline">iter {step.iteration_index}</Badge>
 					{/if}
@@ -481,9 +454,7 @@
 											<span class="ml-1 font-mono text-muted-foreground">· run {i + 1}</span>
 										{/if}
 									</span>
-									<Badge class={childStatusColor[child.status] ?? ''} variant="secondary">
-										{child.status}
-									</Badge>
+									<StatusBadge domain="workflow" status={child.status} />
 									<ArrowRight class="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 								</a>
 							{/each}

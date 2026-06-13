@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { catalogueDownloadUrl, dataEntryContentUrl, type CatalogueEntry } from '$lib/api/client';
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -84,17 +84,6 @@
 	};
 	const cat = $derived(catStyle[entry.category?.toLowerCase()] ?? catStyle.other);
 
-	// ── Copy status colours ─────────────────────────────────────────────────────
-	const statusColors: Record<string, string> = {
-		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-		verified: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		registered: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		copied: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
-		deleted: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
-		mismatch: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-	};
-	const copyStatusColor = (s: string) =>
-		statusColors[s] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
 
 	// ── Helpers ─────────────────────────────────────────────────────────────────
 	function formatBytes(bytes: number | null | undefined): string {
@@ -488,7 +477,7 @@
 								{/if}
 								{#if c.server_kind}<span class="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">{c.server_kind}</span>{/if}
 								<span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" title={c.path}>{c.path}</span>
-								<Badge class="{copyStatusColor(c.status)} shrink-0" variant="secondary">{c.status}</Badge>
+								<StatusBadge domain="copy" status={c.status} class="shrink-0" />
 							</div>
 						{/each}
 						{#if entry.storage_path}

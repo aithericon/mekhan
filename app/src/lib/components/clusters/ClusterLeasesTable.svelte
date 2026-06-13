@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import type { AllocationResponse } from '$lib/api/clusters';
 
 	type Props = {
@@ -18,14 +19,6 @@
 	);
 
 	const title = $derived(variant === 'active' ? 'Active leases' : 'Lease history');
-
-	const allocStatusColor: Record<string, string> = {
-		pending: 'bg-amber-100 text-amber-700',
-		held: 'bg-green-100 text-green-700',
-		released: 'bg-slate-100 text-slate-600',
-		failed: 'bg-red-100 text-red-700',
-		expired: 'bg-orange-100 text-orange-700'
-	};
 
 	function flavorClass(f: string | null | undefined): string {
 		if (f === 'slurm') return 'bg-sky-500/15 text-sky-700 dark:text-sky-300';
@@ -102,10 +95,9 @@
 				</thead>
 				<tbody class="divide-y divide-border/60">
 					{#each visibleLeases as row (row.id)}
-						{@const statusCls = allocStatusColor[row.status] ?? 'bg-gray-100 text-gray-700'}
 						<tr class="hover:bg-muted/30">
 							<td class="px-3 py-2">
-								<Badge class="{statusCls} font-normal" variant="secondary">{row.status}</Badge>
+								<StatusBadge domain="lease" status={row.status} />
 							</td>
 							<td class="px-3 py-2">
 								<div class="font-mono text-sm text-foreground">

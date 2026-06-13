@@ -26,6 +26,7 @@
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
+	import { StatusBadge } from '$lib/components/status';
 	import { roleAtLeast } from '$lib/api/iam';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import Share2 from '@lucide/svelte/icons/share-2';
@@ -96,32 +97,6 @@
 	});
 
 	provideInstanceContext(ctx);
-
-	// Per-status pill styling: a leading status dot + a soft pill, both with
-	// dark-mode variants. Hardcoded so the JIT keeps the classes.
-	const statusMeta: Record<string, { dot: string; pill: string }> = {
-		created: {
-			dot: 'bg-gray-400',
-			pill: 'bg-gray-100 text-gray-700 dark:bg-gray-500/15 dark:text-gray-300'
-		},
-		running: {
-			dot: 'bg-blue-500 animate-pulse',
-			pill: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
-		},
-		completed: {
-			dot: 'bg-green-500',
-			pill: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300'
-		},
-		failed: {
-			dot: 'bg-red-500',
-			pill: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-		},
-		cancelled: {
-			dot: 'bg-slate-400',
-			pill: 'bg-slate-100 text-slate-700 dark:bg-slate-500/15 dark:text-slate-300'
-		}
-	};
-	const statusStyle = $derived(statusMeta[ctx.instance?.status ?? ''] ?? statusMeta.created);
 
 	const formatDate = (s: string | null) => (s ? new Date(s).toLocaleString() : '—');
 
@@ -476,12 +451,7 @@
 					<div
 						class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted-foreground"
 					>
-						<span
-							class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-medium capitalize {statusStyle.pill}"
-						>
-							<span class="size-1.5 rounded-full {statusStyle.dot}"></span>
-							{instance.status}
-						</span>
+						<StatusBadge domain="workflow" status={instance.status} size="sm" dot capitalize />
 						{#if durationMs != null}
 							<span
 								class="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 font-medium text-foreground/80"

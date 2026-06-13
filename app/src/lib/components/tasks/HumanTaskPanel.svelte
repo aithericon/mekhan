@@ -2,7 +2,7 @@
 	import type { HumanTask, TaskStep } from '$lib/hpi/types';
 	import { BlockRenderer, FieldDisplay } from '$lib/hpi';
 	import type { ProcessState } from '$lib/hpi/types';
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import Clock from '@lucide/svelte/icons/clock';
 	import CheckCircle from '@lucide/svelte/icons/check-circle';
 	import XCircle from '@lucide/svelte/icons/x-circle';
@@ -18,14 +18,16 @@
 
 	let { task, process = null, hpiBaseUrl }: Props = $props();
 
-	const statusConfig: Record<string, { color: string; label: string }> = {
-		pending: { color: 'border-amber-200 bg-amber-50 text-amber-700', label: 'Pending' },
-		completed: { color: 'border-emerald-200 bg-emerald-50 text-emerald-700', label: 'Completed' },
-		cancelled: { color: 'border-slate-200 bg-slate-50 text-slate-600', label: 'Cancelled' },
-		failed: { color: 'border-red-200 bg-red-50 text-red-600', label: 'Rejected' }
-	};
-
-	const status = $derived(statusConfig[task.status] ?? statusConfig.pending);
+	// Leading icon per task state (colour + label come from the shared registry).
+	const statusIcon = $derived(
+		task.status === 'pending'
+			? Clock
+			: task.status === 'completed'
+				? CheckCircle
+				: task.status === 'failed'
+					? AlertCircle
+					: XCircle
+	);
 	const hasData = $derived(task.data && Object.keys(task.data).length > 0);
 
 	function formatDuration(ms?: number | null): string | null {
@@ -61,18 +63,7 @@
 		<div class="min-w-0">
 			<h3 class="text-sm font-semibold text-foreground truncate">{task.title}</h3>
 			<div class="flex items-center gap-2 mt-1">
-				<Badge class="rounded-full {status.color}" variant="outline">
-					{#if task.status === 'pending'}
-						<Clock class="size-3 mr-1" />
-					{:else if task.status === 'completed'}
-						<CheckCircle class="size-3 mr-1" />
-					{:else if task.status === 'failed'}
-						<AlertCircle class="size-3 mr-1" />
-					{:else}
-						<XCircle class="size-3 mr-1" />
-					{/if}
-					{status.label}
-				</Badge>
+				<StatusBadge domain="task" status={task.status} icon={statusIcon} class="rounded-full" />
 				{#if task.assignee_id}
 					<span class="flex items-center gap-1 text-sm text-muted-foreground">
 						<User class="size-3" />

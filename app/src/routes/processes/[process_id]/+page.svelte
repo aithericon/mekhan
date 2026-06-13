@@ -9,6 +9,7 @@
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import { ProcessView } from '$lib/components/processes';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Separator } from '$lib/components/ui/separator';
@@ -27,22 +28,11 @@
 
 	const processId = $derived(($page.params as Record<string, string>).process_id);
 
-	const statusColors: Record<string, string> = {
-		active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		completed: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-	};
 	const kindColors: Record<string, string> = {
 		'petri-net': 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
 		'bo-campaign': 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
 		pipeline: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200'
 	};
-	function statusColor(s: string): string {
-		return (
-			statusColors[s.toLowerCase()] ??
-			'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-		);
-	}
 	function kindColor(k: string): string {
 		return (
 			kindColors[k.toLowerCase()] ??
@@ -110,9 +100,7 @@
 			<!-- Meta rows shared between display + rename header states -->
 			{#snippet metaRows()}
 				<div class="mt-2 mb-2 flex flex-wrap items-center gap-2">
-					<Badge class={statusColor(d.status)} variant="secondary">
-						{d.status}
-					</Badge>
+					<StatusBadge domain="process" status={d.status} />
 					{#if d.kind}
 						<Badge class={kindColor(d.kind)} variant="secondary">
 							{d.kind}

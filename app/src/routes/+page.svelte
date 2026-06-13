@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import {
 		listInstances,
 		listTemplates,
@@ -60,14 +61,6 @@
 		completedToday: 0,
 		failedToday: 0
 	});
-
-	const statusStyles: Record<string, string> = {
-		running: 'bg-blue-100 text-blue-700',
-		created: 'bg-gray-100 text-gray-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		cancelled: 'bg-slate-100 text-slate-700'
-	};
 
 	async function openDemo() {
 		if (openingDemo) return;
@@ -505,12 +498,7 @@
 											<span class="truncate text-sm font-medium text-foreground">
 												{instance.template_name ?? instance.net_id}
 											</span>
-											<Badge
-												variant="secondary"
-												class={statusStyles[instance.status] ?? ''}
-											>
-												{instance.status}
-											</Badge>
+											<StatusBadge domain="workflow" status={instance.status} />
 										</div>
 										<p class="mt-0.5 truncate text-sm text-muted-foreground">
 											{#if instance.current_step}

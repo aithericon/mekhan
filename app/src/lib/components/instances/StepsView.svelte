@@ -8,7 +8,7 @@
 		type WorkflowInstance,
 		type WorkflowNode
 	} from '$lib/api/client';
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import {
 		parseInterfaceRegistry,
 		type InterfaceRegistry,
@@ -62,14 +62,6 @@
 			instance.status === 'failed' ||
 			instance.status === 'cancelled'
 	);
-
-	const statusColor: Record<string, string> = {
-		pending: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		skipped: 'bg-slate-100 text-slate-500'
-	};
 
 	async function refresh() {
 		try {
@@ -184,9 +176,7 @@
 							</td>
 							<td class="px-4 py-2 text-sm text-muted-foreground">{step.node_kind}</td>
 							<td class="px-4 py-2">
-								<Badge class={statusColor[step.status] ?? ''} variant="secondary">
-									{step.status}
-								</Badge>
+								<StatusBadge domain="step" status={step.status} />
 							</td>
 							<td class="px-4 py-2 text-sm text-muted-foreground">
 								{step.iteration_index > 0 ? step.iteration_index : '—'}

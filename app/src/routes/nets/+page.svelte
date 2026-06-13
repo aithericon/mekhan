@@ -2,6 +2,7 @@
 	import { PageShell, PageHeader, FilterPills } from '$lib/components/shell';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import Server from '@lucide/svelte/icons/server';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Eye from '@lucide/svelte/icons/eye';
@@ -56,14 +57,6 @@
 	let includeInfra = $state(false);
 	/** A bulk op is running — disables the bulk buttons. */
 	let bulkBusy = $state(false);
-
-	const statusColors: Record<string, string> = {
-		running: 'bg-blue-100 text-blue-700',
-		created: 'bg-gray-100 text-gray-700',
-		completed: 'bg-green-100 text-green-700',
-		cancelled: 'bg-slate-100 text-slate-700',
-		failed: 'bg-red-100 text-red-700'
-	};
 
 	const isActive = (n: AdminNetRow) => n.status === 'running' || n.status === 'created';
 
@@ -338,9 +331,7 @@
 								</div>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">
-								<Badge class={statusColors[net.status] ?? 'bg-gray-100 text-gray-700'}>
-									{net.status}
-								</Badge>
+								<StatusBadge domain="workflow" status={net.status} />
 								<Button variant="ghost" size="icon-sm" href="/nets/{net.net_id}">
 									<Eye class="size-3.5" />
 								</Button>

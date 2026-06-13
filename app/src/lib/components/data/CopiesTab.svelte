@@ -5,7 +5,7 @@
 		type InventoryEntry,
 		type InventoryStats
 	} from '$lib/api/client';
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { CopyButton } from '$lib/components/ui/copy-button';
@@ -49,22 +49,6 @@
 		{ value: '-path', label: 'Path Z-A' },
 		{ value: 'file_server_id', label: 'Server A-Z' }
 	];
-
-	// One physical copy moves through these states (docs/32 §4): observed →
-	// hash-verified → registered by-reference → bytes copied → source deleted.
-	// mismatch/orphan_* are reconcile outcomes.
-	const statusColors: Record<string, string> = {
-		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-		verified: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		registered: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		copied: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
-		deleted: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
-		mismatch: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-		orphan_disk: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-		orphan_db: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
-	};
-	const statusColor = (s: string) =>
-		statusColors[s] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
 
 	const formatDate = (s: string | null | undefined) =>
 		s
@@ -141,7 +125,7 @@
 			<div class="mt-2 flex flex-wrap gap-1">
 				{#each stats.by_status as s}
 					<button class="inline-flex" onclick={() => { statusFilter = s.key; resetPage(); }} title="Filter by {s.key}">
-						<Badge class={statusColor(s.key)} variant="secondary">{s.key}: {s.count.toLocaleString()}</Badge>
+						<StatusBadge domain="copy" status={s.key} label="{s.key}: {s.count.toLocaleString()}" />
 					</button>
 				{:else}
 					<span class="text-sm text-muted-foreground">—</span>
@@ -272,7 +256,7 @@
 					</div>
 
 					<div class="col-span-2">
-						<Badge class={statusColor(entry.status)} variant="secondary">{entry.status}</Badge>
+						<StatusBadge domain="copy" status={entry.status} />
 						{#if entry.migration_target}
 							<Tooltip.Root>
 								<Tooltip.Trigger><span class="ml-1 text-sm text-muted-foreground">→</span></Tooltip.Trigger>

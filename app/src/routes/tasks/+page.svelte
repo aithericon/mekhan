@@ -1,18 +1,10 @@
 <script lang="ts">
 	import { createTaskStore } from '$lib/stores/tasks.svelte';
 	import { PageShell, PageHeader, FilterPills } from '$lib/components/shell';
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import ClipboardList from '@lucide/svelte/icons/clipboard-list';
 
 	const store = createTaskStore();
-
-	type StatusConfig = { class: string; label: string };
-	const statusConfig: Record<string, StatusConfig> = {
-		pending: { class: 'border-amber-200 bg-amber-50 text-amber-700', label: 'Pending' },
-		completed: { class: 'border-emerald-200 bg-emerald-50 text-emerald-700', label: 'Completed' },
-		cancelled: { class: 'border-slate-200 bg-slate-50 text-slate-600', label: 'Cancelled' },
-		failed: { class: 'border-red-200 bg-red-50 text-red-600', label: 'Rejected' }
-	};
 
 	const hoverByStatus: Record<string, string> = {
 		pending: 'hover:border-primary/40 hover:shadow-md',
@@ -112,7 +104,6 @@
 	{:else}
 		<div class="space-y-2">
 			{#each store.tasks as task (task.task_id)}
-				{@const cfg = statusConfig[task.status] ?? statusConfig.pending}
 				{@const hover = hoverByStatus[task.status] ?? hoverByStatus.pending}
 				{@const duration = formatDuration(task.duration_ms)}
 				<a
@@ -136,9 +127,7 @@
 								{/if}
 							</div>
 						</div>
-						<Badge variant="outline" class="shrink-0 rounded-full {cfg.class}">
-							{cfg.label}
-						</Badge>
+						<StatusBadge domain="task" status={task.status} class="shrink-0" />
 					</div>
 				</a>
 			{/each}

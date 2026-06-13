@@ -10,6 +10,7 @@
 		DropdownMenuSeparator
 	} from '$lib/components/ui/dropdown-menu';
 	import { listInstances, type InstanceListItem } from '$lib/api/client';
+	import { StatusBadge } from '$lib/components/status';
 	import { allRunsHref, runWhenLabel, RUNS_MENU_LIMIT } from './runs-menu';
 
 	type Props = {
@@ -49,14 +50,6 @@
 	$effect(() => {
 		if (open) void loadRuns();
 	});
-
-	const statusColors: Record<string, string> = {
-		created: 'bg-gray-100 text-gray-700',
-		running: 'bg-blue-100 text-blue-700',
-		completed: 'bg-green-100 text-green-700',
-		failed: 'bg-red-100 text-red-700',
-		cancelled: 'bg-slate-100 text-slate-700'
-	};
 </script>
 
 <DropdownMenu bind:open>
@@ -94,9 +87,7 @@
 				>
 					<span class="min-w-0 flex-1">
 						<span class="flex items-center gap-1.5">
-							<span class="rounded px-1 text-sm {statusColors[run.status] ?? ''}">
-								{run.status}
-							</span>
+							<StatusBadge domain="workflow" status={run.status} />
 							<span class="text-sm text-muted-foreground">v{run.template_version}</span>
 							{#if run.mode !== 'live'}
 								<span class="rounded bg-accent px-1 text-sm text-muted-foreground">

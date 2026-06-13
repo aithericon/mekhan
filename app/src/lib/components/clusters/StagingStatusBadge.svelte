@@ -5,7 +5,7 @@
 	// Badge palette mirrors ClusterLeasesTable:
 	//   staging → amber  |  staged → green  |  failed → red  |  stale → slate
 
-	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import type { TemplateStaging } from '$lib/api/job-templates';
 
 	type Props = {
@@ -13,18 +13,6 @@
 	};
 
 	let { staging }: Props = $props();
-
-	const statusClass = $derived(
-		staging?.status === 'staging'
-			? 'bg-amber-100 text-amber-700'
-			: staging?.status === 'staged'
-				? 'bg-green-100 text-green-700'
-				: staging?.status === 'failed'
-					? 'bg-red-100 text-red-700'
-					: staging?.status === 'stale'
-						? 'bg-slate-100 text-slate-600'
-						: 'bg-muted text-muted-foreground'
-	);
 
 	/** Tooltip: remote_ref for staged, last_error for failed. */
 	const tooltip = $derived(
@@ -50,20 +38,7 @@
 {:else}
 	<div class="flex flex-col gap-0.5">
 		<div class="flex items-center gap-1.5">
-			<Badge
-				class="{statusClass} font-normal text-xs"
-				variant="secondary"
-				title={tooltip}
-			>
-				{staging.status}
-			</Badge>
-			{#if staging.status === 'staging'}
-				<!-- Pulse dot while staging is in progress -->
-				<span
-					class="inline-block size-1.5 animate-pulse rounded-full bg-amber-500"
-					aria-hidden="true"
-				></span>
-			{/if}
+			<StatusBadge domain="staging" status={staging.status} title={tooltip} dot />
 		</div>
 		{#if sublabel}
 			<span

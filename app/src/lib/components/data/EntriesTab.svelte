@@ -14,6 +14,7 @@
 	import type { DataTypesState } from './data-types.svelte';
 	import QueryBar from './QueryBar.svelte';
 	import { Badge } from '$lib/components/ui/badge';
+	import { StatusBadge } from '$lib/components/status';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 	import FileBox from '@lucide/svelte/icons/file-box';
@@ -71,15 +72,6 @@
 		{ value: '-meta.num_rows', label: 'Most rows' },
 		{ value: '-meta.completeness', label: 'Most complete' }
 	];
-
-	const statusColors: Record<string, string> = {
-		indexed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-		verified: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-		registered: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-		copied: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200'
-	};
-	const statusColor = (s: string) =>
-		statusColors[s] ?? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
 
 	// `entry.id` is the catalogue row id (job-net artifacts); content-addressed /
 	// by-reference rows carry only entry_id/content_hash, so prefer those.
@@ -239,7 +231,7 @@
 									<Server class="size-3" /><span>{c.server_display_name ?? c.file_server_id}</span>
 								</button>
 								<span class="truncate font-mono text-muted-foreground" title={c.path}>{c.path}</span>
-								<Badge class={statusColor(c.status)} variant="secondary">{c.status}</Badge>
+								<StatusBadge domain="copy" status={c.status} />
 							{/if}
 						</div>
 					{/each}
