@@ -361,6 +361,18 @@
               "required": true
             },
             {
+              "name": "limits_md",
+              "label": "Limits / margins (markdown)",
+              "kind": "textarea",
+              "required": true
+            },
+            {
+              "name": "table_rows",
+              "label": "Top curves table rows",
+              "kind": "json",
+              "required": true
+            },
+            {
               "name": "best_label",
               "label": "Best curve (one-liner)",
               "kind": "text",

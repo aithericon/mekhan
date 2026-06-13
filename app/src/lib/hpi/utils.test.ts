@@ -19,7 +19,7 @@ import {
 	type SortingState,
 	type TableState
 } from '@tanstack/table-core';
-import { tableColumns } from './utils';
+import { resolveTableRows, tableColumns } from './utils';
 
 function sortedColumn(headers: string[], rows: string[][], sorting: SortingState): string[][] {
 	let state = { sorting } as TableState;
@@ -71,5 +71,52 @@ describe('tableColumns', () => {
 		];
 		const sorted = sortedColumn(headers, rows, []);
 		expect(sorted.map((r) => r[0])).toEqual(['b', 'a']);
+	});
+});
+
+describe('resolveTableRows', () => {
+	const payload = {
+		report: { table_rows: [['1', '4.20'], [2, 3.7], ['3', null]] }
+	} as Record<string, unknown>;
+
+	it('resolves rows_ref against the task payload, stringifying cells', () => {
+		const rows = resolveTableRows({ rows_ref: 'report.table_rows' }, payload);
+		expect(rows).toEqual([
+			['1', '4.20'],
+			['2', '3.7'],
+			['3', '']
+		]);
+	});
+
+	it('rows_ref wins over static rows when both are set', () => {
+		const rows = resolveTableRows(
+			{ rows_ref: 'report.table_rows', rows: [['static']] },
+			payload
+		);
+		expect(rows).toHaveLength(3);
+	});
+
+	it('falls back to static rows when the ref is missing, malformed, or unresolved', () => {
+		const block = { rows: [['static']] };
+		expect(resolveTableRows(block, payload)).toEqual([['static']]);
+		expect(resolveTableRows({ ...block, rows_ref: 'singleseg' }, payload)).toEqual([['static']]);
+		expect(resolveTableRows({ ...block, rows_ref: 'a.b[*]' }, payload)).toEqual([['static']]);
+		expect(resolveTableRows({ ...block, rows_ref: 'report.nope' }, payload)).toEqual([['static']]);
+		expect(resolveTableRows({ ...block, rows_ref: 'report.nope' }, undefined)).toEqual([
+			['static']
+		]);
+	});
+
+	it('returns an empty table when nothing is usable', () => {
+		expect(resolveTableRows({ rows_ref: 'report.nope' }, payload)).toEqual([]);
+		expect(resolveTableRows({}, payload)).toEqual([]);
+	});
+
+	it('wraps a non-array element as a single-cell row', () => {
+		const rows = resolveTableRows(
+			{ rows_ref: 'r.list' },
+			{ r: { list: ['plain', ['a', 'b']] } }
+		);
+		expect(rows).toEqual([['plain'], ['a', 'b']]);
 	});
 });

@@ -689,21 +689,35 @@ fn parse_repeater_items_ref(raw: &str) -> Option<(String, Vec<String>)> {
     Some((head, pre))
 }
 
-/// Walk every Repeater block in `steps` and emit one `d.payload = __set_path(...)`
-/// statement per unique `(head, pre)` `items_ref` path. Empty when there are no
-/// Repeater blocks, preserving the existing byte-identical output for legacy
-/// HumanTasks.
+/// Walk every Repeater (`items_ref`) and Table (`rows_ref`) block in `steps`
+/// and emit one `d.payload = __set_path(...)` statement per unique
+/// `(head, pre)` upstream path. Empty when no block stages payload data,
+/// preserving the existing byte-identical output for legacy HumanTasks.
+///
+/// Tables nested inside a Repeater are render-only per row — a `rows_ref`
+/// there is NOT staged (per-element resolution has no whole-array path).
 fn build_repeater_payload_block(steps: &[TaskStepConfig]) -> String {
     let mut seen: std::collections::BTreeSet<(String, Vec<String>)> =
         std::collections::BTreeSet::new();
     let mut emissions: Vec<String> = Vec::new();
     for step in steps {
         for block in &step.blocks {
-            let TaskBlockConfig::Repeater { items_ref, .. } = block else {
-                continue;
-            };
-            let Some((head, pre)) = parse_repeater_items_ref(items_ref) else {
-                continue;
+            let (head, pre) = match block {
+                TaskBlockConfig::Repeater { items_ref, .. } => {
+                    match parse_repeater_items_ref(items_ref) {
+                        Some(hp) => hp,
+                        None => continue,
+                    }
+                }
+                // Table rows_ref shares the steps_ref grammar (plain dotted
+                // path, no `[*]`): head = slug, pre = the field path.
+                TaskBlockConfig::Table {
+                    rows_ref: Some(r), ..
+                } => match parse_steps_ref_segments(r) {
+                    Some(segs) => (segs[0].clone(), segs[1..].to_vec()),
+                    None => continue,
+                },
+                _ => continue,
             };
             if !seen.insert((head.clone(), pre.clone())) {
                 continue;
@@ -1075,6 +1089,49 @@ mod tests {
             script.matches("fn __pluck(").count(),
             1,
             "expected one __pluck helper, got: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_with_table_rows_ref_stages_payload_via_pluck() {
+        // A Table block's rows_ref (`report.table_rows`) rides the same
+        // payload-staging rails as a Repeater items_ref: one __set_path
+        // emission at the (head, pre) path. A malformed ref (single
+        // segment / `[*]`) is skipped — silent degrade, like the
+        // scanner's borrow-eligibility gate.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Results".into(),
+            description_mdsvex: None,
+            blocks: vec![
+                TaskBlockConfig::Table {
+                    headers: vec!["#".into(), "cycle".into()],
+                    rows: vec![],
+                    rows_ref: Some("report.table_rows".into()),
+                    alignments: None,
+                    caption: Some("Top curves".into()),
+                },
+                TaskBlockConfig::Table {
+                    headers: vec!["x".into()],
+                    rows: vec![vec!["static".into()]],
+                    rows_ref: Some("malformed".into()),
+                    alignments: None,
+                    caption: None,
+                },
+            ],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(
+                r#"d.payload = __set_path(d.payload, ["report", "table_rows"], 0, __pluck(input, ["report", "table_rows"]))"#
+            ),
+            "missing table rows_ref staging emission: {script}"
+        );
+        assert_eq!(
+            script.matches("d.payload = __set_path(").count(),
+            1,
+            "malformed rows_ref must not stage: {script}"
         );
     }
 

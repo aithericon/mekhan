@@ -104,7 +104,7 @@
 				{/if}
 				{#each step.blocks as block}
 					{#if block.type !== 'input' && block.type !== 'repeater'}
-						<BlockRenderer {block} />
+						<BlockRenderer {block} taskData={task.payload} />
 					{/if}
 				{/each}
 			</div>

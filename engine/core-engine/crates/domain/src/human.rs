@@ -323,7 +323,17 @@ pub enum TaskBlock {
     },
     Table {
         headers: Vec<String>,
+        /// Static cell matrix. Defaults to empty: the compiler omits it
+        /// when the table is `rows_ref`-driven (skip_serializing_if on
+        /// the authoring side).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         rows: Vec<Vec<String>>,
+        /// Upstream whole-array reference (`<slug>.<field>`) resolved
+        /// renderer-side against `HumanTaskRequest.payload`, where the
+        /// compiler stages the array (same rails as `Repeater.items_ref`).
+        /// Engine pass-through — must survive re-serialization.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows_ref: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alignments: Option<Vec<TableAlignment>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -757,6 +767,42 @@ mod tests {
         assert_eq!(back["items_ref"], "extract.line_items[*]");
         assert_eq!(back["item_label_ref"], "extract.line_items[*].description");
         assert_eq!(back["output_slug"], "line_approvals");
+    }
+
+    /// A `rows_ref`-driven table omits `rows` entirely (the compiler's
+    /// skip_serializing_if) — the parse must default it to empty, and the
+    /// `rows_ref` pass-through must survive re-serialization so the
+    /// renderer can resolve it against `HumanTaskRequest.payload`.
+    #[test]
+    fn table_block_with_rows_ref_and_no_rows_round_trips() {
+        let raw = json!({
+            "type": "table",
+            "headers": ["#", "Cycle [h]"],
+            "rows_ref": "report.table_rows",
+            "alignments": ["right", "right"],
+            "caption": "Top firing curves"
+        });
+        let block: TaskBlock = serde_json::from_value(raw).expect("parse rows_ref table");
+        match &block {
+            TaskBlock::Table {
+                headers,
+                rows,
+                rows_ref,
+                ..
+            } => {
+                assert_eq!(headers.len(), 2);
+                assert!(rows.is_empty(), "omitted rows must default to empty");
+                assert_eq!(rows_ref.as_deref(), Some("report.table_rows"));
+            }
+            other => panic!("expected TaskBlock::Table, got {other:?}"),
+        }
+        let back = serde_json::to_value(&block).expect("serialize");
+        assert_eq!(back["type"], "table");
+        assert_eq!(back["rows_ref"], "report.table_rows");
+        assert!(
+            back.get("rows").is_none(),
+            "empty rows must stay omitted on the wire"
+        );
     }
 
     /// `item_label_ref` is the only optional Repeater field — the

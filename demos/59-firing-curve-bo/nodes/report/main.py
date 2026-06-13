@@ -416,10 +416,11 @@ summary = {
 
 # --- Review-facing outputs (consumed by the `review` HumanTask) ---------------
 # The HumanTask's blocks interpolate `{{ report.<field> }}` at instance time:
-# `report_md` renders as an mdsvex block (markdown incl. the results table),
-# the storage KEYS feed `/api/v1/files/{{ report.gp_final_key }}` image/download
-# blocks, and `top_curves` drives a Repeater (`report.top_curves[*]`) with a
-# per-curve "queue for physical verification" checkbox.
+# `report_md` / `limits_md` render as mdsvex blocks, `table_rows` feeds the
+# sortable results table (`rows_ref: report.table_rows`), the storage KEYS
+# feed `/api/v1/files/{{ report.gp_final_key }}` image/download blocks, and
+# `top_curves` drives a Repeater (`report.top_curves[*]`) with a per-curve
+# "queue for physical verification" checkbox.
 
 # Artifact storage keys are deterministic: artifacts/{execution_id}/{id}/{name}
 # (observed executor-storage layout). Empty when rendering was skipped.
@@ -476,26 +477,32 @@ if feasible:
 else:
     best_label = "no feasible firing curve found — consider more iterations"
 
-_rows = "\n".join(
-    f"| {i + 1} | {c['cycle_h']:.2f} | {c['ramp_rate']:.1f} | {c['cool_rate']:.1f} "
-    f"| {c['hold_min']:.0f} | {c['sigma_max_mpa']:.1f} | {c['soak_min_k']:.1f} "
-    f"| {c['verdict']} |"
+# Sortable results table: the review task's `table` block resolves
+# `rows_ref: report.table_rows` against the staged payload — string cells,
+# one row per top curve, columns matching the block's `headers`.
+table_rows = [
+    [
+        str(i + 1),
+        f"{c['cycle_h']:.2f}",
+        f"{c['ramp_rate']:.1f}",
+        f"{c['cool_rate']:.1f}",
+        f"{c['hold_min']:.0f}",
+        f"{c['sigma_max_mpa']:.1f}",
+        f"{c['soak_min_k']:.1f}",
+        c["verdict"],
+    ]
     for i, c in enumerate(top_curves)
-)
+]
 _max_feas_sigma = max((float(o["sigma_max_mpa"]) for o in feasible), default=0.0)
 _min_feas_soak = min((float(o["soak_min_k"]) for o in feasible), default=0.0)
 
 report_md = f"""### Campaign summary
 
 **{n_obs} simulations** across **{n_iters} iterations** — **{len(feasible)} feasible**, {_n_crack} crack-risk, {_n_soak} under-soaked. The infeasible runs are not waste: they are the boundary probes that taught the surrogate where the material limits lie.
+"""
 
-#### Top firing curves
-
-| # | cycle [h] | ramp [K/min] | cool [K/min] | hold [min] | sigma_max [MPa] | soak min [K] | verdict |
-|---|-----------|--------------|--------------|------------|------------------|--------------|---------|
-{_rows}
-
-#### How close did we get to the limits?
+# Rendered as its own mdsvex block AFTER the sortable top-curves table.
+limits_md = f"""#### How close did we get to the limits?
 
 - Crack threshold **{float(sigma_limit):.0f} MPa** — best feasible curve peaks at **{_max_feas_sigma:.1f} MPa** ({float(sigma_limit) - _max_feas_sigma:.1f} MPa of margin).
 - Soak target **{_soak_target:.0f} K** (hold temp − 15) — tightest feasible soak: **{_min_feas_soak:.1f} K**.

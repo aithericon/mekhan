@@ -707,7 +707,7 @@
 					{errors}
 				/>
 			{:else}
-				<BlockRenderer {block} />
+				<BlockRenderer {block} {taskData} />
 			{/if}
 		{/each}
 	{/if}

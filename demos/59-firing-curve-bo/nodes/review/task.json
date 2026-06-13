@@ -14,6 +14,17 @@
         "type": "mdsvex",
         "content": "{{ report.report_md }}"
       },
+      {
+        "type": "table",
+        "headers": ["#", "Cycle [h]", "Ramp [K/min]", "Cool [K/min]", "Hold [min]", "σ max [MPa]", "Soak min [K]", "Verdict"],
+        "rows_ref": "report.table_rows",
+        "alignments": ["right", "right", "right", "right", "right", "right", "right", "left"],
+        "caption": "Top firing curves — feasible first, then the nearest misses (click a header to sort)"
+      },
+      {
+        "type": "mdsvex",
+        "content": "{{ report.limits_md }}"
+      },
       { "type": "divider" },
       {
         "type": "image",

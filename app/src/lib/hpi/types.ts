@@ -91,7 +91,13 @@ export type TaskBlock =
 	| { type: 'input'; field: TaskField }
 	| { type: 'mdsvex'; content: string }
 	| { type: 'download'; downloads: DownloadItem[] }
-	| { type: 'table'; headers: string[]; rows: string[][]; alignments?: ('left' | 'center' | 'right')[]; caption?: string }
+	/**
+	 * Sortable data table. `rows` is the static cell matrix; `rows_ref`,
+	 * when set, names an upstream `<slug>.<field>` whole-array path —
+	 * the renderer resolves it against `taskData` (the staged task
+	 * payload) and it wins over `rows`. Non-string cells are stringified.
+	 */
+	| { type: 'table'; headers: string[]; rows?: string[][]; rows_ref?: string; alignments?: ('left' | 'center' | 'right')[]; caption?: string }
 	| { type: 'image'; url: string; alt?: string; caption?: string }
 	| { type: 'callout'; severity: 'info' | 'warning' | 'error' | 'success'; title?: string; content: string }
 	| { type: 'pdf'; url: string; filename?: string; caption?: string; height?: string }

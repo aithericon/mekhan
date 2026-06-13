@@ -156,6 +156,34 @@ pub enum TaskBlockConfig {
     /// typically `{{ <slug>.<field> }}`-interpolated to an uploaded file.
     #[serde(rename = "download")]
     Download { downloads: Vec<DownloadItemConfig> },
+    /// Sortable data table for rich report display. Serializes to the
+    /// frontend `{type:"table",headers,rows,rows_ref?,alignments?,caption?}`
+    /// hpi block (`app/src/lib/hpi/types.ts`).
+    ///
+    /// `rows` is a static `string[][]` literal — each cell may carry
+    /// `{{ <slug>.<field> }}` text interpolation like any other authored
+    /// string. `rows_ref`, when set, is a producer-namespaced
+    /// `<slug>.<field>[.<more>…]` whole-array reference (same grammar as
+    /// `steps_ref` — no `[*]`): the compiler synthesizes a read-arc on the
+    /// upstream parked place and stages the resolved array into the task
+    /// payload on the same Feature-B rails as `Repeater.items_ref`; the
+    /// task UI resolves it against `task.payload` at render time and it
+    /// wins over `rows`. A malformed or unresolvable ref silently degrades
+    /// to the static `rows` (an empty table when none are authored) —
+    /// mirroring the Repeater's render-side degrade, not the hard
+    /// `steps_ref` validator.
+    #[serde(rename = "table")]
+    Table {
+        headers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rows: Vec<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alignments: Option<Vec<TableAlignment>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
     /// Feature B — render N copies of a sub-task body, one per element of an
     /// upstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`
     /// reference; the compiler synthesizes a read-arc on the parked array
@@ -233,6 +261,19 @@ pub enum CalloutSeverity {
     Warning,
     Error,
     Success,
+}
+
+/// Per-column text alignment for table blocks. Snake-case wire values
+/// (`"left"`, `"center"`, `"right"`) matching the frontend hpi
+/// `alignments?: ('left' | 'center' | 'right')[]` contract.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TableAlignment {
+    Left,
+    Center,
+    Right,
 }
 
 /// Layout mode for image blocks. Snake-case wire values: `"single"`,

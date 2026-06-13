@@ -17,10 +17,15 @@
 	// form-state machinery. BlockRenderer is only for display blocks.
 	type NonInputBlock = Exclude<TaskBlock, { type: 'input' } | { type: 'repeater' }>;
 
-	let { block }: { block: NonInputBlock } = $props();
+	let { block, taskData }: {
+		block: NonInputBlock;
+		/** Staged task payload — table blocks resolve `rows_ref` against it. */
+		taskData?: Record<string, unknown>;
+	} = $props();
 
 	// `satisfies` enforces exhaustiveness: every NonInputBlock variant must have
-	// a renderer whose `block` prop matches the variant's shape. A missing or
+	// a renderer whose `block` prop matches the variant's shape (taskData is
+	// optional — renderers that don't consume it still satisfy). A missing or
 	// mistyped entry fails to compile.
 	const RENDERERS = {
 		mdsvex: MdsvexBlock,
@@ -32,10 +37,15 @@
 		chart: ChartBlock,
 		divider: DividerBlock
 	} satisfies {
-		[K in NonInputBlock['type']]: Component<{ block: Extract<NonInputBlock, { type: K }> }>;
+		[K in NonInputBlock['type']]: Component<{
+			block: Extract<NonInputBlock, { type: K }>;
+			taskData?: Record<string, unknown>;
+		}>;
 	};
 
-	const Renderer = $derived(RENDERERS[block.type] as Component<{ block: NonInputBlock }>);
+	const Renderer = $derived(
+		RENDERERS[block.type] as Component<{ block: NonInputBlock; taskData?: Record<string, unknown> }>
+	);
 </script>
 
-<Renderer {block} />
+<Renderer {block} {taskData} />

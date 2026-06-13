@@ -16,6 +16,7 @@
 	import FileBlockEditor from './FileBlockEditor.svelte';
 	import PdfBlockEditor from './PdfBlockEditor.svelte';
 	import DownloadBlockEditor from './DownloadBlockEditor.svelte';
+	import TableBlockEditor from './TableBlockEditor.svelte';
 	import RepeaterBlockEditor from './RepeaterBlockEditor.svelte';
 	import BlockTypePicker from './BlockTypePicker.svelte';
 
@@ -128,6 +129,16 @@
 				{scope}
 				onchange={(downloads) =>
 					updateBlock(blockIdx, { type: 'download', downloads })}
+				onremove={() => removeBlock(blockIdx)}
+			/>
+		{:else if block.type === 'table'}
+			<TableBlockEditor
+				headers={block.headers}
+				rows_ref={block.rows_ref ?? undefined}
+				caption={block.caption ?? undefined}
+				{readonly}
+				{scope}
+				onchange={(updated) => updateBlock(blockIdx, { ...block, type: 'table', ...updated })}
 				onremove={() => removeBlock(blockIdx)}
 			/>
 		{:else if block.type === 'repeater'}

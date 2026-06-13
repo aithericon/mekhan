@@ -11821,6 +11821,13 @@ export interface components {
             /** @description Secret key (S3 secret access key, GCS HMAC secret, Azure account key). */
             secret_key?: string;
         };
+        /**
+         * @description Per-column text alignment for table blocks. Snake-case wire values
+         *     (`"left"`, `"center"`, `"right"`) matching the frontend hpi
+         *     `alignments?: ('left' | 'center' | 'right')[]` contract.
+         * @enum {string}
+         */
+        TableAlignment: "left" | "center" | "right";
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
             /** @enum {string} */
@@ -11861,6 +11868,14 @@ export interface components {
             downloads: components["schemas"]["DownloadItemConfig"][];
             /** @enum {string} */
             type: "download";
+        } | {
+            alignments?: components["schemas"]["TableAlignment"][] | null;
+            caption?: string | null;
+            headers: string[];
+            rows?: string[][];
+            rows_ref?: string | null;
+            /** @enum {string} */
+            type: "table";
         } | {
             /**
              * @description The sub-task body rendered per element. Any TaskBlockConfig

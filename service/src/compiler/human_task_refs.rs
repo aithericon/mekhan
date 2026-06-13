@@ -119,6 +119,35 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
                 }
             }
         }
+        // Table: headers / static cells / caption are ordinary interpolated
+        // strings. `rows_ref` is a structured `<slug>.<field>` whole-array
+        // ref (steps_ref grammar) — surface it as a synthetic placeholder so
+        // the borrow planner synthesizes the read-arc and the payload
+        // staging's `__pluck(input, …)` gets retargeted to the producer.
+        TaskBlockConfig::Table {
+            headers,
+            rows,
+            rows_ref,
+            caption,
+            ..
+        } => {
+            for h in headers {
+                scan_into(h, out);
+            }
+            for row in rows {
+                for cell in row {
+                    scan_into(cell, out);
+                }
+            }
+            if let Some(c) = caption {
+                scan_into(c, out);
+            }
+            if let Some(r) = rows_ref {
+                if is_well_formed_steps_ref(r) {
+                    scan_into(&format!("{{{{ {} }}}}", r.trim()), out);
+                }
+            }
+        }
         // Feature B Repeater: `items_ref` and `item_label_ref` are
         // structured `<slug>.<field>[*]…` refs (no `{{ … }}` braces).
         // The borrow planner needs the slug + first-field pair so it

@@ -29276,6 +29276,15 @@
           }
         }
       },
+      "TableAlignment": {
+        "type": "string",
+        "description": "Per-column text alignment for table blocks. Snake-case wire values\n(`\"left\"`, `\"center\"`, `\"right\"`) matching the frontend hpi\n`alignments?: ('left' | 'center' | 'right')[]` contract.",
+        "enum": [
+          "left",
+          "center",
+          "right"
+        ]
+      },
       "TaskBlockConfig": {
         "oneOf": [
           {
@@ -29473,6 +29482,58 @@
                 "type": "string",
                 "enum": [
                   "download"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Sortable data table for rich report display. Serializes to the\nfrontend `{type:\"table\",headers,rows,rows_ref?,alignments?,caption?}`\nhpi block (`app/src/lib/hpi/types.ts`).\n\n`rows` is a static `string[][]` literal — each cell may carry\n`{{ <slug>.<field> }}` text interpolation like any other authored\nstring. `rows_ref`, when set, is a producer-namespaced\n`<slug>.<field>[.<more>…]` whole-array reference (same grammar as\n`steps_ref` — no `[*]`): the compiler synthesizes a read-arc on the\nupstream parked place and stages the resolved array into the task\npayload on the same Feature-B rails as `Repeater.items_ref`; the\ntask UI resolves it against `task.payload` at render time and it\nwins over `rows`. A malformed or unresolvable ref silently degrades\nto the static `rows` (an empty table when none are authored) —\nmirroring the Repeater's render-side degrade, not the hard\n`steps_ref` validator.",
+            "required": [
+              "headers",
+              "type"
+            ],
+            "properties": {
+              "alignments": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/components/schemas/TableAlignment"
+                }
+              },
+              "caption": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "rows_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "table"
                 ]
               }
             }
