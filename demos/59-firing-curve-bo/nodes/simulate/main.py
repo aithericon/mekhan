@@ -16,7 +16,11 @@ Reads the per-candidate firing curve off the token-resident itemVar (`cand.*`
   4. renders a firing-curve + stress-trace PNG and registers it via
      `log_artifact(category="plot", mime_type="image/png")` so each evaluation
      shows up as a renderable media card on the process Overview tab;
-  5. emits `obs` — the observation dict the Map lifts as the gathered element.
+  5. on the docker path, exports the fields (foamToVTK) and renders a radial
+     (r,z) cross-section CUT-THROUGH animation of temperature and von-Mises
+     stress (`cutthrough_*.mp4`, video/mp4) via the headless
+     `aithericon-pvrender` image — best-effort, skipped if the image is absent;
+  6. emits `obs` — the observation dict the Map lifts as the gathered element.
 
 SOLVER MODES (cand.solver_mode, threaded from the Start form by `propose`):
   - "docker"    : require Docker; raise on failure (real-physics-or-bust).
@@ -73,6 +77,7 @@ log_info(
 )
 
 DOCKER_IMAGE = "opencfd/openfoam-default:2506"
+RENDER_IMAGE = "aithericon-pvrender:dev"
 
 _run_dir = os.environ.get("AITHERICON_RUN_DIR", os.getcwd())
 _artifacts_dir = os.environ.get("AITHERICON_ARTIFACTS_DIR", _run_dir)
@@ -345,7 +350,10 @@ def _run_docker():
         DOCKER_IMAGE,
         "bash", "-lc",
         "cd /case && blockMesh > log.blockMesh 2>&1 && "
-        "solidDisplacementFoam > log.solidDisplacementFoam 2>&1",
+        "solidDisplacementFoam > log.solidDisplacementFoam 2>&1 && "
+        # Export the field series for the cut-through render. Non-fatal: a
+        # foamToVTK hiccup must not fail an otherwise-good solve (`|| true`).
+        "{ foamToVTK > log.foamToVTK 2>&1 || true; }",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if proc.returncode != 0:
@@ -488,6 +496,199 @@ def _lag_frac(t):
     return 0.3
 
 
+# --- Field cut-through animation (docker path only) ------------------------------
+# render_slice.py, embedded so the executor (which ships only the entrypoint)
+# can drop it into the case dir at runtime. Kept in sync with the canonical,
+# standalone-testable copy at demos/59-firing-curve-bo/viz/render_slice.py.
+RENDER_SCRIPT = r'''"""Cut-through animation of an OpenFOAM solidDisplacementFoam puck case.
+
+Reads the foamToVTK series (VTK/case_<N>.vtm, one per write time), slices the
+quarter-symmetry puck on a plane through the z-axis (the symmetry mid-plane =
+a true radial cross-section of the full puck), and renders two panels per
+frame - temperature T [K] and von-Mises stress sigmaEq [MPa] - with color
+scales held constant across the whole series, into an mp4.
+
+Offscreen via Xvfb + Mesa software GL (no GPU). Run under a DISPLAY pointing at
+an Xvfb screen (the aithericon-pvrender image's entrypoint provides one).
+
+Usage: render_slice.py <case_dir> <out.mp4>
+"""
+import glob
+import os
+import re
+import sys
+
+import numpy as np
+import pyvista as pv
+
+pv.OFF_SCREEN = True
+
+case_dir = sys.argv[1] if len(sys.argv) > 1 else "case"
+out_path = sys.argv[2] if len(sys.argv) > 2 else "cutthrough.mp4"
+
+vtms = glob.glob(os.path.join(case_dir, "VTK", "case_*.vtm"))
+if not vtms:
+    print("no case_*.vtm under " + case_dir + "/VTK", file=sys.stderr)
+    sys.exit(2)
+
+
+def tindex(p):
+    m = re.search(r"case_(\d+)\.vtm$", p)
+    return int(m.group(1)) if m else 0
+
+
+vtms = sorted(vtms, key=tindex)
+
+
+def read_step(path):
+    """Return (internal UnstructuredGrid, physical_time) for one .vtm."""
+    mb = pv.read(path)
+    grid = None
+    for key in mb.keys():
+        if key and key.lower().startswith("internal") and mb[key] is not None:
+            grid = mb[key]
+            break
+    if grid is None:
+        for blk in mb:
+            if blk is not None and getattr(blk, "n_points", 0):
+                grid = blk
+                break
+    t = None
+    try:
+        tv = mb.field_data.get("TimeValue")
+        if tv is not None and len(tv):
+            t = float(tv[0])
+    except Exception:
+        pass
+    return grid, t
+
+
+# Pass 1: global color ranges (constant scale across the whole animation).
+ranges = {"T": [np.inf, -np.inf], "sigma_MPa": [np.inf, -np.inf]}
+
+
+def field_array(grid, name):
+    a = grid.point_data.get(name)
+    if a is None:
+        a = grid.cell_data.get(name)
+    if a is None:
+        return None
+    a = np.asarray(a)
+    return np.linalg.norm(a, axis=1) if a.ndim > 1 else a
+
+
+probe, _ = read_step(vtms[len(vtms) // 2])
+if probe is None:
+    print("could not extract internal block", file=sys.stderr)
+    sys.exit(3)
+
+for p in vtms:
+    g, _ = read_step(p)
+    if g is None:
+        continue
+    t = field_array(g, "T")
+    s = field_array(g, "sigmaEq")
+    if t is not None:
+        ranges["T"] = [min(ranges["T"][0], float(np.nanmin(t))),
+                       max(ranges["T"][1], float(np.nanmax(t)))]
+    if s is not None:
+        s = s / 1e6
+        ranges["sigma_MPa"] = [min(ranges["sigma_MPa"][0], float(np.nanmin(s))),
+                               max(ranges["sigma_MPa"][1], float(np.nanmax(s)))]
+
+y_eps = probe.bounds[2] + 1e-4  # just inside symY -> internal (r,z) cut
+
+PANELS = [
+    ("T", "temperature  T  [K]", "inferno", "%.0f"),
+    ("sigma_MPa", "von Mises  sigma  [MPa]", "viridis", "%.0f"),
+]
+
+pl = pv.Plotter(off_screen=True, shape=(1, 2), window_size=(1280, 540))
+pl.open_movie(out_path, framerate=4)
+
+n = 0
+for p in vtms:
+    grid, t = read_step(p)
+    if grid is None:
+        continue
+    if "sigmaEq" in grid.point_data:
+        grid.point_data["sigma_MPa"] = np.asarray(grid.point_data["sigmaEq"]) / 1e6
+    if "sigmaEq" in grid.cell_data:
+        grid.cell_data["sigma_MPa"] = np.asarray(grid.cell_data["sigmaEq"]) / 1e6
+    sl = grid.slice(normal="y", origin=(0, y_eps, 0))
+    if sl.n_points == 0:
+        sl = grid.slice(normal="y")
+
+    tlabel = ("t = %0.0f s" % t) if t is not None else ("step %d" % tindex(p))
+    for col, (skey, title, cmap, fmt) in enumerate(PANELS):
+        pl.subplot(0, col)
+        if sl.n_points and skey in (set(sl.point_data) | set(sl.cell_data)):
+            pl.add_mesh(
+                sl, scalars=skey, cmap=cmap, clim=ranges[skey],
+                show_edges=False, name="field",
+                scalar_bar_args=dict(title=title, n_labels=4, fmt=fmt),
+            )
+        pl.add_text(tlabel, name="tlabel", font_size=10, position="upper_left")
+        pl.view_xz()
+        pl.camera.zoom(1.5)
+    pl.write_frame()
+    n += 1
+
+pl.close()
+print("wrote " + out_path + " (" + str(n) + " frames)")
+'''
+
+
+def _render_cutthrough():
+    """Render the (r,z) field cut-through animation from the foamToVTK series.
+
+    Best-effort, docker-path only: needs both the VTK export (written by the
+    foamToVTK step in the solver container) and the `aithericon-pvrender`
+    image. A missing image / no VTK / render failure are all WARN-skipped — an
+    evaluation never fails on visualization. Build the image once with:
+        docker build -t aithericon-pvrender:dev demos/59-firing-curve-bo/viz
+    """
+    if not os.path.isdir(os.path.join(case_dir, "VTK")):
+        log_warn("simulate: no VTK export — skipping cut-through render")
+        return
+    chk = subprocess.run(
+        ["docker", "image", "inspect", RENDER_IMAGE], capture_output=True, text=True
+    )
+    if chk.returncode != 0:
+        log_warn(
+            f"simulate: render image {RENDER_IMAGE} absent — skipping cut-through "
+            "(build: docker build -t aithericon-pvrender:dev "
+            "demos/59-firing-curve-bo/viz)"
+        )
+        return
+    try:
+        with open(os.path.join(case_dir, "render_slice.py"), "w") as f:
+            f.write(RENDER_SCRIPT)
+        mp4_path = os.path.join(case_dir, "cutthrough.mp4")
+        proc = subprocess.run(
+            [
+                "docker", "run", "--rm", "-v", f"{case_dir}:/work", RENDER_IMAGE,
+                "python", "-u", "/work/render_slice.py", "/work", "/work/cutthrough.mp4",
+            ],
+            capture_output=True, text=True, timeout=300,
+        )
+        if proc.returncode != 0 or not os.path.exists(mp4_path):
+            raise RuntimeError(f"render rc={proc.returncode}: {proc.stderr[-400:]}")
+        mp4_name = f"cutthrough_r{ramp_rate:.0f}_h{hold_time_s:.0f}_c{cool_rate:.0f}.mp4"
+        log_artifact(
+            mp4_path, name=mp4_name, category="plot", mime_type="video/mp4",
+            metadata={
+                "kind": "field_cutthrough",
+                "verdict": verdict,
+                "sigma_max_mpa": f"{sigma_max_mpa:.2f}",
+                "fields": "T,sigmaEq",
+            },
+        )
+        log_info(f"simulate: cut-through rendered ({mp4_name})")
+    except Exception as exc:  # noqa: BLE001 — visualization is telemetry, not physics
+        log_warn(f"simulate: cut-through render failed (non-fatal): {exc!r}")
+
+
 # --- Dispatch by solver mode ----------------------------------------------------
 result = None
 if solver_mode == "surrogate":
@@ -598,6 +799,11 @@ try:
     )
 except Exception as exc:  # noqa: BLE001 — plotting is telemetry, not physics
     log_warn(f"simulate: plot/artifact failed (non-fatal): {exc!r}")
+
+# --- 4b. Field cut-through animation (docker path only; best-effort) -------------
+# The surrogate has no spatial field to slice; only the real OpenFOAM run does.
+if result["source"] == "openfoam":
+    _render_cutthrough()
 
 # Persist the raw extraction next to the case for debugging.
 try:
