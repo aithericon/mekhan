@@ -55,6 +55,64 @@ async fn publish_template(db: &sqlx::PgPool, template_id: Uuid) {
     .unwrap();
 }
 
+/// Helper: create an unpublished template with an explicit visibility.
+async fn create_template_with_visibility(db: &sqlx::PgPool, visibility: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    let graph = mekhan_service::models::template::WorkflowGraph::default_graph();
+    let graph_json = serde_json::to_value(&graph).unwrap();
+
+    sqlx::query(
+        r#"INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id, visibility)
+           VALUES ($1, 'WS Vis Test', '', $1, 1, TRUE, $2, $3, $4)"#,
+    )
+    .bind(id)
+    .bind(&graph_json)
+    .bind(Uuid::new_v4())
+    .bind(visibility)
+    .execute(db)
+    .await
+    .unwrap();
+
+    let persistence = mekhan_service::yjs::persistence::YjsPersistence::new(db.clone());
+    persistence.init_doc_from_graph(id, &graph).await.unwrap();
+
+    id
+}
+
+/// Send one Yjs update over `ws` and return the row count for `template_id`
+/// after the server has had time to (maybe) persist it.
+async fn send_update_and_count(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    db: &sqlx::PgPool,
+    template_id: Uuid,
+) -> i64 {
+    let update = {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let root = txn.get_or_insert_map("test");
+            root.insert(&mut txn, "vis_key", "vis_value");
+        }
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&yrs::StateVector::default())
+    };
+    let mut msg = Vec::with_capacity(1 + update.len());
+    msg.push(MSG_SYNC_UPDATE);
+    msg.extend_from_slice(&update);
+    ws.send(Message::Binary(msg)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    ws.close(None).await.ok();
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+            .bind(template_id)
+            .fetch_one(db)
+            .await
+            .unwrap();
+    count
+}
+
 // ---------------------------------------------------------------------------
 // 1. WS upgrade succeeds for unpublished template; first msg is SyncStep2
 // ---------------------------------------------------------------------------
@@ -264,6 +322,52 @@ async fn update_persisted_to_db() {
     assert!(
         count >= 2,
         "should have at least 2 update rows (init + WS update), got {count}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6b. A PUBLIC but UNPUBLISHED draft must stay writable for an Editor — a new
+//     version forked off a public template inherits visibility='public', and
+//     the old `visibility == "public" => read-only` short-circuit silently
+//     dropped its owner's edits (regression: "Run draft / publish saw a stale
+//     graph"). The dev_noop principal is an Editor+ on the default workspace.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ws_public_draft_is_writable() {
+    let (addr, db) = common::start_test_server().await;
+    let template_id = create_template_with_visibility(&db, "public").await;
+
+    let url = format!("ws://{addr}/api/yjs/{template_id}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let _initial = ws.next().await.unwrap().unwrap(); // consume initial sync
+
+    let count = send_update_and_count(&mut ws, &db, template_id).await;
+    assert!(
+        count >= 2,
+        "an Editor's update to a PUBLIC unpublished draft must persist (init + update), got {count}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6c. A PUBLIC *published* template stays frozen: updates are dropped, the
+//     row count never grows past the initial seed.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ws_public_published_drops_updates() {
+    let (addr, db) = common::start_test_server().await;
+    let template_id = create_template_with_visibility(&db, "public").await;
+    publish_template(&db, template_id).await;
+
+    let url = format!("ws://{addr}/api/yjs/{template_id}");
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let _initial = ws.next().await.unwrap().unwrap();
+
+    let count = send_update_and_count(&mut ws, &db, template_id).await;
+    assert_eq!(
+        count, 1,
+        "a published public template is frozen; the WS update must be dropped (only the init seed remains), got {count}"
     );
 }
 

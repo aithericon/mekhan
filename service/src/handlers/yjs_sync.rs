@@ -68,11 +68,23 @@ pub async fn ws_handler(
     // read-only socket even on an unpublished draft — `handle_socket` drops
     // their updates. This is load-bearing: a folder-scoped Editor cannot
     // collaborate unless the grant is honored here.
-    let readonly = if template.visibility == "public" {
+    // A *published* public template is frozen and world-viewable: any
+    // authenticated user connects read-only with no workspace role required.
+    // But an UNPUBLISHED public draft (e.g. a new version forked off a public
+    // template — `new_version` copies `visibility`) is still being authored, so
+    // it must NOT be blanket read-only: that silently dropped its owner's edits
+    // (writes are discarded in `handle_socket`) so "Run draft" / publish saw a
+    // stale graph. Only short-circuit on public *and published*; otherwise fall
+    // through to the role check so an Editor+ on the draft can write.
+    let readonly = if template.visibility == "public" && template.published {
         true
     } else {
         match effective_object_role(&state.db, &user, ObjectRef::template(template.id)).await {
             Ok(Some(role)) => template.published || role < Role::Editor,
+            // No role on the object. A public draft is still world-viewable, so
+            // degrade to a read-only socket (parity with public-published)
+            // rather than rejecting; anything non-public stays forbidden.
+            Ok(None) if template.visibility == "public" => true,
             Ok(None) => {
                 tracing::debug!(
                     template_id = %template_id,
