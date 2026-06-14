@@ -47,6 +47,11 @@ use utoipa::OpenApi;
             // Phase 4 governance — promote/demote/fork request bodies.
             crate::handlers::governance::PromoteTemplateRequest,
             crate::handlers::governance::ForkLibraryRequest,
+            // Phase 5 governance — lifecycle + upgrade-preview DTOs.
+            crate::handlers::governance::LifecycleRequest,
+            crate::handlers::governance::UpgradePreview,
+            crate::handlers::governance::ContractDiff,
+            crate::handlers::governance::FieldChange,
             // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
             // these directly but utoipa's auto-discovery only walks the
             // handler signature; nested types (e.g. ResourceTypeInfo

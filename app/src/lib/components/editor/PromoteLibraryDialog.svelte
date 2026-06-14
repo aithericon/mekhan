@@ -22,6 +22,7 @@
 	import {
 		ApiError,
 		promoteTemplate,
+		setLifecycle,
 		listLibraryCategories,
 		type Template
 	} from '$lib/api/client';
@@ -49,7 +50,12 @@
 	let submitting = $state(false);
 	let error = $state<string | null>(null);
 
+	// Lifecycle (Phase 5) — only meaningful once it's a library node.
+	let successor = $state('');
+	let lifecycleBusy = $state(false);
+
 	const isManage = $derived(template?.template_kind === 'library_node');
+	const lifecycle = $derived(template?.lifecycle_status ?? 'active');
 	const PreviewIcon = $derived(resolveNodeIcon(icon));
 
 	// Re-seed the form from the template each time the dialog opens, and lazily
@@ -63,8 +69,10 @@
 		icon = p.icon ?? '';
 		color = p.color ?? '#14b8a6';
 		badge = p.badge ?? '';
+		successor = template?.superseded_by ?? '';
 		error = null;
 		submitting = false;
+		lifecycleBusy = false;
 		if (categories.length === 0) {
 			listLibraryCategories()
 				.then((c) => (categories = c))
@@ -107,6 +115,31 @@
 				err instanceof ApiError
 					? (err.body?.error ?? 'Could not promote template.')
 					: 'Could not promote template.';
+		}
+	}
+
+	async function changeLifecycle(status: 'active' | 'deprecated' | 'retired') {
+		if (lifecycleBusy) return;
+		const succ = successor.trim();
+		if (status !== 'active' && succ && !succ.includes('/')) {
+			error = 'Successor must be a vendor/slug coordinate.';
+			return;
+		}
+		lifecycleBusy = true;
+		error = null;
+		try {
+			const updated = await setLifecycle(template.id, {
+				status,
+				superseded_by: status === 'active' ? undefined : succ || undefined
+			});
+			onpromoted?.(updated);
+		} catch (err) {
+			error =
+				err instanceof ApiError
+					? (err.body?.error ?? 'Could not change lifecycle.')
+					: 'Could not change lifecycle.';
+		} finally {
+			lifecycleBusy = false;
 		}
 	}
 </script>
@@ -213,6 +246,76 @@
 					data-testid="promote-badge"
 				/>
 			</div>
+
+			{#if isManage}
+				<div class="space-y-2 rounded-md border border-border/60 p-3" data-testid="lifecycle-section">
+					<div class="flex items-center justify-between">
+						<Label>Lifecycle</Label>
+						<span
+							class="rounded px-1.5 py-0.5 text-xs font-medium uppercase {lifecycle === 'active'
+								? 'bg-emerald-500/15 text-emerald-600'
+								: lifecycle === 'deprecated'
+									? 'bg-amber-500/15 text-amber-600'
+									: 'bg-muted text-muted-foreground'}"
+							data-testid="lifecycle-status"
+						>
+							{lifecycle}
+						</span>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						Deprecated nodes stay droppable with a warning; retired nodes are hidden
+						from the palette. Existing embeds keep resolving either way.
+					</p>
+					<Input
+						bind:value={successor}
+						placeholder="successor coordinate (optional, vendor/slug)"
+						autocomplete="off"
+						class="font-mono"
+						data-testid="lifecycle-successor"
+					/>
+					<div class="flex gap-2">
+						{#if lifecycle !== 'active'}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								class="flex-1"
+								disabled={lifecycleBusy}
+								onclick={() => changeLifecycle('active')}
+								data-testid="lifecycle-reactivate"
+							>
+								Reactivate
+							</Button>
+						{/if}
+						{#if lifecycle !== 'deprecated'}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								class="flex-1"
+								disabled={lifecycleBusy}
+								onclick={() => changeLifecycle('deprecated')}
+								data-testid="lifecycle-deprecate"
+							>
+								Deprecate
+							</Button>
+						{/if}
+						{#if lifecycle !== 'retired'}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								class="flex-1"
+								disabled={lifecycleBusy}
+								onclick={() => changeLifecycle('retired')}
+								data-testid="lifecycle-retire"
+							>
+								Retire
+							</Button>
+						{/if}
+					</div>
+				</div>
+			{/if}
 
 			{#if error}
 				<p class="text-sm text-destructive" data-testid="promote-error">{error}</p>

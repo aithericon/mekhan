@@ -69,6 +69,70 @@ test.describe('Library governance', () => {
 		await expect(page.getByTestId('btn-demote-library')).toBeVisible();
 	});
 
+	test('lifecycle: a library node can be deprecated from the manage dialog', async ({ page }) => {
+		await page.route('**/api/v1/node-library/categories', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(['CFD', 'Data'])
+			})
+		);
+		// The lifecycle POST returns the family now stamped deprecated.
+		await page.route('**/api/v1/templates/*/lifecycle', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					id: 'demo-template-test',
+					name: 'Invoice Processing Demo',
+					description: 'Showcase workflow',
+					graph: {},
+					version: 1,
+					published: true,
+					template_kind: 'library_node',
+					origin: 'workspace',
+					coordinate: 'acme/invoice',
+					lifecycle_status: 'deprecated',
+					superseded_by: 'acme/invoice-2',
+					presentation: { vendor: 'Acme', category: 'Data' },
+					my_effective_role: 'owner',
+					author_id: '00000000-0000-0000-0000-000000000000',
+					created_at: new Date().toISOString(),
+					updated_at: new Date().toISOString()
+				})
+			})
+		);
+
+		// Open the editor already-a-library-node so the toolbar shows "Manage node".
+		await gotoDemoEditor(page, {
+			published: true,
+			my_effective_role: 'owner',
+			template_kind: 'library_node',
+			origin: 'workspace',
+			coordinate: 'acme/invoice',
+			lifecycle_status: 'active',
+			presentation: { vendor: 'Acme', category: 'Data' }
+		});
+		await expect(page.getByTestId('template-editor-page')).toBeVisible();
+
+		const manageBtn = page.getByTestId('btn-promote-library');
+		await expect(manageBtn).toBeVisible({ timeout: 10000 });
+		await expect(manageBtn).toContainText('Manage node');
+		await manageBtn.click();
+
+		// The manage dialog exposes the lifecycle section, starting active.
+		await expect(page.getByTestId('lifecycle-section')).toBeVisible();
+		await expect(page.getByTestId('lifecycle-status')).toContainText('active');
+
+		await page.getByTestId('lifecycle-successor').fill('acme/invoice-2');
+		await page.getByTestId('lifecycle-deprecate').click();
+
+		// Status badge flips to deprecated; the deprecate button is now gone.
+		await expect(page.getByTestId('lifecycle-status')).toContainText('deprecated');
+		await expect(page.getByTestId('lifecycle-deprecate')).toHaveCount(0);
+		await expect(page.getByTestId('lifecycle-reactivate')).toBeVisible();
+	});
+
 	test('fork: a library palette item forks into a new editable template', async ({ page }) => {
 		await gotoDemoEditor(page);
 		await expect(page.getByTestId('canvas-drop-zone')).toBeVisible();

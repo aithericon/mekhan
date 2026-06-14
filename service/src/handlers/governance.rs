@@ -21,19 +21,22 @@
 //! inventing a half-gate.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::auth::{map_to_api_error, require_role, AuthUser, Role};
+use crate::compiler::derive_child_io;
 use crate::handlers::require_template;
 use crate::handlers::templates::graph_with_ydoc_fallback;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    is_known_library_category, Presentation, WorkflowGraph, WorkflowTemplate, LIBRARY_CATEGORIES,
+    is_known_library_category, FieldKind, Port, Presentation, WorkflowGraph, WorkflowTemplate,
+    LIBRARY_CATEGORIES,
 };
 use crate::AppState;
 
@@ -406,6 +409,325 @@ pub async fn fork_library_node(
     Ok((StatusCode::CREATED, Json(template)))
 }
 
+// ─── Phase 5: lifecycle ──────────────────────────────────────────────────────
+
+/// The lifecycle states a library node can occupy. `active` is droppable;
+/// `deprecated` stays droppable but the palette warns (and surfaces a successor
+/// if `superseded_by` is set); `retired` is hidden from the palette entirely
+/// (existing pinned embeds still resolve via their frozen version row — version
+/// rows are never hard-deleted, decision 11).
+fn valid_lifecycle_status(s: &str) -> bool {
+    matches!(s, "active" | "deprecated" | "retired")
+}
+
+/// Body for `POST /api/v1/templates/{id}/lifecycle`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct LifecycleRequest {
+    /// Target lifecycle state: `active` | `deprecated` | `retired`.
+    pub status: String,
+    /// Optional successor coordinate (`vendor/slug`) shown to consumers of a
+    /// `deprecated`/`retired` node so they know what to migrate to. Cleared when
+    /// omitted. Only meaningful for non-`active` states.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+}
+
+/// POST /api/v1/templates/{id}/lifecycle
+///
+/// Set a library node's lifecycle state across its whole version family
+/// (decision 11). Admin/Owner on the node's workspace; seeded `system` nodes are
+/// untouchable via the API. Never deletes version rows — `retired` only hides
+/// the node from the palette while keeping pinned embeds resolvable.
+#[utoipa::path(
+    post,
+    path = "/api/v1/templates/{id}/lifecycle",
+    params(("id" = Uuid, Path, description = "Template id (any version in the family)")),
+    request_body = LifecycleRequest,
+    responses(
+        (status = 200, description = "Lifecycle updated", body = WorkflowTemplate),
+        (status = 400, description = "Invalid status / successor / system node", body = ErrorResponse),
+        (status = 403, description = "Caller lacks workspace Admin/Owner", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 409, description = "Template is not a library node", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "library",
+)]
+pub async fn set_lifecycle(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<LifecycleRequest>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let existing = require_template(&state.db, id).await?;
+
+    if existing.template_kind != "library_node" {
+        return Err(ApiError::conflict("template is not a library node"));
+    }
+    if existing.origin.as_deref() == Some("system") {
+        return Err(ApiError::bad_request(
+            "seeded `system` library nodes cannot change lifecycle via the API",
+        ));
+    }
+    if !valid_lifecycle_status(&req.status) {
+        return Err(ApiError::bad_request(
+            "status must be one of: active, deprecated, retired",
+        ));
+    }
+    if let Some(succ) = req.superseded_by.as_deref() {
+        validate_coordinate(succ)?;
+    }
+
+    require_role(&state.db, &user, existing.workspace_id, Role::Admin)
+        .await
+        .map_err(map_to_api_error)?;
+
+    let base_id = existing.chain_root_id();
+    let principal = user.subject_as_uuid();
+
+    sqlx::query(
+        "UPDATE workflow_templates \
+            SET lifecycle_status = $2, superseded_by = $3, \
+                updated_by = $4, updated_at = NOW() \
+          WHERE COALESCE(base_template_id, id) = $1",
+    )
+    .bind(base_id)
+    .bind(&req.status)
+    .bind(&req.superseded_by)
+    .bind(principal)
+    .execute(&state.db)
+    .await?;
+
+    tracing::info!(
+        template_id = %id,
+        family = %base_id,
+        status = %req.status,
+        superseded_by = ?req.superseded_by,
+        principal = %principal,
+        "governance: set library node lifecycle"
+    );
+
+    require_template(&state.db, id).await.map(Json)
+}
+
+// ─── Phase 5: upgrade preview (contract diff) ────────────────────────────────
+
+/// A single field-level change between two contract versions. `from_kind` /
+/// `to_kind` are the serde wire names of the [`FieldKind`]; a retype carries
+/// both, an add carries only `to_kind`, a remove only `from_kind`.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldChange {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_kind: Option<String>,
+    /// Whether the field is required in the target version (drives the
+    /// breaking-vs-compatible call for newly-added inputs).
+    pub required: bool,
+}
+
+/// Field-level diff of a library node's input + output [`Port`] contracts
+/// between two versions. Inputs drive the breaking classification (a consumer's
+/// `input_mapping`s target these); outputs are informational (the join just
+/// maps whatever the child returns).
+#[derive(Debug, Serialize, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractDiff {
+    pub input_added: Vec<FieldChange>,
+    pub input_removed: Vec<FieldChange>,
+    pub input_retyped: Vec<FieldChange>,
+    pub output_added: Vec<FieldChange>,
+    pub output_removed: Vec<FieldChange>,
+    pub output_retyped: Vec<FieldChange>,
+}
+
+/// Result of comparing a pinned embed's version against the family's latest.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradePreview {
+    pub coordinate: String,
+    pub from_version: i32,
+    pub to_version: i32,
+    /// `up_to_date` (already on latest), `compatible` (drop-in), or `breaking`
+    /// (a consumed input was removed/retyped, or a new required input appeared —
+    /// the consumer's input mappings need attention before adopting).
+    pub classification: String,
+    pub contract_diff: ContractDiff,
+    /// Input field names a consumer must revisit on upgrade: removed, retyped,
+    /// or newly-required-added. The editor cross-references these against the
+    /// embedding node's `inputMapping` to flag exactly which rows to remap.
+    pub affected_input_fields: Vec<String>,
+}
+
+/// Query params for `GET /api/v1/library/upgrade-preview`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UpgradePreviewQuery {
+    /// Library node coordinate (`vendor/slug`). Query param rather than path
+    /// because coordinates contain a slash.
+    pub coordinate: String,
+    /// The version the consumer is currently pinned to.
+    pub from: i32,
+}
+
+/// Serde wire name of a [`FieldKind`] (e.g. `"text"`, `"json"`), for the diff.
+fn kind_wire(kind: FieldKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Diff two ports into (added, removed, retyped) field changes, matched by name.
+fn diff_ports(from: &Port, to: &Port) -> (Vec<FieldChange>, Vec<FieldChange>, Vec<FieldChange>) {
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut retyped = Vec::new();
+
+    for tf in &to.fields {
+        match from.fields.iter().find(|ff| ff.name == tf.name) {
+            None => added.push(FieldChange {
+                name: tf.name.clone(),
+                from_kind: None,
+                to_kind: Some(kind_wire(tf.kind)),
+                required: tf.required,
+            }),
+            Some(ff) if ff.kind != tf.kind => retyped.push(FieldChange {
+                name: tf.name.clone(),
+                from_kind: Some(kind_wire(ff.kind)),
+                to_kind: Some(kind_wire(tf.kind)),
+                required: tf.required,
+            }),
+            Some(_) => {}
+        }
+    }
+    for ff in &from.fields {
+        if !to.fields.iter().any(|tf| tf.name == ff.name) {
+            removed.push(FieldChange {
+                name: ff.name.clone(),
+                from_kind: Some(kind_wire(ff.kind)),
+                to_kind: None,
+                required: ff.required,
+            });
+        }
+    }
+    (added, removed, retyped)
+}
+
+/// GET /api/v1/library/upgrade-preview?coordinate=vendor/slug&from=N
+///
+/// Classify the upgrade from version `from` to the family's latest visible
+/// version of a library node, by diffing the derived SubWorkflow input/output
+/// contracts (`derive_child_io` — the same derivation the publish path freezes,
+/// so the preview can't drift). Drives the editor's "vN+1 available" prompt and
+/// tells it which input mappings a breaking change touches.
+#[utoipa::path(
+    get,
+    path = "/api/v1/library/upgrade-preview",
+    params(UpgradePreviewQuery),
+    responses(
+        (status = 200, description = "Upgrade classification + contract diff", body = UpgradePreview),
+        (status = 404, description = "Library node / from-version not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "library",
+)]
+pub async fn library_upgrade_preview(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(q): Query<UpgradePreviewQuery>,
+) -> Result<Json<UpgradePreview>, ApiError> {
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+
+    // Latest visible library version for the coordinate (own ws or public).
+    let latest = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates \
+          WHERE coordinate = $1 AND template_kind = 'library_node' AND is_latest \
+            AND (workspace_id = $2 OR visibility = 'public') \
+          ORDER BY version DESC LIMIT 1",
+    )
+    .bind(&q.coordinate)
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found(format!("library node `{}` not found", q.coordinate)))?;
+
+    let base_id = latest.chain_root_id();
+
+    // Already on (or ahead of) latest → nothing to do.
+    if q.from >= latest.version {
+        return Ok(Json(UpgradePreview {
+            coordinate: q.coordinate,
+            from_version: q.from,
+            to_version: latest.version,
+            classification: "up_to_date".to_string(),
+            contract_diff: ContractDiff::default(),
+            affected_input_fields: Vec::new(),
+        }));
+    }
+
+    // The version the consumer is pinned to — same family, explicit version.
+    let from_row = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates \
+          WHERE (base_template_id = $1 OR id = $1) AND version = $2",
+    )
+    .bind(base_id)
+    .bind(q.from)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| {
+        ApiError::not_found(format!(
+            "version {} of `{}` not found",
+            q.from, q.coordinate
+        ))
+    })?;
+
+    // Derive both contracts from the frozen `graph` column — exactly what the
+    // io-contract endpoint and publish-time resolution read, so the diff can
+    // never drift from the contract that gets embedded.
+    let parse = |t: &WorkflowTemplate| -> Result<WorkflowGraph, ApiError> {
+        serde_json::from_value(t.graph.clone())
+            .map_err(|e| ApiError::internal(format!("child graph is invalid: {e}")))
+    };
+    let (from_in, from_out) = derive_child_io(&parse(&from_row)?);
+    let (to_in, to_out) = derive_child_io(&parse(&latest)?);
+
+    let (input_added, input_removed, input_retyped) = diff_ports(&from_in, &to_in);
+    let (output_added, output_removed, output_retyped) = diff_ports(&from_out, &to_out);
+
+    // Breaking iff a consumed input was removed/retyped, or a NEW required input
+    // appeared. New optional inputs and any output change are drop-in compatible.
+    let breaking = !input_removed.is_empty()
+        || !input_retyped.is_empty()
+        || input_added.iter().any(|f| f.required);
+    let classification = if breaking { "breaking" } else { "compatible" };
+
+    let affected_input_fields = input_removed
+        .iter()
+        .chain(input_retyped.iter())
+        .chain(input_added.iter().filter(|f| f.required))
+        .map(|f| f.name.clone())
+        .collect();
+
+    Ok(Json(UpgradePreview {
+        coordinate: q.coordinate,
+        from_version: q.from,
+        to_version: latest.version,
+        classification: classification.to_string(),
+        contract_diff: ContractDiff {
+            input_added,
+            input_removed,
+            input_retyped,
+            output_added,
+            output_removed,
+            output_retyped,
+        },
+        affected_input_fields,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +764,88 @@ mod tests {
         assert!(validate_category(&p).is_err()); // case-sensitive
         p.category = Some("Frobnication".to_string());
         assert!(validate_category(&p).is_err()); // unknown
+    }
+
+    fn fld(name: &str, kind: FieldKind, required: bool) -> crate::models::template::PortField {
+        crate::models::template::PortField {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind,
+            required,
+            default: None,
+            options: None,
+            description: None,
+            accept: None,
+            schema: None,
+        }
+    }
+
+    fn port(fields: Vec<crate::models::template::PortField>) -> Port {
+        Port {
+            id: "in".to_string(),
+            label: "In".to_string(),
+            fields,
+        }
+    }
+
+    #[test]
+    fn diff_detects_add_remove_retype() {
+        let from = port(vec![
+            fld("keep", FieldKind::Text, false),
+            fld("gone", FieldKind::Text, false),
+            fld("shift", FieldKind::Text, false),
+        ]);
+        let to = port(vec![
+            fld("keep", FieldKind::Text, false),
+            fld("shift", FieldKind::Number, false), // retyped
+            fld("fresh", FieldKind::Text, false),   // added
+        ]);
+        let (added, removed, retyped) = diff_ports(&from, &to);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].name, "fresh");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].name, "gone");
+        assert_eq!(retyped.len(), 1);
+        assert_eq!(retyped[0].name, "shift");
+        assert_eq!(retyped[0].from_kind.as_deref(), Some("text"));
+        assert_eq!(retyped[0].to_kind.as_deref(), Some("number"));
+    }
+
+    #[test]
+    fn classification_breaking_vs_compatible() {
+        // Adding an OPTIONAL field is compatible.
+        let base = port(vec![fld("a", FieldKind::Text, false)]);
+        let add_opt = port(vec![
+            fld("a", FieldKind::Text, false),
+            fld("b", FieldKind::Text, false),
+        ]);
+        let (added, removed, retyped) = diff_ports(&base, &add_opt);
+        let breaking = !removed.is_empty() || !retyped.is_empty() || added.iter().any(|f| f.required);
+        assert!(!breaking, "optional add is compatible");
+
+        // Adding a REQUIRED field is breaking.
+        let add_req = port(vec![
+            fld("a", FieldKind::Text, false),
+            fld("b", FieldKind::Text, true),
+        ]);
+        let (added, _, _) = diff_ports(&base, &add_req);
+        assert!(added.iter().any(|f| f.required), "required add is breaking");
+
+        // Removing a field is breaking.
+        let (_, removed, _) = diff_ports(&base, &port(vec![]));
+        assert!(!removed.is_empty(), "remove is breaking");
+
+        // Retype is breaking.
+        let (_, _, retyped) = diff_ports(&base, &port(vec![fld("a", FieldKind::Number, false)]));
+        assert!(!retyped.is_empty(), "retype is breaking");
+    }
+
+    #[test]
+    fn lifecycle_status_validation() {
+        assert!(valid_lifecycle_status("active"));
+        assert!(valid_lifecycle_status("deprecated"));
+        assert!(valid_lifecycle_status("retired"));
+        assert!(!valid_lifecycle_status("archived"));
+        assert!(!valid_lifecycle_status(""));
     }
 }

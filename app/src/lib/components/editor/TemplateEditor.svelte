@@ -32,6 +32,8 @@
 		createNewVersion,
 		discardDraft,
 		demoteTemplate,
+		getUpgradePreview,
+		type UpgradePreview,
 		compileGraph,
 		ensureAttachedPage,
 		CompileApiError,
@@ -87,6 +89,11 @@
 	let promoteOpen = $state(false);
 	let discardConfirmOpen = $state(false);
 	let discarding = $state(false);
+	// Fork rebase hint (Phase 5): a fork carries `forked_from`; if the upstream
+	// library node has shipped a newer version since the fork, surface an
+	// informational nudge (no auto-merge in v1).
+	let rebaseHint = $state<UpgradePreview | null>(null);
+	let rebaseDismissed = $state(false);
 
 	// Object-Admins can manage sharing. `my_effective_role` rides the template
 	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
@@ -151,6 +158,24 @@
 				} catch {
 					ownerName = null;
 				}
+			}
+			// Fork rebase hint: compare the forked-from version against upstream's
+			// latest. Best-effort + non-blocking — a retired/unreadable upstream
+			// just yields no hint.
+			rebaseHint = null;
+			rebaseDismissed = false;
+			const ff = template?.forked_from as
+				| { coordinate?: string; version?: number }
+				| null
+				| undefined;
+			if (ff?.coordinate && typeof ff.version === 'number') {
+				const coord = ff.coordinate;
+				const ver = ff.version;
+				getUpgradePreview(coord, ver)
+					.then((p) => {
+						if (p.classification !== 'up_to_date') rebaseHint = p;
+					})
+					.catch(() => {});
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
@@ -639,6 +664,24 @@
 						type="button"
 						class="underline"
 						onclick={() => (error = null)}>dismiss</button
+					>
+				</div>
+			{/if}
+
+			{#if rebaseHint && !rebaseDismissed}
+				<div
+					class="flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-800"
+					data-testid="rebase-hint"
+				>
+					<span class="flex-1">
+						Upstream <span class="font-mono">{rebaseHint.coordinate}</span> has shipped
+						v{rebaseHint.toVersion} (you forked from v{rebaseHint.fromVersion}). Re-fork to
+						pick up upstream changes — there's no automatic merge.
+					</span>
+					<button
+						type="button"
+						class="underline"
+						onclick={() => (rebaseDismissed = true)}>dismiss</button
 					>
 				</div>
 			{/if}

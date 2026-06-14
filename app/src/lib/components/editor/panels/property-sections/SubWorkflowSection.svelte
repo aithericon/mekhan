@@ -7,7 +7,9 @@
 		createTemplate,
 		setTemplateVisibility,
 		getTemplateIoContract,
-		type Template
+		getUpgradePreview,
+		type Template,
+		type UpgradePreview
 	} from '$lib/api/client';
 	import { untrack } from 'svelte';
 	import { portsEqual } from '$lib/editor/port-utils';
@@ -19,6 +21,8 @@
 	import { FormField } from '$lib/components/ui/form-field';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Lock from '@lucide/svelte/icons/lock';
+	import ArrowUpCircle from '@lucide/svelte/icons/arrow-up-circle';
+	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import DerivedPortsSection from './DerivedPortsSection.svelte';
@@ -226,6 +230,45 @@
 		});
 	});
 
+	// Upgrade detection (Phase 5): for a PINNED library-node embed, ask the
+	// backend whether a newer family version exists and how its contract differs.
+	// `latest`-tracking embeds never need a prompt — they always resolve newest.
+	// Debounced + seq-guarded like the contract fetch so a quick re-pin can't
+	// apply a stale verdict.
+	let upgrade = $state<UpgradePreview | null>(null);
+	const upgradeFetcher = createDebouncedFetcher();
+	$effect(() => {
+		const coordinate = data.sourceCoordinate;
+		const from = data.versionPin?.mode === 'pinned' ? data.versionPin.version : undefined;
+		if (!coordinate || from === undefined) {
+			upgrade = null;
+			return;
+		}
+		upgradeFetcher.schedule(async (fresh) => {
+			try {
+				const p = await getUpgradePreview(coordinate, from);
+				if (!fresh()) return;
+				upgrade = p.classification === 'up_to_date' ? null : p;
+			} catch {
+				if (!fresh()) return;
+				upgrade = null; // a missing/unreadable family just means "no prompt"
+			}
+		});
+	});
+
+	// Input fields whose mapping a breaking upgrade would disturb (removed /
+	// retyped / newly-required). Drives the per-row "needs remap" badge.
+	const affectedFields = $derived(new Set(upgrade?.affectedInputFields ?? []));
+
+	// Adopt the offered version: re-pin to it. The contract effect then refetches
+	// the new child contract, reconciles `data.output`/`inputContract`, and prunes
+	// any input-mapping row whose target field no longer exists — so the author
+	// finishes the remap in the SAME fixed-row editor below.
+	function adoptUpgrade() {
+		if (!upgrade) return;
+		setPinnedVersion(upgrade.toVersion);
+	}
+
 	function pickTemplate(famId: string) {
 		onchange({ ...data, templateId: famId });
 	}
@@ -380,6 +423,59 @@
 		</p>
 	</div>
 
+	<!-- Upgrade prompt (Phase 5): a newer version of this library node exists.
+	     Compatible = drop-in; breaking = some inputs need remapping after adopt. -->
+	{#if upgrade}
+		{@const breaking = upgrade.classification === 'breaking'}
+		<div
+			class="space-y-2 rounded-md border p-2 {breaking
+				? 'border-amber-500/50 bg-amber-500/5'
+				: 'border-primary/40 bg-primary/5'}"
+			data-testid="subworkflow-upgrade"
+		>
+			<div class="flex items-center gap-1.5 text-sm font-medium">
+				{#if breaking}
+					<TriangleAlert class="size-4 text-amber-500" />
+					<span data-testid="upgrade-classification"
+						>v{upgrade.toVersion} available — breaking</span
+					>
+				{:else}
+					<ArrowUpCircle class="size-4 text-primary" />
+					<span data-testid="upgrade-classification"
+						>v{upgrade.toVersion} available — compatible</span
+					>
+				{/if}
+			</div>
+			<p class="text-sm text-muted-foreground">
+				You're pinned to v{upgrade.fromVersion}.
+				{#if breaking}
+					Adopting it changes the input contract; the highlighted fields below need
+					remapping.
+				{:else}
+					It's a drop-in upgrade — no input changes.
+				{/if}
+			</p>
+			{#if breaking && upgrade.affectedInputFields.length > 0}
+				<ul class="space-y-0.5 text-sm text-muted-foreground">
+					{#each upgrade.affectedInputFields as f (f)}
+						<li class="font-mono">• {f}</li>
+					{/each}
+				</ul>
+			{/if}
+			<Button
+				variant={breaking ? 'outline' : 'default'}
+				size="sm"
+				class="w-full"
+				disabled={readonly}
+				onclick={adoptUpgrade}
+				data-testid="btn-upgrade-subworkflow"
+			>
+				<ArrowUpCircle class="size-4" />
+				Upgrade to v{upgrade.toVersion}
+			</Button>
+		</div>
+	{/if}
+
 	{#if contractError}
 		<p class="rounded-md border border-dashed border-destructive/40 p-2 text-sm text-destructive">
 			Couldn't read the child's contract: {contractError}. Publish the child template,
@@ -409,6 +505,11 @@
 							{field.name}
 						</span>
 						<span class="text-sm text-muted-foreground">
+							{#if affectedFields.has(field.name)}
+								<span class="font-medium text-amber-600" data-testid="subworkflow-field-remap"
+									>needs remap • </span
+								>
+							{/if}
 							{field.kind}{field.required ? ' • required' : ''}
 						</span>
 					</div>

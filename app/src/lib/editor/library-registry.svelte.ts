@@ -26,7 +26,12 @@ type RegistryState =
 let state: RegistryState = $state({ kind: 'idle' });
 
 async function fetchLibraryNodes(): Promise<LibraryNodeDescriptor[]> {
-	const res = await fetch('/api/v1/node-library', { credentials: 'same-origin' });
+	// Include `deprecated` nodes: the palette keeps them droppable with a warning
+	// label + successor hint (Phase 5). `retired` nodes are always excluded server
+	// side — their pinned embeds still resolve, but they can't be dropped anew.
+	const res = await fetch('/api/v1/node-library?include_deprecated=true', {
+		credentials: 'same-origin'
+	});
 	if (!res.ok) {
 		throw new Error(`GET /api/v1/node-library failed: ${res.status}`);
 	}

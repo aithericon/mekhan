@@ -141,7 +141,11 @@
 		<div class="min-w-0 flex-1">
 			<div class="truncate text-sm font-medium text-foreground">{node.name}</div>
 			<div class="truncate text-sm leading-tight text-muted-foreground">
-				{node.coordinate}{node.lifecycleStatus === 'deprecated' ? ' · deprecated' : ''}
+				{node.coordinate}{node.lifecycleStatus === 'deprecated'
+					? node.supersededBy
+						? ` · deprecated → ${node.supersededBy}`
+						: ' · deprecated'
+					: ''}
 			</div>
 		</div>
 		<!-- Fork-to-workspace: hidden until hover so it doesn't crowd the card.

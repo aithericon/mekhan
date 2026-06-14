@@ -43,6 +43,10 @@ pub struct LibraryNodeDescriptor {
     /// Lifecycle: `active` (default) | `deprecated`. `retired` nodes are
     /// excluded from this listing entirely.
     pub lifecycle_status: String,
+    /// Successor coordinate for a `deprecated` node (decision 11) — the palette
+    /// shows it as a "use X instead" hint. Absent for `active` nodes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     /// Branding blob (icon/color/vendor/category/badge), parsed from the row
     /// JSONB. Drives palette grouping (category → vendor) and the frozen card.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +73,7 @@ struct LibraryNodeRow {
     description: Option<String>,
     origin: Option<String>,
     lifecycle_status: String,
+    superseded_by: Option<String>,
     presentation: Option<serde_json::Value>,
 }
 
@@ -103,7 +108,7 @@ pub async fn list_node_library(
     let rows = sqlx::query_as::<_, LibraryNodeRow>(
         "SELECT coordinate, \
                 COALESCE(base_template_id, id) AS template_id, \
-                version, name, description, origin, lifecycle_status, presentation \
+                version, name, description, origin, lifecycle_status, superseded_by, presentation \
            FROM workflow_templates \
           WHERE template_kind = 'library_node' \
             AND is_latest = TRUE \
@@ -132,6 +137,7 @@ pub async fn list_node_library(
             // hand-seeded row with a NULL origin still renders sensibly.
             origin: r.origin.unwrap_or_else(|| "system".to_string()),
             lifecycle_status: r.lifecycle_status,
+            superseded_by: r.superseded_by,
             presentation: r
                 .presentation
                 .and_then(|v| serde_json::from_value::<Presentation>(v).ok()),

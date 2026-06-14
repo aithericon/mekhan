@@ -253,6 +253,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::governance::promote_template))
         .routes(routes!(handlers::governance::demote_template))
         .routes(routes!(handlers::governance::fork_library_node))
+        .routes(routes!(handlers::governance::set_lifecycle))
+        .routes(routes!(handlers::governance::library_upgrade_preview))
         .routes(routes!(handlers::templates::discard_draft))
         .routes(routes!(handlers::templates::apply_template))
         .routes(routes!(handlers::templates::list_versions))

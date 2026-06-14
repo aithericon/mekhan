@@ -7179,6 +7179,69 @@
         }
       }
     },
+    "/api/v1/library/upgrade-preview": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "GET /api/v1/library/upgrade-preview?coordinate=vendor/slug&from=N",
+        "description": "Classify the upgrade from version `from` to the family's latest visible\nversion of a library node, by diffing the derived SubWorkflow input/output\ncontracts (`derive_child_io` — the same derivation the publish path freezes,\nso the preview can't drift). Drives the editor's \"vN+1 available\" prompt and\ntells it which input mappings a breaking change touches.",
+        "operationId": "library_upgrade_preview",
+        "parameters": [
+          {
+            "name": "coordinate",
+            "in": "query",
+            "description": "Library node coordinate (`vendor/slug`). Query param rather than path\nbecause coordinates contain a slash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The version the consumer is currently pinned to.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upgrade classification + contract diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradePreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Library node / from-version not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me/active-workspace": {
       "post": {
         "tags": [
@@ -12920,6 +12983,100 @@
           },
           "404": {
             "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/lifecycle": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "POST /api/v1/templates/{id}/lifecycle",
+        "description": "Set a library node's lifecycle state across its whole version family\n(decision 11). Admin/Owner on the node's workspace; seeded `system` nodes are\nuntouchable via the API. Never deletes version rows — `retired` only hides\nthe node from the palette while keeping pinned embeds resolvable.",
+        "operationId": "set_lifecycle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version in the family)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Lifecycle updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status / successor / system node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks workspace Admin/Owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Template is not a library node",
             "content": {
               "application/json": {
                 "schema": {
@@ -18846,6 +19003,56 @@
           "summarize_oldest"
         ]
       },
+      "ContractDiff": {
+        "type": "object",
+        "description": "Field-level diff of a library node's input + output [`Port`] contracts\nbetween two versions. Inputs drive the breaking classification (a consumer's\n`input_mapping`s target these); outputs are informational (the join just\nmaps whatever the child returns).",
+        "required": [
+          "inputAdded",
+          "inputRemoved",
+          "inputRetyped",
+          "outputAdded",
+          "outputRemoved",
+          "outputRetyped"
+        ],
+        "properties": {
+          "inputAdded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          },
+          "inputRemoved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          },
+          "inputRetyped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          },
+          "outputAdded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          },
+          "outputRemoved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          },
+          "outputRetyped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          }
+        }
+      },
       "CopyConfig": {
         "type": "object",
         "required": [
@@ -21140,6 +21347,35 @@
           "test_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "FieldChange": {
+        "type": "object",
+        "description": "A single field-level change between two contract versions. `from_kind` /\n`to_kind` are the serde wire names of the [`FieldKind`]; a retype carries\nboth, an add carries only `to_kind`, a remove only `from_kind`.",
+        "required": [
+          "name",
+          "required"
+        ],
+        "properties": {
+          "fromKind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether the field is required in the target version (drives the\nbreaking-vs-compatible call for newly-added inputs)."
+          },
+          "toKind": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -23990,6 +24226,13 @@
               }
             ]
           },
+          "supersededBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Successor coordinate for a `deprecated` node (decision 11) — the palette\nshows it as a \"use X instead\" hint. Absent for `active` nodes."
+          },
           "templateId": {
             "type": "string",
             "format": "uuid",
@@ -23999,6 +24242,26 @@
             "type": "integer",
             "format": "int32",
             "description": "Current latest version of the family; a drop pins to this version."
+          }
+        }
+      },
+      "LifecycleRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/templates/{id}/lifecycle`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Target lifecycle state: `active` | `deprecated` | `retired`."
+          },
+          "superseded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional successor coordinate (`vendor/slug`) shown to consumers of a\n`deprecated`/`retired` node so they know what to migrate to. Cleared when\nomitted. Only meaningful for non-`active` states."
           }
         }
       },
@@ -32708,6 +32971,45 @@
             "items": {
               "$ref": "#/components/schemas/StartToken"
             }
+          }
+        }
+      },
+      "UpgradePreview": {
+        "type": "object",
+        "description": "Result of comparing a pinned embed's version against the family's latest.",
+        "required": [
+          "coordinate",
+          "fromVersion",
+          "toVersion",
+          "classification",
+          "contractDiff",
+          "affectedInputFields"
+        ],
+        "properties": {
+          "affectedInputFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Input field names a consumer must revisit on upgrade: removed, retyped,\nor newly-required-added. The editor cross-references these against the\nembedding node's `inputMapping` to flag exactly which rows to remap."
+          },
+          "classification": {
+            "type": "string",
+            "description": "`up_to_date` (already on latest), `compatible` (drop-in), or `breaking`\n(a consumed input was removed/retyped, or a new required input appeared —\nthe consumer's input mappings need attention before adopting)."
+          },
+          "contractDiff": {
+            "$ref": "#/components/schemas/ContractDiff"
+          },
+          "coordinate": {
+            "type": "string"
+          },
+          "fromVersion": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "toVersion": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

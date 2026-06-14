@@ -547,6 +547,29 @@ export async function listLibraryCategories(): Promise<string[]> {
 	return unwrap(await client.GET('/api/v1/node-library/categories', {})) as unknown as string[];
 }
 
+// ── Library-node lifecycle + upgrades (Phase 5) ─────────────────────────────
+
+export type LifecycleRequest = components['schemas']['LifecycleRequest'];
+export type UpgradePreview = components['schemas']['UpgradePreview'];
+
+/** Set a library node's lifecycle state across its family (Admin/Owner). */
+export async function setLifecycle(id: string, body: LifecycleRequest): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/lifecycle', { params: { path: { id } }, body })
+	);
+}
+
+/**
+ * Classify the upgrade of a pinned library embed (version `from`) against the
+ * family's latest visible version: `up_to_date` | `compatible` | `breaking`,
+ * plus the field-level contract diff and which input fields need a remap.
+ */
+export async function getUpgradePreview(coordinate: string, from: number): Promise<UpgradePreview> {
+	return unwrap(
+		await client.GET('/api/v1/library/upgrade-preview', { params: { query: { coordinate, from } } })
+	) as unknown as UpgradePreview;
+}
+
 export async function getTemplateVersions(id: string): Promise<Template[]> {
 	return unwrap(
 		await client.GET('/api/v1/templates/{id}/versions', { params: { path: { id } } })
