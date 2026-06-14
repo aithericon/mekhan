@@ -19,6 +19,9 @@ export interface EmbedProcess {
 }
 
 export interface ArtifactEmbedContext {
+	/** Host run, for linking an embedded artifact back to its producing step. */
+	readonly instanceId: string;
+	readonly templateId: string;
 	/** Processes belonging to the host run — feeds the insert picker. Live. */
 	readonly processes: EmbedProcess[];
 	/**
@@ -33,12 +36,20 @@ export interface ArtifactEmbedContext {
  * live (a thunk) so the picker reflects processes that appear after mount. The
  * returned `destroy` tears down every store the page lazily created.
  */
-export function createEmbedContext(getProcesses: () => EmbedProcess[]): {
+export function createEmbedContext(
+	host: { instanceId: string; getTemplateId: () => string },
+	getProcesses: () => EmbedProcess[]
+): {
 	context: ArtifactEmbedContext;
 	destroy: () => void;
 } {
 	const stores = new Map<string, ReturnType<typeof createProcessLiveStore>>();
 	const context: ArtifactEmbedContext = {
+		instanceId: host.instanceId,
+		// Read live — the host instance (and its template_id) loads async.
+		get templateId() {
+			return host.getTemplateId();
+		},
 		get processes() {
 			return getProcesses();
 		},

@@ -22,7 +22,9 @@ describe('createEmbedContext', () => {
 
 	it('reads processes live from the thunk', () => {
 		let procs = [{ id: 'a', name: 'A' }];
-		const { context } = createEmbedContext(() => procs);
+		const { context } = createEmbedContext({ instanceId: 'i1', getTemplateId: () => 't1' }, () => procs);
+		expect(context.instanceId).toBe('i1');
+		expect(context.templateId).toBe('t1');
 		expect(context.processes).toEqual([{ id: 'a', name: 'A' }]);
 		procs = [
 			{ id: 'a', name: 'A' },
@@ -32,7 +34,7 @@ describe('createEmbedContext', () => {
 	});
 
 	it('memoizes one store per process and inits it exactly once', () => {
-		const { context } = createEmbedContext(() => []);
+		const { context } = createEmbedContext({ instanceId: 'i1', getTemplateId: () => 't1' }, () => []);
 		const s1 = context.getArtifactStore('p1');
 		const s2 = context.getArtifactStore('p1');
 		expect(s1).toBe(s2);
@@ -45,7 +47,7 @@ describe('createEmbedContext', () => {
 	});
 
 	it('destroy tears down every created store and clears the map', () => {
-		const { context, destroy } = createEmbedContext(() => []);
+		const { context, destroy } = createEmbedContext({ instanceId: 'i1', getTemplateId: () => 't1' }, () => []);
 		const a = context.getArtifactStore('p1');
 		const b = context.getArtifactStore('p2');
 		destroy();

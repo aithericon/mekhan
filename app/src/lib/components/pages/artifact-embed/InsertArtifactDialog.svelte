@@ -97,6 +97,7 @@
 			groupKey: '',
 			groupLabel: '',
 			artifactId: '',
+			executionId: '',
 			artifactName: '',
 			storagePath: '',
 			mimeType: '',
@@ -128,6 +129,7 @@
 		insertNode({
 			mode: 'artifact',
 			artifactId: e.artifact_id ?? e.id ?? '',
+			executionId: e.execution_id ?? '',
 			artifactName: e.name ?? e.filename ?? '',
 			storagePath: e.storage_path ?? '',
 			mimeType: e.mime_type ?? '',
