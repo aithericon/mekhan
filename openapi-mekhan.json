@@ -8076,7 +8076,7 @@
           "processes"
         ],
         "summary": "GET /api/v1/processes — list processes with filter/sort/pagination.",
-        "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated.",
+        "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated. Workspace-scoped:\nonly the caller's workspace (+ public-template processes) are returned.",
         "operationId": "list_processes",
         "responses": {
           "200": {
@@ -14460,6 +14460,56 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "POST /api/v1/workspaces",
+        "description": "Self-serve workspace (tenant) creation. Any authenticated principal may\ncreate a workspace; they become its `owner` in the same transaction. The\nworkspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is\nFALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with\nmembership (not an IdP org) as the source of truth. An operator can later\nbind it to a Zitadel org out-of-band; the auth resolver is purely additive\nand never prunes the owner membership minted here.",
+        "operationId": "create_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkspaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Workspace created; caller is owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty name / unsluggable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/workspaces/{id}": {
@@ -14504,6 +14554,61 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}",
+        "description": "**Soft-deletes (archives)** a workspace. Owner-gated — deleting the tenant is\nthe most destructive control-plane action, so it sits above `admin`.\n\nArchiving sets `archived_at` and nothing else: every row (templates,\ninstances, members, catalogue, …) is preserved for audit / recovery. The\nworkspace immediately drops out of the tenant picker, the membership\nlisting, and auth resolution. A hard purge is a deliberately separate\noperation.\n\nRefuses (409) to archive:\n  - a **system** workspace (`is_system`) or the seeded `default` — they are\n    platform-owned and load-bearing for unbound principals;\n  - a workspace with **live instances** (`created` / `running`) — tear those\n    down first so no orphaned nets keep executing against a dead tenant.\n\nIdempotent: archiving an already-archived workspace returns 204.",
+        "operationId": "delete_workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Workspace archived (or already archived)"
+          },
+          "403": {
+            "description": "Owner role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "System/default workspace, or has live instances",
             "content": {
               "application/json": {
                 "schema": {
@@ -19147,6 +19252,25 @@
               "null"
             ],
             "description": "Defaults to `true` (reusable) when omitted."
+          }
+        }
+      },
+      "CreateWorkspaceRequest": {
+        "type": "object",
+        "description": "Body for `POST /workspaces` — self-serve workspace creation.\n\n`display_name` is required. `slug` is optional: when omitted (or empty\nafter sanitization) the server derives one from `display_name`. Either way\nthe value is run through the same slugifier so the stored slug is always\nURL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —\n`zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its\n`owner` in the same transaction.",
+        "required": [
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional explicit slug. Sanitized server-side; if it sanitizes to empty\nthe slug is derived from `display_name` instead."
           }
         }
       },

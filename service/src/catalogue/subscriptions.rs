@@ -346,7 +346,15 @@ impl SubscriptionManager {
             "traceparent": null,
         });
 
-        let subject = format!("petri.signal.{}.{}", sub.net_id, sub.signal_place);
+        // The subscriber net is a mekhan instance net whose engine signal
+        // listener filters `petri.{ws}.{net}.signal.>`. The old
+        // `petri.signal.{net}.{place}` shape lands in PETRI_GLOBAL but matches
+        // no consumer → the subscription token is never delivered.
+        let subject = crate::nats::subjects::Subjects::signal_transfer(
+            &sub.workspace_id.to_string(),
+            &sub.net_id,
+            &sub.signal_place,
+        );
         let msg_id = dedup_id.clone();
 
         let mut headers = async_nats::HeaderMap::new();

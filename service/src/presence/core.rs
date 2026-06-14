@@ -166,7 +166,7 @@ pub(crate) fn bridge_envelope(inj: PoolInjection<'_>, timestamp: &str) -> serde_
 }
 
 /// Publish one bridge injection to
-/// `petri.bridge.<pool_net_id>.<inbox>`. NO reply routing — bridge injections
+/// `petri.default.<pool_net_id>.bridge.<inbox>`. NO reply routing — bridge injections
 /// are one-way (the unit lives in the pool until granted/reaped; a claim is
 /// consumed by `t_claim`).
 pub(crate) async fn inject_bridge(
@@ -176,14 +176,24 @@ pub(crate) async fn inject_bridge(
     inj: PoolInjection<'_>,
     what: &str,
 ) {
-    let subject = format!("petri.bridge.{pool_net_id}.{inbox}");
+    // Pool/adapter nets deploy on the reserved `default` workspace sentinel
+    // (see `pool_net.rs`), so the engine's bridge listener filters
+    // `petri.default.{net}.bridge.>`. The pre-multi-tenancy
+    // `petri.bridge.{net}.{inbox}` shape ACKs into PETRI_GLOBAL but matches no
+    // consumer → the injection is silently dropped (masked only because
+    // heartbeats re-acquire).
+    let subject = crate::nats::subjects::Subjects::bridge_transfer(
+        crate::nats::subjects::Subjects::DEFAULT_WORKSPACE,
+        pool_net_id,
+        inbox,
+    );
     let envelope = bridge_envelope(inj, &Utc::now().to_rfc3339());
     publish_jetstream(nats, &subject, &envelope, what).await;
 }
 
 /// Inject ONE slot's `presence_acquire` token into the pool net's
 /// `presence_acquire` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_acquire`. Wire shape is the engine's
+/// `petri.default.<pool_net_id>.bridge.presence_acquire`. Wire shape is the engine's
 /// `CrossNetTokenTransfer` envelope (what the engine's global bridge listener
 /// deserializes); NO reply routing (acquire is one-way — the unit lives in the
 /// pool until granted/reaped). The BUILDER (`inj`) is per-kind: see the
@@ -230,7 +240,7 @@ pub(crate) fn signal_envelope(sig: PoolSignal<'_>, timestamp: &str) -> serde_jso
     })
 }
 
-/// Publish one signal injection to `petri.signal.<pool_net_id>.<signal>`.
+/// Publish one signal injection to `petri.default.<pool_net_id>.signal.<signal>`.
 pub(crate) async fn inject_signal(
     nats: &MekhanNats,
     pool_net_id: &str,
@@ -238,13 +248,22 @@ pub(crate) async fn inject_signal(
     sig: PoolSignal<'_>,
     what: &str,
 ) {
-    let subject = format!("petri.signal.{pool_net_id}.{signal}");
+    // Pool nets deploy on the reserved `default` workspace sentinel, so the
+    // engine's signal listener filters `petri.default.{net}.signal.>`. The old
+    // `petri.signal.{net}.{signal}` shape never matches a consumer → the
+    // expire signal is silently dropped (masked only because the sweep
+    // re-expires).
+    let subject = crate::nats::subjects::Subjects::signal_transfer(
+        crate::nats::subjects::Subjects::DEFAULT_WORKSPACE,
+        pool_net_id,
+        signal,
+    );
     let envelope = signal_envelope(sig, &Utc::now().to_rfc3339());
     publish_jetstream(nats, &subject, &envelope, what).await;
 }
 
 /// Inject `slots` BARE `presence_expired { runner_id }` signals into the pool
-/// net's signal place via `petri.signal.<pool_net_id>.presence_expired` — one
+/// net's signal place via `petri.default.<pool_net_id>.signal.presence_expired` — one
 /// per applied slot, since each signal is consumed once and reaps exactly one
 /// of the unit's slots (reap-ALL-by-reap-key; the net's `t_reap_free` /
 /// `t_reap_held` discriminate free-vs-held by input place, so mekhan keeps NO
@@ -287,7 +306,7 @@ pub(crate) fn claim_injection(grant_id: &str, runner_id: &str) -> PoolInjection<
 
 /// Inject a UNIT-INITIATED `presence_claim { grant_id, runner_id }` token into
 /// the pool net's `presence_claim` bridge_in place via
-/// `petri.bridge.<pool_net_id>.presence_claim` (the `Acceptance::Consent`
+/// `petri.default.<pool_net_id>.bridge.presence_claim` (the `Acceptance::Consent`
 /// claim path, docs/33 + docs/35 §4).
 ///
 /// A claim binds a parked offer to the claiming MEMBER (docs/34 §3): the offer

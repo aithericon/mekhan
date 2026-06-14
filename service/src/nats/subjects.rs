@@ -32,6 +32,19 @@ pub const BRIDGE_PREFIX_DOT: &str = ".bridge.";
 /// `petri.*.*.bridge.>` — every cross-net bridge transfer in any workspace.
 pub const BRIDGE_ALL: &str = "petri.*.*.bridge.>";
 
+/// `petri.*.*.events.>` — every domain event in any workspace/net.
+///
+/// This is the events-category half of the causality consumer's filter, kept
+/// DISJOINT from [`BRIDGE_ALL`] so the two can coexist as `filter_subjects` on a
+/// single JetStream consumer. The engine's `Subjects::EVENTS_ALL` is the broad
+/// `petri.>` (used where a lone catch-all filter is wanted, e.g. the projections
+/// framework); pairing *that* with `BRIDGE_ALL` is rejected by JetStream
+/// (error 10138, "subject filters cannot overlap") since `petri.>` subsumes
+/// `petri.*.*.bridge.>`. Scoping to the `events` category restores disjointness
+/// and also keeps `signal`/other categories (which share the stream) out of the
+/// projector, which only understands events + bridge.
+pub const EVENTS_CATEGORY_ALL: &str = "petri.*.*.events.>";
+
 /// `petri.*.*.events.net.>` — net lifecycle events (created/completed/cancelled)
 /// for every net in every workspace. NATS `*` matches an entire dot-delimited
 /// token; workspace ids and net ids (`mekhan-{uuid}`) are single tokens.
@@ -113,6 +126,21 @@ mod tests {
             BRIDGE_ALL,
             format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::BRIDGE_CATEGORY)
         );
+        assert_eq!(
+            EVENTS_CATEGORY_ALL,
+            format!(
+                "{}.*.*.{}.>",
+                Subjects::PETRI_ROOT,
+                Subjects::EVENTS_CATEGORY
+            )
+        );
+        // The causality consumer pairs these two as `filter_subjects`; JetStream
+        // rejects overlapping filters, so they MUST stay category-disjoint. (The
+        // historical bug paired `EVENTS_ALL` = `petri.>` with `BRIDGE_ALL`, which
+        // overlaps and silently killed the projection.)
+        assert_ne!(EVENTS_CATEGORY_ALL, BRIDGE_ALL);
+        assert!(!EVENTS_CATEGORY_ALL.contains(Subjects::BRIDGE_CATEGORY));
+        assert!(!BRIDGE_ALL.contains(Subjects::EVENTS_CATEGORY));
         assert_eq!(
             NET_LIFECYCLE_EVENTS_FILTER,
             format!(

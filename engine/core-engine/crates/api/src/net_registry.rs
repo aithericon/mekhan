@@ -1506,10 +1506,19 @@ where
 
         // grant_id is `<instance_id>:<loop_id>` where `<instance_id>` is the BARE
         // workflow-instance UUID (`loop_.rs`: `input._instance_id + ":<loop_id>"`),
-        // NOT the engine net_id. The instance net_id is `mekhan-<uuid>`, so strip
-        // the `mekhan-` prefix before matching — otherwise the prefix never
-        // matches any held grant and the cancel leaks an orphan allocation.
-        let instance_id = net_id.strip_prefix("mekhan-").unwrap_or(net_id);
+        // NOT the engine net_id. Multi-tenancy made the instance net_id
+        // `mekhan-{ws}-{instance}` (was `mekhan-{instance}`), so we must strip
+        // BOTH the `mekhan-` prefix AND the leading `{ws}-` workspace segment to
+        // recover the bare instance UUID — otherwise the prefix never matches any
+        // held grant and the cancel leaks an orphan allocation.
+        let instance_id = match net_id.strip_prefix("mekhan-") {
+            // `mekhan-{ws}-{instance}`: ws is a 36-char UUID then `-`.
+            Some(rest) if rest.len() > 37 && rest.as_bytes()[36] == b'-' => &rest[37..],
+            // legacy `mekhan-{instance}`
+            Some(rest) => rest,
+            // non-mekhan net (unchanged fallback)
+            None => net_id,
+        };
         let grant_prefix = format!("{instance_id}:");
 
         // Scan every live lease-adapter pool-net for in_use holds owned by this

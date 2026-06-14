@@ -43,28 +43,78 @@ const LOG_FILTER_FIELDS: &[&str] = &["process_id", "level", "source", "timestamp
 /// Allowed sort fields for hpi_logs (whitelist).
 const LOG_SORT_FIELDS: &[&str] = &["timestamp", "level", "source"];
 
-/// List processes with full filter/sort/pagination support.
+/// The nil workspace sentinel — `resolve_net_workspace` (causality ingest) maps
+/// pool/infra/legacy nets with no linked instance/template to this value, and
+/// the catalogue/inventory `workspace_id` columns default to it. We mirror that
+/// here so a process whose net is unlinked is visible exactly to a
+/// nil-workspace caller, consistent across the read surface.
+const NIL_WS: &str = "'00000000-0000-0000-0000-000000000000'::uuid";
+
+/// FROM + JOINs that resolve a process's owning workspace. A process carries no
+/// `workspace_id` column; its tenant is its producing instance's template
+/// workspace (`instance_id → workflow_instances → workflow_templates`), the same
+/// path `causality::ingest::resolve_net_workspace` uses. LEFT JOINs so an
+/// unlinked process (NULL `instance_id`, or an instance not yet linked to a
+/// template) survives the join with NULL workspace → resolved to `NIL_WS`.
+const PROCESS_JOIN: &str = " FROM hpi_processes p \
+     LEFT JOIN workflow_instances wi ON wi.id = p.instance_id \
+     LEFT JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version";
+
+/// True if `process_id` exists and is visible to a caller in `workspace_id`.
+///
+/// Scopes through [`PROCESS_JOIN`]: the process is visible when its resolved
+/// workspace equals the caller's (unlinked → `NIL_WS`, so nil-workspace callers
+/// see infra/pool/legacy processes). STRICT — no public-visibility escape: a
+/// process is per-run execution data owned by one workspace, not a shareable
+/// definition. A public template is read-only-discoverable cross-workspace, but
+/// its *runs* (and their processes/causality) stay private to the workspace that
+/// owns them — mirrors `list_instances`. Per-process read handlers call this and
+/// 404 on `false`, so a tenant can neither read nor confirm the existence of
+/// another tenant's process.
+pub async fn process_in_workspace(
+    pool: &PgPool,
+    process_id: &str,
+    workspace_id: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    let sql = format!(
+        "SELECT EXISTS ( \
+             SELECT 1{PROCESS_JOIN} \
+             WHERE p.process_id = $1 \
+               AND COALESCE(wt.workspace_id, {NIL_WS}) = $2 \
+         )"
+    );
+    sqlx::query_scalar::<_, bool>(&sql)
+        .bind(process_id)
+        .bind(workspace_id)
+        .fetch_one(pool)
+        .await
+}
+
+/// List processes with full filter/sort/pagination support, scoped to one
+/// workspace (+ public-template processes).
 pub async fn list_processes(
     pool: &PgPool,
     params: &QueryParams,
+    workspace_id: uuid::Uuid,
 ) -> Result<Paginated<HpiProcess>, QueryError> {
     // -- COUNT query --
     let count = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM hpi_processes");
-        append_process_where(&mut qb, params)?;
+        let mut qb =
+            QueryBuilder::<Postgres>::new(format!("SELECT COUNT(*)::bigint{PROCESS_JOIN}"));
+        append_process_where(&mut qb, params, workspace_id)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
     };
 
     // -- SELECT query --
     let entries = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM hpi_processes");
-        append_process_where(&mut qb, params)?;
+        let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT p.*{PROCESS_JOIN}"));
+        append_process_where(&mut qb, params, workspace_id)?;
 
         if let Some(ref sort) = params.sort {
-            builder::build_order_by(&mut qb, sort, PROCESS_SORT_FIELDS)?;
+            builder::build_order_by_with_prefix(&mut qb, sort, PROCESS_SORT_FIELDS, Some("p."))?;
         } else {
-            qb.push(" ORDER BY created_at DESC");
+            qb.push(" ORDER BY p.created_at DESC");
         }
 
         builder::build_pagination(&mut qb, &params.page);
@@ -75,43 +125,38 @@ pub async fn list_processes(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// Append a WHERE clause for process queries.
+/// Append the WHERE clause for process queries: the always-on workspace gate
+/// first (so it binds `$1`-then-`$2` via the JOIN), then any filter/search
+/// conditions. Filter/sort/search columns are `p.`-prefixed to disambiguate
+/// from the joined `workflow_instances`/`workflow_templates` columns.
 fn append_process_where(
     qb: &mut QueryBuilder<'_, Postgres>,
     params: &QueryParams,
+    workspace_id: uuid::Uuid,
 ) -> Result<(), QueryError> {
-    let has_filter = params
-        .filter
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false);
-    let has_search = params.search.is_some();
-
-    if !has_filter && !has_search {
-        return Ok(());
-    }
-
-    qb.push(" WHERE ");
-    let mut need_and = false;
+    qb.push(format!(" WHERE COALESCE(wt.workspace_id, {NIL_WS}) = "));
+    qb.push_bind(workspace_id);
 
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
-            builder::build_where_conditions(qb, filter, PROCESS_FILTER_FIELDS)?;
-            need_and = true;
+            qb.push(" AND ");
+            builder::build_where_conditions_with_prefix(
+                qb,
+                filter,
+                PROCESS_FILTER_FIELDS,
+                Some("p."),
+            )?;
         }
     }
 
-    // Free-text search across name and kind
+    // Free-text search across name, kind, process_id.
     if let Some(ref search) = params.search {
-        if need_and {
-            qb.push(" AND ");
-        }
         let pattern = format!("%{search}%");
-        qb.push("(name ILIKE ");
+        qb.push(" AND (p.name ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR kind ILIKE ");
+        qb.push(" OR p.kind ILIKE ");
         qb.push_bind(pattern.clone());
-        qb.push(" OR process_id ILIKE ");
+        qb.push(" OR p.process_id ILIKE ");
         qb.push_bind(pattern);
         qb.push(")");
     }
@@ -188,15 +233,19 @@ pub async fn get_process_detail(
     }))
 }
 
-/// List tasks with full filter/sort/pagination support.
+/// List tasks with full filter/sort/pagination support, scoped to one
+/// workspace. `hpi_tasks` carries its own `workspace_id` (migr 20240157); legacy
+/// NULL rows resolve to `NIL_WS` so they remain visible to a nil-workspace
+/// caller, consistent with the process read surface.
 pub async fn list_tasks(
     pool: &PgPool,
     params: &QueryParams,
+    workspace_id: uuid::Uuid,
 ) -> Result<Paginated<HpiTask>, QueryError> {
     // -- COUNT query --
     let count = {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM hpi_tasks");
-        append_task_where(&mut qb, params)?;
+        append_task_where(&mut qb, params, workspace_id)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
     };
@@ -204,7 +253,7 @@ pub async fn list_tasks(
     // -- SELECT query --
     let entries = {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM hpi_tasks");
-        append_task_where(&mut qb, params)?;
+        append_task_where(&mut qb, params, workspace_id)?;
 
         if let Some(ref sort) = params.sort {
             builder::build_order_by(&mut qb, sort, TASK_SORT_FIELDS)?;
@@ -220,39 +269,27 @@ pub async fn list_tasks(
     Ok(Paginated::new(entries, count, &params.page))
 }
 
-/// Append a WHERE clause for task queries.
+/// Append the WHERE clause for task queries: the always-on workspace gate first,
+/// then any filter/search conditions.
 fn append_task_where(
     qb: &mut QueryBuilder<'_, Postgres>,
     params: &QueryParams,
+    workspace_id: uuid::Uuid,
 ) -> Result<(), QueryError> {
-    let has_filter = params
-        .filter
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false);
-    let has_search = params.search.is_some();
-
-    if !has_filter && !has_search {
-        return Ok(());
-    }
-
-    qb.push(" WHERE ");
-    let mut need_and = false;
+    qb.push(format!(" WHERE COALESCE(workspace_id, {NIL_WS}) = "));
+    qb.push_bind(workspace_id);
 
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
+            qb.push(" AND ");
             builder::build_where_conditions(qb, filter, TASK_FILTER_FIELDS)?;
-            need_and = true;
         }
     }
 
     // Free-text search across title
     if let Some(ref search) = params.search {
-        if need_and {
-            qb.push(" AND ");
-        }
         let pattern = format!("%{search}%");
-        qb.push("(title ILIKE ");
+        qb.push(" AND (title ILIKE ");
         qb.push_bind(pattern);
         qb.push(")");
     }
@@ -485,12 +522,21 @@ fn append_log_where(
     Ok(())
 }
 
-/// Aggregate process stats grouped by status.
-pub async fn process_stats(pool: &PgPool) -> Result<ProcessStats, sqlx::Error> {
-    let rows: Vec<(String, i64)> =
-        sqlx::query_as("SELECT status, COUNT(*)::bigint FROM hpi_processes GROUP BY status")
-            .fetch_all(pool)
-            .await?;
+/// Aggregate process stats grouped by status, scoped strictly to one workspace
+/// via [`PROCESS_JOIN`] (no public-visibility escape — runs are private).
+pub async fn process_stats(
+    pool: &PgPool,
+    workspace_id: uuid::Uuid,
+) -> Result<ProcessStats, sqlx::Error> {
+    let sql = format!(
+        "SELECT p.status, COUNT(*)::bigint{PROCESS_JOIN} \
+         WHERE COALESCE(wt.workspace_id, {NIL_WS}) = $1 \
+         GROUP BY p.status"
+    );
+    let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
+        .bind(workspace_id)
+        .fetch_all(pool)
+        .await?;
 
     let mut stats = ProcessStats {
         total: 0,

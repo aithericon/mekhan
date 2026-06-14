@@ -150,6 +150,7 @@ export type CreateTokenRequest = components['schemas']['CreateTokenRequest'];
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 export type WorkspaceMember = components['schemas']['WorkspaceMember'];
 export type AddMemberRequest = components['schemas']['AddMemberRequest'];
+export type CreateWorkspaceRequest = components['schemas']['CreateWorkspaceRequest'];
 export type Folder = components['schemas']['Folder'];
 export type CreateFolderRequest = components['schemas']['CreateFolderRequest'];
 export type UpdateFolderRequest = components['schemas']['UpdateFolderRequest'];
@@ -778,14 +779,19 @@ export async function listProcesses(params?: {
 
 /** Processes produced by a given workflow instance (usually one, but a
  *  multi-start template can spawn several). Filters on the TEXT `net_id`
- *  column (`mekhan-{instanceId}`, populated alongside `instance_id`) — the
- *  generic query DSL binds values as text, so filtering the UUID
- *  `instance_id` column directly errors with `uuid = text`. */
+ *  column — the generic query DSL binds values as text, so filtering the
+ *  UUID `instance_id` column directly errors with `uuid = text`.
+ *
+ *  Multi-tenancy made `net_id` workspace-namespaced (`mekhan-{ws}-{inst}`,
+ *  see `handlers/instances.rs`), so an exact `mekhan-{inst}` match no longer
+ *  hits anything. We match on the `-{instanceId}` suffix instead: the
+ *  instance id is a globally-unique UUID, so the suffix reliably selects this
+ *  instance's net(s) and stays compatible with legacy `mekhan-{inst}` rows. */
 export async function listProcessesByInstance(
 	instanceId: string
 ): Promise<PaginatedProcesses> {
 	const qs = new URLSearchParams();
-	qs.set('filter[net_id][eq]', `mekhan-${instanceId}`);
+	qs.set('filter[net_id][ends_with]', `-${instanceId}`);
 	qs.set('sort', '-created_at');
 	return rawJson(`/processes?${qs.toString()}`);
 }
@@ -1219,6 +1225,23 @@ export async function getWorkspace(id: string): Promise<WorkspaceSummary> {
 	return unwrap(
 		await client.GET('/api/v1/workspaces/{id}', { params: { path: { id } } })
 	);
+}
+
+/// POST /api/v1/workspaces — self-serve create; caller becomes owner.
+export async function createWorkspace(
+	body: CreateWorkspaceRequest
+): Promise<WorkspaceSummary> {
+	return unwrap(await client.POST('/api/v1/workspaces', { body }));
+}
+
+/// DELETE /api/v1/workspaces/{id} — soft-delete (archive). Owner-only.
+/// Throws `ApiError` (403 not owner, 409 system/default or live instances).
+export async function deleteWorkspace(id: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/workspaces/{id}', {
+		params: { path: { id } }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }
 
 export async function listWorkspaceMembers(id: string): Promise<WorkspaceMember[]> {

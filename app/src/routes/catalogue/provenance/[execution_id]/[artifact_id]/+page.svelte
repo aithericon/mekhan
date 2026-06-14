@@ -7,6 +7,7 @@
 		type CrossNetEdge,
 		type CatalogueEntry
 	} from '$lib/api/client';
+	import { instanceIdFromNet, instanceIdFromExecution } from '$lib/utils';
 	import { ProvenanceCanvas } from '$lib/components/provenance';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -22,14 +23,10 @@
 
 	const executionId = $derived($page.params.execution_id);
 	const artifactId = $derived($page.params.artifact_id);
-	// Producing instance: source_net is the net_id (`mekhan-{instance_uuid}`);
-	// execution_id is net_id + a run suffix. Either resolves to /instances/{id}.
+	// Producing instance: source_net is the net_id (`mekhan-{ws}-{instance}`);
+	// execution_id is `mekhan-{ws}-{inst}-{run}`. Either resolves to /instances/{id}.
 	const instanceId = $derived(
-		artifact?.source_net
-			? artifact.source_net.replace(/^mekhan-/, '')
-			: executionId
-				? executionId.replace(/^mekhan-/, '').split('-').slice(0, 5).join('-')
-				: null
+		instanceIdFromNet(artifact?.source_net) ?? instanceIdFromExecution(executionId)
 	);
 
 	$effect(() => {

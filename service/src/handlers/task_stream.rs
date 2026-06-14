@@ -37,6 +37,12 @@ pub async fn task_stream(
     let member = user.subject_as_uuid();
     let presence_subject = format!("human.{member}.presence");
 
+    // Workspace scope: human.* subjects carry the instance net_id
+    // `mekhan-{ws}-{inst}`, which embeds the producing workspace. We only relay
+    // events whose net workspace matches the caller's — otherwise this firehose
+    // leaks every tenant's task lifecycle (payloads included) to any session.
+    let caller_ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+
     let stream = async_stream::stream! {
         yield Ok(Event::default().event("connected").data("ok"));
 
@@ -88,7 +94,7 @@ pub async fn task_stream(
             tokio::select! {
                 Some(msg) = request_sub.next() => {
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.request.") {
-                        if net_id.starts_with("mekhan-") {
+                        if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_created").data(&*data));
                         }
@@ -96,7 +102,7 @@ pub async fn task_stream(
                 }
                 Some(msg) = completed_sub.next() => {
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.completed.") {
-                        if net_id.starts_with("mekhan-") {
+                        if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_completed").data(&*data));
                         }
@@ -104,7 +110,7 @@ pub async fn task_stream(
                 }
                 Some(msg) = failed_sub.next() => {
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.failed.") {
-                        if net_id.starts_with("mekhan-") {
+                        if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_failed").data(&*data));
                         }
@@ -112,7 +118,7 @@ pub async fn task_stream(
                 }
                 Some(msg) = cancelled_sub.next() => {
                     if let Some(net_id) = extract_net_id(&msg.subject, "human.cancelled.") {
-                        if net_id.starts_with("mekhan-") {
+                        if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_cancelled").data(&*data));
                         }
@@ -120,7 +126,7 @@ pub async fn task_stream(
                 }
                 Some(msg) = process_sub.next() => {
                     if let Some(namespace) = extract_net_id(&msg.subject, "human.process.") {
-                        if namespace.starts_with("mekhan-") {
+                        if workspace_from_net_id(namespace) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("process_update").data(&*data));
                         }
@@ -145,4 +151,43 @@ pub async fn task_stream(
 fn extract_net_id<'a>(subject: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = subject.strip_prefix(prefix)?;
     rest.split('.').next()
+}
+
+/// Workspace UUID embedded in an instance net_id `mekhan-{ws}-{inst}` (both
+/// UUIDs, five `-`-groups each). Returns `None` for non-`mekhan` or malformed
+/// nets, so the caller's workspace match also acts as the old `mekhan-` prefix
+/// gate (a stray non-instance subject is simply not relayed).
+fn workspace_from_net_id(net_id: &str) -> Option<uuid::Uuid> {
+    let rest = net_id.strip_prefix("mekhan-")?;
+    let segs: Vec<&str> = rest.split('-').collect();
+    if segs.len() < 10 {
+        return None;
+    }
+    segs[0..5].join("-").parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_parses_from_namespaced_net_id() {
+        let ws = "11111111-1111-1111-1111-111111111111";
+        let inst = "22222222-2222-2222-2222-222222222222";
+        assert_eq!(
+            workspace_from_net_id(&format!("mekhan-{ws}-{inst}")),
+            Some(ws.parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn workspace_rejects_legacy_and_foreign_nets() {
+        // Legacy single-UUID net (pre multi-tenancy) carries no workspace.
+        assert_eq!(
+            workspace_from_net_id("mekhan-22222222-2222-2222-2222-222222222222"),
+            None
+        );
+        assert_eq!(workspace_from_net_id("pool-abc"), None);
+        assert_eq!(workspace_from_net_id("mekhan-short"), None);
+    }
 }

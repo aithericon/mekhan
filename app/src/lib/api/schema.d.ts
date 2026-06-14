@@ -2680,7 +2680,8 @@ export interface paths {
         /**
          * GET /api/v1/processes — list processes with filter/sort/pagination.
          * @description Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
-         *     `sort`, `page`, `page_size`. Response shape is paginated.
+         *     `sort`, `page`, `page_size`. Response shape is paginated. Workspace-scoped:
+         *     only the caller's workspace (+ public-template processes) are returned.
          */
         get: operations["list_processes"];
         put?: never;
@@ -4793,7 +4794,17 @@ export interface paths {
          */
         get: operations["list_workspaces"];
         put?: never;
-        post?: never;
+        /**
+         * POST /api/v1/workspaces
+         * @description Self-serve workspace (tenant) creation. Any authenticated principal may
+         *     create a workspace; they become its `owner` in the same transaction. The
+         *     workspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is
+         *     FALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with
+         *     membership (not an IdP org) as the source of truth. An operator can later
+         *     bind it to a Zitadel org out-of-band; the auth resolver is purely additive
+         *     and never prunes the owner membership minted here.
+         */
+        post: operations["create_workspace"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4811,7 +4822,26 @@ export interface paths {
         get: operations["get_workspace"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * DELETE /api/v1/workspaces/{id}
+         * @description **Soft-deletes (archives)** a workspace. Owner-gated — deleting the tenant is
+         *     the most destructive control-plane action, so it sits above `admin`.
+         *
+         *     Archiving sets `archived_at` and nothing else: every row (templates,
+         *     instances, members, catalogue, …) is preserved for audit / recovery. The
+         *     workspace immediately drops out of the tenant picker, the membership
+         *     listing, and auth resolution. A hard purge is a deliberately separate
+         *     operation.
+         *
+         *     Refuses (409) to archive:
+         *       - a **system** workspace (`is_system`) or the seeded `default` — they are
+         *         platform-owned and load-bearing for unbound principals;
+         *       - a workspace with **live instances** (`created` / `running`) — tear those
+         *         down first so no orphaned nets keep executing against a dead tenant.
+         *
+         *     Idempotent: archiving an already-archived workspace returns 204.
+         */
+        delete: operations["delete_workspace"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6928,6 +6958,24 @@ export interface components {
             max_uses?: number | null;
             /** @description Defaults to `true` (reusable) when omitted. */
             reusable?: boolean | null;
+        };
+        /**
+         * @description Body for `POST /workspaces` — self-serve workspace creation.
+         *
+         *     `display_name` is required. `slug` is optional: when omitted (or empty
+         *     after sanitization) the server derives one from `display_name`. Either way
+         *     the value is run through the same slugifier so the stored slug is always
+         *     URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —
+         *     `zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its
+         *     `owner` in the same transaction.
+         */
+        CreateWorkspaceRequest: {
+            display_name: string;
+            /**
+             * @description Optional explicit slug. Sanitized server-side; if it sanitizes to empty
+             *     the slug is derived from `display_name` instead.
+             */
+            slug?: string | null;
         };
         /**
          * @description Response for a freshly-minted registration token. `token` is the full
@@ -24613,6 +24661,48 @@ export interface operations {
             };
         };
     };
+    create_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Workspace created; caller is owner */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Empty name / unsluggable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Slug already taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_workspace: {
         parameters: {
             query?: never;
@@ -24645,6 +24735,54 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace archived (or already archived) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Owner role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description System/default workspace, or has live instances */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
