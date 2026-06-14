@@ -416,22 +416,27 @@ async fn test_watcher_publishes_signal_to_nats() {
     let place = "sig_inbox";
     let corr = "e2e-test:0";
 
-    // 2. Create JetStream stream covering petri.signal.>
+    // 2. Create JetStream stream covering the workspace-namespaced signal
+    //    subjects (`petri.{ws}.{net}.signal.{place}` since multi-tenancy).
     //    Delete first to purge stale messages from previous runs.
     let stream_name = "TEST_WATCHER_SIGNALS";
     let _ = jetstream.delete_stream(stream_name).await;
     let stream = jetstream
         .create_stream(StreamConfig {
             name: stream_name.to_string(),
-            subjects: vec!["petri.signal.>".to_string()],
+            subjects: vec!["petri.*.*.signal.>".to_string()],
             max_age: std::time::Duration::from_secs(300),
             ..Default::default()
         })
         .await
         .expect("create signal stream");
 
-    // 3. Create pull consumer filtered to the exact subject BEFORE watcher starts
-    let filter_subject = format!("petri.signal.{}.{}", net_id, place);
+    // 3. Create pull consumer filtered to the exact subject BEFORE watcher
+    //    starts — built via the same helpers the watcher publishes with, so the
+    //    workspace segment (here the `default` sentinel, since `net_id` is not a
+    //    `mekhan-{ws}-{inst}` id) always matches.
+    let signal_ws = petri_scheduler_bridge::workspace_for_signal("", net_id);
+    let filter_subject = petri_scheduler_bridge::signal_subject(&signal_ws, net_id, place);
     let consumer: PullConsumer = stream
         .create_consumer(async_nats::jetstream::consumer::pull::Config {
             filter_subject: filter_subject.clone(),
