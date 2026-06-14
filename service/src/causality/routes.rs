@@ -7,10 +7,50 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::AuthUser;
 use crate::catalogue::model::CatalogueEntry;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::process::model::{HpiLog, HpiMetric, HpiTask};
 use crate::AppState;
+
+/// True if the engine net `net_id` is visible to a caller in `workspace_id`: its
+/// producing instance's template workspace matches (unlinked pool/infra/legacy
+/// nets resolve to the nil sentinel, so a nil-workspace caller sees them), OR the
+/// producing template is `public`. Mirrors the process read surface's scoping
+/// (`causality::ingest::resolve_net_workspace` + the `list_instances` public
+/// escape); provenance handlers 404 on `false` so a tenant cannot walk another
+/// tenant's causality graph.
+async fn net_in_workspace(
+    db: &sqlx::PgPool,
+    net_id: &str,
+    workspace_id: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    let row: Option<(uuid::Uuid, bool)> = sqlx::query_as(
+        "SELECT t.workspace_id, (t.visibility = 'public') \
+         FROM workflow_instances i \
+         JOIN workflow_templates t ON t.id = i.template_id AND t.version = i.template_version \
+         WHERE i.net_id = $1 LIMIT 1",
+    )
+    .bind(net_id)
+    .fetch_optional(db)
+    .await?;
+    let (net_ws, is_public) = row.unwrap_or_else(|| (uuid::Uuid::nil(), false));
+    Ok(is_public || net_ws == workspace_id)
+}
+
+/// 404 unless the net is visible to the caller (see [`net_in_workspace`]).
+async fn gate_net(state: &AppState, net_id: &str, user: &AuthUser) -> Result<(), ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let visible = net_in_workspace(&state.db, net_id, ws).await.map_err(|e| {
+        tracing::error!(net_id = %net_id, "provenance ws gate: {e}");
+        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::status_only(StatusCode::NOT_FOUND))
+    }
+}
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ProvenanceParams {
@@ -76,9 +116,11 @@ pub struct ProvenanceResponse {
 )]
 pub async fn token_provenance(
     State(state): State<AppState>,
+    user: AuthUser,
     Path((net_id, token_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
+    gate_net(&state, &net_id, &user).await?;
     let depth = params.depth.clamp(1, 50);
 
     let resp = run_provenance_cte(&state.db, &net_id, &token_id, depth)
@@ -116,6 +158,7 @@ pub struct CrossLink {
 )]
 pub async fn cross_link(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(signal_key): Path<String>,
 ) -> Result<Json<CrossLink>, ApiError> {
     let link =
@@ -128,6 +171,28 @@ pub async fn cross_link(
                 ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
             })?
             .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
+    // Signal_key is not workspace-keyed; scope via either net the bridge spans.
+    // The caller must own (or the template be public for) the egress OR ingress
+    // net — otherwise 404, so a foreign tenant cannot resolve another tenant's
+    // bridge topology by guessing signal keys.
+    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let mut visible = false;
+    for net in [link.egress_net.as_deref(), link.ingress_net.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if net_in_workspace(&state.db, net, ws).await.map_err(|e| {
+            tracing::error!("cross-link ws gate: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })? {
+            visible = true;
+            break;
+        }
+    }
+    if !visible {
+        return Err(ApiError::status_only(StatusCode::NOT_FOUND));
+    }
     Ok(Json(link))
 }
 
@@ -155,6 +220,7 @@ pub async fn cross_link(
 )]
 pub async fn provenance_from_artifact(
     State(state): State<AppState>,
+    user: AuthUser,
     Path((execution_id, artifact_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
@@ -175,6 +241,9 @@ pub async fn provenance_from_artifact(
         entry.ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     let source_net = source_net.ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+
+    // Scope to the artifact's producing net before walking its provenance.
+    gate_net(&state, &source_net, &user).await?;
 
     // Resolve to (net_id, token_id) for the provenance CTE
     let resolved: Option<(String, String)> = if let Some(seq) = source_seq {
@@ -509,8 +578,10 @@ pub struct EventDetail {
 )]
 pub async fn event_detail(
     State(state): State<AppState>,
+    user: AuthUser,
     Path((net_id, event_seq)): Path<(String, i64)>,
 ) -> Result<Json<EventDetail>, ApiError> {
+    gate_net(&state, &net_id, &user).await?;
     let db = &state.db;
 
     // Fetch the event + new payload columns in one go.
