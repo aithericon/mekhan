@@ -3,13 +3,13 @@
 //! When the engine fires its `human_cancel` effect handler — typically as a
 //! Timeout node's drain transition when the timer wins the SLA race — the
 //! engine's `HumanNatsClient::cancel_task` publishes a `HumanTaskCancellation`
-//! envelope to `human.cancel.{net_id}.{place}`. At the petri-net level the
+//! envelope to `human.{ws}.cancel.{net_id}.{place}` (ADR-09). At the petri-net level the
 //! engine already emits the cancelled token on the handler's output port, so
 //! token flow continues without waiting for a round trip. But mekhan's
 //! `hpi_tasks` row stays `pending` forever — the task lingers in the user's
 //! inbox even though the engine has moved on.
 //!
-//! This listener closes that loop. It subscribes to `human.cancel.>`,
+//! This listener closes that loop. It subscribes to `human.*.cancel.>`,
 //! deserializes the engine's `HumanTaskCancellation` payload (which carries
 //! the `task_id`), and flips the matching `hpi_tasks` row to `cancelled`
 //! with the cancellation timestamp and optional reason. Idempotent — only
@@ -46,7 +46,7 @@ struct HumanCancelPayload {
 }
 
 /// Start the NATS listener that projects engine-fired human task cancels
-/// into the `hpi_tasks` table. Subscribes to `human.cancel.>` on the
+/// into the `hpi_tasks` table. Subscribes to `human.*.cancel.>` on the
 /// engine-owned `HUMAN_CANCEL` JetStream stream.
 pub async fn start_human_cancel_listener(nats: MekhanNats, db: PgPool) {
     let consumer = match nats.human_cancel_consumer().await {
@@ -65,7 +65,7 @@ pub async fn start_human_cancel_listener(nats: MekhanNats, db: PgPool) {
         }
     };
 
-    tracing::info!("human cancel listener started on human.cancel.>");
+    tracing::info!("human cancel listener started on human.*.cancel.>");
 
     while let Some(msg_result) = messages.next().await {
         let msg = match msg_result {

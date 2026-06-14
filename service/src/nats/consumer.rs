@@ -211,7 +211,7 @@ impl MekhanNats {
     }
 
     /// Create or get the durable consumer for engine-initiated human task
-    /// cancellations. The engine publishes to `human.cancel.{net_id}.{place}`
+    /// cancellations. The engine publishes to `human.{ws}.cancel.{net_id}.{place}`
     /// when the `human_cancel` effect handler fires (e.g. a Timeout's drain
     /// transition firing when the timer wins). Mekhan reacts by flipping the
     /// hpi_tasks row to `cancelled`, so the task disappears from the inbox

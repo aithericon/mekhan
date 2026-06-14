@@ -635,14 +635,19 @@ pub async fn complete_task(
         })?
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    // Publish NATS signal: human.completed.{net_id}.{place}
+    // Publish NATS signal: human.{ws}.completed.{net_id}.{place} (ADR-09).
     // The engine's GlobalHumanResultListener expects HumanTaskCompletion shape:
-    // { task_id, data, completed_at, corr_id? }
+    // { task_id, data, completed_at, corr_id? }. The `{ws}` segment is required
+    // by the workspace-namespaced human-result stream/consumer — a 4-part
+    // subject is silently dropped (no stream captures it) and the instance
+    // parks forever. The engine resolves the net by `net_id` alone, so `ws` is
+    // observability + stream-shape; the task row's `workspace_id` is authoritative.
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
-        let subject = format!("human.completed.{net_id}.{place}");
+        let ws = task.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+        let subject = petri_api_types::subjects::Subjects::human_completed(&ws.to_string(), net_id, place);
         let completion = serde_json::json!({
             "task_id": id,
             "data": coerced_data,
@@ -713,14 +718,16 @@ pub async fn cancel_task(
         })?
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    // Publish NATS signal: human.cancelled.{net_id}.{place}
+    // Publish NATS signal: human.{ws}.cancelled.{net_id}.{place} (ADR-09).
     // The engine's GlobalHumanResultListener expects HumanTaskCancellation shape:
-    // { task_id, reason?, cancelled_at }
+    // { task_id, reason?, cancelled_at }. The `{ws}` segment is required by the
+    // workspace-namespaced cancelled stream/consumer (see `complete_task`).
     let net_id = task.detail.get("net_id").and_then(|v| v.as_str());
     let place = task.detail.get("place").and_then(|v| v.as_str());
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
-        let subject = format!("human.cancelled.{net_id}.{place}");
+        let ws = task.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+        let subject = petri_api_types::subjects::Subjects::human_cancelled(&ws.to_string(), net_id, place);
         let cancellation = serde_json::json!({
             "task_id": id,
             "reason": body.get("reason").and_then(|v| v.as_str()),

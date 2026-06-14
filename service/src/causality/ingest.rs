@@ -2198,6 +2198,9 @@ fn extract_task_status_from_token(color: &petri_domain::TokenColor) -> String {
 /// resolve provenance fields from the causality context (source_net from
 /// the event's net_id, source_place from consumed token place, process_id
 /// from process tags), and insert into `catalogue_entries`.
+// Provenance + workspace scoping is genuinely wide here; a struct would just
+// shuffle the same fields across the one call site.
+#[allow(clippy::too_many_arguments)]
 async fn register_catalogue_entry(
     db: &PgPool,
     net_id: &str,
