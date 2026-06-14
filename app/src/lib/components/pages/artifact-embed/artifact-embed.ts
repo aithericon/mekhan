@@ -44,6 +44,11 @@ export interface ArtifactEmbedAttrs {
 	renderHint: string;
 	category: string;
 	processStep: string;
+	/** Pinned provenance snapshot (captured at insert; powers ArtifactProvenance). */
+	createdAt: string;
+	sizeBytes: string;
+	/** JSON of the artifact's user_metadata (producer params + render_hint). */
+	userMetaJson: string;
 	caption: string;
 }
 
@@ -62,6 +67,9 @@ const STRING_ATTRS: (keyof ArtifactEmbedAttrs)[] = [
 	'renderHint',
 	'category',
 	'processStep',
+	'createdAt',
+	'sizeBytes',
+	'userMetaJson',
 	'caption'
 ];
 

@@ -42,6 +42,7 @@
 		placeholder = 'Write something…',
 		showToolbar = true,
 		embedContext = null,
+		contentClass = '',
 		onReady
 	}: {
 		pageId: string;
@@ -49,6 +50,13 @@
 		placeholder?: string;
 		/** Render the formatting toolbar above the content (default true). */
 		showToolbar?: boolean;
+		/**
+		 * Classes applied to an inner wrapper around the toolbar AND the scrollable
+		 * content (e.g. `mx-auto max-w-4xl px-6`). The SCROLL container itself stays
+		 * full-width, so the scrollbar rides the screen edge while the content stays
+		 * centered. Empty (default) → content fills the editor width as before.
+		 */
+		contentClass?: string;
 		/**
 		 * Run context enabling the "Insert media" block (instance Report only).
 		 * When set, the editor gains the `artifactEmbed` node and the toolbar
@@ -121,37 +129,43 @@
 <div class="flex h-full min-h-0 flex-col">
 	{#if showToolbar && editable}
 		<div class="shrink-0 pb-2">
-			<EdraToolbar {editor}>
-				{#snippet actions()}
-					{#if embedContext}
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-sm"
-							title="Insert run media"
-							aria-label="Insert run media"
-							disabled={!editor}
-							onclick={() => (insertOpen = true)}
-						>
-							<FileBox />
-						</Button>
-					{/if}
-				{/snippet}
-			</EdraToolbar>
+			<div class={contentClass}>
+				<EdraToolbar {editor}>
+					{#snippet actions()}
+						{#if embedContext}
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-sm"
+								title="Insert run media"
+								aria-label="Insert run media"
+								disabled={!editor}
+								onclick={() => (insertOpen = true)}
+							>
+								<FileBox />
+							</Button>
+						{/if}
+					{/snippet}
+				</EdraToolbar>
+			</div>
 		</div>
 	{/if}
 
+	<!-- The scroll container is full-width so its scrollbar rides the screen edge;
+	     `contentClass` (e.g. mx-auto max-w-4xl) re-centers the content within it. -->
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		{#if synced && fragment}
-			<!-- {#key pageId} guards against a stale editor surviving a pageId swap
-			     within the same mounted component (call sites also key, belt-and-suspenders). -->
-			{#key pageId}
-				<EdraEditor {fragment} {editable} {placeholder} {extraExtensions} onready={handleReady} />
-			{/key}
-			<EdraBubbleMenu {editor} />
-		{:else}
-			<div class="text-muted-foreground p-4 text-sm">Connecting…</div>
-		{/if}
+		<div class="{contentClass} h-full">
+			{#if synced && fragment}
+				<!-- {#key pageId} guards against a stale editor surviving a pageId swap
+				     within the same mounted component (call sites also key, belt-and-suspenders). -->
+				{#key pageId}
+					<EdraEditor {fragment} {editable} {placeholder} {extraExtensions} onready={handleReady} />
+				{/key}
+				<EdraBubbleMenu {editor} />
+			{:else}
+				<div class="text-muted-foreground p-4 text-sm">Connecting…</div>
+			{/if}
+		</div>
 	</div>
 </div>
 

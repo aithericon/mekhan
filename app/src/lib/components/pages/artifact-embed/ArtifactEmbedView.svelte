@@ -15,6 +15,7 @@
 <script lang="ts">
 	import ArtifactsPanel from '$lib/components/process-live/ArtifactsPanel.svelte';
 	import ArtifactMediaPreview from '$lib/components/catalogue/ArtifactMediaPreview.svelte';
+	import ArtifactProvenance from '$lib/components/catalogue/ArtifactProvenance.svelte';
 	import { isShowcaseEntry, pickRenderer, groupKey } from '$lib/components/process-live/renderers/registry';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
@@ -51,7 +52,19 @@
 			: showcase.length;
 	});
 
-	// Reconstruct a minimal catalogue entry for the pinned-artifact renderer.
+	// Reconstruct a minimal catalogue entry for the pinned-artifact renderer +
+	// its provenance, from the snapshot attrs captured at insert time.
+	function parseUserMeta(): Record<string, unknown> | null {
+		if (attrs.userMetaJson) {
+			try {
+				const m = JSON.parse(attrs.userMetaJson);
+				if (m && typeof m === 'object') return m as Record<string, unknown>;
+			} catch {
+				/* fall through */
+			}
+		}
+		return attrs.renderHint ? { render_hint: attrs.renderHint } : null;
+	}
 	const pinnedEntry = $derived<LiveArtifactEntry>({
 		id: attrs.artifactId,
 		artifact_id: attrs.artifactId,
@@ -61,11 +74,11 @@
 		filename: attrs.artifactName,
 		mime_type: attrs.mimeType || null,
 		storage_path: attrs.storagePath || null,
-		size_bytes: null,
+		size_bytes: attrs.sizeBytes ? Number(attrs.sizeBytes) : null,
 		process_step: attrs.processStep || null,
 		signal_key: null,
-		user_metadata: attrs.renderHint ? { render_hint: attrs.renderHint } : null,
-		created_at: ''
+		user_metadata: parseUserMeta(),
+		created_at: attrs.createdAt || ''
 	} as LiveArtifactEntry);
 	const PinnedRenderer = $derived(attrs.mode === 'artifact' ? pickRenderer(pinnedEntry) : null);
 
@@ -97,25 +110,28 @@
 
 	<div class="p-3">
 		{#if attrs.mode === 'artifact'}
-			{#if PinnedRenderer}
-				{@const R = PinnedRenderer}
-				<R entry={pinnedEntry} />
-			{:else if attrs.storagePath}
-				<ArtifactMediaPreview
-					storagePath={attrs.storagePath}
-					mimeType={attrs.mimeType}
-					name={attrs.artifactName}
-				/>
-			{:else}
-				<p class="text-sm text-muted-foreground">This artifact can't be previewed.</p>
-			{/if}
+			<div class="flex flex-col gap-2">
+				{#if PinnedRenderer}
+					{@const R = PinnedRenderer}
+					<R entry={pinnedEntry} />
+				{:else if attrs.storagePath}
+					<ArtifactMediaPreview
+						storagePath={attrs.storagePath}
+						mimeType={attrs.mimeType}
+						name={attrs.artifactName}
+					/>
+				{:else}
+					<p class="text-sm text-muted-foreground">This artifact can't be previewed.</p>
+				{/if}
+				<ArtifactProvenance entry={pinnedEntry} />
+			</div>
 		{:else if store}
 			{#if liveCount === 0}
 				<p class="text-sm text-muted-foreground">
 					No renderable media yet — it'll appear here as the run produces it.
 				</p>
 			{:else}
-				<ArtifactsPanel {store} renderableOnly {groupFilter} />
+				<ArtifactsPanel {store} renderableOnly showProvenance {groupFilter} />
 			{/if}
 		{:else}
 			<p class="text-sm text-muted-foreground">
