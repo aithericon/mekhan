@@ -79,7 +79,7 @@ pub struct WorkflowTemplate {
     /// embedded only by this family and never runs standalone.
     pub owner_template_id: Option<Uuid>,
 
-    // --- Library / vendor nodes (migration 20240183) ---
+    // --- Library / vendor nodes (migration 20240184) ---
     /// Exclusive intent: `workflow` (default), `library_node` (a curated
     /// reusable integration surfaced in the palette), or `private_child` (a
     /// private sub-workflow). Drives palette/catalogue/ACL branching.
