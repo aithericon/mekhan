@@ -51,32 +51,42 @@ pub async fn task_stream(
         }
 
         // Use core NATS subscriptions (not JetStream) — we only want live events.
-        let mut request_sub = match client.subscribe("human.request.>").await {
+        // ADR-09: human-task subjects are workspace-namespaced
+        // (`human.{ws}.{category}.{net}.{place}`). Subscribe to ONLY the caller's
+        // workspace segment — this is both the fix for the old 4-part filters
+        // (which no longer match anything the engine/service publishes) AND the
+        // tenant-isolation boundary, so the `workspace_from_net_id` check below
+        // is now a redundant backstop rather than the sole gate.
+        let req_filter = format!("human.{caller_ws}.request.>");
+        let mut request_sub = match client.subscribe(req_filter.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Failed to subscribe to human.request.>: {e}");
+                tracing::warn!("Failed to subscribe to {req_filter}: {e}");
                 yield Ok(Event::default().event("error").data(format!("NATS subscribe failed: {e}")));
                 return;
             }
         };
-        let mut completed_sub = match client.subscribe("human.completed.>").await {
+        let completed_filter = format!("human.{caller_ws}.completed.>");
+        let mut completed_sub = match client.subscribe(completed_filter.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Failed to subscribe to human.completed.>: {e}");
+                tracing::warn!("Failed to subscribe to {completed_filter}: {e}");
                 return;
             }
         };
-        let mut failed_sub = match client.subscribe("human.failed.>").await {
+        let failed_filter = format!("human.{caller_ws}.failed.>");
+        let mut failed_sub = match client.subscribe(failed_filter.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Failed to subscribe to human.failed.>: {e}");
+                tracing::warn!("Failed to subscribe to {failed_filter}: {e}");
                 return;
             }
         };
-        let mut cancelled_sub = match client.subscribe("human.cancelled.>").await {
+        let cancelled_filter = format!("human.{caller_ws}.cancelled.>");
+        let mut cancelled_sub = match client.subscribe(cancelled_filter.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Failed to subscribe to human.cancelled.>: {e}");
+                tracing::warn!("Failed to subscribe to {cancelled_filter}: {e}");
                 return;
             }
         };
@@ -93,7 +103,7 @@ pub async fn task_stream(
         loop {
             tokio::select! {
                 Some(msg) = request_sub.next() => {
-                    if let Some(net_id) = extract_net_id(&msg.subject, "human.request.") {
+                    if let Some(net_id) = extract_net_id(&msg.subject, &format!("human.{caller_ws}.request.")) {
                         if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_created").data(&*data));
@@ -101,7 +111,7 @@ pub async fn task_stream(
                     }
                 }
                 Some(msg) = completed_sub.next() => {
-                    if let Some(net_id) = extract_net_id(&msg.subject, "human.completed.") {
+                    if let Some(net_id) = extract_net_id(&msg.subject, &format!("human.{caller_ws}.completed.")) {
                         if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_completed").data(&*data));
@@ -109,7 +119,7 @@ pub async fn task_stream(
                     }
                 }
                 Some(msg) = failed_sub.next() => {
-                    if let Some(net_id) = extract_net_id(&msg.subject, "human.failed.") {
+                    if let Some(net_id) = extract_net_id(&msg.subject, &format!("human.{caller_ws}.failed.")) {
                         if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_failed").data(&*data));
@@ -117,7 +127,7 @@ pub async fn task_stream(
                     }
                 }
                 Some(msg) = cancelled_sub.next() => {
-                    if let Some(net_id) = extract_net_id(&msg.subject, "human.cancelled.") {
+                    if let Some(net_id) = extract_net_id(&msg.subject, &format!("human.{caller_ws}.cancelled.")) {
                         if workspace_from_net_id(net_id) == Some(caller_ws) {
                             let data = String::from_utf8_lossy(&msg.payload);
                             yield Ok(Event::default().event("task_cancelled").data(&*data));

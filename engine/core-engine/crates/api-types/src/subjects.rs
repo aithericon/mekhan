@@ -245,6 +245,34 @@ impl Subjects {
         )
     }
 
+    /// Build a human task completion subject (UI -> engine):
+    /// `human.{ws}.completed.{net}.{place}`. The publish-side mirror of
+    /// [`Self::parse_human_completed_subject`] — keep the two in lockstep.
+    pub fn human_completed(ws: &str, net_id: &str, place_name: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.{}",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_COMPLETED_CATEGORY,
+            net_id,
+            place_name
+        )
+    }
+
+    /// Build a human task cancelled subject (UI -> engine):
+    /// `human.{ws}.cancelled.{net}.{place}`. The publish-side mirror of
+    /// [`Self::parse_human_cancelled_subject`].
+    pub fn human_cancelled(ws: &str, net_id: &str, place_name: &str) -> String {
+        format!(
+            "{}.{}.{}.{}.{}",
+            Self::HUMAN_ROOT,
+            ws,
+            Self::HUMAN_CANCELLED_CATEGORY,
+            net_id,
+            place_name
+        )
+    }
+
     /// Build a human task cancelled filter (for engine-side consumer):
     /// `human.{ws}.cancelled.{net}.>`.
     pub fn human_cancelled_filter(ws: &str, net_id: &str) -> String {
@@ -792,6 +820,39 @@ mod tests {
     fn test_human_cancel_subject() {
         let subject = Subjects::human_cancel("ws1", "net-a", "review");
         assert_eq!(subject, "human.ws1.cancel.net-a.review");
+    }
+
+    #[test]
+    fn test_human_completed_subject() {
+        let subject = Subjects::human_completed("ws1", "net-a", "review");
+        assert_eq!(subject, "human.ws1.completed.net-a.review");
+    }
+
+    #[test]
+    fn test_human_cancelled_subject() {
+        let subject = Subjects::human_cancelled("ws1", "net-a", "review");
+        assert_eq!(subject, "human.ws1.cancelled.net-a.review");
+    }
+
+    // The publish builders MUST round-trip through the engine-side parsers —
+    // this is the exact publish/parse drift that left 4-part human-result
+    // subjects unconsumed and parked instances at their human tasks.
+    #[test]
+    fn test_human_completed_publish_parse_roundtrip() {
+        let subject = Subjects::human_completed("ws1", "net-a", "review");
+        assert_eq!(
+            Subjects::parse_human_completed_subject(&subject),
+            Some(("ws1", "net-a", "review"))
+        );
+    }
+
+    #[test]
+    fn test_human_cancelled_publish_parse_roundtrip() {
+        let subject = Subjects::human_cancelled("ws1", "net-a", "review");
+        assert_eq!(
+            Subjects::parse_human_cancelled_subject(&subject),
+            Some(("ws1", "net-a", "review"))
+        );
     }
 
     #[test]

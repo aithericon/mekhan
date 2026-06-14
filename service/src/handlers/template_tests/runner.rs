@@ -103,12 +103,19 @@ pub async fn run_test(
     // Subscribe to the engine's authoritative human-request stream for THIS
     // net BEFORE launching, so a request published between launch and our
     // first poll isn't missed. We drive human tasks straight off the engine
-    // protocol (`human.request.{net_id}.{place}`, payload = the
+    // protocol (`human.{ws}.request.{net_id}.{place}`, payload = the
     // HumanTaskRequest carrying task_id + place + form) instead of polling the
     // `hpi_tasks` causality projection: that projection only lands a row once
     // a process tag resolves, which `test_run` instances never carry, so it
     // never surfaces a test's human tasks. net_id is the always-present handle.
-    let request_subject = format!("human.request.{net_id}.>");
+    // ADR-09: human subjects carry the workspace segment
+    // (`human.{ws}.request.{net}.{place}`). The engine stamps the net's own
+    // workspace there (its `org_id`, else the `default` sentinel) — which is
+    // not necessarily `ctx.workspace_id` once the engine normalizes/defaults.
+    // `net_id` is globally unique per run, so wildcard the `{ws}` segment and
+    // echo back whatever ws the engine actually used (captured from the subject
+    // below); the engine resolves the completion by `net_id` regardless.
+    let request_subject = format!("human.*.request.{net_id}.>");
     let mut human_requests = state
         .nats
         .client()
@@ -239,12 +246,18 @@ pub async fn run_test(
                 continue;
             }
 
-            // Place is the subject tail (`human.request.{net_id}.{place}`),
-            // with the payload's `place` as a fallback.
-            let place = msg
-                .subject
-                .strip_prefix(&format!("human.request.{net_id}."))
-                .map(str::to_string)
+            // Subject shape: `human.{ws}.request.{net_id}.{place}` (all segments
+            // dot-free). Capture the engine-chosen ws (echoed on completion) and
+            // the trailing place; fall back to the payload's `place`.
+            let subj_parts: Vec<&str> = msg.subject.split('.').collect();
+            let req_ws = subj_parts
+                .get(1)
+                .copied()
+                .unwrap_or(petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE);
+            let place = subj_parts
+                .last()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
                 .or_else(|| {
                     detail
                         .get("place")
@@ -303,7 +316,8 @@ pub async fn run_test(
             // Publish the synthetic completion on the same subject the UI
             // path uses (`process::handlers`): the engine's
             // GlobalHumanResultListener injects the result token at `place`.
-            let subject = format!("human.completed.{net_id}.{place}");
+            let subject =
+                petri_api_types::subjects::Subjects::human_completed(req_ws, &net_id, &place);
             let payload = json!({
                 "task_id": task_id,
                 "data": answer,
