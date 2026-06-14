@@ -64,10 +64,13 @@ const PROCESS_JOIN: &str = " FROM hpi_processes p \
 ///
 /// Scopes through [`PROCESS_JOIN`]: the process is visible when its resolved
 /// workspace equals the caller's (unlinked → `NIL_WS`, so nil-workspace callers
-/// see infra/pool/legacy processes) OR the producing template is `public`
-/// (demos are visible cross-workspace — mirrors `list_instances`). Per-process
-/// read handlers call this and 404 on `false`, so a tenant can neither read nor
-/// confirm the existence of another tenant's process.
+/// see infra/pool/legacy processes). STRICT — no public-visibility escape: a
+/// process is per-run execution data owned by one workspace, not a shareable
+/// definition. A public template is read-only-discoverable cross-workspace, but
+/// its *runs* (and their processes/causality) stay private to the workspace that
+/// owns them — mirrors `list_instances`. Per-process read handlers call this and
+/// 404 on `false`, so a tenant can neither read nor confirm the existence of
+/// another tenant's process.
 pub async fn process_in_workspace(
     pool: &PgPool,
     process_id: &str,
@@ -77,7 +80,7 @@ pub async fn process_in_workspace(
         "SELECT EXISTS ( \
              SELECT 1{PROCESS_JOIN} \
              WHERE p.process_id = $1 \
-               AND (COALESCE(wt.workspace_id, {NIL_WS}) = $2 OR wt.visibility = 'public') \
+               AND COALESCE(wt.workspace_id, {NIL_WS}) = $2 \
          )"
     );
     sqlx::query_scalar::<_, bool>(&sql)
@@ -131,11 +134,8 @@ fn append_process_where(
     params: &QueryParams,
     workspace_id: uuid::Uuid,
 ) -> Result<(), QueryError> {
-    qb.push(format!(
-        " WHERE (COALESCE(wt.workspace_id, {NIL_WS}) = "
-    ));
+    qb.push(format!(" WHERE COALESCE(wt.workspace_id, {NIL_WS}) = "));
     qb.push_bind(workspace_id);
-    qb.push(" OR wt.visibility = 'public')");
 
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
@@ -522,15 +522,15 @@ fn append_log_where(
     Ok(())
 }
 
-/// Aggregate process stats grouped by status, scoped to one workspace (+ public
-/// templates) via [`PROCESS_JOIN`].
+/// Aggregate process stats grouped by status, scoped strictly to one workspace
+/// via [`PROCESS_JOIN`] (no public-visibility escape — runs are private).
 pub async fn process_stats(
     pool: &PgPool,
     workspace_id: uuid::Uuid,
 ) -> Result<ProcessStats, sqlx::Error> {
     let sql = format!(
         "SELECT p.status, COUNT(*)::bigint{PROCESS_JOIN} \
-         WHERE (COALESCE(wt.workspace_id, {NIL_WS}) = $1 OR wt.visibility = 'public') \
+         WHERE COALESCE(wt.workspace_id, {NIL_WS}) = $1 \
          GROUP BY p.status"
     );
     let rows: Vec<(String, i64)> = sqlx::query_as(&sql)

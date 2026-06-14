@@ -290,8 +290,14 @@ pub async fn list_instances(
     let offset = (params.page - 1) * params.per_page;
     // Workspace scope (closes the pre-Phase-3 leak: this list had no auth and
     // returned instances across ALL workspaces). Instances carry no
-    // workspace_id, so scope through the joined template's workspace + public
-    // visibility — mirroring `list_templates`.
+    // workspace_id, so scope through the joined template's workspace.
+    //
+    // STRICT — no public-visibility escape here, unlike `list_templates`. A
+    // public template is a shareable *definition* (read-only cross-workspace);
+    // an instance is a concrete *run* owned by exactly one workspace (its tenancy
+    // is stamped into net_id `mekhan-{ws}-{inst}` at launch == the template's
+    // workspace). A run must never inherit its template's public visibility, or
+    // every workspace would see every other workspace's runs of the shared demos.
     let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
     // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
@@ -335,10 +341,13 @@ pub async fn list_instances(
         conditions.push(format!("wi.mode = ${bind_index}"));
         bind_index += 1;
     }
-    // Workspace + public gate on the joined template (bound last among filters).
+    // Workspace gate on the joined template (bound last among filters). Strict:
+    // the run's tenancy must equal the caller's active workspace. Unlinked /
+    // legacy templates with NULL workspace_id resolve to the nil sentinel (the
+    // `default` workspace), matching how net_id / causality treat them.
     let ws_bind = bind_index;
     conditions.push(format!(
-        "(wt.workspace_id = ${ws_bind} OR wt.visibility = 'public')"
+        "COALESCE(wt.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid) = ${ws_bind}"
     ));
     bind_index += 1;
 
