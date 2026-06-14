@@ -1,25 +1,23 @@
 /**
- * DOM tests for the artifact-embed node view — the three render branches the
- * Tiptap node mounts: no run context, a context with zero renderable media, and
- * a context whose live store carries a renderable image.
+ * DOM tests for the artifact-embed node view — its render branches: no run
+ * context, an empty live store, a live store carrying a renderable image, and a
+ * PINNED single artifact (rendered straight from snapshot attrs, no store).
  *
- * The image branch is what proves the node view actually mounts the SHARED
- * ArtifactsPanel (the same component the Process Overview "Media" card uses)
- * against a resolved per-process store — the one path the schema round-trip
- * test can't reach.
+ * The live + pinned image branches prove the node view actually draws media via
+ * the SHARED ArtifactsPanel / renderer registry (the same path the Process
+ * Overview "Media" card uses) — what the schema round-trip test can't reach.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/svelte';
 import ArtifactEmbedView from './ArtifactEmbedView.svelte';
+import type { ArtifactEmbedAttrs } from './artifact-embed';
 import type { ArtifactEmbedContext } from './embed-context';
 
 afterEach(() => cleanup());
 
-// Minimal live-store shape ArtifactsPanel reads: artifacts + status + error.
 function storeWith(artifacts: unknown[]) {
 	return { artifacts, artifactStatus: 'streaming', error: null };
 }
-
 function contextWith(artifacts: unknown[]): ArtifactEmbedContext {
 	return {
 		processes: [],
@@ -43,40 +41,85 @@ const imageArtifact = {
 	created_at: '2026-06-14T10:00:00Z'
 };
 
-const baseAttrs = { processId: 'proc-1', processName: 'Simulate', caption: 'Final renders' };
+function attrs(partial: Partial<ArtifactEmbedAttrs> = {}): ArtifactEmbedAttrs {
+	return {
+		processId: 'proc-1',
+		processName: 'Simulate',
+		mode: 'all',
+		groupKey: '',
+		groupLabel: '',
+		artifactId: '',
+		artifactName: '',
+		storagePath: '',
+		mimeType: '',
+		renderHint: '',
+		category: '',
+		processStep: '',
+		caption: '',
+		...partial
+	};
+}
 
 describe('ArtifactEmbedView', () => {
 	it('renders a neutral placeholder when there is no run context', () => {
 		const { getByText } = render(ArtifactEmbedView, {
-			props: { attrs: baseAttrs, editable: true, context: null, onDelete: () => {} }
+			props: { attrs: attrs(), editable: true, context: null, onDelete: () => {} }
 		});
 		expect(getByText(/needs a run context/i)).toBeTruthy();
 	});
 
 	it('shows the empty-state when the run has no renderable media yet', () => {
 		const { getByText } = render(ArtifactEmbedView, {
-			props: { attrs: baseAttrs, editable: false, context: contextWith([]), onDelete: () => {} }
+			props: { attrs: attrs(), editable: false, context: contextWith([]), onDelete: () => {} }
 		});
 		expect(getByText(/No renderable media yet/i)).toBeTruthy();
 	});
 
-	it('mounts the shared ArtifactsPanel when the store carries a renderable image', () => {
+	it('mounts the shared ArtifactsPanel for an "all" embed with a renderable image', () => {
 		const ctx = contextWith([imageArtifact]);
 		const { getByText, queryByText } = render(ArtifactEmbedView, {
-			props: { attrs: baseAttrs, editable: true, context: ctx, onDelete: () => {} }
+			props: { attrs: attrs({ caption: 'Final renders' }), editable: true, context: ctx, onDelete: () => {} }
 		});
-		// Resolved the per-process store...
 		expect(ctx.getArtifactStore).toHaveBeenCalledWith('proc-1');
-		// ...and rendered the artifact (panel mounted), not the empty-state.
 		expect(queryByText(/No renderable media yet/i)).toBeNull();
 		expect(getByText('gp_final_state.png')).toBeTruthy();
+		// caption drives the header
+		expect(getByText('Final renders')).toBeTruthy();
 	});
 
-	it('shows the caption + process name in the header', () => {
-		const { getByText } = render(ArtifactEmbedView, {
-			props: { attrs: baseAttrs, editable: true, context: contextWith([]), onDelete: () => {} }
+	it('renders a pinned single artifact WITHOUT resolving the live store', () => {
+		const ctx = contextWith([]);
+		const { getAllByText } = render(ArtifactEmbedView, {
+			props: {
+				attrs: attrs({
+					mode: 'artifact',
+					artifactId: 'art-1',
+					artifactName: 'gp_final_state.png',
+					storagePath: imageArtifact.storage_path,
+					mimeType: 'image/png',
+					category: 'plot'
+				}),
+				editable: true,
+				context: ctx,
+				onDelete: () => {}
+			}
 		});
-		expect(getByText('Final renders')).toBeTruthy();
+		// Pinned mode draws from attrs, not the per-process store.
+		expect(ctx.getArtifactStore).not.toHaveBeenCalled();
+		// header (and the image renderer) show the artifact name → renderer mounted
+		expect(getAllByText('gp_final_state.png').length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('uses the group label as the header for a group embed', () => {
+		const { getByText } = render(ArtifactEmbedView, {
+			props: {
+				attrs: attrs({ mode: 'group', groupKey: 'hint:gp-posterior', groupLabel: 'gp-posterior' }),
+				editable: true,
+				context: contextWith([]),
+				onDelete: () => {}
+			}
+		});
+		expect(getByText('gp-posterior')).toBeTruthy();
 		expect(getByText(/Simulate/)).toBeTruthy();
 	});
 });
