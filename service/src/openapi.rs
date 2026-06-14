@@ -44,6 +44,22 @@ use utoipa::OpenApi;
             // reached only through this, so register it too.
             crate::handlers::node_library::LibraryNodeDescriptor,
             crate::models::template::Presentation,
+            // Library packs — the row projection + the import/export bundle
+            // document. The list/detail responses and the import result nest
+            // these (Vec<_>, #[serde(flatten)], request body), which utoipa's
+            // auto-discovery doesn't fully walk, so register them explicitly for
+            // frontend codegen.
+            crate::models::library_pack::LibraryPack,
+            crate::models::library_pack::LibraryPackSummary,
+            crate::models::library_pack::LibraryPackDetail,
+            crate::models::library_pack::PackBundle,
+            crate::models::library_pack::PackManifest,
+            crate::models::library_pack::PackNode,
+            crate::models::library_pack::PackAsset,
+            crate::models::library_pack::PackImportResult,
+            // Custom uploaded library-logo upload body + response token.
+            crate::handlers::library_packs::LibraryIconUpload,
+            crate::handlers::library_packs::LibraryIconResponse,
             // Phase 4 governance — promote/demote/fork request bodies.
             crate::handlers::governance::PromoteTemplateRequest,
             crate::handlers::governance::ForkLibraryRequest,
@@ -437,6 +453,7 @@ use utoipa::OpenApi;
         (name = "container-images", description = "Container image materialization onto datacenter clusters."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
+        (name = "library-packs", description = "Library packs — named, importable/exportable bundles of library nodes grouped under one vendor/slug coordinate. Import recompiles each node's graph; export embeds referenced logo blobs as base64. Admin/Owner-gated mutation."),
         (name = "health", description = "Liveness probe."),
         (name = "workspaces", description = "Tenant boundaries — membership + member admin (Phase A2)."),
         (name = "folders", description = "Workspace-scoped hierarchical template grouping (single-parent tree) + tag/visibility surface + per-folder OpenAPI bundle."),

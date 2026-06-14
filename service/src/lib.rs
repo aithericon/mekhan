@@ -221,6 +221,20 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // ACL-filtered, unlike the static node-type registry above.
         .routes(routes!(handlers::node_library::list_node_library))
         .routes(routes!(handlers::node_library::list_library_categories))
+        // Library packs — named, importable/exportable bundles of library
+        // nodes. `import` + `export` are registered BEFORE the `{id}` routes so
+        // the literal segments win against the `{id}` wildcard in the trie (same
+        // reasoning as the templates `apply-air` ordering note below).
+        .routes(routes!(handlers::library_packs::list_packs))
+        .routes(routes!(handlers::library_packs::import_pack))
+        .routes(routes!(handlers::library_packs::export_pack))
+        .routes(routes!(handlers::library_packs::get_pack))
+        .routes(routes!(handlers::library_packs::delete_pack))
+        // Custom uploaded library logos — lightweight image blob store keyed by
+        // an opaque id (NOT the asset-type/record system). `presentation.icon`
+        // carries an `asset:{id}` token that the frontend resolves via the GET.
+        .routes(routes!(handlers::library_packs::upload_library_icon))
+        .routes(routes!(handlers::library_packs::get_library_icon))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these

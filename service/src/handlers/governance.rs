@@ -44,7 +44,7 @@ use crate::AppState;
 /// lowercase `[a-z0-9-]` with no leading/trailing/double hyphen. Mirrors the
 /// slug rules enforced on workspace slugs + seeded library packs so a
 /// hand-promoted coordinate can never diverge from a GitOps-seeded one.
-fn validate_coordinate(coordinate: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_coordinate(coordinate: &str) -> Result<(), ApiError> {
     let parts: Vec<&str> = coordinate.split('/').collect();
     if parts.len() != 2 {
         return Err(ApiError::bad_request(
@@ -70,7 +70,7 @@ fn validate_coordinate(coordinate: &str) -> Result<(), ApiError> {
 
 /// Validate that a library node's `presentation.category` is present and a
 /// member of the controlled vocabulary (drives the two-level palette grouping).
-fn validate_category(presentation: &Presentation) -> Result<(), ApiError> {
+pub(crate) fn validate_category(presentation: &Presentation) -> Result<(), ApiError> {
     match presentation.category.as_deref() {
         None => Err(ApiError::bad_request("presentation.category is required")),
         Some(c) if !is_known_library_category(c) => Err(ApiError::bad_request(format!(

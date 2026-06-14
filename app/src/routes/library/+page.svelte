@@ -8,7 +8,7 @@
 		type Template
 	} from '$lib/api/client';
 	import { roleAtLeast } from '$lib/api/iam';
-	import { resolveNodeIcon } from '$lib/editor/icon-registry';
+	import LibraryIconBox from '$lib/components/library/LibraryIconBox.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -24,7 +24,6 @@
 	import Settings from '@lucide/svelte/icons/settings';
 	import ArrowDownToLine from '@lucide/svelte/icons/arrow-down-to-line';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
-	import { PageShell, PageHeader } from '$lib/components/shell';
 	import PromoteLibraryDialog from '$lib/components/editor/PromoteLibraryDialog.svelte';
 
 	let nodes = $state<LibraryNodeDescriptor[]>([]);
@@ -117,12 +116,7 @@
 	onMount(reload);
 </script>
 
-<PageShell testid="node-library-page">
-	{#snippet band()}
-		<PageHeader title="Node Library" subtitle="Manage workspace library nodes — rebrand, lifecycle, and demote">
-		</PageHeader>
-	{/snippet}
-
+<div data-testid="node-library-page">
 	{#if error}
 		<div
 			class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
@@ -193,7 +187,6 @@
 	{:else}
 		<div class="space-y-2" data-testid="library-list">
 			{#each filtered as node (node.templateId)}
-				{@const Icon = resolveNodeIcon(node.presentation?.icon)}
 				{@const govern = canGovern(node)}
 				<div
 					class="flex flex-col gap-3 rounded-lg border border-border bg-card p-4"
@@ -201,14 +194,7 @@
 				>
 					<div class="flex items-start justify-between gap-3">
 						<div class="flex min-w-0 items-start gap-3">
-							<div
-								class="flex size-9 shrink-0 items-center justify-center rounded-md border border-border"
-								style={node.presentation?.color
-									? `color: ${node.presentation.color}; border-color: ${node.presentation.color}33;`
-									: undefined}
-							>
-								<Icon class="size-5" />
-							</div>
+							<LibraryIconBox icon={node.presentation?.icon} color={node.presentation?.color} />
 							<div class="min-w-0">
 								<div class="flex flex-wrap items-center gap-2">
 									<span class="truncate text-sm font-medium text-foreground">{node.name}</span>
@@ -275,7 +261,7 @@
 			{/each}
 		</div>
 	{/if}
-</PageShell>
+</div>
 
 {#if manageTemplate}
 	<PromoteLibraryDialog

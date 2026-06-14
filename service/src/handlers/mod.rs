@@ -20,6 +20,7 @@ pub mod inference_telemetry;
 pub mod instances;
 pub mod invites;
 pub mod job_templates;
+pub mod library_packs;
 pub mod me;
 pub mod model_catalog;
 pub mod model_commands;

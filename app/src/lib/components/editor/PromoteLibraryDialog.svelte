@@ -24,6 +24,9 @@
 		promoteTemplate,
 		setLifecycle,
 		listLibraryCategories,
+		uploadLibraryIcon,
+		libraryIconUrl,
+		isAssetIcon,
 		type Template
 	} from '$lib/api/client';
 	import { resolveNodeIcon, iconRegistryKeys } from '$lib/editor/icon-registry';
@@ -54,9 +57,48 @@
 	let successor = $state('');
 	let lifecycleBusy = $state(false);
 
+	// Custom-logo upload (the `icon` field may hold an `asset:{uuid}` token).
+	let uploading = $state(false);
+	let fileInput = $state<HTMLInputElement | null>(null);
+
 	const isManage = $derived(template?.template_kind === 'library_node');
 	const lifecycle = $derived(template?.lifecycle_status ?? 'active');
 	const PreviewIcon = $derived(resolveNodeIcon(icon));
+	// When the icon is an uploaded logo, render its served image; otherwise the
+	// named-registry PreviewIcon path is used.
+	const assetIcon = $derived(isAssetIcon(icon));
+	const assetIconSrc = $derived(libraryIconUrl(icon));
+
+	function pickLogo() {
+		error = null;
+		fileInput?.click();
+	}
+
+	async function onLogoSelected(e: Event) {
+		const target = e.currentTarget as HTMLInputElement;
+		const file = target.files?.[0];
+		// Reset the input so re-selecting the same file fires `change` again.
+		target.value = '';
+		if (!file) return;
+		uploading = true;
+		error = null;
+		try {
+			const res = await uploadLibraryIcon(file);
+			icon = res.icon;
+		} catch (err) {
+			error =
+				err instanceof ApiError
+					? (err.body?.error ?? 'Could not upload logo.')
+					: 'Could not upload logo.';
+		} finally {
+			uploading = false;
+		}
+	}
+
+	function clearLogo() {
+		error = null;
+		icon = '';
+	}
 
 	// Re-seed the form from the template each time the dialog opens, and lazily
 	// fetch the category vocabulary once.
@@ -207,19 +249,64 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1.5">
 					<Label>Icon</Label>
-					<Select.Root type="single" value={icon} onValueChange={(v) => v && (icon = v)}>
-						<Select.Trigger class="w-full" data-testid="promote-icon">
-							<span class="flex items-center gap-2 truncate" style="color: {color}">
-								<PreviewIcon class="size-4" />
-								<span class="text-foreground">{icon || 'default'}</span>
-							</span>
-						</Select.Trigger>
-						<Select.Content>
-							{#each iconKeys as k (k)}
-								<Select.Item value={k} label={k} />
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					{#if assetIcon}
+						<div
+							class="flex items-center gap-2 rounded-md border border-input bg-background px-2 py-1.5"
+						>
+							{#if assetIconSrc}
+								<img
+									src={assetIconSrc}
+									alt="Custom logo"
+									class="size-5 shrink-0 rounded-sm object-contain"
+								/>
+							{/if}
+							<span class="truncate text-sm text-foreground">Custom logo</span>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								class="ml-auto h-7 px-2 text-xs"
+								onclick={clearLogo}
+								data-testid="promote-clear-logo"
+							>
+								Use named icon
+							</Button>
+						</div>
+					{:else}
+						<Select.Root type="single" value={icon} onValueChange={(v) => v && (icon = v)}>
+							<Select.Trigger class="w-full" data-testid="promote-icon">
+								<span class="flex items-center gap-2 truncate" style="color: {color}">
+									<PreviewIcon class="size-4" />
+									<span class="text-foreground">{icon || 'default'}</span>
+								</span>
+							</Select.Trigger>
+							<Select.Content>
+								{#each iconKeys as k (k)}
+									<Select.Item value={k} label={k} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="w-full"
+							disabled={uploading}
+							onclick={pickLogo}
+							data-testid="promote-upload-logo"
+						>
+							{uploading ? 'Uploading…' : 'Upload logo'}
+						</Button>
+					{/if}
+					<input
+						bind:this={fileInput}
+						type="file"
+						accept="image/*"
+						class="hidden"
+						onchange={onLogoSelected}
+						aria-hidden="true"
+						tabindex="-1"
+					/>
 				</div>
 				<div class="space-y-1.5">
 					<Label for="lib-color">Accent</Label>

@@ -7179,6 +7179,397 @@
         }
       }
     },
+    "/api/v1/library/icons": {
+      "post": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "POST /api/v1/library/icons",
+        "description": "Upload a custom library logo (multipart image). Any authenticated user may\nupload — no special role is required to provide a branding glyph; the\nresulting `asset:{uuid}` token is only ever adopted into a node's\n`presentation.icon` through a role-gated promote/import path. The bytes are\nstored under the dedicated `library-icons/{uuid}` keyspace (NOT the\nasset-type/record system). Returns `{ icon: \"asset:{uuid}\" }`.",
+        "operationId": "upload_library_icon",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryIconUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Logo stored; returns its asset token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryIconResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/empty file, oversize, or unsupported type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/icons/{id}": {
+      "get": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "GET /api/v1/library/icons/{id}",
+        "description": "Stream a previously uploaded library logo by its id. Within the auth gate but\nrequires no role — the palette/management views render these inline in an\n`<img>` for any signed-in user. Served with the stored content-type and an\nimmutable long-lived cache (logos are content-addressed by id).",
+        "operationId": "get_library_icon",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Library logo id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logo bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "Logo not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/packs": {
+      "get": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "GET /api/v1/library/packs",
+        "description": "List the library packs visible to the caller: those in the caller's active\nworkspace plus any `system`-origin pack (platform-shipped, visible\neverywhere — mirrors the public library-node visibility rule). Each row\ncarries `nodeCount` (the number of `is_latest` library-node families it\nowns) and `myEffectiveRole` so the management view can gate Import/Delete to\n`admin`+.",
+        "operationId": "list_packs",
+        "responses": {
+          "200": {
+            "description": "Visible library packs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LibraryPackSummary"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/packs/export": {
+      "get": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "GET /api/v1/library/packs/export",
+        "description": "Assemble a portable [`PackBundle`] from existing library nodes — by `packId`\n(exact) or by `vendor` (every visible library node with that\n`presentation.vendor`). Each node's coordinate/name/description/presentation/\ngraph are emitted verbatim from the DB row; any `presentation.icon` of the\nform `asset:{uuid}` has its bytes loaded from S3 and embedded as a\n[`PackAsset`]. The result is import-ready (symmetric round-trip).",
+        "operationId": "export_pack",
+        "parameters": [
+          {
+            "name": "pack_id",
+            "in": "query",
+            "description": "Export the pack with this id (preferred — exact).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "description": "Export every visible library node carrying this `presentation.vendor`\n(fallback when the nodes were promoted ad-hoc with no `pack_id`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assembled pack bundle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackBundle"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither packId nor vendor supplied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pack not found / no matching nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/packs/import": {
+      "post": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "POST /api/v1/library/packs/import",
+        "description": "Import a self-contained [`PackBundle`] into the caller's active workspace.\nWorkspace Admin/Owner only. ALL-OR-NOTHING: the pack row + every node + every\nasset commit together or not at all. Each node's graph is RECOMPILED through\nthe same path the seeder uses (no AIR is carried); coordinate format +\ncategory are validated; coordinate uniqueness within the `workspace` origin\nis enforced (409 on clash). Asset bytes are re-stored under fresh logo ids\nand the node's `presentation.icon` token is rewritten to point at the new id.",
+        "operationId": "import_pack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackBundle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Pack imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bundle / coordinate / category / origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks workspace Admin/Owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Pack or node coordinate already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/packs/{id}": {
+      "get": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "GET /api/v1/library/packs/{id}",
+        "description": "Pack detail plus the library nodes it owns (latest version of each family,\nin the same descriptor shape the palette consumes). Visible when the pack is\nin the caller's workspace or is `system`-origin.",
+        "operationId": "get_pack",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pack id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pack detail + its library nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryPackDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pack not found / not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library-packs"
+        ],
+        "summary": "DELETE /api/v1/library/packs/{id}",
+        "description": "Remove a pack and its library-node families. Workspace Admin/Owner only.\nREFUSES (409) when any of the pack's nodes is still embedded as a frozen\nsub-workflow in another template's graph (best-effort in-use check — see\nbelow). Otherwise deletes the node families (all versions) + the pack row,\ntransactionally.\n\n## In-use check (best-effort)\n\nA library node is dropped onto a canvas as a `sub_workflow` node stamped with\nthe node's `sourceCoordinate` (decision 12). We refuse the delete if any OTHER\ntemplate's `graph` JSON references one of this pack's coordinates as a\nsub-workflow `sourceCoordinate`. There is no dedicated reference-count table\nyet, so this scans the graph JSONB; it is intentionally conservative (a stale\ndraft referencing the coordinate also blocks). `system`-origin packs are never\ndeletable via this endpoint (seed-managed).",
+        "operationId": "delete_pack",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pack id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Pack deleted"
+          },
+          "403": {
+            "description": "Caller lacks workspace Admin/Owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pack not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A pack node is still referenced by a consumer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/upgrade-preview": {
       "get": {
         "tags": [
@@ -24189,6 +24580,33 @@
           }
         }
       },
+      "LibraryIconResponse": {
+        "type": "object",
+        "description": "Response of `POST /api/v1/library/icons`: the `asset:{uuid}` token to drop\ninto a node's `presentation.icon`.",
+        "required": [
+          "icon"
+        ],
+        "properties": {
+          "icon": {
+            "type": "string",
+            "description": "The custom-logo token, e.g. `asset:550e8400-e29b-41d4-a716-446655440000`."
+          }
+        }
+      },
+      "LibraryIconUpload": {
+        "type": "object",
+        "description": "Multipart upload body for `POST /api/v1/library/icons` (OpenAPI shape only).",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "The image file (png/jpeg/webp/gif/svg+xml, ≤ 1 MiB)."
+          }
+        }
+      },
       "LibraryNodeDescriptor": {
         "type": "object",
         "description": "A library node as the editor palette consumes it: the stable coordinate,\ndisplay copy, branding, provenance, lifecycle, and the family + version a\ndrop should pin to. Mirrors the `NodeDescriptor` role for primitives, but\ncarries the embed coordinate instead of a wire name.",
@@ -24260,6 +24678,112 @@
             "description": "Current latest version of the family; a drop pins to this version."
           }
         }
+      },
+      "LibraryPack": {
+        "type": "object",
+        "description": "A `library_packs` row, as stored. Read model for the list/detail endpoints.",
+        "required": [
+          "id",
+          "workspaceId",
+          "vendor",
+          "slug",
+          "version",
+          "name",
+          "description",
+          "origin",
+          "installedAt"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "installedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "installedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Trust axis: `system` | `workspace` | `community`."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "LibraryPackDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LibraryPack"
+          },
+          {
+            "type": "object",
+            "required": [
+              "nodes"
+            ],
+            "properties": {
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LibraryNodeDescriptor"
+                },
+                "description": "The pack's library nodes (latest version of each family)."
+              }
+            }
+          }
+        ],
+        "description": "`GET /library/packs/{id}` — the pack plus its library-node descriptors\n(the same shape the palette consumes via `node_library`)."
+      },
+      "LibraryPackSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LibraryPack"
+          },
+          {
+            "type": "object",
+            "required": [
+              "nodeCount"
+            ],
+            "properties": {
+              "myEffectiveRole": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Caller's effective role label (`owner|admin|editor|viewer`) on the\npack's workspace — drives the Import/Delete affordance gate. The backend\nstill enforces the role on every mutate path."
+              },
+              "nodeCount": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Number of `is_latest` library-node families belonging to this pack."
+              }
+            }
+          }
+        ],
+        "description": "A pack list row: the stored pack plus the count of library nodes it owns and\nthe caller's effective role (so the management view can gate Import/Delete to\n`admin`+)."
       },
       "LifecycleRequest": {
         "type": "object",
@@ -25865,6 +26389,142 @@
           "fixed",
           "derived"
         ]
+      },
+      "PackAsset": {
+        "type": "object",
+        "description": "A logo/icon blob embedded in a [`PackBundle`]. `ref` is the\n`asset:{uuid}` token a node's `presentation.icon` points at; import re-stores\nthe bytes (minting a fresh id) and rewrites every matching icon token.",
+        "required": [
+          "ref",
+          "mime",
+          "dataBase64"
+        ],
+        "properties": {
+          "dataBase64": {
+            "type": "string",
+            "description": "Base64-encoded bytes."
+          },
+          "mime": {
+            "type": "string",
+            "description": "MIME type (e.g. `image/svg+xml`, `image/png`)."
+          },
+          "ref": {
+            "type": "string",
+            "description": "The `asset:{uuid}` token used as a `presentation.icon` value."
+          }
+        }
+      },
+      "PackBundle": {
+        "type": "object",
+        "description": "A self-contained, portable pack document. Export emits it; import consumes\nit. Symmetric: `export → import` is lossless on the carried fields. The\nper-node AIR / interface JSON is **not** carried — import RECOMPILES each\nnode's graph through the same compile path the seeder uses, so a bundle can\nnever ship stale or hand-tampered AIR.",
+        "required": [
+          "manifest",
+          "nodes"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackAsset"
+            },
+            "description": "Logo/icon bytes referenced by `presentation.icon` tokens of the form\n`asset:{uuid}`. Empty when no node carries an uploaded logo."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/PackManifest"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackNode"
+            }
+          }
+        }
+      },
+      "PackImportResult": {
+        "type": "object",
+        "description": "Response of a successful `POST /library/packs/import`.",
+        "required": [
+          "pack",
+          "nodeCount"
+        ],
+        "properties": {
+          "nodeCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pack": {
+            "$ref": "#/components/schemas/LibraryPack"
+          }
+        }
+      },
+      "PackManifest": {
+        "type": "object",
+        "description": "Pack-level identity in a [`PackBundle`].",
+        "required": [
+          "vendor",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PackNode": {
+        "type": "object",
+        "description": "One library node in a [`PackBundle`]. Carries the authored graph verbatim;\n`air`/`interface` are RECOMPILED on import, never carried.",
+        "required": [
+          "coordinate",
+          "name",
+          "presentation",
+          "graph"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Stable `vendor/slug` coordinate."
+          },
+          "description": {
+            "type": "string"
+          },
+          "files": {
+            "type": "object",
+            "description": "Per-node source files (`node_id` → `filename` → content), e.g. a Python\nstep's `main.py`. The graph references these by name, so they are\nREQUIRED for the import-time recompile to succeed and to re-seed the\neditor doc — the graph JSON alone is not self-contained. `#[serde(default)]`\nkeeps older graph-only bundles parseable (they simply carry no files).",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "description": "`WorkflowGraph` JSON — the authored graph, recompiled on import."
+          },
+          "name": {
+            "type": "string"
+          },
+          "presentation": {
+            "description": "Branding blob (`Presentation` JSON: icon/color/vendor/category/badge).\nKept as raw JSON so import can rewrite an `asset:{uuid}` icon token\nin-place before persisting, without round-tripping the typed shape."
+          }
+        }
       },
       "Page": {
         "type": "object",
@@ -35174,6 +35834,10 @@
     {
       "name": "node-types",
       "description": "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."
+    },
+    {
+      "name": "library-packs",
+      "description": "Library packs — named, importable/exportable bundles of library nodes grouped under one vendor/slug coordinate. Import recompiles each node's graph; export embeds referenced logo blobs as base64. Admin/Owner-gated mutation."
     },
     {
       "name": "health",

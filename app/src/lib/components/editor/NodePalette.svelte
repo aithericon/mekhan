@@ -13,7 +13,7 @@
 		type LibraryNodeDescriptor
 	} from '$lib/editor/library-registry.svelte';
 	import { nodePaletteMeta } from '$lib/editor/node-palette-meta';
-	import { resolveNodeIcon } from '$lib/editor/icon-registry';
+	import NodeIcon from '$lib/editor/NodeIcon.svelte';
 	import type { WorkflowNodeType } from '$lib/types/editor';
 
 	onMount(() => {
@@ -174,7 +174,6 @@
 </script>
 
 {#snippet libraryItem(node: LibraryNodeDescriptor)}
-	{@const Icon = resolveNodeIcon(node.presentation?.icon)}
 	{@const color = node.presentation?.color ?? '#14b8a6'}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
@@ -188,7 +187,7 @@
 			class="flex size-7 shrink-0 items-center justify-center rounded-md"
 			style="background-color: {color}20; color: {color};"
 		>
-			<Icon class="size-4" />
+			<NodeIcon icon={node.presentation?.icon} class="size-4" />
 		</div>
 		<div class="min-w-0 flex-1">
 			<div class="truncate text-sm font-medium text-foreground">{node.name}</div>

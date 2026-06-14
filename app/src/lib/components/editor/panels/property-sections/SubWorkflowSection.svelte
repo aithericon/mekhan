@@ -30,7 +30,7 @@
 	import RefPicker from './RefPicker.svelte';
 	import ChildWorkflowBrowser from '$lib/components/editor/ChildWorkflowBrowser.svelte';
 	import { portToSchemaNode } from '$lib/schema/model';
-	import { resolveNodeIcon } from '$lib/editor/icon-registry';
+	import NodeIcon from '$lib/editor/NodeIcon.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type Port = components['schemas']['Port'];
@@ -112,7 +112,6 @@
 	// Branded read-only header derives. The lifecycle/version hint maps to
 	// presentation.badge — there's no separate deprecation field; "a newer
 	// version exists" is covered by the upgrade prompt instead.
-	const LibraryIcon = $derived(resolveNodeIcon(data.presentation?.icon));
 	const libVendor = $derived(data.presentation?.vendor ?? '');
 	const libColor = $derived(data.presentation?.color ?? undefined);
 	const libBadge = $derived(data.presentation?.badge ?? null);
@@ -353,7 +352,7 @@
 				class="flex size-8 shrink-0 items-center justify-center rounded-md"
 				style={libHeaderStyle}
 			>
-				<LibraryIcon class="size-5" />
+				<NodeIcon icon={data.presentation?.icon} class="size-5" />
 			</span>
 			<div class="min-w-0 flex-1 space-y-0.5">
 				<div class="flex items-center gap-1.5">

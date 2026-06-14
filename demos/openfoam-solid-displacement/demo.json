@@ -12,5 +12,12 @@
     "vendor": "OpenFOAM",
     "category": "CFD",
     "badge": "vendor"
+  },
+  "pack": {
+    "vendor": "openfoam",
+    "slug": "openfoam-core",
+    "version": "1",
+    "name": "OpenFOAM Core",
+    "description": "Core OpenFOAM integration nodes shipped with the platform."
   }
 }

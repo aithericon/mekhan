@@ -2349,6 +2349,170 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library/icons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/library/icons
+         * @description Upload a custom library logo (multipart image). Any authenticated user may
+         *     upload — no special role is required to provide a branding glyph; the
+         *     resulting `asset:{uuid}` token is only ever adopted into a node's
+         *     `presentation.icon` through a role-gated promote/import path. The bytes are
+         *     stored under the dedicated `library-icons/{uuid}` keyspace (NOT the
+         *     asset-type/record system). Returns `{ icon: "asset:{uuid}" }`.
+         */
+        post: operations["upload_library_icon"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/icons/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/library/icons/{id}
+         * @description Stream a previously uploaded library logo by its id. Within the auth gate but
+         *     requires no role — the palette/management views render these inline in an
+         *     `<img>` for any signed-in user. Served with the stored content-type and an
+         *     immutable long-lived cache (logos are content-addressed by id).
+         */
+        get: operations["get_library_icon"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/library/packs
+         * @description List the library packs visible to the caller: those in the caller's active
+         *     workspace plus any `system`-origin pack (platform-shipped, visible
+         *     everywhere — mirrors the public library-node visibility rule). Each row
+         *     carries `nodeCount` (the number of `is_latest` library-node families it
+         *     owns) and `myEffectiveRole` so the management view can gate Import/Delete to
+         *     `admin`+.
+         */
+        get: operations["list_packs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/packs/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/library/packs/export
+         * @description Assemble a portable [`PackBundle`] from existing library nodes — by `packId`
+         *     (exact) or by `vendor` (every visible library node with that
+         *     `presentation.vendor`). Each node's coordinate/name/description/presentation/
+         *     graph are emitted verbatim from the DB row; any `presentation.icon` of the
+         *     form `asset:{uuid}` has its bytes loaded from S3 and embedded as a
+         *     [`PackAsset`]. The result is import-ready (symmetric round-trip).
+         */
+        get: operations["export_pack"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/packs/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/library/packs/import
+         * @description Import a self-contained [`PackBundle`] into the caller's active workspace.
+         *     Workspace Admin/Owner only. ALL-OR-NOTHING: the pack row + every node + every
+         *     asset commit together or not at all. Each node's graph is RECOMPILED through
+         *     the same path the seeder uses (no AIR is carried); coordinate format +
+         *     category are validated; coordinate uniqueness within the `workspace` origin
+         *     is enforced (409 on clash). Asset bytes are re-stored under fresh logo ids
+         *     and the node's `presentation.icon` token is rewritten to point at the new id.
+         */
+        post: operations["import_pack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/packs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/library/packs/{id}
+         * @description Pack detail plus the library nodes it owns (latest version of each family,
+         *     in the same descriptor shape the palette consumes). Visible when the pack is
+         *     in the caller's workspace or is `system`-origin.
+         */
+        get: operations["get_pack"];
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/library/packs/{id}
+         * @description Remove a pack and its library-node families. Workspace Admin/Owner only.
+         *     REFUSES (409) when any of the pack's nodes is still embedded as a frozen
+         *     sub-workflow in another template's graph (best-effort in-use check — see
+         *     below). Otherwise deletes the node families (all versions) + the pack row,
+         *     transactionally.
+         *
+         *     ## In-use check (best-effort)
+         *
+         *     A library node is dropped onto a canvas as a `sub_workflow` node stamped with
+         *     the node's `sourceCoordinate` (decision 12). We refuse the delete if any OTHER
+         *     template's `graph` JSON references one of this pack's coordinates as a
+         *     sub-workflow `sourceCoordinate`. There is no dedicated reference-count table
+         *     yet, so this scans the graph JSONB; it is intentionally conservative (a stale
+         *     draft referencing the coordinate also blocks). `system`-origin packs are never
+         *     deletable via this endpoint (seed-managed).
+         */
+        delete: operations["delete_pack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/library/upgrade-preview": {
         parameters: {
             query?: never;
@@ -9025,6 +9189,22 @@ export interface components {
             request?: unknown;
         };
         /**
+         * @description Response of `POST /api/v1/library/icons`: the `asset:{uuid}` token to drop
+         *     into a node's `presentation.icon`.
+         */
+        LibraryIconResponse: {
+            /** @description The custom-logo token, e.g. `asset:550e8400-e29b-41d4-a716-446655440000`. */
+            icon: string;
+        };
+        /** @description Multipart upload body for `POST /api/v1/library/icons` (OpenAPI shape only). */
+        LibraryIconUpload: {
+            /**
+             * Format: binary
+             * @description The image file (png/jpeg/webp/gif/svg+xml, ≤ 1 MiB).
+             */
+            file: string;
+        };
+        /**
          * @description A library node as the editor palette consumes it: the stable coordinate,
          *     display copy, branding, provenance, lifecycle, and the family + version a
          *     drop should pin to. Mirrors the `NodeDescriptor` role for primitives, but
@@ -9075,6 +9255,50 @@ export interface components {
              * @description Current latest version of the family; a drop pins to this version.
              */
             version: number;
+        };
+        /** @description A `library_packs` row, as stored. Read model for the list/detail endpoints. */
+        LibraryPack: {
+            description: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            installedAt: string;
+            /** Format: uuid */
+            installedBy?: string | null;
+            name: string;
+            /** @description Trust axis: `system` | `workspace` | `community`. */
+            origin: string;
+            slug: string;
+            vendor: string;
+            version: string;
+            /** Format: uuid */
+            workspaceId: string;
+        };
+        /**
+         * @description `GET /library/packs/{id}` — the pack plus its library-node descriptors
+         *     (the same shape the palette consumes via `node_library`).
+         */
+        LibraryPackDetail: components["schemas"]["LibraryPack"] & {
+            /** @description The pack's library nodes (latest version of each family). */
+            nodes: components["schemas"]["LibraryNodeDescriptor"][];
+        };
+        /**
+         * @description A pack list row: the stored pack plus the count of library nodes it owns and
+         *     the caller's effective role (so the management view can gate Import/Delete to
+         *     `admin`+).
+         */
+        LibraryPackSummary: components["schemas"]["LibraryPack"] & {
+            /**
+             * @description Caller's effective role label (`owner|admin|editor|viewer`) on the
+             *     pack's workspace — drives the Import/Delete affordance gate. The backend
+             *     still enforces the role on every mutate path.
+             */
+            myEffectiveRole?: string | null;
+            /**
+             * Format: int64
+             * @description Number of `is_latest` library-node families belonging to this pack.
+             */
+            nodeCount: number;
         };
         /** @description Body for `POST /api/v1/templates/{id}/lifecycle`. */
         LifecycleRequest: {
@@ -9962,6 +10186,79 @@ export interface components {
          * @enum {string}
          */
         OutputAuthoring: "free" | "fixed" | "derived";
+        /**
+         * @description A logo/icon blob embedded in a [`PackBundle`]. `ref` is the
+         *     `asset:{uuid}` token a node's `presentation.icon` points at; import re-stores
+         *     the bytes (minting a fresh id) and rewrites every matching icon token.
+         */
+        PackAsset: {
+            /** @description Base64-encoded bytes. */
+            dataBase64: string;
+            /** @description MIME type (e.g. `image/svg+xml`, `image/png`). */
+            mime: string;
+            /** @description The `asset:{uuid}` token used as a `presentation.icon` value. */
+            ref: string;
+        };
+        /**
+         * @description A self-contained, portable pack document. Export emits it; import consumes
+         *     it. Symmetric: `export → import` is lossless on the carried fields. The
+         *     per-node AIR / interface JSON is **not** carried — import RECOMPILES each
+         *     node's graph through the same compile path the seeder uses, so a bundle can
+         *     never ship stale or hand-tampered AIR.
+         */
+        PackBundle: {
+            /**
+             * @description Logo/icon bytes referenced by `presentation.icon` tokens of the form
+             *     `asset:{uuid}`. Empty when no node carries an uploaded logo.
+             */
+            assets?: components["schemas"]["PackAsset"][];
+            manifest: components["schemas"]["PackManifest"];
+            nodes: components["schemas"]["PackNode"][];
+        };
+        /** @description Response of a successful `POST /library/packs/import`. */
+        PackImportResult: {
+            /** Format: int64 */
+            nodeCount: number;
+            pack: components["schemas"]["LibraryPack"];
+        };
+        /** @description Pack-level identity in a [`PackBundle`]. */
+        PackManifest: {
+            description?: string;
+            name: string;
+            slug: string;
+            vendor: string;
+            version?: string;
+        };
+        /**
+         * @description One library node in a [`PackBundle`]. Carries the authored graph verbatim;
+         *     `air`/`interface` are RECOMPILED on import, never carried.
+         */
+        PackNode: {
+            /** @description Stable `vendor/slug` coordinate. */
+            coordinate: string;
+            description?: string;
+            /**
+             * @description Per-node source files (`node_id` → `filename` → content), e.g. a Python
+             *     step's `main.py`. The graph references these by name, so they are
+             *     REQUIRED for the import-time recompile to succeed and to re-seed the
+             *     editor doc — the graph JSON alone is not self-contained. `#[serde(default)]`
+             *     keeps older graph-only bundles parseable (they simply carry no files).
+             */
+            files?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            /** @description `WorkflowGraph` JSON — the authored graph, recompiled on import. */
+            graph: unknown;
+            name: string;
+            /**
+             * @description Branding blob (`Presentation` JSON: icon/color/vendor/category/badge).
+             *     Kept as raw JSON so import can rewrite an `asset:{uuid}` icon token
+             *     in-place before persisting, without round-tripping the typed shape.
+             */
+            presentation: unknown;
+        };
         /**
          * @description A page row. `attached_kind`/`attached_id` (singleton tab on a template or
          *     instance) and `folder_id` (free page) are mutually exclusive.
@@ -19753,6 +20050,322 @@ export interface operations {
             };
             /** @description Library node not found / not readable */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upload_library_icon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["LibraryIconUpload"];
+            };
+        };
+        responses: {
+            /** @description Logo stored; returns its asset token */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryIconResponse"];
+                };
+            };
+            /** @description Missing/empty file, oversize, or unsupported type */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_library_icon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Library logo id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logo bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Logo not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_packs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible library packs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPackSummary"][];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    export_pack: {
+        parameters: {
+            query?: {
+                /** @description Export the pack with this id (preferred — exact). */
+                pack_id?: string;
+                /**
+                 * @description Export every visible library node carrying this `presentation.vendor`
+                 *     (fallback when the nodes were promoted ad-hoc with no `pack_id`).
+                 */
+                vendor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Assembled pack bundle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackBundle"];
+                };
+            };
+            /** @description Neither packId nor vendor supplied */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pack not found / no matching nodes */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    import_pack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackBundle"];
+            };
+        };
+        responses: {
+            /** @description Pack imported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackImportResult"];
+                };
+            };
+            /** @description Invalid bundle / coordinate / category / origin */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pack or node coordinate already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_pack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pack id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pack detail + its library nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPackDetail"];
+                };
+            };
+            /** @description Pack not found / not visible */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_pack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pack id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pack deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pack not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A pack node is still referenced by a consumer */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
