@@ -8,6 +8,7 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import NavMenu, { type NavMenuItem } from '$lib/components/NavMenu.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
+	import DevIdentityPicker from '$lib/components/DevIdentityPicker.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
@@ -87,6 +88,7 @@
 			<NavMenu label="Internals" items={internalItems} testid="nav-internals" muted />
 			<div class="ml-auto flex items-center gap-1">
 				{#if auth.isAuthenticated}
+					<DevIdentityPicker />
 					<WorkspacePicker />
 					<span class="h-4 w-px bg-border" aria-hidden="true"></span>
 				{/if}
