@@ -6,7 +6,7 @@
   toolbar self-disables when the editor is not editable.
 -->
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, type Snippet } from 'svelte';
 	import type { Editor } from '@tiptap/core';
 	import Bold from '@lucide/svelte/icons/bold';
 	import Italic from '@lucide/svelte/icons/italic';
@@ -29,10 +29,13 @@
 
 	let {
 		editor,
-		class: className
+		class: className,
+		actions
 	}: {
 		editor: Editor | null;
 		class?: string;
+		/** Optional host-supplied buttons rendered at the toolbar's trailing edge. */
+		actions?: Snippet;
 	} = $props();
 
 	// A monotonically-bumped tick that forces the `active`/`editable` getters to
@@ -168,4 +171,9 @@
 	)}
 	{@render tool('Table', TableIcon, () => editor && cmd.insertTable(editor), false)}
 	{@render tool('Divider', Minus, () => editor && cmd.setHorizontalRule(editor), false)}
+
+	{#if actions}
+		<Separator orientation="vertical" class="mx-1 h-6" />
+		{@render actions()}
+	{/if}
 </div>

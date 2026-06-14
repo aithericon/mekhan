@@ -30,12 +30,18 @@
 	import { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import { yjsWsBase } from '$lib/yjs/session';
 	import { EdraEditor, EdraToolbar, EdraBubbleMenu } from '$lib/components/edra';
+	import FileBox from '@lucide/svelte/icons/file-box';
+	import { Button } from '$lib/components/ui/button';
+	import { ArtifactEmbed } from './artifact-embed/artifact-embed';
+	import InsertArtifactDialog from './artifact-embed/InsertArtifactDialog.svelte';
+	import type { ArtifactEmbedContext } from './artifact-embed/embed-context';
 
 	let {
 		pageId,
 		editable,
 		placeholder = 'Write something…',
 		showToolbar = true,
+		embedContext = null,
 		onReady
 	}: {
 		pageId: string;
@@ -43,8 +49,23 @@
 		placeholder?: string;
 		/** Render the formatting toolbar above the content (default true). */
 		showToolbar?: boolean;
+		/**
+		 * Run context enabling the "Insert media" block (instance Report only).
+		 * When set, the editor gains the `artifactEmbed` node and the toolbar
+		 * grows an Insert button. Absent on free pages / template Notes.
+		 */
+		embedContext?: ArtifactEmbedContext | null;
 		onReady?: (editor: Editor) => void;
 	} = $props();
+
+	// Inject the run-media block only when the host supplied a context — keeps
+	// the base editor generic. The context is stable for the editor's lifetime;
+	// $derived just silences the prop-read lint (the editor is built once).
+	const extraExtensions = $derived(
+		embedContext ? [ArtifactEmbed.configure({ context: embedContext })] : undefined
+	);
+
+	let insertOpen = $state(false);
 
 	// Created client-only in onMount — never during SSR.
 	let doc: Y.Doc | null = null;
@@ -100,7 +121,23 @@
 <div class="flex h-full min-h-0 flex-col">
 	{#if showToolbar && editable}
 		<div class="shrink-0 pb-2">
-			<EdraToolbar {editor} />
+			<EdraToolbar {editor}>
+				{#snippet actions()}
+					{#if embedContext}
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon-sm"
+							title="Insert run media"
+							aria-label="Insert run media"
+							disabled={!editor}
+							onclick={() => (insertOpen = true)}
+						>
+							<FileBox />
+						</Button>
+					{/if}
+				{/snippet}
+			</EdraToolbar>
 		</div>
 	{/if}
 
@@ -109,7 +146,7 @@
 			<!-- {#key pageId} guards against a stale editor surviving a pageId swap
 			     within the same mounted component (call sites also key, belt-and-suspenders). -->
 			{#key pageId}
-				<EdraEditor {fragment} {editable} {placeholder} onready={handleReady} />
+				<EdraEditor {fragment} {editable} {placeholder} {extraExtensions} onready={handleReady} />
 			{/key}
 			<EdraBubbleMenu {editor} />
 		{:else}
@@ -117,3 +154,7 @@
 		{/if}
 	</div>
 </div>
+
+{#if embedContext}
+	<InsertArtifactDialog bind:open={insertOpen} {editor} context={embedContext} />
+{/if}

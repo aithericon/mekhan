@@ -24,6 +24,7 @@
 		fragment,
 		editable = true,
 		placeholder,
+		extraExtensions,
 		class: className,
 		onready
 	}: {
@@ -31,6 +32,8 @@
 		fragment: Y.XmlFragment;
 		editable?: boolean;
 		placeholder?: string;
+		/** Host-supplied extra nodes/extensions (e.g. the run-media embed). */
+		extraExtensions?: Parameters<typeof pageExtensions>[0]['extraExtensions'];
 		class?: string;
 		/** Fired once the Editor is constructed. */
 		onready?: (editor: Editor) => void;
@@ -47,7 +50,7 @@
 		const instance = new Editor({
 			element: el,
 			editable,
-			extensions: pageExtensions({ fragment, placeholder }),
+			extensions: pageExtensions({ fragment, placeholder, extraExtensions }),
 			editorProps: {
 				attributes: {
 					// `.edra-content` is the styling hook (content.css); ProseMirror

@@ -27,8 +27,14 @@
 		 * the host card supplies the chrome and gates on artifact presence.
 		 */
 		renderableOnly?: boolean;
+		/**
+		 * Restrict the rendered panels to these group keys (e.g.
+		 * `['hint:gp-posterior']`). Used by the Report's group-mode embed block
+		 * to show one render bucket. Undefined → all groups (default).
+		 */
+		groupFilter?: string[];
 	}
-	let { store, renderableOnly = false }: Props = $props();
+	let { store, renderableOnly = false, groupFilter }: Props = $props();
 
 	/**
 	 * Per group (by render_hint / MIME / category):
@@ -81,6 +87,11 @@
 		});
 		return out;
 	});
+
+	// Optional group-key whitelist (group-mode embed renders one bucket).
+	const visibleGroups = $derived(
+		groupFilter && groupFilter.length ? groups.filter((g) => groupFilter.includes(g.key)) : groups
+	);
 
 	// Selected index per group (keyed by group.key). Defaults to latest on
 	// first load; sticky when user scrubs but doesn't auto-advance.
@@ -151,7 +162,7 @@
 		</div>
 	{/if}
 
-	{#if groups.length === 0}
+	{#if visibleGroups.length === 0}
 		{#if !renderableOnly && store.artifacts.length === 0}
 			<div
 				class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-8"
@@ -162,7 +173,7 @@
 			</div>
 		{/if}
 	{:else}
-		{#each groups as g (g.key)}
+		{#each visibleGroups as g (g.key)}
 			{@const idx = indexFor(g)}
 			{@const entry = g.entries[idx]}
 			{@const Renderer = pickRenderer(entry)}
