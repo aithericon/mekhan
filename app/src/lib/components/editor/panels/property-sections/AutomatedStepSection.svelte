@@ -21,6 +21,7 @@
 		loadBackends
 	} from '$lib/editor/backend-registry.svelte';
 	import { BACKEND_PANELS } from '$lib/editor/backend-panels';
+	import { iconByName } from '$lib/editor/backend-icons';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
 	type Port = components['schemas']['Port'];
@@ -177,12 +178,22 @@
 		}}
 		disabled={readonly}
 	>
-		<Select.Trigger disabled={readonly}>
+		<Select.Trigger
+			disabled={readonly}
+			class="flex items-center gap-2"
+			data-testid="backend-type-trigger"
+		>
+			{@const TriggerIcon = iconByName(currentBackend?.icon)}
+			<TriggerIcon class="size-4 shrink-0 text-muted-foreground" />
 			{currentBackend?.displayName ?? data.executionSpec.backendType}
 		</Select.Trigger>
 		<Select.Content>
 			{#each backends as b (b.name)}
-				<Select.Item value={b.name} label={b.displayName} />
+				{@const ItemIcon = iconByName(b.icon)}
+				<Select.Item value={b.name} label={b.displayName} data-testid="backend-option-{b.name}">
+					<ItemIcon class="size-4 shrink-0 text-muted-foreground" />
+					{b.displayName}
+				</Select.Item>
 			{/each}
 		</Select.Content>
 	</Select.Root>

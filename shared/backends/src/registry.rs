@@ -34,7 +34,10 @@ pub struct BackendMeta {
     pub wire_name: &'static str,
     /// Human label shown in the editor's backend picker.
     pub display_name: &'static str,
-    /// Lucide-style icon name (frontend resolves to a component).
+    /// Icon name the frontend resolves to a component (see
+    /// `app/src/lib/editor/backend-icons.ts`). Either a brand slug for backends
+    /// with a recognizable product mark (`python`, `docker`, `postgresql`,
+    /// `prometheus`, `grafana`, `ros`) or a generic Lucide glyph name otherwise.
     pub icon: &'static str,
     /// How the compiler lowers a step of this backend into Petri. Drives
     /// the executor's `ExecutorJob` filter — backends with
@@ -67,7 +70,7 @@ pub const PYTHON_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Python,
     wire_name: "python",
     display_name: "Python",
-    icon: "code",
+    icon: "python",
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
@@ -89,7 +92,7 @@ pub const DOCKER_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Docker,
     wire_name: "docker",
     display_name: "Docker",
-    icon: "container",
+    icon: "docker",
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
@@ -185,7 +188,7 @@ pub const POSTGRES_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Postgres,
     wire_name: "postgres",
     display_name: "Postgres",
-    icon: "database",
+    icon: "postgresql",
     dispatch_mode: DispatchMode::ExecutorJob,
     // Inline-only: the bound connection pool is process-local to the executor
     // daemon. No Scheduled (Nomad/Slurm) toggle.
@@ -200,7 +203,7 @@ pub const LOKI_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Loki,
     wire_name: "loki",
     display_name: "Loki Query",
-    icon: "scroll-text",
+    icon: "grafana",
     dispatch_mode: DispatchMode::ExecutorJob,
     // Inline-only: the backend issues an in-process HTTP request from the
     // executor daemon (like postgres/http). No Scheduled (Nomad/Slurm) toggle.
@@ -215,7 +218,7 @@ pub const PROMETHEUS_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Prometheus,
     wire_name: "prometheus",
     display_name: "Prometheus Query",
-    icon: "activity",
+    icon: "prometheus",
     dispatch_mode: DispatchMode::ExecutorJob,
     // Inline-only: the backend issues an in-process HTTP request from the
     // executor daemon (like postgres/http/loki). No Scheduled (Nomad/Slurm) toggle.
@@ -230,7 +233,7 @@ pub const ROS_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Ros,
     wire_name: "ros",
     display_name: "ROS",
-    icon: "bot",
+    icon: "ros",
     dispatch_mode: DispatchMode::ExecutorJob,
     // Inline-only: the rosbridge endpoint is reached in-process from the
     // executor daemon (like postgres/http/loki/prometheus). No Scheduled
