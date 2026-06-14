@@ -8,6 +8,7 @@
 	import SkipForward from '@lucide/svelte/icons/skip-forward';
 	import Maximize from '@lucide/svelte/icons/maximize';
 	import MediaLightbox from './MediaLightbox.svelte';
+	import ArtifactProvenance from '$lib/components/catalogue/ArtifactProvenance.svelte';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import type { createProcessLiveStore } from '$lib/stores/process-live.svelte';
 	import {
@@ -33,8 +34,13 @@
 		 * to show one render bucket. Undefined → all groups (default).
 		 */
 		groupFilter?: string[];
+		/**
+		 * Show a provenance line (step / category / size / time / producer params)
+		 * under each entry. On for Report embeds; off for the Process Overview card.
+		 */
+		showProvenance?: boolean;
 	}
-	let { store, renderableOnly = false, groupFilter }: Props = $props();
+	let { store, renderableOnly = false, groupFilter, showProvenance = false }: Props = $props();
 
 	/**
 	 * Per group (by render_hint / MIME / category):
@@ -257,6 +263,9 @@
 
 				{#if Renderer}
 					<Renderer {entry} />
+				{/if}
+				{#if showProvenance}
+					<ArtifactProvenance {entry} class="px-0.5" />
 				{/if}
 			</div>
 		{/each}

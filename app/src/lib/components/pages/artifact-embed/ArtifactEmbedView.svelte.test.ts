@@ -55,6 +55,9 @@ function attrs(partial: Partial<ArtifactEmbedAttrs> = {}): ArtifactEmbedAttrs {
 		renderHint: '',
 		category: '',
 		processStep: '',
+		createdAt: '',
+		sizeBytes: '',
+		userMetaJson: '',
 		caption: '',
 		...partial
 	};
@@ -108,6 +111,32 @@ describe('ArtifactEmbedView', () => {
 		expect(ctx.getArtifactStore).not.toHaveBeenCalled();
 		// header (and the image renderer) show the artifact name → renderer mounted
 		expect(getAllByText('gp_final_state.png').length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('shows provenance (step / category / producer params) on a pinned artifact', () => {
+		const { getByText } = render(ArtifactEmbedView, {
+			props: {
+				attrs: attrs({
+					mode: 'artifact',
+					artifactId: 'art-1',
+					artifactName: 'firing_r76.png',
+					storagePath: 'artifacts/exec-1/plot/firing_r76.png',
+					mimeType: 'image/png',
+					category: 'plot',
+					processStep: '4',
+					sizeBytes: '20480',
+					userMetaJson: JSON.stringify({ render_hint: null, ramp: 76, hold: 1260 })
+				}),
+				editable: true,
+				context: contextWith([]),
+				onDelete: () => {}
+			}
+		});
+		expect(getByText(/Step 4/)).toBeTruthy();
+		expect(getByText('plot')).toBeTruthy();
+		// producer params surfaced from user_metadata (render_hint excluded)
+		expect(getByText('ramp: 76')).toBeTruthy();
+		expect(getByText('hold: 1260')).toBeTruthy();
 	});
 
 	it('uses the group label as the header for a group embed', () => {

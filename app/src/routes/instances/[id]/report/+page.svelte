@@ -58,7 +58,10 @@
 	const editable = $derived(roleAtLeast(ctx.instance?.my_effective_role, 'editor'));
 </script>
 
-<div class="absolute inset-0 overflow-y-auto">
+<!-- No scroll here: PageEditor owns a FULL-WIDTH scroll container (contentClass
+     re-centers the content) so the scrollbar rides the screen edge, not the
+     middle of the centered column. -->
+<div class="absolute inset-0 overflow-hidden">
 	{#if loading && !pageRecord}
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 			Loading report…
@@ -71,12 +74,13 @@
 		</div>
 	{:else if pageRecord}
 		{@const p = pageRecord}
-		<div class="mx-auto h-full w-full max-w-4xl px-6 py-6">
+		<div class="h-full w-full py-6">
 			{#key p.id}
 				<PageEditor
 					pageId={p.id}
 					{editable}
 					{embedContext}
+					contentClass="mx-auto w-full max-w-4xl px-6"
 					placeholder={editable
 						? 'Write a report for this run…'
 						: 'No report has been written for this run.'}

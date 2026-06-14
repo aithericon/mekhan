@@ -103,6 +103,9 @@
 			renderHint: '',
 			category: '',
 			processStep: '',
+			createdAt: '',
+			sizeBytes: '',
+			userMetaJson: '',
 			caption: '',
 			...partial
 		};
@@ -130,7 +133,12 @@
 			mimeType: e.mime_type ?? '',
 			renderHint: hint,
 			category: e.category ?? '',
-			processStep: e.process_step ?? ''
+			processStep: e.process_step ?? '',
+			// Pin the provenance snapshot so the block keeps its origin even after
+			// the live buffer rolls past this artifact.
+			createdAt: e.created_at ?? '',
+			sizeBytes: e.size_bytes != null ? String(e.size_bytes) : '',
+			userMetaJson: e.user_metadata ? JSON.stringify(e.user_metadata) : ''
 		});
 	}
 </script>
