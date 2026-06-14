@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import GitFork from '@lucide/svelte/icons/git-fork';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { forkLibraryNode } from '$lib/api/client';
 	import { loadNodeTypes, nodeList } from '$lib/editor/node-registry.svelte';
 	import {
@@ -33,6 +35,14 @@
 	let query = $state('');
 	const q = $derived(query.trim().toLowerCase());
 
+	// Active category facet — null = all categories. Click a chip to narrow.
+	let activeCategory = $state<string | null>(null);
+	// Collapsed groups, keyed by `cat` (category header) and `cat\0vendor`
+	// (vendor sub-header). Membership = COLLAPSED; absent = expanded. A Set so the
+	// default (expand-all) needs no pre-population and toggling is O(1).
+	// SvelteSet from 'svelte/reactivity' so .add/.delete are reactive.
+	let collapsed = $state(new SvelteSet<string>());
+
 	const filteredPrimitives = $derived.by(() => {
 		if (!q) return primitives;
 		return primitives.filter(
@@ -40,9 +50,21 @@
 		);
 	});
 
+	// Category chip vocab, derived from the loaded (ACL-filtered) catalogue so it
+	// only ever offers categories the caller can actually see. Alphabetised.
+	const libraryCategories = $derived.by(() => {
+		const set = new Set<string>();
+		for (const n of library) set.add(n.presentation?.category ?? 'Other');
+		return [...set].sort((a, b) => a.localeCompare(b));
+	});
+
 	const filteredLibrary = $derived.by(() => {
-		if (!q) return library;
-		return library.filter(
+		let items = library;
+		if (activeCategory) {
+			items = items.filter((n) => (n.presentation?.category ?? 'Other') === activeCategory);
+		}
+		if (!q) return items;
+		return items.filter(
 			(n) =>
 				n.name.toLowerCase().includes(q) ||
 				n.coordinate.toLowerCase().includes(q) ||
@@ -85,6 +107,36 @@
 	const nothingMatches = $derived(
 		q.length > 0 && filteredPrimitives.length === 0 && filteredLibrary.length === 0
 	);
+
+	// When filtering/narrowed/few-groups, force-expand everything; otherwise honor
+	// the user's `collapsed` set. `forceExpand` wins so a search never hides a hit.
+	const forceExpand = $derived(
+		q.length > 0 || activeCategory !== null || libraryGroups.length <= 2
+	);
+
+	function isOpen(key: string): boolean {
+		return forceExpand || !collapsed.has(key);
+	}
+	function toggle(key: string) {
+		// Only meaningful when not force-expanded; while forceExpand is on the
+		// chevrons are inert (still rendered open). Toggling the underlying set is
+		// harmless and is respected once forceExpand turns off.
+		if (collapsed.has(key)) collapsed.delete(key);
+		else collapsed.add(key);
+	}
+
+	// One-shot default: collapse all category groups on first load when the list
+	// is long enough to need it. Runs once (guarded by `seededDefaults`).
+	let seededDefaults = $state(false);
+	$effect(() => {
+		if (seededDefaults) return;
+		if (libraryGroups.length > 2 && library.length > 0) {
+			for (const g of libraryGroups) collapsed.add(g.category);
+			seededDefaults = true;
+		} else if (library.length > 0) {
+			seededDefaults = true; // small list: leave expanded, don't re-seed
+		}
+	});
 
 	function onPrimitiveDragStart(event: DragEvent, nodeType: WorkflowNodeType) {
 		if (!event.dataTransfer) return;
@@ -242,6 +294,31 @@
 				Library
 			</div>
 
+			{#if libraryCategories.length > 1}
+				<div class="flex flex-wrap gap-1 px-2.5 pb-1 pt-1" data-testid="palette-category-chips">
+					<button
+						type="button"
+						class="rounded-full border px-2 py-0.5 text-[11px] transition-colors {activeCategory ===
+						null
+							? 'border-foreground bg-foreground text-background'
+							: 'border-border text-muted-foreground hover:bg-accent'}"
+						onclick={() => (activeCategory = null)}
+						data-testid="palette-category-all">All</button
+					>
+					{#each libraryCategories as cat (cat)}
+						<button
+							type="button"
+							class="rounded-full border px-2 py-0.5 text-[11px] transition-colors {activeCategory ===
+							cat
+								? 'border-foreground bg-foreground text-background'
+								: 'border-border text-muted-foreground hover:bg-accent'}"
+							onclick={() => (activeCategory = activeCategory === cat ? null : cat)}
+							data-testid="palette-category-chip-{cat}">{cat}</button
+						>
+					{/each}
+				</div>
+			{/if}
+
 			{#if recentItems.length > 0}
 				<div class="px-2.5 pb-0.5 pt-1 text-xs font-medium text-muted-foreground/80">Recent</div>
 				<div class="space-y-1">
@@ -252,22 +329,58 @@
 			{/if}
 
 			{#each libraryGroups as group (group.category)}
-				<div class="px-2.5 pb-0.5 pt-2 text-xs font-medium text-muted-foreground/80">
-					{group.category}
-				</div>
-				{#each group.vendors as v (v.vendor)}
-					{#if group.vendors.length > 1 || v.vendor !== 'Unknown'}
-						<div class="px-2.5 pb-0.5 pt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground/60">
-							{v.vendor}
-						</div>
-					{/if}
-					<div class="space-y-1">
-						{#each v.items as node (node.coordinate)}
-							{@render libraryItem(node)}
-						{/each}
-					</div>
-				{/each}
+				{@const catOpen = isOpen(group.category)}
+				<button
+					type="button"
+					class="flex w-full items-center gap-1 px-2.5 pb-0.5 pt-2 text-left text-xs font-medium text-muted-foreground/80 hover:text-foreground"
+					onclick={() => toggle(group.category)}
+					aria-expanded={catOpen}
+					data-testid="palette-category-group-{group.category}"
+				>
+					<ChevronRight class="size-3 shrink-0 transition-transform {catOpen ? 'rotate-90' : ''}" />
+					<span class="truncate">{group.category}</span>
+					<span class="ml-auto text-[11px] tabular-nums text-muted-foreground/50">
+						{group.vendors.reduce((sum, v) => sum + v.items.length, 0)}
+					</span>
+				</button>
+				{#if catOpen}
+					{#each group.vendors as v (v.vendor)}
+						{#if group.vendors.length > 1 || v.vendor !== 'Unknown'}
+							{@const vKey = `${group.category}\0${v.vendor}`}
+							{@const vOpen = isOpen(vKey)}
+							<button
+								type="button"
+								class="flex w-full items-center gap-1 px-2.5 pb-0.5 pl-4 pt-0.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground/60 hover:text-foreground"
+								onclick={() => toggle(vKey)}
+								aria-expanded={vOpen}
+								data-testid="palette-vendor-group-{group.category}-{v.vendor}"
+							>
+								<ChevronRight
+									class="size-3 shrink-0 transition-transform {vOpen ? 'rotate-90' : ''}"
+								/>
+								<span class="truncate">{v.vendor}</span>
+							</button>
+							{#if vOpen}
+								<div class="space-y-1">
+									{#each v.items as node (node.coordinate)}{@render libraryItem(node)}{/each}
+								</div>
+							{/if}
+						{:else}
+							<!-- single unnamed vendor: no sub-header, render items under the category -->
+							<div class="space-y-1">
+								{#each v.items as node (node.coordinate)}{@render libraryItem(node)}{/each}
+							</div>
+						{/if}
+					{/each}
+				{/if}
 			{/each}
+		{:else if activeCategory && library.length > 0}
+			<p
+				class="px-2.5 py-2 text-sm text-muted-foreground"
+				data-testid="palette-library-category-empty"
+			>
+				No Library blocks in “{activeCategory}”.
+			</p>
 		{/if}
 	</div>
 </div>

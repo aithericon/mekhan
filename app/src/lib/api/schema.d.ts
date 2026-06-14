@@ -2644,9 +2644,12 @@ export interface paths {
          * @description List the library nodes (branded, reusable `sub_workflow` building blocks)
          *     the caller may drop onto a canvas. Returns the latest version of each
          *     `library_node` family that is visible to the caller (public, or in the
-         *     caller's workspace) and not `retired`. `deprecated` nodes are excluded
-         *     unless `include_deprecated=true`. Ordered by category → vendor → name so
-         *     the palette can render its two-level grouping directly.
+         *     caller's workspace). `deprecated` nodes are excluded unless
+         *     `include_deprecated=true`; `retired` nodes are excluded unless
+         *     `include_retired=true` (the `/library` management view passes both so it can
+         *     show + reactivate the complete set). Each row carries `myEffectiveRole` so
+         *     the management view can gate Manage/Demote to `admin`+. Ordered by category
+         *     → vendor → name so the palette can render its two-level grouping directly.
          */
         get: operations["list_node_library"];
         put?: never;
@@ -5070,8 +5073,26 @@ export interface paths {
         };
         /**
          * GET /api/v1/workspaces/{id}/folders
-         * @description Flat list of every folder in the workspace, ordered by `path`. The
+         * @description Flat list of folders for the workspace tree, ordered by `path`. The
          *     frontend reconstructs the tree from `parent_id`.
+         *
+         *     Returns two overlaid sets:
+         *      1. **Owned** — every folder in the active workspace (`workspace_id = $1`).
+         *      2. **Shared** — folders in OTHER workspaces that (transitively) hold a
+         *         `public` template, plus their ancestors. This is what makes the seeded
+         *         demo tree (`/demos/...`, filed only in the `default` workspace) browsable
+         *         from every tenant: the catalogue's flat list already surfaces public
+         *         templates cross-workspace (`templates.rs` `OR visibility = 'public'`),
+         *         but without their folders a non-default workspace had nowhere to click.
+         *         The folder-filtered template query (`append_template_where`) already
+         *         matches public templates by their home folder regardless of the active
+         *         workspace, so once the folder node renders the rest just works.
+         *
+         *     Shared rows are stamped read-only (`my_effective_role = viewer`): the caller
+         *     is not a member of the folder's home workspace, so they may browse the tree
+         *     but not rename/move/Share it. Folder mutate routes are workspace-scoped in
+         *     their path and enforce membership independently, so this is purely a SPA
+         *     affordance hint.
          */
         get: operations["list_folders"];
         put?: never;
@@ -9018,10 +9039,18 @@ export interface components {
             /** @description Optional one-line description. */
             description?: string | null;
             /**
-             * @description Lifecycle: `active` (default) | `deprecated`. `retired` nodes are
-             *     excluded from this listing entirely.
+             * @description Lifecycle: `active` (default) | `deprecated` | `retired`. `retired`
+             *     nodes are excluded from this listing unless `include_retired=true`.
              */
             lifecycleStatus: string;
+            /**
+             * @description The caller's effective workspace/object role label
+             *     (`owner|admin|editor|viewer`) on this node's family — annotated by
+             *     `list_node_library` so the management view can gate Manage (rebrand +
+             *     lifecycle) and Demote to `admin`+. Not a column; the backend still
+             *     enforces on every governance mutate path.
+             */
+            myEffectiveRole?: string | null;
             /** @description Display name. */
             name: string;
             /**
@@ -20290,10 +20319,18 @@ export interface operations {
             query?: {
                 /**
                  * @description Include `deprecated` library nodes (default `false` — only `active`).
-                 *     `retired` nodes are always excluded; their pinned embeds still resolve
-                 *     via the version row, but they must not be droppable anew.
+                 *     `retired` nodes are excluded unless `include_retired=true`; their pinned
+                 *     embeds still resolve via the version row, but they must not be droppable
+                 *     anew.
                  */
                 include_deprecated?: boolean;
+                /**
+                 * @description Management-only: include `retired` library nodes (default `false`) so the
+                 *     `/library` management view can show + reactivate them. The droppable
+                 *     palette never sets this. To list the complete management set, pass both
+                 *     `include_deprecated=true&include_retired=true`.
+                 */
+                include_retired?: boolean;
             };
             header?: never;
             path?: never;

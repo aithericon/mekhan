@@ -7887,13 +7887,22 @@
           "node-library"
         ],
         "summary": "GET /api/v1/node-library",
-        "description": "List the library nodes (branded, reusable `sub_workflow` building blocks)\nthe caller may drop onto a canvas. Returns the latest version of each\n`library_node` family that is visible to the caller (public, or in the\ncaller's workspace) and not `retired`. `deprecated` nodes are excluded\nunless `include_deprecated=true`. Ordered by category → vendor → name so\nthe palette can render its two-level grouping directly.",
+        "description": "List the library nodes (branded, reusable `sub_workflow` building blocks)\nthe caller may drop onto a canvas. Returns the latest version of each\n`library_node` family that is visible to the caller (public, or in the\ncaller's workspace). `deprecated` nodes are excluded unless\n`include_deprecated=true`; `retired` nodes are excluded unless\n`include_retired=true` (the `/library` management view passes both so it can\nshow + reactivate the complete set). Each row carries `myEffectiveRole` so\nthe management view can gate Manage/Demote to `admin`+. Ordered by category\n→ vendor → name so the palette can render its two-level grouping directly.",
         "operationId": "list_node_library",
         "parameters": [
           {
             "name": "include_deprecated",
             "in": "query",
-            "description": "Include `deprecated` library nodes (default `false` — only `active`).\n`retired` nodes are always excluded; their pinned embeds still resolve\nvia the version row, but they must not be droppable anew.",
+            "description": "Include `deprecated` library nodes (default `false` — only `active`).\n`retired` nodes are excluded unless `include_retired=true`; their pinned\nembeds still resolve via the version row, but they must not be droppable\nanew.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_retired",
+            "in": "query",
+            "description": "Management-only: include `retired` library nodes (default `false`) so the\n`/library` management view can show + reactivate them. The droppable\npalette never sets this. To list the complete management set, pass both\n`include_deprecated=true&include_retired=true`.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -15154,7 +15163,7 @@
           "folders"
         ],
         "summary": "GET /api/v1/workspaces/{id}/folders",
-        "description": "Flat list of every folder in the workspace, ordered by `path`. The\nfrontend reconstructs the tree from `parent_id`.",
+        "description": "Flat list of folders for the workspace tree, ordered by `path`. The\nfrontend reconstructs the tree from `parent_id`.\n\nReturns two overlaid sets:\n 1. **Owned** — every folder in the active workspace (`workspace_id = $1`).\n 2. **Shared** — folders in OTHER workspaces that (transitively) hold a\n    `public` template, plus their ancestors. This is what makes the seeded\n    demo tree (`/demos/...`, filed only in the `default` workspace) browsable\n    from every tenant: the catalogue's flat list already surfaces public\n    templates cross-workspace (`templates.rs` `OR visibility = 'public'`),\n    but without their folders a non-default workspace had nowhere to click.\n    The folder-filtered template query (`append_template_where`) already\n    matches public templates by their home folder regardless of the active\n    workspace, so once the folder node renders the rest just works.\n\nShared rows are stamped read-only (`my_effective_role = viewer`): the caller\nis not a member of the folder's home workspace, so they may browse the tree\nbut not rename/move/Share it. Folder mutate routes are workspace-scoped in\ntheir path and enforce membership independently, so this is purely a SPA\naffordance hint.",
         "operationId": "list_folders",
         "parameters": [
           {
@@ -24205,7 +24214,14 @@
           },
           "lifecycleStatus": {
             "type": "string",
-            "description": "Lifecycle: `active` (default) | `deprecated`. `retired` nodes are\nexcluded from this listing entirely."
+            "description": "Lifecycle: `active` (default) | `deprecated` | `retired`. `retired`\nnodes are excluded from this listing unless `include_retired=true`."
+          },
+          "myEffectiveRole": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective workspace/object role label\n(`owner|admin|editor|viewer`) on this node's family — annotated by\n`list_node_library` so the management view can gate Manage (rebrand +\nlifecycle) and Demote to `admin`+. Not a column; the backend still\nenforces on every governance mutate path."
           },
           "name": {
             "type": "string",

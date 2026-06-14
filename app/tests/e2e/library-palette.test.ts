@@ -26,8 +26,9 @@ test.describe('Library palette', () => {
 		// Both seeded system packs surface as draggable library items.
 		await expect(page.getByTestId('palette-library-openfoam/solid-displacement')).toBeVisible();
 		await expect(page.getByTestId('palette-library-aithericon/hello-world')).toBeVisible();
-		// Category grouping label from the controlled vocabulary.
-		await expect(page.getByText('CFD', { exact: true })).toBeVisible();
+		// Category grouping header from the controlled vocabulary (the bare "CFD"
+		// text now also appears in a filter chip, so target the group header).
+		await expect(page.getByTestId('palette-category-group-CFD')).toBeVisible();
 	});
 
 	test('dropping a library node creates a branded, version-pinned sub-workflow', async ({ page }) => {
@@ -52,5 +53,26 @@ test.describe('Library palette', () => {
 		const body = node.getByTestId('sub-workflow-body');
 		await expect(body).toContainText('OpenFOAM');
 		await expect(body).toContainText('v1');
+	});
+
+	test('category chips narrow the Library section to one category', async ({ page }) => {
+		await expect(page.getByTestId('palette-library-header')).toBeVisible({ timeout: 10000 });
+
+		// Chips render because more than one seeded category is present.
+		await expect(page.getByTestId('palette-category-chips')).toBeVisible();
+		const openfoam = page.getByTestId('palette-library-openfoam/solid-displacement');
+		const helloWorld = page.getByTestId('palette-library-aithericon/hello-world');
+		await expect(openfoam).toBeVisible();
+		await expect(helloWorld).toBeVisible();
+
+		// Narrow to Examples → the CFD (OpenFOAM) node drops out.
+		await page.getByTestId('palette-category-chip-Examples').click();
+		await expect(helloWorld).toBeVisible();
+		await expect(openfoam).toHaveCount(0);
+
+		// Back to All → both return.
+		await page.getByTestId('palette-category-all').click();
+		await expect(openfoam).toBeVisible();
+		await expect(helloWorld).toBeVisible();
 	});
 });
