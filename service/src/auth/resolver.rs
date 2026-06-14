@@ -332,7 +332,7 @@ async fn membership_workspace(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>
         "SELECT w.id \
            FROM workspaces w \
            JOIN workspace_members m ON m.workspace_id = w.id \
-          WHERE m.user_id = $1 \
+          WHERE m.user_id = $1 AND w.archived_at IS NULL \
           ORDER BY (w.slug = 'default') DESC, w.is_system ASC, w.created_at ASC \
           LIMIT 1",
     )

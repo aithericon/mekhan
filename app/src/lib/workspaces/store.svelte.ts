@@ -10,6 +10,7 @@ import { auth } from '$lib/auth/store.svelte';
 import {
 	listWorkspaces,
 	createWorkspace as createWorkspaceApi,
+	deleteWorkspace as deleteWorkspaceApi,
 	setActiveWorkspace as setActiveWorkspaceApi,
 	type CreateWorkspaceRequest,
 	type WorkspaceSummary
@@ -70,6 +71,18 @@ class WorkspaceStore {
 		const ws = await createWorkspaceApi(body);
 		await this.refresh();
 		return ws;
+	}
+
+	/**
+	 * Soft-delete (archive) a workspace. Owner-only server-side. Throws
+	 * `ApiError` (403 not owner, 409 system/default or live instances) so the
+	 * caller can surface it. On success the workspace vanishes from the list;
+	 * if it was the active one, the caller should navigate away (the BFF will
+	 * resolve a fresh active workspace on the next request).
+	 */
+	async delete(workspaceId: string): Promise<void> {
+		await deleteWorkspaceApi(workspaceId);
+		await this.refresh();
 	}
 
 	/**

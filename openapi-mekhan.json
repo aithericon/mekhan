@@ -14563,6 +14563,61 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}",
+        "description": "**Soft-deletes (archives)** a workspace. Owner-gated — deleting the tenant is\nthe most destructive control-plane action, so it sits above `admin`.\n\nArchiving sets `archived_at` and nothing else: every row (templates,\ninstances, members, catalogue, …) is preserved for audit / recovery. The\nworkspace immediately drops out of the tenant picker, the membership\nlisting, and auth resolution. A hard purge is a deliberately separate\noperation.\n\nRefuses (409) to archive:\n  - a **system** workspace (`is_system`) or the seeded `default` — they are\n    platform-owned and load-bearing for unbound principals;\n  - a workspace with **live instances** (`created` / `running`) — tear those\n    down first so no orphaned nets keep executing against a dead tenant.\n\nIdempotent: archiving an already-archived workspace returns 204.",
+        "operationId": "delete_workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Workspace archived (or already archived)"
+          },
+          "403": {
+            "description": "Owner role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "System/default workspace, or has live instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/workspaces/{id}/folders": {
