@@ -33,6 +33,12 @@ export interface PageExtensionsOptions {
 	fragment: Y.XmlFragment;
 	/** Placeholder shown when the document is empty. */
 	placeholder?: string;
+	/**
+	 * Host-supplied extra nodes/marks/extensions appended to the lean base set.
+	 * Keeps the editor generic: domain blocks (e.g. the instance Report's
+	 * run-media embed) are injected by the caller, not hard-wired here.
+	 */
+	extraExtensions?: (Extension | Mark | Node)[];
 }
 
 /**
@@ -73,6 +79,7 @@ export function pageExtensions(
 			placeholder: opts.placeholder ?? 'Write something…',
 			emptyEditorClass: 'is-editor-empty'
 		}),
-		Collaboration.configure({ fragment: opts.fragment })
+		Collaboration.configure({ fragment: opts.fragment }),
+		...(opts.extraExtensions ?? [])
 	];
 }

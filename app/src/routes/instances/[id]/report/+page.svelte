@@ -7,13 +7,26 @@
   PageEditor itself is ACL-dumb.
 -->
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { ensureAttachedPage, type Page } from '$lib/api/client';
 	import { useInstanceContext } from '$lib/components/instances/instance-context';
 	import PageEditor from '$lib/components/pages/PageEditor.svelte';
+	import { createEmbedContext } from '$lib/components/pages/artifact-embed/embed-context';
 	import { roleAtLeast } from '$lib/api/iam';
 	import FileText from '@lucide/svelte/icons/file-text';
 
 	const ctx = useInstanceContext();
+
+	// Run context for the "Insert media" block: the run's processes (read live so
+	// the picker reflects processes that appear after mount) + memoized per-process
+	// live stores shared across every embed on the page. Torn down on unmount.
+	const { context: embedContext, destroy: destroyEmbeds } = createEmbedContext(() =>
+		ctx.processes.map((p) => ({
+			id: p.process_id,
+			name: p.name ?? p.kind ?? p.process_id.slice(0, 8)
+		}))
+	);
+	onDestroy(destroyEmbeds);
 
 	let pageRecord = $state<Page | null>(null);
 	let loading = $state(false);
@@ -63,6 +76,7 @@
 				<PageEditor
 					pageId={p.id}
 					{editable}
+					{embedContext}
 					placeholder={editable
 						? 'Write a report for this run…'
 						: 'No report has been written for this run.'}
