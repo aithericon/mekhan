@@ -379,6 +379,7 @@
                   "type": "array"
                 },
                 "rows": {
+                  "description": "Static cell matrix. Defaults to empty: the compiler omits it when the table is `rows_ref`-driven (skip_serializing_if on the authoring side).",
                   "items": {
                     "items": {
                       "type": "string"
@@ -386,6 +387,13 @@
                     "type": "array"
                   },
                   "type": "array"
+                },
+                "rows_ref": {
+                  "description": "Upstream whole-array reference (`<slug>.<field>`) resolved renderer-side against `HumanTaskRequest.payload`, where the compiler stages the array (same rails as `Repeater.items_ref`). Engine pass-through — must survive re-serialization.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "type": {
                   "enum": [
@@ -396,7 +404,6 @@
               },
               "required": [
                 "headers",
-                "rows",
                 "type"
               ],
               "type": "object"

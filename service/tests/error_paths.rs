@@ -279,7 +279,9 @@ async fn lifecycle_listener_retries_then_succeeds() {
     let net_id = format!("mekhan-{}", Uuid::new_v4().simple());
     let instance_id = Uuid::new_v4();
 
-    let subject = format!("petri.events.{net_id}.net.completed");
+    // Post-multi-tenancy subject scheme: petri.{ws}.{net}.events.{suffix}.
+    let ws = "00000000-0000-0000-0000-000000000000";
+    let subject = format!("petri.{ws}.{net_id}.events.net.completed");
     let payload = json!({"sequence": 99, "timestamp": "2026-01-01T00:00:00Z",
         "event": {"type": "completed"}, "hash": "x", "previous_hash": null});
     nats.jetstream()
@@ -344,8 +346,10 @@ async fn instance_state_engine_unavailable_shows_events() {
     let template_id = insert_published_template(&db).await;
     let (instance_id, net_id) = insert_running_instance(&db, template_id).await;
 
-    // Publish a fake event to NATS for this net (simulating engine activity)
-    let event_subject = format!("petri.events.{net_id}.token.created");
+    // Publish a fake event to NATS for this net (simulating engine activity).
+    // Post-multi-tenancy subject scheme: petri.{ws}.{net}.events.{suffix}.
+    let ws = "00000000-0000-0000-0000-000000000000";
+    let event_subject = format!("petri.{ws}.{net_id}.events.token.created");
     let event_payload = json!({
         "sequence": 0,
         "timestamp": "2026-01-01T00:00:00Z",
