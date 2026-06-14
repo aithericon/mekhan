@@ -1,0 +1,3537 @@
+{
+  "air_version": 1,
+  "definitions": {
+    "Ctrl__simulate": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__start": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Data__simulate": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "cycle_h": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "sigma_max_mpa": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "soak_min_k": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "verdict": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "z": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__start": {
+      "additionalProperties": true,
+      "properties": {
+        "_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cool_rate": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "hold_temp": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "hold_time_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ramp_rate": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sigma_limit": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "solver_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DynamicToken": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Dynamic token - untyped JSON data.\n\nUse when you need flexibility and don't want compile-time type checking. Rhai scripts can manipulate these freely.",
+      "title": "DynamicToken"
+    },
+    "EffectError": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Error token produced by the engine when an effect handler fails.\n\nConstructed in `firing.rs` for every effect transition `_error` port. The `inputs` field contains the original port inputs (dynamic), enabling retry logic to re-queue the original job via `err.inputs.job`.",
+      "properties": {
+        "error": {
+          "description": "Error message from the handler.",
+          "type": "string"
+        },
+        "handler_id": {
+          "description": "Handler that failed (e.g., `\"executor_submit\"`).",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Original port inputs (dynamic — shape depends on the transition)."
+        },
+        "retryable": {
+          "description": "Whether the error is retryable.",
+          "type": "boolean"
+        },
+        "transition_id": {
+          "description": "Transition ID where the failure occurred.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "handler_id",
+        "inputs",
+        "retryable",
+        "transition_id"
+      ],
+      "title": "EffectError",
+      "type": "object"
+    },
+    "ExecutorCancelInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Input to the `executor_cancel` effect handler.\n\nCancels a running execution identified by its execution ID.",
+      "properties": {
+        "execution_id": {
+          "description": "Execution ID to cancel (from `ExecutorSubmitted.execution_id`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "title": "ExecutorCancelInput",
+      "type": "object"
+    },
+    "ExecutorCancelled": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Output from the `executor_cancel` effect handler.",
+      "properties": {
+        "execution_id": {
+          "description": "Execution ID that was cancelled.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "title": "ExecutorCancelled",
+      "type": "object"
+    },
+    "ExecutorEventSignal": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Event signal delivered by the ExecutorWatcher for mid-execution events.\n\nCovers progress, artifact, metric, phase, output, and log events.",
+      "properties": {
+        "category": {
+          "description": "Event category (progress, artifact, metric, phase, output, log).",
+          "type": "string"
+        },
+        "detail": {
+          "description": "Event-specific detail payload."
+        },
+        "execution_id": {
+          "description": "Execution ID for correlation.",
+          "type": "string"
+        },
+        "sequence": {
+          "description": "Monotonic sequence number within this execution.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "source": {
+          "description": "Source identifier.",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "ISO 8601 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "detail",
+        "execution_id",
+        "sequence",
+        "source",
+        "timestamp"
+      ],
+      "title": "ExecutorEventSignal",
+      "type": "object"
+    },
+    "ExecutorStatusSignal": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Status signal delivered by the ExecutorWatcher.\n\nAll executor lifecycle statuses (accepted, running, completed, failed, timed_out, cancelled) share this envelope. The `detail` field carries status-specific data (e.g., outputs for completed, error info for failed).",
+      "properties": {
+        "detail": {
+          "description": "Status-specific detail payload."
+        },
+        "execution_id": {
+          "description": "Execution ID for correlation.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Source identifier (e.g., executor instance).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status name (accepted, running, completed, failed, timed_out, cancelled).",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "ISO 8601 timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail",
+        "execution_id",
+        "source",
+        "status",
+        "timestamp"
+      ],
+      "title": "ExecutorStatusSignal",
+      "type": "object"
+    },
+    "ExecutorSubmitInput": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "ConfigRef": {
+          "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
+          "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
+            "storage_path": {
+              "description": "Storage key inside the global artifact bucket.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "storage_path"
+          ],
+          "type": "object"
+        },
+        "ExecutionSpec": {
+          "description": "Open-ended execution spec. The `backend` field selects which backend handles this job; `config` carries backend-specific parameters as opaque JSON.\n\nDomain-level declarations (inputs, outputs) live here because staging hooks need them regardless of backend.\n\n`config_ref` exists to keep large static configs (LLM schemas, prompts, catalogue projections) out of the per-job NATS token. When `config_ref` is set, `FetchConfigHook` downloads the blob at the named storage key and writes it into `config` before staging proceeds — the backends still read from `config` and don't know which path it took.",
+          "properties": {
+            "backend": {
+              "description": "Backend type identifier (e.g., \"process\", \"docker\").",
+              "type": "string"
+            },
+            "config": {
+              "default": {},
+              "description": "Backend-specific configuration (opaque to domain and worker layers). Each backend deserializes this into its own typed config.\n\nWhen `config_ref` is `Some`, this field is populated by `FetchConfigHook` at staging time from the referenced storage blob (overwriting whatever was on the wire — typically `null` / empty object). When `config_ref` is `None`, this field is taken as-is — the inline path used by tests and one-off programmatic jobs."
+            },
+            "config_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfigRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reference to a static config blob in object storage. Compiler-emitted jobs always set this; the inline `config` field is left empty and populated by `FetchConfigHook` before staging."
+            },
+            "inputs": {
+              "default": [],
+              "description": "Declared input files to stage before execution.",
+              "items": {
+                "$ref": "#/definitions/InputDeclaration"
+              },
+              "type": "array"
+            },
+            "outputs": {
+              "default": [],
+              "description": "Declared output files expected after execution.",
+              "items": {
+                "$ref": "#/definitions/OutputDeclaration"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "backend"
+          ],
+          "type": "object"
+        },
+        "InputDeclaration": {
+          "description": "Declaration of an input file to be staged before execution.",
+          "properties": {
+            "name": {
+              "description": "Name of this input (used as filename in inputs_dir).",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this input is required (default true).",
+              "type": "boolean"
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/InputSource"
+                }
+              ],
+              "description": "Where to get the input data."
+            }
+          },
+          "required": [
+            "name",
+            "source"
+          ],
+          "type": "object"
+        },
+        "InputSource": {
+          "description": "Source for an input file.",
+          "oneOf": [
+            {
+              "description": "Reference to a file in storage.\n\nWhen `storage` is `Some`, the file is downloaded from that specific backend. When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "storage": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/StorageConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
+                },
+                "type": {
+                  "enum": [
+                    "storage_path"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Inline JSON value (written as JSON file).",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "inline"
+                  ],
+                  "type": "string"
+                },
+                "value": true
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Raw text content (written verbatim, no JSON serialization).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "raw"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "URL to download from.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "url"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputDeclaration": {
+          "description": "Declaration of an expected output from an execution.",
+          "properties": {
+            "kind": {
+              "description": "Declared field kind (lowercase: \"text\", \"number\", \"bool\", \"json\", \"textarea\", \"select\", \"file\", \"signature\", \"timestamp\"). When the service-side compiler emits a typed output port, this carries the kind across the service/executor boundary so the runner can strict-validate the emitted value against the declaration. `None` means \"no kind validation\" (back-compat with pre-typed jobs + non-Python backends). Backend-side validation is opt-in via `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of this output.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path within outputs_dir. None means the value is set via IPC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this output is required (default true).",
+              "type": "boolean"
+            },
+            "upload_to": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OutputUploadConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "OutputUploadConfig": {
+          "description": "Configuration for uploading an output file to storage after execution.",
+          "properties": {
+            "destination_path": {
+              "description": "Destination path within the storage backend. When omitted, defaults to `artifacts/{execution_id}/outputs/{output_name}`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "storage": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageConfig"
+                }
+              ],
+              "description": "Storage backend configuration for the upload destination."
+            }
+          },
+          "required": [
+            "storage"
+          ],
+          "type": "object"
+        },
+        "RetryConfig": {
+          "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose errors return `is_temporary() == true` — non-transient failures (404, 403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without blowing past a Slurm sbatch's wall-clock budget.",
+          "properties": {
+            "max_attempts": {
+              "default": 3,
+              "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "max_delay_ms": {
+              "default": 10000,
+              "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "min_delay_ms": {
+              "default": 200,
+              "description": "Initial backoff delay in milliseconds. Default 200.",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "StorageBackend": {
+          "description": "Which storage backend to use.",
+          "oneOf": [
+            {
+              "description": "Local filesystem (default).",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Amazon S3 (or S3-compatible like MinIO).",
+              "enum": [
+                "s3"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Google Cloud Storage.",
+              "enum": [
+                "gcs"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Azure Blob Storage.",
+              "enum": [
+                "azblob"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "StorageConfig": {
+          "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the per-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text EXECUTOR_STORAGE_BACKEND=s3 EXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com EXECUTOR_STORAGE_BUCKET=my-bucket EXECUTOR_STORAGE_REGION=us-east-1 EXECUTOR_STORAGE_PREFIX=executor/ EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA... EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa... ```\n\n# executor.toml\n\n```toml [storage] backend = \"s3\" endpoint = \"https://minio.internal:9000\" bucket = \"artifacts\" region = \"us-east-1\" prefix = \"executor/\"\n\n[storage.credentials] access_key = \"minioadmin\" secret_key = \"minioadmin\" ```",
+          "properties": {
+            "backend": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageBackend"
+                }
+              ],
+              "description": "Which backend to use."
+            },
+            "bucket": {
+              "default": "",
+              "description": "Bucket or container name (ignored for local).",
+              "type": "string"
+            },
+            "credentials": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageCredentials"
+                }
+              ],
+              "default": {
+                "access_key": "",
+                "secret_key": ""
+              },
+              "description": "Credentials for the storage backend."
+            },
+            "endpoint": {
+              "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path.",
+              "type": "string"
+            },
+            "prefix": {
+              "default": "",
+              "description": "Path prefix within the bucket (e.g. \"executor/\").",
+              "type": "string"
+            },
+            "region": {
+              "default": null,
+              "description": "Region (optional, for S3/GCS).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resource_alias": {
+              "description": "Optional workspace resource binding (e.g. an `s3` resource). When set, the executor's file-ops backend overlays `endpoint`, `region`, `bucket`, and credentials from the resource envelope at run time — per-step inline values still win on a field-by-field basis. Empty or absent means \"use the inline fields directly\".",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/RetryConfig"
+                }
+              ],
+              "default": {
+                "max_attempts": 3,
+                "max_delay_ms": 10000,
+                "min_delay_ms": 200
+              },
+              "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's `RetryLayer`, so only errors with `is_temporary() == true` are retried."
+            }
+          },
+          "required": [
+            "backend",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        "StorageCredentials": {
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
+          "properties": {
+            "access_key": {
+              "default": "",
+              "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name).",
+              "type": "string"
+            },
+            "secret_key": {
+              "default": "",
+              "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Input to the `executor_submit` effect handler.\n\nSubmit an execution job with a typed [`ExecutionSpec`] describing the work to perform (backend type, config, inputs, outputs). Lifecycle fields (`run`, `retries`, `max_retries`) are passed through for retry tracking.",
+      "properties": {
+        "execution_id": {
+          "description": "Engine-stamped execution id flowed in from the scheduler net (where the same id was passed to the dispatcher, e.g. as `EXECUTOR_TARGET_EXEC_ID` for sbatch). The executor submit handler reuses this id as the NATS subject suffix so a one-shot consumer in the dispatched process exact-matches its own message.",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "Unique job identifier for correlation.",
+          "type": "string"
+        },
+        "max_retries": {
+          "description": "Maximum retries before dead-lettering.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retries": {
+          "description": "Number of retries so far.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "run": {
+          "description": "Execution attempt number (0-indexed, incremented on retry).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "spec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionSpec"
+            }
+          ],
+          "description": "Typed execution specification (backend, config, inputs, outputs)."
+        }
+      },
+      "required": [
+        "execution_id",
+        "job_id",
+        "max_retries",
+        "retries",
+        "run",
+        "spec"
+      ],
+      "title": "ExecutorSubmitInput",
+      "type": "object"
+    },
+    "ExecutorSubmitted": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "ConfigRef": {
+          "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
+          "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
+            "storage_path": {
+              "description": "Storage key inside the global artifact bucket.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "storage_path"
+          ],
+          "type": "object"
+        },
+        "ExecutionSpec": {
+          "description": "Open-ended execution spec. The `backend` field selects which backend handles this job; `config` carries backend-specific parameters as opaque JSON.\n\nDomain-level declarations (inputs, outputs) live here because staging hooks need them regardless of backend.\n\n`config_ref` exists to keep large static configs (LLM schemas, prompts, catalogue projections) out of the per-job NATS token. When `config_ref` is set, `FetchConfigHook` downloads the blob at the named storage key and writes it into `config` before staging proceeds — the backends still read from `config` and don't know which path it took.",
+          "properties": {
+            "backend": {
+              "description": "Backend type identifier (e.g., \"process\", \"docker\").",
+              "type": "string"
+            },
+            "config": {
+              "default": {},
+              "description": "Backend-specific configuration (opaque to domain and worker layers). Each backend deserializes this into its own typed config.\n\nWhen `config_ref` is `Some`, this field is populated by `FetchConfigHook` at staging time from the referenced storage blob (overwriting whatever was on the wire — typically `null` / empty object). When `config_ref` is `None`, this field is taken as-is — the inline path used by tests and one-off programmatic jobs."
+            },
+            "config_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ConfigRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reference to a static config blob in object storage. Compiler-emitted jobs always set this; the inline `config` field is left empty and populated by `FetchConfigHook` before staging."
+            },
+            "inputs": {
+              "default": [],
+              "description": "Declared input files to stage before execution.",
+              "items": {
+                "$ref": "#/definitions/InputDeclaration"
+              },
+              "type": "array"
+            },
+            "outputs": {
+              "default": [],
+              "description": "Declared output files expected after execution.",
+              "items": {
+                "$ref": "#/definitions/OutputDeclaration"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "backend"
+          ],
+          "type": "object"
+        },
+        "InputDeclaration": {
+          "description": "Declaration of an input file to be staged before execution.",
+          "properties": {
+            "name": {
+              "description": "Name of this input (used as filename in inputs_dir).",
+              "type": "string"
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this input is required (default true).",
+              "type": "boolean"
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/InputSource"
+                }
+              ],
+              "description": "Where to get the input data."
+            }
+          },
+          "required": [
+            "name",
+            "source"
+          ],
+          "type": "object"
+        },
+        "InputSource": {
+          "description": "Source for an input file.",
+          "oneOf": [
+            {
+              "description": "Reference to a file in storage.\n\nWhen `storage` is `Some`, the file is downloaded from that specific backend. When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "storage": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/StorageConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
+                },
+                "type": {
+                  "enum": [
+                    "storage_path"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Inline JSON value (written as JSON file).",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "inline"
+                  ],
+                  "type": "string"
+                },
+                "value": true
+              },
+              "required": [
+                "type",
+                "value"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Raw text content (written verbatim, no JSON serialization).",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "raw"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "URL to download from.",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "url"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "OutputDeclaration": {
+          "description": "Declaration of an expected output from an execution.",
+          "properties": {
+            "kind": {
+              "description": "Declared field kind (lowercase: \"text\", \"number\", \"bool\", \"json\", \"textarea\", \"select\", \"file\", \"signature\", \"timestamp\"). When the service-side compiler emits a typed output port, this carries the kind across the service/executor boundary so the runner can strict-validate the emitted value against the declaration. `None` means \"no kind validation\" (back-compat with pre-typed jobs + non-Python backends). Backend-side validation is opt-in via `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of this output.",
+              "type": "string"
+            },
+            "path": {
+              "description": "Relative path within outputs_dir. None means the value is set via IPC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "default": true,
+              "description": "Whether this output is required (default true).",
+              "type": "boolean"
+            },
+            "upload_to": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/OutputUploadConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "OutputUploadConfig": {
+          "description": "Configuration for uploading an output file to storage after execution.",
+          "properties": {
+            "destination_path": {
+              "description": "Destination path within the storage backend. When omitted, defaults to `artifacts/{execution_id}/outputs/{output_name}`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "storage": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageConfig"
+                }
+              ],
+              "description": "Storage backend configuration for the upload destination."
+            }
+          },
+          "required": [
+            "storage"
+          ],
+          "type": "object"
+        },
+        "RetryConfig": {
+          "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose errors return `is_temporary() == true` — non-transient failures (404, 403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst (~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without blowing past a Slurm sbatch's wall-clock budget.",
+          "properties": {
+            "max_attempts": {
+              "default": 3,
+              "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "max_delay_ms": {
+              "default": 10000,
+              "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "min_delay_ms": {
+              "default": 200,
+              "description": "Initial backoff delay in milliseconds. Default 200.",
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "StorageBackend": {
+          "description": "Which storage backend to use.",
+          "oneOf": [
+            {
+              "description": "Local filesystem (default).",
+              "enum": [
+                "local"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Amazon S3 (or S3-compatible like MinIO).",
+              "enum": [
+                "s3"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Google Cloud Storage.",
+              "enum": [
+                "gcs"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Azure Blob Storage.",
+              "enum": [
+                "azblob"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "SFTP / SSH file server (docs/32 §4.1). `endpoint` is the SSH endpoint (`ssh://host:port`); `credentials.access_key` is the username and `credentials.secret_key` is the inline PEM private key (written to a 0600 temp file at operator-build). `prefix` carries the base path.",
+              "enum": [
+                "sftp"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "StorageConfig": {
+          "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the per-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text EXECUTOR_STORAGE_BACKEND=s3 EXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com EXECUTOR_STORAGE_BUCKET=my-bucket EXECUTOR_STORAGE_REGION=us-east-1 EXECUTOR_STORAGE_PREFIX=executor/ EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA... EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa... ```\n\n# executor.toml\n\n```toml [storage] backend = \"s3\" endpoint = \"https://minio.internal:9000\" bucket = \"artifacts\" region = \"us-east-1\" prefix = \"executor/\"\n\n[storage.credentials] access_key = \"minioadmin\" secret_key = \"minioadmin\" ```",
+          "properties": {
+            "backend": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageBackend"
+                }
+              ],
+              "description": "Which backend to use."
+            },
+            "bucket": {
+              "default": "",
+              "description": "Bucket or container name (ignored for local).",
+              "type": "string"
+            },
+            "credentials": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/StorageCredentials"
+                }
+              ],
+              "default": {
+                "access_key": "",
+                "secret_key": ""
+              },
+              "description": "Credentials for the storage backend."
+            },
+            "endpoint": {
+              "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path.",
+              "type": "string"
+            },
+            "prefix": {
+              "default": "",
+              "description": "Path prefix within the bucket (e.g. \"executor/\").",
+              "type": "string"
+            },
+            "region": {
+              "default": null,
+              "description": "Region (optional, for S3/GCS).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resource_alias": {
+              "description": "Optional workspace resource binding (e.g. an `s3` resource). When set, the executor's file-ops backend overlays `endpoint`, `region`, `bucket`, and credentials from the resource envelope at run time — per-step inline values still win on a field-by-field basis. Empty or absent means \"use the inline fields directly\".",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/RetryConfig"
+                }
+              ],
+              "default": {
+                "max_attempts": 3,
+                "max_delay_ms": 10000,
+                "min_delay_ms": 200
+              },
+              "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's `RetryLayer`, so only errors with `is_temporary() == true` are retried."
+            }
+          },
+          "required": [
+            "backend",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        "StorageCredentials": {
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
+          "properties": {
+            "access_key": {
+              "default": "",
+              "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name).",
+              "type": "string"
+            },
+            "secret_key": {
+              "default": "",
+              "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "description": "Output from the `executor_submit` effect handler.\n\nContains all input fields plus the engine-assigned `execution_id` for tracking the execution through its lifecycle (accepted → running → completed/failed/timed_out/cancelled).",
+      "properties": {
+        "execution_id": {
+          "description": "Engine-assigned execution identifier for lifecycle tracking.",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "Job identifier (echoed from input).",
+          "type": "string"
+        },
+        "max_retries": {
+          "description": "Max retries (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "retries": {
+          "description": "Retries so far (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "run": {
+          "description": "Execution attempt (echoed from input).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "spec": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecutionSpec"
+            }
+          ],
+          "description": "Execution spec (echoed from input, needed for retry resubmission)."
+        }
+      },
+      "required": [
+        "execution_id",
+        "job_id",
+        "max_retries",
+        "retries",
+        "run",
+        "spec"
+      ],
+      "title": "ExecutorSubmitted",
+      "type": "object"
+    }
+  },
+  "description": "",
+  "groups": [
+    {
+      "id": "group_1",
+      "name": "OpenFOAM solidDisplacementFoam"
+    },
+    {
+      "id": "group_2",
+      "name": "Submission",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_3",
+      "name": "Status Tracking",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_4",
+      "name": "Failure & Timeout",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_5",
+      "name": "Cancellation",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_6",
+      "name": "Events",
+      "parent_id": "group_1"
+    },
+    {
+      "id": "group_7",
+      "name": "Effect Error Recovery",
+      "parent_id": "group_1"
+    }
+  ],
+  "name": "OpenFOAM · solidDisplacementFoam (firing evaluation)",
+  "places": [
+    {
+      "id": "p_end_completed",
+      "name": "Evaluation - Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "id": "p_end_result",
+      "name": "Evaluation - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_simulate_ctrl",
+      "name": "OpenFOAM solidDisplacementFoam - Control Token",
+      "token_schema": "#/definitions/Ctrl__simulate",
+      "type": "state"
+    },
+    {
+      "id": "p_simulate_data",
+      "name": "OpenFOAM solidDisplacementFoam - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__simulate",
+      "type": "state"
+    },
+    {
+      "id": "p_simulate_output",
+      "name": "OpenFOAM solidDisplacementFoam - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_data",
+      "name": "Firing curve - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__start",
+      "type": "state"
+    },
+    {
+      "id": "p_start_main",
+      "name": "Firing curve - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_named",
+      "name": "Firing curve - Named",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_process",
+      "name": "Firing curve - Process",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready",
+      "name": "Firing curve",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_start_ready_out",
+      "name": "Firing curve - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_3",
+      "id": "simulate/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_5",
+      "id": "simulate/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_5",
+      "id": "simulate/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_5",
+      "id": "simulate/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "simulate/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_3",
+      "id": "simulate/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_2",
+      "id": "simulate/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "simulate/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    }
+  ],
+  "requirements": [
+    {
+      "category": "catalogue",
+      "handler_ids": [
+        "catalogue_register"
+      ]
+    },
+    {
+      "category": "executor",
+      "handler_ids": [
+        "executor_cancel",
+        "executor_submit"
+      ]
+    },
+    {
+      "category": "human",
+      "handler_ids": [
+        "process_log_message",
+        "process_log_metric"
+      ]
+    },
+    {
+      "category": "orchestration",
+      "handler_ids": [
+        "process_complete",
+        "process_phase",
+        "process_progress",
+        "process_start"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "caused_signals": [
+        "simulate/sig_cancelled"
+      ],
+      "group_id": "group_5",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/cancel",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorCancelInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorCancelInput": {
+            "$ref": "#/definitions/ExecutorCancelInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/cancel_request",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_cancel",
+        "type": "effect"
+      },
+      "name": "Cancel Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "cancelled",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/cancelling",
+          "port": "cancelled",
+          "weight": 1
+        },
+        {
+          "place": "simulate/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_7",
+      "guard": {
+        "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "simulate/dlq_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ dead: #{ job_id: err.inputs.job.job_id, run: err.inputs.job.run, reason: err.error, retries_exhausted: 0 } }",
+        "type": "rhai"
+      },
+      "name": "Dead Letter Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "simulate/exhausted_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'OpenFOAM solidDisplacementFoam' failed and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted (no handler — crash net)"
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_artifact",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "artifacts",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_artifact",
+          "port": "artifacts",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "catalogue_register",
+        "type": "effect"
+      },
+      "name": "Log Artifact",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "catalogued",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/artifact_log",
+          "port": "catalogued",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/log_failure",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/failure_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Message",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/message_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_metric",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "metric",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_metric",
+          "port": "metric",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_metric",
+        "type": "effect"
+      },
+      "name": "Log Metric",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/metric_log",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "evt",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_output",
+          "port": "evt",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ log: evt }",
+        "type": "rhai"
+      },
+      "name": "Log Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/output_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_phase",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "phase",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_phase",
+          "port": "phase",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_phase",
+        "type": "effect"
+      },
+      "name": "Log Phase",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/phase_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "simulate/log_progress",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "progress",
+          "schema_ref": "#/definitions/ExecutorEventSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorEventSignal": {
+            "$ref": "#/definitions/ExecutorEventSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/sig_progress",
+          "port": "progress",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_progress",
+        "type": "effect"
+      },
+      "name": "Log Progress",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "simulate/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, executor_namespace: e.executor_namespace, feed_chunks: e.feed_chunks, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "simulate/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "simulate/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"simulate\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Evaluate ONE firing curve with a real OpenFOAM solidDisplacementFoam run.\\n\\nThe single-evaluation kernel of demo 59 (`59-firing-curve-bo`), lifted into a\\nstandalone, reusable library node. Where demo 59 reads the candidate off a Map\\nitemVar (`cand.*`), this node reads it straight off its own Start fields\\n(`input.*`) — so it drops onto any canvas as a sub-workflow building block: a\\nconstrained-BO loop, a DOE sweep, or a one-shot check. Otherwise the physics is\\nbyte-identical to demo 59's `simulate` body.\\n\\nIt:\\n  1. generates a complete solidDisplacementFoam case (zirconia 3Y-TZP puck,\\n     Ø60 x 12 mm, quarter symmetry, kiln-curve table BC) in the run directory;\\n  2. runs blockMesh + solidDisplacementFoam in the multi-arch\\n     `opencfd/openfoam-default:2506` Docker image (run dir bind-mounted in);\\n  3. extracts peak von-Mises stress over the cycle (solver log), soak\\n     completeness = min core temperature during the hold window (fieldMinMax\\n     function object), and total cycle time;\\n  4. renders a firing-curve + stress-trace PNG and registers it via\\n     `log_artifact(category=\\\"plot\\\", mime_type=\\\"image/png\\\")` (media card);\\n  5. emits the objectives as typed outputs (sigma_max_mpa, soak_min_k, cycle_h,\\n     z, verdict, source).\\n\\nSOLVER MODES (`input.solver_mode`, default `auto`):\\n  - \\\"docker\\\"    : require Docker; raise on failure (real-physics-or-bust).\\n  - \\\"surrogate\\\" : skip Docker entirely; closed-form surrogate (below).\\n  - \\\"auto\\\"      : try Docker, fall back to the surrogate on ANY failure so the\\n                  node never hard-fails on an unprovisioned machine.\\n\\nThe surrogate is calibrated against three cluster-validated OpenFOAM runs on\\nRPTU Elwetritsch (rates 10/20/60 K/min -> sigma_max 18.5/29.4/103 MPa, soak\\ndeficits ~2/7/25 K at 1 h hold). It exists so CI and docker-less machines can\\nexercise the node; observations it produces are flagged `source: surrogate`.\\n\\nThe cost `z` (the value a BO loop would minimize) is deliberate:\\n    z = cycle_hours\\n        + (0 if sigma <= limit else 25 + 50 * (sigma - limit) / limit)\\n        + (0 if soak ok    else 10 + 2 * soak_deficit_K)\\nA cracked puck or an under-sintered core is a scrapped part — both penalties\\njump discontinuously and then grow, so the optimum is the FASTEST cycle that\\nkeeps sigma_max under the crack threshold AND soaks the core to within 15 K of\\nthe hold temperature.\\n\\\"\\\"\\\"\\n\\nimport json\\nimport math\\nimport os\\nimport re\\nimport shutil\\nimport subprocess\\n\\n# --- Firing curve (Start fields; optionals fall back to calibrated defaults) --\\nramp_rate = float(input.ramp_rate)               # K/min  (required)\\ncool_rate = float(input.cool_rate)               # K/min  (required)\\nhold_time_s = float(input.hold_time_s)           # s      (required)\\nhold_temp = float(input.hold_temp or 1850.0)     # K\\nsigma_limit = float(input.sigma_limit or 80.0)   # MPa\\nsolver_mode = str(input.solver_mode or \\\"auto\\\")\\n\\nT0 = 300.0\\nN_STEPS = 800\\n\\nt_ramp_end = (hold_temp - T0) / (ramp_rate / 60.0)\\nt_hold_end = t_ramp_end + hold_time_s\\nt_end = t_hold_end + (hold_temp - T0) / (cool_rate / 60.0)\\ncycle_h = t_end / 3600.0\\n\\nlog_info(\\n    f\\\"simulate: ramp={ramp_rate} K/min hold={hold_time_s:.0f}s@{hold_temp:.0f}K \\\"\\n    f\\\"cool={cool_rate} K/min -> cycle {cycle_h:.2f} h (mode={solver_mode})\\\"\\n)\\n\\nDOCKER_IMAGE = \\\"opencfd/openfoam-default:2506\\\"\\n\\n_run_dir = os.environ.get(\\\"AITHERICON_RUN_DIR\\\", os.getcwd())\\n_artifacts_dir = os.environ.get(\\\"AITHERICON_ARTIFACTS_DIR\\\", _run_dir)\\ncase_dir = os.path.join(_run_dir, \\\"case\\\")\\n\\n\\n# --- 1. Case generation -------------------------------------------------------\\n# The full validated case, embedded. Only `system/caseParams` carries the\\n# candidate's parameters — every other file is byte-stable across runs.\\n\\ndef _foam_header(cls, obj):\\n    return (\\n        \\\"FoamFile\\\\n{\\\\n\\\"\\n        \\\"    version     2.0;\\\\n\\\"\\n        \\\"    format      ascii;\\\\n\\\"\\n        f\\\"    class       {cls};\\\\n\\\"\\n        f\\\"    object      {obj};\\\\n\\\"\\n        \\\"}\\\\n\\\"\\n    )\\n\\n\\nCASE_FILES = {\\n    \\\"system/caseParams\\\": _foam_header(\\\"dictionary\\\", \\\"caseParams\\\")\\n    + f\\\"\\\"\\\"\\nrampRate        {ramp_rate};\\nholdTemp        {hold_temp};\\nholdTime        {hold_time_s};\\ncoolRate        {cool_rate};\\n\\nT0              {T0};\\nnSteps          {N_STEPS};\\nnWrites         20;\\n\\ntRampEnd        #eval{{ ($holdTemp - $T0) / ($rampRate / 60.0) }};\\ntHoldEnd        #eval{{ $tRampEnd + $holdTime }};\\ntEnd            #eval{{ $tHoldEnd + ($holdTemp - $T0) / ($coolRate / 60.0) }};\\ndt              #eval{{ $tEnd / $nSteps }};\\nwriteInt        #eval{{ $tEnd / $nWrites }};\\n\\\"\\\"\\\",\\n    \\\"system/blockMeshDict\\\": _foam_header(\\\"dictionary\\\", \\\"blockMeshDict\\\")\\n    + \\\"\\\"\\\"\\n// Quarter cylinder (puck): R=30mm, H=12mm (scale 1.5 on base R=20mm coords).\\nscale   1.5;\\n\\nvertices\\n(\\n    (0          0          0)\\n    (0.008      0          0)\\n    (0.02       0          0)\\n    (0.0141421  0.0141421  0)\\n    (0.008      0.008      0)\\n    (0          0.008      0)\\n    (0          0.02       0)\\n    (0          0          0.008)\\n    (0.008      0          0.008)\\n    (0.02       0          0.008)\\n    (0.0141421  0.0141421  0.008)\\n    (0.008      0.008      0.008)\\n    (0          0.008      0.008)\\n    (0          0.02       0.008)\\n);\\n\\nblocks\\n(\\n    hex (0 1 4 5  7 8 11 12)   (8 8 10) simpleGrading (1 1 1)\\n    hex (1 2 3 4  8 9 10 11)   (8 8 10) simpleGrading (1 1 1)\\n    hex (5 4 3 6  12 11 10 13) (8 8 10) simpleGrading (1 1 1)\\n);\\n\\nedges\\n(\\n    arc  2  3 (0.0184776 0.0076537 0)\\n    arc  9 10 (0.0184776 0.0076537 0.008)\\n    arc  3  6 (0.0076537 0.0184776 0)\\n    arc 10 13 (0.0076537 0.0184776 0.008)\\n);\\n\\nboundary\\n(\\n    symX\\n    {\\n        type symmetryPlane;\\n        faces ((0 1 8 7) (1 2 9 8));\\n    }\\n    symY\\n    {\\n        type symmetryPlane;\\n        faces ((0 7 12 5) (5 12 13 6));\\n    }\\n    outer\\n    {\\n        type patch;\\n        faces ((2 3 10 9) (3 6 13 10));\\n    }\\n    bottom\\n    {\\n        type patch;\\n        faces ((0 5 4 1) (1 4 3 2) (5 6 3 4));\\n    }\\n    top\\n    {\\n        type patch;\\n        faces ((7 8 11 12) (8 9 10 11) (12 11 10 13));\\n    }\\n);\\n\\\"\\\"\\\",\\n    \\\"system/controlDict\\\": _foam_header(\\\"dictionary\\\", \\\"controlDict\\\")\\n    + \\\"\\\"\\\"\\n#include \\\"caseParams\\\"\\n\\napplication     solidDisplacementFoam;\\nstartFrom       startTime;\\nstartTime       0;\\nstopAt          endTime;\\nendTime         $tEnd;\\ndeltaT          $dt;\\nwriteControl    runTime;\\nwriteInterval   $writeInt;\\npurgeWrite      0;\\nwriteFormat     ascii;\\nwritePrecision  6;\\nwriteCompression off;\\ntimeFormat      general;\\ntimePrecision   6;\\nrunTimeModifiable true;\\n\\nfunctions\\n{\\n    minMaxT\\n    {\\n        type            fieldMinMax;\\n        libs            (fieldFunctionObjects);\\n        fields          (T);\\n        writeControl    timeStep;\\n        writeInterval   1;\\n        log             false;\\n    }\\n}\\n\\\"\\\"\\\",\\n    \\\"system/fvSchemes\\\": _foam_header(\\\"dictionary\\\", \\\"fvSchemes\\\")\\n    + \\\"\\\"\\\"\\n// Quasi-static stress (steadyState d2dt2) + transient heat conduction.\\nd2dt2Schemes  { default steadyState; }\\nddtSchemes    { default Euler; }\\ngradSchemes\\n{\\n    default         leastSquares;\\n    grad(D)         leastSquares;\\n    grad(T)         leastSquares;\\n}\\ndivSchemes\\n{\\n    default         none;\\n    div(sigmaD)     Gauss linear;\\n}\\nlaplacianSchemes\\n{\\n    default         none;\\n    laplacian(DD,D) Gauss linear corrected;\\n    laplacian(DT,T) Gauss linear corrected;\\n}\\ninterpolationSchemes { default linear; }\\nsnGradSchemes        { default none; }\\n\\\"\\\"\\\",\\n    \\\"system/fvSolution\\\": _foam_header(\\\"dictionary\\\", \\\"fvSolution\\\")\\n    + \\\"\\\"\\\"\\nsolvers\\n{\\n    \\\"(D|T)\\\"\\n    {\\n        solver          GAMG;\\n        tolerance       1e-06;\\n        relTol          0.9;\\n        smoother        GaussSeidel;\\n        nCellsInCoarsestLevel 20;\\n    }\\n}\\n\\nstressAnalysis\\n{\\n    compactNormalStress yes;\\n    nCorrectors     1;\\n    D               1e-06;\\n}\\n\\\"\\\"\\\",\\n    \\\"constant/mechanicalProperties\\\": _foam_header(\\\"dictionary\\\", \\\"mechanicalProperties\\\")\\n    + \\\"\\\"\\\"\\n// Zirconia (3Y-TZP).\\nrho { type uniform; value 6050; }\\nnu  { type uniform; value 0.30; }\\nE   { type uniform; value 2.0e+11; }\\nplaneStress     no;\\n\\\"\\\"\\\",\\n    \\\"constant/thermalProperties\\\": _foam_header(\\\"dictionary\\\", \\\"thermalProperties\\\")\\n    + \\\"\\\"\\\"\\n// Zirconia (3Y-TZP); thermal stress coupling ON.\\nC     { type uniform; value 460; }\\nk     { type uniform; value 2.0; }\\nalpha { type uniform; value 1.0e-05; }\\nthermalStress   yes;\\n\\\"\\\"\\\",\\n    \\\"0/T\\\": _foam_header(\\\"volScalarField\\\", \\\"T\\\")\\n    + \\\"\\\"\\\"\\n#include \\\"../system/caseParams\\\"\\n\\ndimensions      [0 0 0 1 0 0 0];\\ninternalField   uniform $T0;\\n\\nboundaryField\\n{\\n    symX { type symmetryPlane; }\\n    symY { type symmetryPlane; }\\n    \\\"(outer|top|bottom)\\\"\\n    {\\n        type            uniformFixedValue;\\n        uniformValue    table\\n        (\\n            (0          $T0)\\n            ($tRampEnd  $holdTemp)\\n            ($tHoldEnd  $holdTemp)\\n            ($tEnd      $T0)\\n        );\\n    }\\n}\\n\\\"\\\"\\\",\\n    \\\"0/D\\\": _foam_header(\\\"volVectorField\\\", \\\"D\\\")\\n    + \\\"\\\"\\\"\\ndimensions      [0 1 0 0 0 0 0];\\ninternalField   uniform (0 0 0);\\n\\nboundaryField\\n{\\n    symX { type symmetryPlane; }\\n    symY { type symmetryPlane; }\\n    \\\"(outer|top|bottom)\\\"\\n    {\\n        type            tractionDisplacement;\\n        traction        uniform (0 0 0);\\n        pressure        uniform 0;\\n        value           uniform (0 0 0);\\n    }\\n}\\n\\\"\\\"\\\",\\n}\\n\\n\\ndef _write_case():\\n    if os.path.isdir(case_dir):\\n        shutil.rmtree(case_dir, ignore_errors=True)\\n    for rel, content in CASE_FILES.items():\\n        path = os.path.join(case_dir, rel)\\n        os.makedirs(os.path.dirname(path), exist_ok=True)\\n        with open(path, \\\"w\\\") as f:\\n            f.write(content)\\n\\n\\n# --- 2./3. Docker run + extraction --------------------------------------------\\n\\ndef _run_docker():\\n    \\\"\\\"\\\"Run the case in the OpenFOAM container; return parsed results.\\\"\\\"\\\"\\n    _write_case()\\n    # `bash -lc` is REQUIRED: the opencfd image sources the OpenFOAM\\n    # environment from the login profile. That profile also `cd`s to $HOME,\\n    # clobbering `docker -w` — so the explicit `cd /case` is load-bearing.\\n    cmd = [\\n        \\\"docker\\\", \\\"run\\\", \\\"--rm\\\",\\n        \\\"-v\\\", f\\\"{case_dir}:/case\\\",\\n        DOCKER_IMAGE,\\n        \\\"bash\\\", \\\"-lc\\\",\\n        \\\"cd /case && blockMesh > log.blockMesh 2>&1 && \\\"\\n        \\\"solidDisplacementFoam > log.solidDisplacementFoam 2>&1\\\",\\n    ]\\n    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)\\n    if proc.returncode != 0:\\n        tail = \\\"\\\"\\n        log_path = os.path.join(case_dir, \\\"log.solidDisplacementFoam\\\")\\n        if os.path.exists(log_path):\\n            with open(log_path) as f:\\n                tail = \\\"\\\".join(f.readlines()[-25:])\\n        raise RuntimeError(\\n            f\\\"docker/OpenFOAM failed rc={proc.returncode}: \\\"\\n            f\\\"{proc.stderr[-500:]}\\\\n{tail}\\\"\\n        )\\n\\n    # Peak von Mises over the cycle + full trace, from the solver log.\\n    # v2506 solidDisplacementFoam prints `Iteration: <t>` (NOT `Time =`)\\n    # followed by `Max sigmaEq = <Pa>` per step.\\n    sigma_t, sigma_v = [], []\\n    t_cur = None\\n    with open(os.path.join(case_dir, \\\"log.solidDisplacementFoam\\\")) as f:\\n        for line in f:\\n            m = re.match(r\\\"^Iteration: (\\\\S+)\\\", line)\\n            if m:\\n                t_cur = float(m.group(1))\\n                continue\\n            m = re.search(r\\\"Max sigmaEq = (\\\\S+)\\\", line)\\n            if m and t_cur is not None:\\n                sigma_t.append(t_cur)\\n                sigma_v.append(float(m.group(1)))\\n    if not sigma_v:\\n        raise RuntimeError(\\\"no `Max sigmaEq` lines in solver log\\\")\\n\\n    # Core temperature trace (min T over the mesh) from the fieldMinMax FO.\\n    # Column layout (proven on the cluster): col 0 = time, col 2 = min.\\n    core_t, core_v = [], []\\n    import glob as _glob\\n\\n    for dat in sorted(\\n        _glob.glob(os.path.join(case_dir, \\\"postProcessing/minMaxT/*/fieldMinMax.dat\\\"))\\n    ):\\n        with open(dat) as f:\\n            for line in f:\\n                if line.startswith(\\\"#\\\"):\\n                    continue\\n                parts = line.split()\\n                try:\\n                    core_t.append(float(parts[0]))\\n                    core_v.append(float(parts[2]))\\n                except (ValueError, IndexError):\\n                    continue\\n\\n    sigma_max_pa = max(sigma_v)\\n    sigma_max_time = sigma_t[sigma_v.index(sigma_max_pa)]\\n    soak_vals = [v for t, v in zip(core_t, core_v) if t_ramp_end <= t <= t_hold_end]\\n    soak_min = min(soak_vals) if soak_vals else 0.0\\n\\n    return {\\n        \\\"source\\\": \\\"openfoam\\\",\\n        \\\"sigma_max_mpa\\\": sigma_max_pa / 1e6,\\n        \\\"sigma_max_time_s\\\": sigma_max_time,\\n        \\\"soak_min_k\\\": soak_min,\\n        \\\"trace\\\": {\\n            \\\"sigma_t\\\": sigma_t,\\n            \\\"sigma_mpa\\\": [v / 1e6 for v in sigma_v],\\n            \\\"core_t\\\": core_t,\\n            \\\"core_k\\\": core_v,\\n        },\\n    }\\n\\n\\n# --- Surrogate fallback ---------------------------------------------------------\\n\\ndef _run_surrogate():\\n    \\\"\\\"\\\"Closed-form stand-in calibrated against the cluster-validated runs.\\n\\n    Calibration anchors (Elwetritsch zr runs, hold @ 1850 K; ramp/hold/cool):\\n      5 / 3600 / 10  -> 18.49 MPa, soak_min 1848.47 K\\n      20 / 1800 / 30 -> 29.39 MPa, soak_min 1842.80 K\\n      60 /  600 /120 -> 103.2 MPa, soak_min 1825.25 K\\n    sigma is rate-driven (peak at end-of-cool): power-law on max(ramp, cool).\\n    soak_min is the core temperature at hold START (ramp-lag), so it depends\\n    on ramp only — exact 3-point fit: deficit = 0.256 * ramp^1.11.\\n    \\\"\\\"\\\"\\n    r_eff = max(ramp_rate, cool_rate)\\n    dT = hold_temp - T0\\n    sigma_max_mpa = 18.5 * (r_eff / 10.0) ** 0.69 * (dT / 1550.0)\\n    soak_deficit = 0.256 * ramp_rate**1.11\\n    soak_min = hold_temp - soak_deficit\\n\\n    n = 200\\n    ts = [t_end * i / (n - 1) for i in range(n)]\\n    sigma_trace = []\\n    for t in ts:\\n        if t <= t_ramp_end:\\n            s = sigma_max_mpa * 0.55 * (t / max(t_ramp_end, 1.0))\\n        elif t <= t_hold_end:\\n            frac = (t - t_ramp_end) / max(hold_time_s, 1.0)\\n            s = sigma_max_mpa * 0.55 * math.exp(-2.5 * frac)\\n        else:\\n            frac = (t - t_hold_end) / max(t_end - t_hold_end, 1.0)\\n            s = sigma_max_mpa * (0.15 + 0.85 * frac)\\n        sigma_trace.append(s)\\n    core_trace = [\\n        max(T0, min(_kiln_T(t) - soak_deficit * _lag_frac(t), hold_temp))\\n        for t in ts\\n    ]\\n\\n    return {\\n        \\\"source\\\": \\\"surrogate\\\",\\n        \\\"sigma_max_mpa\\\": sigma_max_mpa,\\n        \\\"sigma_max_time_s\\\": t_end,\\n        \\\"soak_min_k\\\": soak_min,\\n        \\\"trace\\\": {\\n            \\\"sigma_t\\\": ts,\\n            \\\"sigma_mpa\\\": sigma_trace,\\n            \\\"core_t\\\": ts,\\n            \\\"core_k\\\": core_trace,\\n        },\\n    }\\n\\n\\ndef _kiln_T(t):\\n    \\\"\\\"\\\"Prescribed kiln curve (the table BC).\\\"\\\"\\\"\\n    if t <= t_ramp_end:\\n        return T0 + (hold_temp - T0) * t / max(t_ramp_end, 1.0)\\n    if t <= t_hold_end:\\n        return hold_temp\\n    return hold_temp - (hold_temp - T0) * (t - t_hold_end) / max(t_end - t_hold_end, 1.0)\\n\\n\\ndef _lag_frac(t):\\n    \\\"\\\"\\\"Rough thermal-lag weight for the synthetic core trace.\\\"\\\"\\\"\\n    if t <= t_ramp_end:\\n        return 1.0\\n    if t <= t_hold_end:\\n        return math.exp(-2.0 * (t - t_ramp_end) / max(hold_time_s, 1.0))\\n    return 0.3\\n\\n\\n# --- Dispatch by solver mode ----------------------------------------------------\\nresult = None\\nif solver_mode == \\\"surrogate\\\":\\n    result = _run_surrogate()\\nelse:\\n    try:\\n        result = _run_docker()\\n    except Exception as exc:  # noqa: BLE001\\n        if solver_mode == \\\"docker\\\":\\n            raise  # real-physics-or-bust\\n        log_warn(f\\\"simulate: docker path failed ({exc!r}); surrogate fallback\\\")\\n        result = _run_surrogate()\\n\\nsigma_max_mpa = float(result[\\\"sigma_max_mpa\\\"])\\nsoak_min_k = float(result[\\\"soak_min_k\\\"])\\nsource = str(result[\\\"source\\\"])\\n\\n# --- 4. Cost --------------------------------------------------------------------\\nsoak_target = hold_temp - 15.0\\nsoak_deficit = max(0.0, soak_target - soak_min_k)\\n\\npen_sigma = 0.0\\nif sigma_max_mpa > sigma_limit:\\n    pen_sigma = 25.0 + 50.0 * (sigma_max_mpa - sigma_limit) / sigma_limit\\npen_soak = 0.0\\nif soak_deficit > 0.0:\\n    pen_soak = 10.0 + 2.0 * soak_deficit\\n\\nz = cycle_h + pen_sigma + pen_soak\\nok = pen_sigma == 0.0 and pen_soak == 0.0\\nverdict = \\\"OK\\\" if ok else (\\\"CRACK RISK\\\" if pen_sigma > 0.0 else \\\"UNDER-SOAKED\\\")\\n\\nlog_info(\\n    f\\\"simulate[{source}]: sigma_max={sigma_max_mpa:.1f} MPa \\\"\\n    f\\\"(limit {sigma_limit:.0f}) soak_min={soak_min_k:.1f} K \\\"\\n    f\\\"(target {soak_target:.0f}) cycle={cycle_h:.2f} h -> z={z:.3f} [{verdict}]\\\"\\n)\\n\\n# --- 5. Media-card PNG (best-effort — never fails the evaluation) ----------------\\ntry:\\n    import matplotlib\\n\\n    matplotlib.use(\\\"Agg\\\")\\n    import matplotlib.pyplot as plt\\n\\n    trace = result[\\\"trace\\\"]\\n    kiln_ts = [t_end * i / 399.0 for i in range(400)]\\n\\n    fig, (ax_t, ax_s) = plt.subplots(\\n        2, 1, figsize=(9.0, 6.4), sharex=True,\\n        gridspec_kw={\\\"height_ratios\\\": [1.1, 1.0]},\\n    )\\n\\n    ax_t.plot(\\n        [t / 3600.0 for t in kiln_ts], [_kiln_T(t) for t in kiln_ts],\\n        color=\\\"#d97706\\\", lw=2.0, label=\\\"kiln set-point\\\",\\n    )\\n    if trace[\\\"core_t\\\"]:\\n        ax_t.plot(\\n            [t / 3600.0 for t in trace[\\\"core_t\\\"]], trace[\\\"core_k\\\"],\\n            color=\\\"#2563eb\\\", lw=1.6, label=\\\"slowest point (min T)\\\",\\n        )\\n    ax_t.axhline(soak_target, color=\\\"#2563eb\\\", ls=\\\":\\\", lw=1.0, alpha=0.6)\\n    ax_t.axvspan(t_ramp_end / 3600.0, t_hold_end / 3600.0, color=\\\"#d97706\\\", alpha=0.08)\\n    ax_t.set_ylabel(\\\"T [K]\\\")\\n    ax_t.legend(loc=\\\"lower center\\\", fontsize=8, ncol=2)\\n\\n    ax_s.plot(\\n        [t / 3600.0 for t in trace[\\\"sigma_t\\\"]], trace[\\\"sigma_mpa\\\"],\\n        color=\\\"#dc2626\\\", lw=1.8, label=\\\"max von-Mises\\\",\\n    )\\n    ax_s.axhline(\\n        sigma_limit, color=\\\"#dc2626\\\", ls=\\\"--\\\", lw=1.2, alpha=0.8,\\n        label=f\\\"crack threshold {sigma_limit:.0f} MPa\\\",\\n    )\\n    ax_s.set_xlabel(\\\"time [h]\\\")\\n    ax_s.set_ylabel(\\\"sigma_eq [MPa]\\\")\\n    ax_s.legend(loc=\\\"upper left\\\", fontsize=8)\\n\\n    src_tag = \\\" (surrogate)\\\" if source == \\\"surrogate\\\" else \\\"\\\"\\n    fig.suptitle(\\n        f\\\"ramp {ramp_rate:.0f} K/min · hold {hold_time_s / 60.0:.0f} min @ \\\"\\n        f\\\"{hold_temp:.0f} K · cool {cool_rate:.0f} K/min{src_tag}\\\\n\\\"\\n        f\\\"sigma_max {sigma_max_mpa:.1f} MPa · soak min {soak_min_k:.0f} K · \\\"\\n        f\\\"cycle {cycle_h:.2f} h — {verdict} (cost {z:.2f})\\\",\\n        fontsize=10,\\n    )\\n    fig.tight_layout(rect=(0, 0, 1, 0.91))\\n\\n    png_name = f\\\"firing_r{ramp_rate:.0f}_h{hold_time_s:.0f}_c{cool_rate:.0f}.png\\\"\\n    png_path = os.path.join(_artifacts_dir, png_name)\\n    fig.savefig(png_path, dpi=110)\\n    plt.close(fig)\\n\\n    log_artifact(\\n        png_path,\\n        name=png_name,\\n        category=\\\"plot\\\",\\n        mime_type=\\\"image/png\\\",\\n        metadata={\\n            \\\"kind\\\": \\\"firing_curve_eval\\\",\\n            \\\"verdict\\\": verdict,\\n            \\\"sigma_max_mpa\\\": f\\\"{sigma_max_mpa:.2f}\\\",\\n            \\\"cost\\\": f\\\"{z:.3f}\\\",\\n            \\\"source\\\": source,\\n        },\\n    )\\nexcept Exception as exc:  # noqa: BLE001 — plotting is telemetry, not physics\\n    log_warn(f\\\"simulate: plot/artifact failed (non-fatal): {exc!r}\\\")\\n\\n# Persist the raw extraction next to the case for debugging.\\ntry:\\n    with open(os.path.join(_run_dir, \\\"results.json\\\"), \\\"w\\\") as f:\\n        json.dump(\\n            {k: v for k, v in result.items() if k != \\\"trace\\\"}\\n            | {\\\"z\\\": z, \\\"cycle_h\\\": cycle_h, \\\"verdict\\\": verdict},\\n            f,\\n            indent=2,\\n        )\\nexcept Exception:  # noqa: BLE001\\n    pass\\n\\n# --- 6. Typed outputs (swept from globals matching the output port) -------------\\nsigma_max_mpa = round(sigma_max_mpa, 3)\\nsoak_min_k = round(soak_min_k, 2)\\ncycle_h = round(cycle_h, 4)\\nz = round(z, 4)\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"sigma_max_mpa\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"soak_min_k\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"cycle_h\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"z\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"verdict\", \"required\": true, \"kind\": \"text\"}, #{\"name\": \"source\", \"required\": true, \"kind\": \"text\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/simulate/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "OpenFOAM solidDisplacementFoam - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "simulate/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec, executor_namespace: f.executor_namespace, feed_chunks: f.feed_chunks } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_7",
+      "guard": {
+        "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
+        "type": "rhai"
+      },
+      "id": "simulate/retry_effect_err",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/effect_errors",
+          "port": "err",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "{\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    job.retries = retries + 1;\n                    #{ job: job }\n                }",
+        "type": "rhai"
+      },
+      "name": "Retry Effect Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "simulate/sig_accepted",
+        "simulate/sig_running",
+        "simulate/sig_completed",
+        "simulate/sig_failed",
+        "simulate/sig_timed_out"
+      ],
+      "effect_config": {
+        "event_routes": {
+          "artifact": "simulate/sig_artifact",
+          "log": "simulate/sig_log",
+          "metric": "simulate/sig_metric",
+          "output": "simulate/sig_output",
+          "phase": "simulate/sig_phase",
+          "progress": "simulate/sig_progress"
+        },
+        "signal_routes": {
+          "accepted": "simulate/sig_accepted",
+          "cancelled": "simulate/sig_cancelled",
+          "completed": "simulate/sig_completed",
+          "failed": "simulate/sig_failed",
+          "running": "simulate/sig_running",
+          "timed_out": "simulate/sig_timed_out"
+        }
+      },
+      "group_id": "group_2",
+      "id": "simulate/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "simulate/sig_artifact",
+            "log": "simulate/sig_log",
+            "metric": "simulate/sig_metric",
+            "output": "simulate/sig_output",
+            "phase": "simulate/sig_phase",
+            "progress": "simulate/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "simulate/sig_accepted",
+            "cancelled": "simulate/sig_cancelled",
+            "completed": "simulate/sig_completed",
+            "failed": "simulate/sig_failed",
+            "running": "simulate/sig_running",
+            "timed_out": "simulate/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "simulate/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_accepted",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/submitted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_accepted",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Accepted",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/accepted",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_5",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_cancelled",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorCancelled"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorCancelled": {
+            "$ref": "#/definitions/ExecutorCancelled"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/cancelling",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_cancelled",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Cancelled",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/cancelled",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_failed_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_failed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    err: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        detail: sig.detail,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Failed (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "err",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/failed",
+          "port": "err",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_running",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_running",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ out: job }",
+        "type": "rhai"
+      },
+      "name": "Execution Running",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/running",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_3",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_success",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_completed",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __done = #{\n                    job_id: job.job_id,\n                    run: job.run,\n                    execution_id: job.execution_id,\n                    detail: sig.detail,\n                    source: if sig.source != () { sig.source } else { \"\" },\n                    status: sig.status\n                };\n                for __k in job.keys() { if __k.starts_with(\"_\") { __done[__k] = job[__k]; } }\n                #{ done: __done }",
+        "type": "rhai"
+      },
+      "name": "Execution Completed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/running",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_4",
+      "guard": {
+        "source": "sig.execution_id == job.execution_id",
+        "type": "rhai"
+      },
+      "id": "simulate/t_timeout_pre_run",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "sig",
+          "schema_ref": "#/definitions/ExecutorStatusSignal"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          },
+          "ExecutorStatusSignal": {
+            "$ref": "#/definitions/ExecutorStatusSignal"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/accepted",
+          "port": "job",
+          "weight": 1
+        },
+        {
+          "place": "simulate/sig_timed_out",
+          "port": "sig",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{\n                    out: #{\n                        job_id: job.job_id,\n                        execution_id: job.execution_id,\n                        retries: job.retries,\n                        max_retries: job.max_retries,\n                        run: job.run,\n                        spec: job.spec,\n                        executor_namespace: job.executor_namespace,\n                        feed_chunks: job.feed_chunks\n                    }\n                }",
+        "type": "rhai"
+      },
+      "name": "Execution Timed Out (pre-Running)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "out",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "simulate/timed_out",
+          "port": "out",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_proc_complete",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_end_result",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_complete",
+        "type": "effect"
+      },
+      "name": "Evaluation - Complete Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "completed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_completed",
+          "port": "completed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_result_shape",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_simulate",
+          "schema_ref": "#/definitions/Data__simulate"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_simulate_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_simulate_data",
+          "port": "d_simulate",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __rv0 = (d_simulate.detail.outputs.sigma_max_mpa); let __rv1 = (d_simulate.detail.outputs.soak_min_k); let __rv2 = (d_simulate.detail.outputs.cycle_h); let __rv3 = (d_simulate.detail.outputs.z); let __rv4 = (d_simulate.detail.outputs.verdict); let __rv5 = (d_simulate.detail.outputs.source); let __rv = #{ \"sigma_max_mpa\": __rv0, \"soak_min_k\": __rv1, \"cycle_h\": __rv2, \"z\": __rv3, \"verdict\": __rv4, \"source\": __rv5 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "type": "rhai"
+      },
+      "name": "Evaluation - Result",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "result",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_result",
+          "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_simulate_to_error_deadend",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "throw \"automated step 'OpenFOAM solidDisplacementFoam' dead-lettered (infra failure) and no error handler is wired\"",
+        "type": "rhai"
+      },
+      "name": "OpenFOAM solidDisplacementFoam - Dead-letter (no handler — crash net)"
+    },
+    {
+      "id": "t_simulate_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "simulate/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "OpenFOAM solidDisplacementFoam - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_simulate_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_simulate_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_simulate_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "OpenFOAM solidDisplacementFoam - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__simulate"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__simulate"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_simulate_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_simulate_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_park",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready_out",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; #{ data: d, main: d }",
+        "type": "rhai"
+      },
+      "name": "Firing curve - Park Inputs (fork: park data, forward token)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_start_main",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_start_proc_name",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_ready",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d._process_name = \"OpenFOAM firing eval\"; #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Firing curve - Derive Process Name",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_named",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "effect_config": {
+        "forward_ports": [
+          "main"
+        ],
+        "name": "Firing curve",
+        "name_field": "_process_name"
+      },
+      "id": "t_start_proc_start",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "trigger",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_named",
+          "port": "trigger",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "forward_ports": [
+            "main"
+          ],
+          "name": "Firing curve",
+          "name_field": "_process_name"
+        },
+        "handler_id": "process_start",
+        "type": "effect"
+      },
+      "name": "Firing curve - Register Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "weight": 1
+        },
+        {
+          "place": "p_start_ready_out",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

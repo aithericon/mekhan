@@ -52,11 +52,17 @@ ALTER TABLE workflow_templates
 ALTER TABLE workflow_templates
     ADD COLUMN IF NOT EXISTS forked_from JSONB;
 
--- Coordinate uniqueness is scoped to origin and only enforced where a
--- coordinate is set (plain workflows leave it NULL).
+-- Coordinate uniqueness is scoped to origin AND to the *latest* version row.
+-- A library node is a versioned family: every version row shares the same
+-- (origin, coordinate), and decision 11 keeps historical version rows forever
+-- so pinned embeds always resolve. An unscoped unique index would reject the
+-- second version. Scoping to `is_latest` enforces the real invariant — at most
+-- one *current* row per (origin, coordinate) within an origin — while letting
+-- superseded versions coexist. (A `system` and a `workspace` openfoam/x can
+-- also coexist, since the index keys on origin too.)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_templates_origin_coordinate
     ON workflow_templates (origin, coordinate)
-    WHERE coordinate IS NOT NULL;
+    WHERE coordinate IS NOT NULL AND is_latest;
 
 -- Palette/catalogue queries filter by kind; partial index keeps it cheap.
 CREATE INDEX IF NOT EXISTS idx_workflow_templates_library

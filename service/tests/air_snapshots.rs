@@ -139,6 +139,16 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // is live-only (needs the opencfd/openfoam-default image), and
     // `solver_mode=surrogate` exercises the full topology without it.
     "59-firing-curve-bo",
+    // openfoam-solid-displacement: a LIBRARY NODE (template_kind=library_node,
+    // coordinate openfoam/solid-displacement) — the single-evaluation OpenFOAM
+    // kernel of demo 59 lifted into a standalone, brandable sub-workflow
+    // building block (Start firing curve → solidDisplacementFoam step → End
+    // objectives). A library node compiles through the IDENTICAL path as any
+    // workflow (decision 12: no engine/compiler primitive); this pins that a
+    // linear Python-step node with token-resident Start reads (`input.*`) and a
+    // typed multi-field End mapping lowers cleanly. RUNNING the docker path is
+    // live-only; `solver_mode=surrogate` exercises it without the image.
+    "openfoam-solid-displacement",
 ];
 
 fn repo_root() -> PathBuf {
@@ -415,6 +425,11 @@ fn snapshot_55_crawl_campaign() {
 #[test]
 fn snapshot_59_firing_curve_bo() {
     run("59-firing-curve-bo");
+}
+
+#[test]
+fn snapshot_openfoam_solid_displacement() {
+    run("openfoam-solid-displacement");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

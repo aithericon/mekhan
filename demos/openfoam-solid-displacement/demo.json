@@ -1,0 +1,16 @@
+{
+  "templateId": "00000000-0000-0000-0000-00000000f001",
+  "folder": "library",
+  "name": "OpenFOAM · solidDisplacementFoam (firing evaluation)",
+  "description": "A reusable OpenFOAM integration node: evaluate ONE ceramic-sintering firing curve with a real solidDisplacementFoam thermo-mechanical run (zirconia 3Y-TZP puck Ø60×12 mm, quarter-symmetry mesh) in the opencfd/openfoam-default:2506 Docker image, and extract peak von-Mises stress, soak completeness (min core temperature during the hold), and total cycle time. This is the single-evaluation kernel of demo 59 lifted into a standalone, brandable building block: a Start (ramp/cool/hold + thresholds), one AutomatedStep (case generation → solve → extraction → media-card PNG), and an End that surfaces the objectives. Drop it onto any canvas as a sub-workflow node — a constrained-BO loop, a DOE sweep, or a one-shot check. `solver_mode=surrogate` (or `auto` on a Docker-less machine) evaluates a closed-form surrogate calibrated against three cluster-validated runs, so the node works end-to-end without Docker.",
+  "templateKind": "library_node",
+  "origin": "system",
+  "coordinate": "openfoam/solid-displacement",
+  "presentation": {
+    "icon": "wind",
+    "color": "#0ea5e9",
+    "vendor": "OpenFOAM",
+    "category": "CFD",
+    "badge": "vendor"
+  }
+}

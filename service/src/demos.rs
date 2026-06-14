@@ -517,6 +517,20 @@ pub enum DemoSeedError {
     PrivateMissingOwner,
     #[error("`ownerTemplateId` is only valid with `visibility: private`")]
     OwnerOnNonPrivate,
+    #[error(
+        "`templateKind: library_node` requires a `coordinate` (vendor/slug, e.g. \
+         `openfoam/solid-displacement`) so embeds and the upgrade prompt can resolve it"
+    )]
+    LibraryNodeMissingCoordinate,
+    #[error(
+        "coordinate `{coordinate}` (origin `{origin}`) is already claimed by another \
+         template family `{existing}` — pick a unique vendor/slug"
+    )]
+    CoordinateConflict {
+        coordinate: String,
+        origin: String,
+        existing: uuid::Uuid,
+    },
     #[error("db error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("compile failed: {0}")]
@@ -648,6 +662,13 @@ const DEMO_CATEGORIES: &[DemoCategory] = &[
         slug: "examples",
         display_name: "Examples",
         description: "End-to-end example workflows that tie the primitives together.",
+    },
+    DemoCategory {
+        slug: "library",
+        display_name: "Library Nodes",
+        description: "Branded, reusable integration nodes (OpenFOAM, …) — published \
+                      templates that drop onto any canvas as a sub-workflow building \
+                      block. See `templateKind: library_node`.",
     },
 ];
 
@@ -1618,6 +1639,36 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             .await?;
     if exists.is_some() {
         return Ok(SeedOutcome::AlreadyPresent);
+    }
+
+    // Library-node coordinate invariants (decision 7). A library node MUST
+    // carry a coordinate, and the coordinate must be unique within its origin
+    // among *live* (is_latest) families. The DB partial unique index enforces
+    // the latter, but a pre-insert check turns the opaque 23505 constraint
+    // violation into an actionable seed-error line naming the colliding family.
+    // (Seeding runs single-threaded at startup, so there is no race between the
+    // SELECT and the INSERT below.)
+    if template_kind == "library_node" {
+        let coord = coordinate.ok_or(DemoSeedError::LibraryNodeMissingCoordinate)?;
+        let origin_val = origin.unwrap_or("system");
+        let clash: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT base_template_id FROM workflow_templates \
+             WHERE coordinate = $1 AND origin IS NOT DISTINCT FROM $2 \
+               AND is_latest AND base_template_id <> $3 \
+             LIMIT 1",
+        )
+        .bind(coord)
+        .bind(origin_val)
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((existing,)) = clash {
+            return Err(DemoSeedError::CoordinateConflict {
+                coordinate: coord.to_string(),
+                origin: origin_val.to_string(),
+                existing,
+            });
+        }
     }
 
     // File the demo into its declared folder (default "Demos") BEFORE compiling.
