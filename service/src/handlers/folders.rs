@@ -85,8 +85,26 @@ pub async fn list_workspace_tags(
 
 /// GET /api/v1/workspaces/{id}/folders
 ///
-/// Flat list of every folder in the workspace, ordered by `path`. The
+/// Flat list of folders for the workspace tree, ordered by `path`. The
 /// frontend reconstructs the tree from `parent_id`.
+///
+/// Returns two overlaid sets:
+///  1. **Owned** — every folder in the active workspace (`workspace_id = $1`).
+///  2. **Shared** — folders in OTHER workspaces that (transitively) hold a
+///     `public` template, plus their ancestors. This is what makes the seeded
+///     demo tree (`/demos/...`, filed only in the `default` workspace) browsable
+///     from every tenant: the catalogue's flat list already surfaces public
+///     templates cross-workspace (`templates.rs` `OR visibility = 'public'`),
+///     but without their folders a non-default workspace had nowhere to click.
+///     The folder-filtered template query (`append_template_where`) already
+///     matches public templates by their home folder regardless of the active
+///     workspace, so once the folder node renders the rest just works.
+///
+/// Shared rows are stamped read-only (`my_effective_role = viewer`): the caller
+/// is not a member of the folder's home workspace, so they may browse the tree
+/// but not rename/move/Share it. Folder mutate routes are workspace-scoped in
+/// their path and enforce membership independently, so this is purely a SPA
+/// affordance hint.
 #[utoipa::path(
     get,
     path = "/api/v1/workspaces/{id}/folders",
@@ -105,15 +123,36 @@ pub async fn list_folders(
     require_role(&state.db, &user, workspace_id, Role::Viewer)
         .await
         .map_err(map_to_api_error)?;
-    let mut rows: Vec<Folder> = sqlx::query_as(&format!(
-        "SELECT {FOLDER_COLS} FROM folders WHERE workspace_id = $1 ORDER BY path"
+    // Owned folders (this workspace) UNION the shared public-bearing tree from
+    // other workspaces. The EXISTS picks a folder `f` iff some folder `g` that
+    // is `f`-or-a-descendant holds a latest `public` template — which yields the
+    // public-holding folders AND every ancestor up to the root, so the tree
+    // stays connected. Path matching is segment-safe (`= path OR LIKE path||'/%'`).
+    let rows: Vec<Folder> = sqlx::query_as(&format!(
+        "SELECT {FOLDER_COLS} FROM folders f \
+         WHERE f.workspace_id = $1 \
+            OR EXISTS ( \
+                 SELECT 1 FROM folders g \
+                 JOIN template_folders tf ON tf.folder_id = g.id \
+                 JOIN workflow_templates t \
+                      ON COALESCE(t.base_template_id, t.id) = tf.base_template_id \
+                 WHERE t.is_latest = TRUE AND t.visibility = 'public' \
+                   AND (g.path = f.path OR g.path LIKE f.path || '/%') \
+               ) \
+         ORDER BY path"
     ))
     .bind(workspace_id)
     .fetch_all(&state.db)
     .await?;
 
-    // Annotate each row with the caller's effective object role (one query for
-    // the whole list) so the SPA can gate edit/Share affordances; the backend
+    // Split owned vs. shared: only owned folders get the real ACL resolve
+    // (the resolver keys roles off the passed workspace, so running it over a
+    // foreign folder would falsely report the caller's active-workspace role).
+    let (mut owned, mut shared): (Vec<Folder>, Vec<Folder>) =
+        rows.into_iter().partition(|f| f.workspace_id == workspace_id);
+
+    // Annotate owned rows with the caller's effective object role (one query for
+    // the whole page) so the SPA can gate edit/Share affordances; the backend
     // still enforces on every folder mutate path.
     // Keep-all on purpose: tree navigation must see the full path structure.
     annotate_roles_keep_all(
@@ -121,11 +160,19 @@ pub async fn list_folders(
         &user,
         ObjectKind::Folder,
         workspace_id,
-        &mut rows,
+        &mut owned,
     )
     .await
     .map_err(map_to_api_error)?;
-    Ok(Json(rows))
+
+    // Shared rows are read-only browse targets — never editable from here.
+    for f in &mut shared {
+        f.my_effective_role = Some(Role::Viewer.as_label().to_string());
+    }
+
+    owned.append(&mut shared);
+    owned.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(Json(owned))
 }
 
 /// POST /api/v1/workspaces/{id}/folders
