@@ -268,6 +268,56 @@ impl ArtifactStore {
         Ok(key)
     }
 
+    /// Deterministic S3 key for a library-node logo blob, keyed by the opaque
+    /// logo id minted at import/upload time (`library-icons/{id}`). A library
+    /// node's `presentation.icon` carries the token `asset:{id}`; the frontend
+    /// resolves the bytes via the (pass-2) logo serve endpoint, which reads this
+    /// key. Deliberately a flat, dedicated keyspace — NOT the heavyweight
+    /// asset-type/record system — so a pack logo is just bytes addressed by id.
+    pub fn library_logo_key(logo_id: Uuid) -> String {
+        format!("library-icons/{logo_id}")
+    }
+
+    /// Store a library-node logo blob and return its minted id. The caller
+    /// rewrites the node's `presentation.icon` to `asset:{returned_id}`.
+    ///
+    /// Lightweight on purpose (see [`library_logo_key`](Self::library_logo_key)):
+    /// one PUT under `library-icons/{id}`, no DB row. Pass-2 adds the multipart
+    /// upload + serve endpoints; import calls this directly.
+    pub async fn upload_library_logo(
+        &self,
+        content: &[u8],
+        content_type: &str,
+    ) -> Result<Uuid, ArtifactStoreError> {
+        let logo_id = Uuid::new_v4();
+        let key = Self::library_logo_key(logo_id);
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(content.to_vec()))
+            .content_type(content_type)
+            .cache_control("public, max-age=31536000, immutable")
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("upload library logo {key}: {e}")))?;
+
+        tracing::debug!(key = %key, content_type = %content_type, "uploaded library logo to S3");
+
+        Ok(logo_id)
+    }
+
+    /// Fetch a library-node logo blob by its id. Returns `(bytes, content_type)`.
+    /// Used by export to embed an `asset:{id}`-referenced logo as a `PackAsset`
+    /// (and, pass-2, by the logo serve endpoint).
+    pub async fn get_library_logo(
+        &self,
+        logo_id: Uuid,
+    ) -> Result<(Vec<u8>, String), ArtifactStoreError> {
+        self.get_file(&Self::library_logo_key(logo_id)).await
+    }
+
     /// Namespace an object-store key under its owning workspace so two tenants'
     /// byte-identical artifacts never collide in the flat bucket.
     ///

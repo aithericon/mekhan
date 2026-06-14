@@ -111,6 +111,32 @@ pub struct DemoMetadata {
     /// JSONB column and frozen onto embedding nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<serde_json::Value>,
+    /// Optional pack membership for a library-node demo. When present, the
+    /// seeder upserts a `system`-origin `library_packs` row keyed by
+    /// `(origin, vendor, slug)` and stamps this node's `pack_id` to it, so the
+    /// Packs UI shows a real shipped pack out of the box. Ignored for
+    /// non-`library_node` demos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<DemoPackDescriptor>,
+}
+
+/// Pack descriptor a library-node demo may declare (see [`DemoMetadata::pack`]).
+/// Mirrors the `library_packs` row's identity fields; `origin` is always
+/// `system` for a seeded pack.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoPackDescriptor {
+    pub vendor: String,
+    pub slug: String,
+    #[serde(default = "default_pack_version")]
+    pub version: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+fn default_pack_version() -> String {
+    "1".to_string()
 }
 
 /// One parsed demo directory.
@@ -1776,6 +1802,43 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         .await
         .map_err(DemoSeedError::Upload)?;
 
+    // Pack membership (decision: a library node may ship inside a named pack).
+    // When a library-node demo declares a `pack`, upsert a `system`-origin
+    // `library_packs` row keyed by `(origin, vendor, slug)` and stamp this
+    // node's `pack_id` to it. Idempotent across re-seeds: the unique index on
+    // `(origin, vendor, slug)` makes ON CONFLICT reuse the same id and refresh
+    // name/version/description. Non-library-node demos never get a pack.
+    let pack_id: Option<uuid::Uuid> = if template_kind == "library_node" {
+        if let Some(pack) = demo.metadata.pack.as_ref() {
+            let id: (uuid::Uuid,) = sqlx::query_as(
+                r#"
+                INSERT INTO library_packs
+                    (id, workspace_id, vendor, slug, version, name, description, origin, installed_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'system', NULL)
+                ON CONFLICT (origin, vendor, slug)
+                    DO UPDATE SET version = EXCLUDED.version,
+                                  name = EXCLUDED.name,
+                                  description = EXCLUDED.description
+                RETURNING id
+                "#,
+            )
+            .bind(uuid::Uuid::new_v4())
+            .bind(DEMO_WORKSPACE_ID)
+            .bind(&pack.vendor)
+            .bind(&pack.slug)
+            .bind(&pack.version)
+            .bind(&pack.name)
+            .bind(&pack.description)
+            .fetch_one(&state.db)
+            .await?;
+            Some(id.0)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // INSERT born-published, version 1, latest. Schema matches the row
     // `apply_template`'s seed-mode finalize produces, just done as a
     // single INSERT since no draft predecessor exists.
@@ -1785,9 +1848,9 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, author_id, workspace_id, visibility, owner_template_id,
-             metrics, template_kind, origin, coordinate, presentation)
+             metrics, template_kind, origin, coordinate, presentation, pack_id)
         VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15)
+                $11, $12, $13, $14, $15, $16)
         RETURNING *
         "#,
     )
@@ -1806,6 +1869,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .bind(origin)
     .bind(coordinate)
     .bind(presentation)
+    .bind(pack_id)
     .fetch_one(&state.db)
     .await?;
 

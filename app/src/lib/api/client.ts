@@ -572,6 +572,109 @@ export async function listNodeLibrary(opts?: {
 	) as unknown as LibraryNodeDescriptor[];
 }
 
+// ── Library packs + custom icons (Phase: library packs) ─────────────────────
+
+export type LibraryPack = components['schemas']['LibraryPack'];
+export type LibraryPackSummary = components['schemas']['LibraryPackSummary'];
+export type LibraryPackDetail = components['schemas']['LibraryPackDetail'];
+export type PackBundle = components['schemas']['PackBundle'];
+export type PackManifest = components['schemas']['PackManifest'];
+export type PackNode = components['schemas']['PackNode'];
+export type PackAsset = components['schemas']['PackAsset'];
+export type PackImportResult = components['schemas']['PackImportResult'];
+export type LibraryIconResponse = components['schemas']['LibraryIconResponse'];
+
+/** `asset:`-token prefix a `presentation.icon` uses to reference an uploaded
+ *  logo blob (`asset:{uuid}`). Mirrors the backend `ICON_ASSET_PREFIX`. */
+const ICON_ASSET_PREFIX = 'asset:';
+
+/**
+ * GET /api/v1/library/packs — the library packs visible to the caller (own
+ * workspace plus any `system`-origin pack). Each row carries `nodeCount` and
+ * `myEffectiveRole` so the management view can gate Import/Delete to Admin+.
+ */
+export async function listPacks(): Promise<LibraryPackSummary[]> {
+	return unwrap(await client.GET('/api/v1/library/packs', {})) as unknown as LibraryPackSummary[];
+}
+
+/** GET /api/v1/library/packs/{id} — pack detail plus its library nodes (latest
+ *  version of each family, in the palette descriptor shape). */
+export async function getPack(id: string): Promise<LibraryPackDetail> {
+	return unwrap(
+		await client.GET('/api/v1/library/packs/{id}', { params: { path: { id } } })
+	) as unknown as LibraryPackDetail;
+}
+
+/** POST /api/v1/library/packs/import — import a self-contained {@link PackBundle}
+ *  into the caller's active workspace (Admin/Owner). All-or-nothing. */
+export async function importPack(bundle: PackBundle): Promise<PackImportResult> {
+	return unwrap(
+		await client.POST('/api/v1/library/packs/import', { body: bundle })
+	) as unknown as PackImportResult;
+}
+
+/** GET /api/v1/library/packs/export — assemble a portable {@link PackBundle}
+ *  from existing library nodes, by `packId` (exact) or `vendor` (fallback).
+ *  Supply at least one; the backend 400s when neither is set. */
+export async function exportPack(opts: {
+	packId?: string;
+	vendor?: string;
+}): Promise<PackBundle> {
+	const query: { pack_id?: string; vendor?: string } = {};
+	if (opts.packId) query.pack_id = opts.packId;
+	if (opts.vendor) query.vendor = opts.vendor;
+	return unwrap(
+		await client.GET('/api/v1/library/packs/export', { params: { query } })
+	) as unknown as PackBundle;
+}
+
+/** DELETE /api/v1/library/packs/{id} — remove a pack + its library-node families
+ *  (Admin/Owner). Throws `ApiError` (403 not admin, 404 not found, 409 a node is
+ *  still embedded in another template or the pack is `system`-origin). */
+export async function deletePack(id: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/library/packs/{id}', { params: { path: { id } } });
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+/**
+ * POST /api/v1/library/icons — upload a custom library logo (multipart image,
+ * ≤ 1 MiB). Returns the `asset:{uuid}` token to drop into a node's
+ * `presentation.icon`. Uses the `authFetch` + `FormData` pattern (openapi-fetch
+ * can't model multipart bodies) — same shape as {@link uploadFile}.
+ */
+export async function uploadLibraryIcon(file: File): Promise<LibraryIconResponse> {
+	const formData = new FormData();
+	formData.append('file', file);
+
+	const res = await authFetch(`${API_BASE}/library/icons`, {
+		method: 'POST',
+		body: formData
+	});
+
+	if (!res.ok) {
+		throw new ApiError(res.status, await parseErrorBody(res));
+	}
+
+	return res.json() as Promise<LibraryIconResponse>;
+}
+
+/** True when a `presentation.icon` value is a custom uploaded-logo token
+ *  (`asset:{uuid}`) rather than a named icon-registry key. Mirrors the backend
+ *  `is_asset_icon`. */
+export function isAssetIcon(token: string | null | undefined): boolean {
+	return typeof token === 'string' && token.startsWith(ICON_ASSET_PREFIX);
+}
+
+/** Build the `GET /api/v1/library/icons/{id}` serve URL from an `asset:{uuid}`
+ *  token (strips the `asset:` prefix). Returns `null` for a non-asset token so
+ *  callers can fall through to `resolveNodeIcon` for named registry keys. */
+export function libraryIconUrl(assetToken: string | null | undefined): string | null {
+	if (!isAssetIcon(assetToken)) return null;
+	const id = (assetToken as string).slice(ICON_ASSET_PREFIX.length);
+	return `${API_BASE}/library/icons/${id}`;
+}
+
 // ── Library-node lifecycle + upgrades (Phase 5) ─────────────────────────────
 
 export type LifecycleRequest = components['schemas']['LifecycleRequest'];

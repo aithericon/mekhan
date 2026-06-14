@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { SubWorkflowNodeData } from '$lib/types/editor';
-	import Workflow from '@lucide/svelte/icons/workflow';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
-	import { resolveNodeIcon } from '$lib/editor/icon-registry';
+	import SubWorkflowCardIcon, {
+		setSubWorkflowIconToken
+	} from '$lib/editor/SubWorkflowCardIcon.svelte';
 
 	let { id, data, selected }: { id: string; data: SubWorkflowNodeData; selected?: boolean } =
 		$props();
@@ -14,7 +15,11 @@
 	// io-contract fetch. When present we render the vendor icon + accent instead
 	// of the generic teal sub-workflow chip; otherwise the card stays generic.
 	const presentation = $derived(data.presentation ?? undefined);
-	const nodeIcon = $derived(presentation?.icon ? resolveNodeIcon(presentation.icon) : Workflow);
+	// Publish the icon token so the card's icon slot (which only forwards `class`)
+	// can render it via NodeIcon — including a custom uploaded `asset:` logo. A
+	// null/unknown token degrades to the generic workflow glyph inside NodeIcon,
+	// preserving the previous plain sub-workflow chip.
+	setSubWorkflowIconToken(() => presentation?.icon);
 	const accentColor = $derived(presentation?.color ?? undefined);
 
 	const fields = $derived(data.output?.fields ?? []);
@@ -61,7 +66,7 @@
 <WorkflowNodeCard
 	nodeId={id}
 	kind="sub-workflow"
-	icon={nodeIcon}
+	icon={SubWorkflowCardIcon}
 	{accentColor}
 	label={data.label}
 	{selected}
