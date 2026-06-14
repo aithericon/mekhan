@@ -4,8 +4,15 @@
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
+	import { backendIcon } from '$lib/editor/backend-icons';
 
 	let { id, data, selected }: { id: string; data: AutomatedStepNodeData; selected?: boolean } = $props();
+
+	// Per-executor glyph: each backend (python/http/llm/docker/…) ships its own
+	// Lucide icon name server-side; resolve it so the card is visually distinct
+	// by backend instead of every automated step wearing the same Cpu chip.
+	// Falls back to Cpu until the backend registry resolves.
+	const stepIcon = $derived(backendIcon(data.executionSpec?.backendType ?? 'python'));
 
 	// Phase 2 typed-ports: render declared `output` port fields inline so the
 	// port editor's effect is visible on the canvas. Falls back to the legacy
@@ -79,7 +86,7 @@
 <WorkflowNodeCard
 	nodeId={id}
 	kind="automated"
-	icon={Cpu}
+	icon={stepIcon}
 	label={data.label}
 	{selected}
 	width={NODE_WIDTH.automated_step}
