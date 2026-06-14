@@ -30,6 +30,7 @@
 	import RefPicker from './RefPicker.svelte';
 	import ChildWorkflowBrowser from '$lib/components/editor/ChildWorkflowBrowser.svelte';
 	import { portToSchemaNode } from '$lib/schema/model';
+	import { resolveNodeIcon } from '$lib/editor/icon-registry';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type Port = components['schemas']['Port'];
@@ -99,6 +100,33 @@
 	const selectedName = $derived(
 		selectedTemplate?.name ??
 			(data.templateId ? data.templateId.slice(0, 8) : 'Select a template…')
+	);
+
+	// A branded library node carries a real `vendor/slug` coordinate frozen onto
+	// the node by the contract effect below (empty string / null / undefined are
+	// all falsy ⇒ only a genuine coordinate flips this on). Hand-built
+	// sub-workflows never set it, so this cleanly distinguishes a pinned vendor
+	// pack (read-only branding) from an author-built child.
+	const isLibraryNode = $derived(!!data.sourceCoordinate);
+
+	// Branded read-only header derives. The lifecycle/version hint maps to
+	// presentation.badge — there's no separate deprecation field; "a newer
+	// version exists" is covered by the upgrade prompt instead.
+	const LibraryIcon = $derived(resolveNodeIcon(data.presentation?.icon));
+	const libVendor = $derived(data.presentation?.vendor ?? '');
+	const libColor = $derived(data.presentation?.color ?? undefined);
+	const libBadge = $derived(data.presentation?.badge ?? null);
+	const libName = $derived(selectedName);
+	// The tinted-background trick (`${color}1a` = ~10% alpha) only works for a
+	// 6-digit hex; a design-token color name would break the inline style, so
+	// only tint when it's hex — otherwise use the raw value for the glyph alone.
+	const libIsHex = $derived(!!libColor && /^#[0-9a-fA-F]{6}$/.test(libColor));
+	const libHeaderStyle = $derived(
+		libIsHex
+			? `background-color:${libColor}1a;color:${libColor}`
+			: libColor
+				? `color:${libColor}`
+				: undefined
 	);
 
 	// Create a blank child template bound private to THIS workflow, point the
@@ -314,8 +342,54 @@
 </script>
 
 <div class="space-y-4">
+	<!-- Branded read-only header for a pinned library / vendor pack. Hand-built
+	     sub-workflows (no sourceCoordinate) never render this. -->
+	{#if isLibraryNode}
+		<div
+			class="flex items-start gap-2.5 rounded-md border border-border/60 bg-muted/20 p-2.5"
+			data-testid="subworkflow-library-header"
+		>
+			<span
+				class="flex size-8 shrink-0 items-center justify-center rounded-md"
+				style={libHeaderStyle}
+			>
+				<LibraryIcon class="size-5" />
+			</span>
+			<div class="min-w-0 flex-1 space-y-0.5">
+				<div class="flex items-center gap-1.5">
+					{#if libVendor}
+						<span
+							class="text-sm font-medium text-foreground"
+							data-testid="subworkflow-library-vendor">{libVendor}</span
+						>
+						<span class="text-muted-foreground">·</span>
+					{/if}
+					<span
+						class="truncate text-sm font-medium text-foreground"
+						data-testid="subworkflow-library-name">{libName}</span
+					>
+					{#if libBadge}
+						<span
+							class="rounded bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-600"
+							data-testid="subworkflow-library-badge">{libBadge}</span
+						>
+					{/if}
+				</div>
+				<code
+					class="block truncate font-mono text-xs text-muted-foreground"
+					data-testid="subworkflow-library-coordinate">{data.sourceCoordinate}</code
+				>
+				<p class="text-xs text-muted-foreground">
+					Versioned vendor pack — pinned and read-only. Change behavior by re-pinning
+					the version below.
+				</p>
+			</div>
+		</div>
+	{/if}
+
 	<!-- Template picker -->
-	<div class="space-y-1.5">
+	{#if !isLibraryNode}
+		<div class="space-y-1.5">
 		<span class="text-sm font-medium text-muted-foreground">Child template</span>
 		<div class="flex items-center gap-1.5">
 			<Button
@@ -380,7 +454,8 @@
 				</Button>
 			</div>
 		{/if}
-	</div>
+		</div>
+	{/if}
 
 	<!-- Version pin -->
 	<div class="space-y-1.5">

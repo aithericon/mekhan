@@ -549,6 +549,29 @@ export async function listLibraryCategories(): Promise<string[]> {
 	return unwrap(await client.GET('/api/v1/node-library/categories', {})) as unknown as string[];
 }
 
+export type LibraryNodeDescriptor = components['schemas']['LibraryNodeDescriptor'];
+
+/**
+ * Browse every library node visible in the workspace. The `/library` management
+ * overview passes both flags so it can list — and reactivate — the complete set;
+ * each row carries `myEffectiveRole` so the view can gate Manage/Demote to Admin+.
+ */
+export async function listNodeLibrary(opts?: {
+	includeDeprecated?: boolean;
+	includeRetired?: boolean;
+}): Promise<LibraryNodeDescriptor[]> {
+	return unwrap(
+		await client.GET('/api/v1/node-library', {
+			params: {
+				query: {
+					include_deprecated: opts?.includeDeprecated,
+					include_retired: opts?.includeRetired
+				}
+			}
+		})
+	) as unknown as LibraryNodeDescriptor[];
+}
+
 // ── Library-node lifecycle + upgrades (Phase 5) ─────────────────────────────
 
 export type LifecycleRequest = components['schemas']['LifecycleRequest'];

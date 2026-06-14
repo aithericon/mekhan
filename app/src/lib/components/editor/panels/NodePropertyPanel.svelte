@@ -89,6 +89,14 @@
 		if (binding && nodeId) binding.updateNodeSlug(nodeId, value);
 	}
 
+	// A library-sourced sub-workflow is a pinned vendor pack: its author-facing
+	// slug / guard-namespace plumbing is meaningless (the pack is read-only), so
+	// hide the Slug field for it only. Every other node kind — and hand-built
+	// sub-workflows (no sourceCoordinate) — keep the Slug field unchanged.
+	const isLibraryNode = $derived(
+		data.type === 'sub_workflow' && 'sourceCoordinate' in data && !!data.sourceCoordinate
+	);
+
 	// In-scope identifiers at the selected node, used by the universal
 	// Inputs-in-scope picker as well as every nested section that embeds a
 	// RefPicker (Decision, Loop, AutomatedStep, HumanTask). Single source of
@@ -267,7 +275,7 @@
 
 		<!-- Common: Slug — author-facing `<slug>.<field>` guard namespace.
 		     Node-level, so it needs the Yjs binding. -->
-		{#if binding && nodeId}
+		{#if binding && nodeId && !isLibraryNode}
 			<FormField label="Slug" for="node-slug">
 				<Input
 					id="node-slug"
