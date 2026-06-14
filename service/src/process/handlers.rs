@@ -73,10 +73,41 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
     JsonValue::Object(obj)
 }
 
+/// The caller's active workspace, defaulting to the nil sentinel (dev_noop and
+/// legacy unlinked data live under nil — see `queries::NIL_WS`).
+fn caller_ws(user: &AuthUser) -> uuid::Uuid {
+    user.workspace_id.unwrap_or_else(uuid::Uuid::nil)
+}
+
+/// 404 unless `process_id` is visible to the caller's workspace. We return
+/// NOT_FOUND rather than FORBIDDEN so a tenant cannot even confirm the existence
+/// of another tenant's process (the list/stats endpoints already hide it).
+async fn gate_process(state: &AppState, process_id: &str, user: &AuthUser) -> Result<(), ApiError> {
+    let visible = queries::process_in_workspace(&state.db, process_id, caller_ws(user))
+        .await
+        .map_err(|e| {
+            tracing::error!("process ws gate: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::status_only(StatusCode::NOT_FOUND))
+    }
+}
+
+/// Whether a task row belongs to the caller's workspace. Tasks carry their own
+/// `workspace_id` (NULL legacy rows resolve to nil); there is no public-template
+/// escape — human work is strictly workspace-scoped.
+fn task_in_ws(task: &HpiTask, user: &AuthUser) -> bool {
+    task.workspace_id.unwrap_or_else(uuid::Uuid::nil) == caller_ws(user)
+}
+
 /// GET /api/v1/processes — list processes with filter/sort/pagination.
 ///
 /// Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
-/// `sort`, `page`, `page_size`. Response shape is paginated.
+/// `sort`, `page`, `page_size`. Response shape is paginated. Workspace-scoped:
+/// only the caller's workspace (+ public-template processes) are returned.
 #[utoipa::path(
     get,
     path = "/api/v1/processes",
@@ -88,9 +119,10 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
 )]
 pub async fn list_processes(
     State(state): State<AppState>,
+    user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let response = queries::list_processes(&state.db, &params)
+    let response = queries::list_processes(&state.db, &params, caller_ws(&user))
         .await
         .map_err(|e| {
             tracing::warn!("process list: {e}");
@@ -109,8 +141,13 @@ pub async fn list_processes(
     ),
     tag = "processes",
 )]
-pub async fn process_stats(State(state): State<AppState>) -> Result<Json<ProcessStats>, ApiError> {
-    let stats = queries::process_stats(&state.db).await.map_err(|e| {
+pub async fn process_stats(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<ProcessStats>, ApiError> {
+    let stats = queries::process_stats(&state.db, caller_ws(&user))
+        .await
+        .map_err(|e| {
         tracing::error!("process stats: {e}");
         ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
     })?;
@@ -131,8 +168,10 @@ pub async fn process_stats(State(state): State<AppState>) -> Result<Json<Process
 )]
 pub async fn get_process(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
 ) -> Result<Json<ProcessDetail>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let detail = queries::get_process_detail(&state.db, &process_id)
         .await
         .map_err(|e| {
@@ -158,9 +197,11 @@ pub async fn get_process(
 )]
 pub async fn update_process(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Json(body): Json<ProcessUpdateRequest>,
 ) -> Result<Json<HpiProcess>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let process = queries::update_process(&state.db, &process_id, &body)
         .await
         .map_err(|e| {
@@ -190,8 +231,10 @@ pub struct MetricQueryParams {
 )]
 pub async fn get_process_metrics_summary(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
 ) -> Result<Json<Vec<HpiMetricSummary>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let summary = queries::summarize_metrics(&state.db, &process_id)
         .await
         .map_err(|e| {
@@ -217,9 +260,11 @@ pub async fn get_process_metrics_summary(
 )]
 pub async fn get_process_metrics(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(params): Query<MetricQueryParams>,
 ) -> Result<Json<Vec<HpiMetric>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let limit = params.limit.unwrap_or(500);
     let metrics = queries::list_metrics(&state.db, &process_id, params.key.as_deref(), limit)
         .await
@@ -243,9 +288,11 @@ pub async fn get_process_metrics(
 )]
 pub async fn get_process_logs(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let response = queries::list_logs(&state.db, &process_id, &params)
         .await
         .map_err(|e| {
@@ -268,8 +315,10 @@ pub async fn get_process_logs(
 )]
 pub async fn get_process_tasks(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
 ) -> Result<Json<Vec<JsonValue>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let tasks = queries::list_process_tasks(&state.db, &process_id)
         .await
         .map_err(|e| {
@@ -293,9 +342,11 @@ pub async fn get_process_tasks(
 )]
 pub async fn get_process_artifacts(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let response = queries::list_process_artifacts(&state.db, &process_id, &params)
         .await
         .map_err(|e| {
@@ -322,9 +373,12 @@ pub async fn get_process_artifacts(
 )]
 pub async fn list_tasks(
     State(state): State<AppState>,
+    user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<TaskListResponse>, ApiError> {
-    let response = queries::list_tasks(&state.db, &params).await.map_err(|e| {
+    let response = queries::list_tasks(&state.db, &params, caller_ws(&user))
+        .await
+        .map_err(|e| {
         tracing::warn!("task list: {e}");
         ApiError::bad_request(e.to_string())
     })?;
@@ -395,6 +449,7 @@ pub async fn inbox(
 )]
 pub async fn get_task(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<JsonValue>, ApiError> {
     let task = queries::get_task(&state.db, &id)
@@ -403,6 +458,7 @@ pub async fn get_task(
             tracing::error!("task get: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
         })?
+        .filter(|t| task_in_ws(t, &user))
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
     Ok(Json(to_human_task_json(&task)))
 }
@@ -531,6 +587,7 @@ fn coerce_bool(v: &JsonValue) -> bool {
 )]
 pub async fn complete_task(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<JsonValue>, ApiError> {
@@ -541,6 +598,7 @@ pub async fn complete_task(
             tracing::error!("task complete lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
         })?
+        .filter(|t| task_in_ws(t, &user))
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
@@ -622,6 +680,7 @@ pub async fn complete_task(
 )]
 pub async fn cancel_task(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<JsonValue>, ApiError> {
@@ -632,6 +691,7 @@ pub async fn cancel_task(
             tracing::error!("task cancel lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
         })?
+        .filter(|t| task_in_ws(t, &user))
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
@@ -735,6 +795,7 @@ pub async fn claim_task(
             tracing::error!("task claim lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
         })?
+        .filter(|t| task_in_ws(t, &user))
         .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     // An UNPOOLED task (`pending`, no `capacity_id`) has no offer pool to route a

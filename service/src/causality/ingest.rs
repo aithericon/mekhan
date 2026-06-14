@@ -27,8 +27,10 @@ struct CrossNetTokenTransfer {
 
 /// Start the causality event ingest consumer.
 ///
-/// Subscribes to `petri.events.>` and `petri.bridge.>` on the `PETRI_GLOBAL`
-/// JetStream stream and projects each domain event into the causality tables.
+/// Subscribes to `petri.*.*.events.>` and `petri.*.*.bridge.>` on the
+/// `PETRI_GLOBAL` JetStream stream (the `{ws}.{net}` tokens wildcarded) and
+/// projects each domain event into the causality tables. The two filters are
+/// kept disjoint by category so JetStream accepts them on one consumer.
 pub async fn start_causality_ingest(
     nats: MekhanNats,
     db: PgPool,
@@ -56,7 +58,7 @@ pub async fn start_causality_ingest(
         }
     };
 
-    tracing::info!("causality ingest started on petri.events.> + petri.bridge.>");
+    tracing::info!("causality ingest started on petri.*.*.events.> + petri.*.*.bridge.>");
 
     while let Some(msg_result) = messages.next().await {
         let msg = match msg_result {

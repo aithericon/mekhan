@@ -8076,7 +8076,7 @@
           "processes"
         ],
         "summary": "GET /api/v1/processes — list processes with filter/sort/pagination.",
-        "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated.",
+        "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated. Workspace-scoped:\nonly the caller's workspace (+ public-template processes) are returned.",
         "operationId": "list_processes",
         "responses": {
           "200": {

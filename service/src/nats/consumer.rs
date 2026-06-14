@@ -16,8 +16,8 @@ use async_nats::jetstream;
 use async_nats::jetstream::consumer::PullConsumer;
 
 use super::subjects::{
-    self, Subjects, BRIDGE_ALL, HUMAN_CANCEL_ALL, HUMAN_REQUEST_ALL, INFERENCE_METERING_ALL,
-    STREAM_HUMAN_REQUESTS, STREAM_INFERENCE_METERING,
+    self, Subjects, BRIDGE_ALL, EVENTS_CATEGORY_ALL, HUMAN_CANCEL_ALL, HUMAN_REQUEST_ALL,
+    INFERENCE_METERING_ALL, STREAM_HUMAN_REQUESTS, STREAM_INFERENCE_METERING,
 };
 use super::MekhanNats;
 
@@ -246,7 +246,11 @@ impl MekhanNats {
         self.pull_consumer(ConsumerSpec {
             stream: StreamSource::ExistingWithRetry(Subjects::STREAM_GLOBAL),
             durable_base: "mekhan-causality-ingest",
-            filter_subjects: vec![Subjects::EVENTS_ALL.into(), BRIDGE_ALL.into()],
+            // Events + bridge as two DISJOINT filters. Must NOT be
+            // `Subjects::EVENTS_ALL` (`petri.>`) here — it subsumes `BRIDGE_ALL`,
+            // and JetStream rejects overlapping `filter_subjects` (error 10138),
+            // which silently kills the whole causality projection.
+            filter_subjects: vec![EVENTS_CATEGORY_ALL.into(), BRIDGE_ALL.into()],
             ack_wait: None,
             // Reap the durable if this projection is ever removed (see the
             // step-executions projection spec for the incident rationale).

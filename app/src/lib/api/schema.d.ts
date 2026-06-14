@@ -2680,7 +2680,8 @@ export interface paths {
         /**
          * GET /api/v1/processes — list processes with filter/sort/pagination.
          * @description Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
-         *     `sort`, `page`, `page_size`. Response shape is paginated.
+         *     `sort`, `page`, `page_size`. Response shape is paginated. Workspace-scoped:
+         *     only the caller's workspace (+ public-template processes) are returned.
          */
         get: operations["list_processes"];
         put?: never;

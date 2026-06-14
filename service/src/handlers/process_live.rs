@@ -31,6 +31,29 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::{ArtifactsListResponse, LogsTailResponse};
 use crate::AppState;
 
+/// 404 unless `process_id` is visible to the caller's workspace. Shared by every
+/// live/backfill endpoint here so the SSE firehoses and DB backfills are
+/// workspace-scoped (a tenant cannot tail another tenant's metrics/logs by id).
+/// See `crate::process::queries::process_in_workspace` for the scoping rule.
+async fn gate_process(
+    state: &AppState,
+    process_id: &str,
+    user: &AuthUser,
+) -> Result<(), ApiError> {
+    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let visible = crate::process::queries::process_in_workspace(&state.db, process_id, ws)
+        .await
+        .map_err(|e| {
+            tracing::error!(process_id = %process_id, "process ws gate: {e}");
+            ApiError::internal(e.to_string())
+        })?;
+    if visible {
+        Ok(())
+    } else {
+        Err(ApiError::status_only(axum::http::StatusCode::NOT_FOUND))
+    }
+}
+
 // ─── metrics/series (DB backfill with adaptive downsampling) ───────────────
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -99,9 +122,11 @@ fn choose_bucket_seconds(window_seconds: i64, max_points: i64) -> i64 {
 )]
 pub async fn metrics_series(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(q): Query<MetricsSeriesQuery>,
 ) -> Result<Json<MetricsSeriesResponse>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let until = q.until.unwrap_or_else(Utc::now);
     let since = q
         .since
@@ -235,9 +260,11 @@ pub struct MetricsStreamQuery {
 )]
 pub async fn metrics_stream(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(q): Query<MetricsStreamQuery>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let since_seq = q.since_seq.unwrap_or(0);
     let signal_filter = q.signal_key.clone();
     let key_filter: Option<HashSet<String>> = q.keys.as_deref().map(|s| {
@@ -335,11 +362,11 @@ pub async fn metrics_stream(
         .chain(futures::stream::iter(backfill))
         .chain(live_stream);
 
-    Sse::new(stream).keep_alive(
+    Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
             .text("ping"),
-    )
+    ))
 }
 
 fn metric_event_to_sse(e: &LiveMetricEvent) -> Event {
@@ -403,9 +430,11 @@ pub struct LogRow {
 )]
 pub async fn logs_tail(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(qp): Query<LogsTailQuery>,
 ) -> Result<Json<LogsTailResponse>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let sql = "SELECT id, process_id, level, source, message, detail, timestamp, signal_key \
                FROM hpi_logs \
                WHERE process_id = $1 \
@@ -468,9 +497,11 @@ pub struct LogsStreamQuery {
 )]
 pub async fn logs_stream(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(qp): Query<LogsStreamQuery>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let since_seq = qp.since_seq.unwrap_or(0);
     let signal_filter = qp.signal_key.clone();
     let level_filter = qp.level.clone();
@@ -567,11 +598,11 @@ pub async fn logs_stream(
         .chain(futures::stream::iter(backfill))
         .chain(live_stream);
 
-    Sse::new(stream).keep_alive(
+    Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
             .text("ping"),
-    )
+    ))
 }
 
 fn log_event_to_sse(e: &LiveLogEvent) -> Event {
@@ -630,6 +661,7 @@ pub async fn artifacts_list(
     Path(process_id): Path<String>,
     Query(qp): Query<ArtifactsListQuery>,
 ) -> Result<Json<ArtifactsListResponse>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
     let categories = parse_csv(qp.categories.as_deref());
     let hints = parse_csv(qp.render_hints.as_deref());
@@ -703,9 +735,11 @@ fn artifact_matches(
 )]
 pub async fn artifacts_stream(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(process_id): Path<String>,
     Query(qp): Query<ArtifactsStreamQuery>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    gate_process(&state, &process_id, &user).await?;
     let since_seq = qp.since_seq.unwrap_or(0);
     let categories: Option<HashSet<String>> = qp.categories.as_deref().map(|s| {
         s.split(',')
@@ -777,11 +811,11 @@ pub async fn artifacts_stream(
         .chain(futures::stream::iter(backfill))
         .chain(live_stream);
 
-    Sse::new(stream).keep_alive(
+    Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
             .text("ping"),
-    )
+    ))
 }
 
 fn artifact_event_to_sse(e: &LiveArtifactEvent) -> Event {
