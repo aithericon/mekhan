@@ -15,18 +15,20 @@ use crate::AppState;
 
 /// True if the engine net `net_id` is visible to a caller in `workspace_id`: its
 /// producing instance's template workspace matches (unlinked pool/infra/legacy
-/// nets resolve to the nil sentinel, so a nil-workspace caller sees them), OR the
-/// producing template is `public`. Mirrors the process read surface's scoping
-/// (`causality::ingest::resolve_net_workspace` + the `list_instances` public
-/// escape); provenance handlers 404 on `false` so a tenant cannot walk another
+/// nets resolve to the nil sentinel, so a nil-workspace caller sees them).
+/// STRICT — no public-visibility escape: causality is per-run execution data
+/// owned by one workspace, not a shareable definition. A public template is
+/// read-only-discoverable cross-workspace, but its runs' provenance graphs stay
+/// private to the owning workspace (mirrors `list_instances` / the process read
+/// surface). Provenance handlers 404 on `false` so a tenant cannot walk another
 /// tenant's causality graph.
 async fn net_in_workspace(
     db: &sqlx::PgPool,
     net_id: &str,
     workspace_id: uuid::Uuid,
 ) -> Result<bool, sqlx::Error> {
-    let row: Option<(uuid::Uuid, bool)> = sqlx::query_as(
-        "SELECT t.workspace_id, (t.visibility = 'public') \
+    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT t.workspace_id \
          FROM workflow_instances i \
          JOIN workflow_templates t ON t.id = i.template_id AND t.version = i.template_version \
          WHERE i.net_id = $1 LIMIT 1",
@@ -34,8 +36,8 @@ async fn net_in_workspace(
     .bind(net_id)
     .fetch_optional(db)
     .await?;
-    let (net_ws, is_public) = row.unwrap_or_else(|| (uuid::Uuid::nil(), false));
-    Ok(is_public || net_ws == workspace_id)
+    let net_ws = row.map(|(ws,)| ws).unwrap_or_else(uuid::Uuid::nil);
+    Ok(net_ws == workspace_id)
 }
 
 /// 404 unless the net is visible to the caller (see [`net_in_workspace`]).

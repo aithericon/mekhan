@@ -80,9 +80,14 @@ pub async fn apply_override(db: &PgPool, user: &mut AuthUser, headers: &HeaderMa
     // Membership check — refuse to honour a cookie whose UUID the user no
     // longer has access to. We never error: failed membership silently
     // reverts to the resolver's pick.
+    // Join `workspaces` so an archived (soft-deleted) workspace is never
+    // honoured even if the caller still holds a stale cookie + membership row;
+    // resolution silently falls back to the resolver's live pick.
     let user_id = user.subject_as_uuid();
     let row: Result<Option<(String,)>, _> = sqlx::query_as(
-        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        "SELECT m.role FROM workspace_members m \
+           JOIN workspaces w ON w.id = m.workspace_id \
+          WHERE m.workspace_id = $1 AND m.user_id = $2 AND w.archived_at IS NULL",
     )
     .bind(requested)
     .bind(user_id)

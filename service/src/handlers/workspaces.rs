@@ -151,7 +151,7 @@ pub async fn list_workspaces(
         "SELECT w.id, w.slug, w.display_name, w.is_system, w.created_at \
            FROM workspaces w \
            JOIN workspace_members m ON m.workspace_id = w.id \
-          WHERE m.user_id = $1 \
+          WHERE m.user_id = $1 AND w.archived_at IS NULL \
           ORDER BY w.created_at",
     )
     .bind(user_id)
@@ -182,13 +182,98 @@ pub async fn get_workspace(
         .map_err(map_to_api_error)?;
     let row: Option<WorkspaceSummary> = sqlx::query_as(
         "SELECT id, slug, display_name, is_system, created_at \
-           FROM workspaces WHERE id = $1",
+           FROM workspaces WHERE id = $1 AND archived_at IS NULL",
     )
     .bind(id)
     .fetch_optional(&state.db)
     .await?;
     row.map(Json)
         .ok_or_else(|| ApiError::not_found("workspace not found"))
+}
+
+/// DELETE /api/v1/workspaces/{id}
+///
+/// **Soft-deletes (archives)** a workspace. Owner-gated — deleting the tenant is
+/// the most destructive control-plane action, so it sits above `admin`.
+///
+/// Archiving sets `archived_at` and nothing else: every row (templates,
+/// instances, members, catalogue, …) is preserved for audit / recovery. The
+/// workspace immediately drops out of the tenant picker, the membership
+/// listing, and auth resolution. A hard purge is a deliberately separate
+/// operation.
+///
+/// Refuses (409) to archive:
+///   - a **system** workspace (`is_system`) or the seeded `default` — they are
+///     platform-owned and load-bearing for unbound principals;
+///   - a workspace with **live instances** (`created` / `running`) — tear those
+///     down first so no orphaned nets keep executing against a dead tenant.
+///
+/// Idempotent: archiving an already-archived workspace returns 204.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/workspaces/{id}",
+    params(("id" = Uuid, Path, description = "Workspace id")),
+    responses(
+        (status = 204, description = "Workspace archived (or already archived)"),
+        (status = 403, description = "Owner role required", body = ErrorResponse),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "System/default workspace, or has live instances", body = ErrorResponse),
+    ),
+    tag = "workspaces",
+)]
+pub async fn delete_workspace(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    require_role(&state.db, &user, id, Role::Owner)
+        .await
+        .map_err(map_to_api_error)?;
+
+    let row: Option<(bool, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT is_system, slug, archived_at FROM workspaces WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (is_system, slug, archived_at) =
+        row.ok_or_else(|| ApiError::not_found("workspace not found"))?;
+
+    // Already archived → idempotent success.
+    if archived_at.is_some() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    if is_system {
+        return Err(ApiError::conflict("cannot delete a system workspace"));
+    }
+    if slug == "default" {
+        return Err(ApiError::conflict("cannot delete the default workspace"));
+    }
+
+    // Block while live nets exist — instances carry no workspace_id column, so
+    // scope through the joined template's workspace. `created`/`running` are the
+    // non-terminal states; `completed`/`failed`/`cancelled` are safe to leave.
+    let (live,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)::BIGINT \
+           FROM workflow_instances wi \
+           JOIN workflow_templates wt ON wt.id = wi.template_id \
+          WHERE wt.workspace_id = $1 AND wi.status IN ('created', 'running')",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    if live > 0 {
+        return Err(ApiError::conflict(format!(
+            "workspace has {live} live instance(s) — cancel them before deleting"
+        )));
+    }
+
+    sqlx::query("UPDATE workspaces SET archived_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/v1/workspaces/{id}/members

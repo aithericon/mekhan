@@ -1234,6 +1234,16 @@ export async function createWorkspace(
 	return unwrap(await client.POST('/api/v1/workspaces', { body }));
 }
 
+/// DELETE /api/v1/workspaces/{id} — soft-delete (archive). Owner-only.
+/// Throws `ApiError` (403 not owner, 409 system/default or live instances).
+export async function deleteWorkspace(id: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/workspaces/{id}', {
+		params: { path: { id } }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
 export async function listWorkspaceMembers(id: string): Promise<WorkspaceMember[]> {
 	return unwrap(
 		await client.GET('/api/v1/workspaces/{id}/members', {
