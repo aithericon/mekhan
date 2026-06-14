@@ -49,6 +49,7 @@ function attrs(partial: Partial<ArtifactEmbedAttrs> = {}): ArtifactEmbedAttrs {
 		groupKey: '',
 		groupLabel: '',
 		artifactId: '',
+		executionId: '',
 		artifactName: '',
 		storagePath: '',
 		mimeType: '',

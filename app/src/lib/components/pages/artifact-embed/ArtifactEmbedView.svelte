@@ -16,6 +16,7 @@
 	import ArtifactsPanel from '$lib/components/process-live/ArtifactsPanel.svelte';
 	import ArtifactMediaPreview from '$lib/components/catalogue/ArtifactMediaPreview.svelte';
 	import ArtifactProvenance from '$lib/components/catalogue/ArtifactProvenance.svelte';
+	import StepSheetLauncher from '$lib/components/instances/StepSheetLauncher.svelte';
 	import { isShowcaseEntry, pickRenderer, groupKey } from '$lib/components/process-live/renderers/registry';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
@@ -101,11 +102,22 @@
 				<span class="truncate text-muted-foreground">· {attrs.processName}</span>
 			{/if}
 		</div>
-		{#if editable}
-			<Button variant="ghost" size="icon-sm" title="Remove block" onclick={onDelete}>
-				<Trash2 class="size-4" />
-			</Button>
-		{/if}
+		<div class="flex shrink-0 items-center gap-0.5">
+			{#if attrs.mode === 'artifact' && context && context.instanceId && attrs.executionId && attrs.artifactId}
+				<StepSheetLauncher
+					instanceId={context.instanceId}
+					templateId={context.templateId}
+					executionId={attrs.executionId}
+					artifactId={attrs.artifactId}
+					createdAt={attrs.createdAt}
+				/>
+			{/if}
+			{#if editable}
+				<Button variant="ghost" size="icon-sm" title="Remove block" onclick={onDelete}>
+					<Trash2 class="size-4" />
+				</Button>
+			{/if}
+		</div>
 	</div>
 
 	<div class="p-3">
@@ -131,7 +143,15 @@
 					No renderable media yet — it'll appear here as the run produces it.
 				</p>
 			{:else}
-				<ArtifactsPanel {store} renderableOnly showProvenance {groupFilter} />
+				<ArtifactsPanel
+					{store}
+					renderableOnly
+					showProvenance
+					{groupFilter}
+					stepContext={context && context.instanceId
+						? { instanceId: context.instanceId, templateId: context.templateId }
+						: undefined}
+				/>
 			{/if}
 		{:else}
 			<p class="text-sm text-muted-foreground">

@@ -20,11 +20,13 @@
 	// Run context for the "Insert media" block: the run's processes (read live so
 	// the picker reflects processes that appear after mount) + memoized per-process
 	// live stores shared across every embed on the page. Torn down on unmount.
-	const { context: embedContext, destroy: destroyEmbeds } = createEmbedContext(() =>
-		ctx.processes.map((p) => ({
-			id: p.process_id,
-			name: p.name ?? p.kind ?? p.process_id.slice(0, 8)
-		}))
+	const { context: embedContext, destroy: destroyEmbeds } = createEmbedContext(
+		{ instanceId: ctx.instanceId, getTemplateId: () => ctx.instance?.template_id ?? '' },
+		() =>
+			ctx.processes.map((p) => ({
+				id: p.process_id,
+				name: p.name ?? p.kind ?? p.process_id.slice(0, 8)
+			}))
 	);
 	onDestroy(destroyEmbeds);
 

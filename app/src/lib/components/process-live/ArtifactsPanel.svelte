@@ -9,6 +9,7 @@
 	import Maximize from '@lucide/svelte/icons/maximize';
 	import MediaLightbox from './MediaLightbox.svelte';
 	import ArtifactProvenance from '$lib/components/catalogue/ArtifactProvenance.svelte';
+	import StepSheetLauncher from '$lib/components/instances/StepSheetLauncher.svelte';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 	import type { createProcessLiveStore } from '$lib/stores/process-live.svelte';
 	import {
@@ -39,8 +40,19 @@
 		 * under each entry. On for Report embeds; off for the Process Overview card.
 		 */
 		showProvenance?: boolean;
+		/**
+		 * When set (Report embeds), each entry gets a button that opens the
+		 * StepDetailDrawer for the step that produced it. Off for the Overview card.
+		 */
+		stepContext?: { instanceId: string; templateId: string };
 	}
-	let { store, renderableOnly = false, groupFilter, showProvenance = false }: Props = $props();
+	let {
+		store,
+		renderableOnly = false,
+		groupFilter,
+		showProvenance = false,
+		stepContext
+	}: Props = $props();
 
 	/**
 	 * Per group (by render_hint / MIME / category):
@@ -249,6 +261,15 @@
 							<span class="ml-1 text-sm tabular-nums text-muted-foreground">
 								{idx + 1} / {g.entries.length}
 							</span>
+						{/if}
+						{#if stepContext && (entry.execution_id ?? '') && (entry.artifact_id ?? entry.id ?? '')}
+							<StepSheetLauncher
+								instanceId={stepContext.instanceId}
+								templateId={stepContext.templateId}
+								executionId={entry.execution_id ?? ''}
+								artifactId={entry.artifact_id ?? entry.id ?? ''}
+								createdAt={entry.created_at}
+							/>
 						{/if}
 						<Button
 							variant="ghost"

@@ -38,6 +38,8 @@ export interface ArtifactEmbedAttrs {
 	groupLabel: string;
 	/** artifact mode: pinned snapshot of one catalogue entry. */
 	artifactId: string;
+	/** Producing executor job id — resolves the artifact back to its step. */
+	executionId: string;
 	artifactName: string;
 	storagePath: string;
 	mimeType: string;
@@ -61,6 +63,7 @@ const STRING_ATTRS: (keyof ArtifactEmbedAttrs)[] = [
 	'groupKey',
 	'groupLabel',
 	'artifactId',
+	'executionId',
 	'artifactName',
 	'storagePath',
 	'mimeType',
