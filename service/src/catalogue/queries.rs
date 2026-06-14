@@ -402,6 +402,9 @@ pub(crate) fn append_where(
     // Typed filters
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
+            if need_and {
+                qb.push(" AND ");
+            }
             builder::build_where_conditions_specs(qb, filter, CATALOGUE_FIELD_SPECS)?;
             need_and = true;
         }

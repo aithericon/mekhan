@@ -313,7 +313,7 @@ async fn subworkflow_pins_child_at_parent_publish() {
         .await
         .unwrap();
     for tbl in ["yjs_documents", "yjs_snapshots"] {
-        sqlx::query(&format!("DELETE FROM {tbl} WHERE template_id = $1"))
+        sqlx::query(&format!("DELETE FROM {tbl} WHERE doc_id = $1"))
             .bind(child_v2)
             .execute(&db)
             .await

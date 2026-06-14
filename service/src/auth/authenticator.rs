@@ -29,6 +29,54 @@ use super::model::{AuthError, AuthUser};
 /// requests *and* the WebSocket upgrade with no client code.
 pub const SESSION_COOKIE: &str = "mekhan_session";
 
+/// Cookie selecting which seeded dev identity the [`NoopAuthenticator`] returns
+/// (value = the identity's `subject`). Dev-only: [`BffAuthenticator`] never
+/// reads it, so it's completely inert in production. Set/cleared by the
+/// `/api/v1/dev/identities/active` endpoint.
+pub const DEV_USER_COOKIE: &str = "mekhan_dev_user";
+
+/// Second dev workspace ("Acme Labs"), seeded by migration 20240184 and owned
+/// by `dev-user-2`. Hard-coded here so the noop roster lands that identity in
+/// its own tenant by default — the parallel of `dev-user` landing in
+/// `Uuid::nil()` (the `default` workspace).
+pub const DEV_ORG2_WORKSPACE_ID: uuid::Uuid =
+    uuid::uuid!("00000000-0000-0000-0000-000000000002");
+
+/// The dev identities the [`NoopAuthenticator`] can impersonate. Index 0 is the
+/// default — returned when no `mekhan_dev_user` cookie is present. Each entry is
+/// backed by a `workspace_members` seed row (migrations 20240123 + 20240184) so
+/// the active-workspace override and every membership gate behave exactly like a
+/// real login. Single source of truth: both the authenticator and the
+/// `/api/v1/dev/identities` endpoint read this list.
+pub fn dev_user_roster() -> Vec<AuthUser> {
+    vec![
+        // dev-user — owner of `default` (Uuid::nil()), also a member of
+        // acme-labs (so it can switch orgs). The historical fixed dev user.
+        AuthUser {
+            subject: "dev-user".to_string(),
+            email: Some("dev@local".to_string()),
+            display_name: Some("Dev User".to_string()),
+            roles: Vec::new(),
+            org_id: None,
+            workspace_id: Some(uuid::Uuid::nil()),
+            workspace_role: Some("owner".to_string()),
+            avatar_url: None,
+        },
+        // dev-user-2 — owner of acme-labs ONLY. Switching to this identity
+        // shows a cleanly isolated tenant (it is not a member of `default`).
+        AuthUser {
+            subject: "dev-user-2".to_string(),
+            email: Some("dev2@local".to_string()),
+            display_name: Some("Dev User Two".to_string()),
+            roles: Vec::new(),
+            org_id: None,
+            workspace_id: Some(DEV_ORG2_WORKSPACE_ID),
+            workspace_role: Some("owner".to_string()),
+            avatar_url: None,
+        },
+    ]
+}
+
 /// Refresh the access token when it expires within this window. Keeps a
 /// long-lived editor session from 401-ing mid-edit.
 const REFRESH_SKEW_SECS: i64 = 60;
@@ -118,36 +166,43 @@ impl Authenticator for BffAuthenticator {
     }
 }
 
-/// Dev authenticator: every request is the fixed dev user. Selected for
+/// Dev authenticator: every request is a seeded dev user. Selected for
 /// `auth.mode = "dev_noop"`; `main.rs` refuses it under `MEKHAN_ENV=prod`.
+///
+/// Holds a small roster (see [`dev_user_roster`]). Which identity a request
+/// resolves to is chosen by the `mekhan_dev_user` cookie ([`DEV_USER_COOKIE`]) —
+/// absent / unknown value falls back to roster index 0 (the historical fixed
+/// `dev-user`). This is the only authenticator that reads that cookie, so user
+/// switching is a dev-only affordance.
 #[derive(Debug, Clone)]
 pub struct NoopAuthenticator {
-    user: AuthUser,
+    /// Index 0 is the default identity. Never empty.
+    users: Vec<AuthUser>,
 }
 
 impl Default for NoopAuthenticator {
     fn default() -> Self {
         Self {
-            user: AuthUser {
-                subject: "dev-user".to_string(),
-                email: Some("dev@local".to_string()),
-                display_name: Some("Dev User".to_string()),
-                roles: Vec::new(),
-                org_id: None,
-                // The dev user is seeded as `owner` of the default workspace
-                // (id = Uuid::nil()) by migration 20240123. Hard-coding here
-                // matches what `DbPrincipalResolver::membership_workspace`
-                // would return for this subject; we shortcut the lookup since
-                // NoopAuthenticator bypasses the resolver path entirely.
-                workspace_id: Some(uuid::Uuid::nil()),
-                // Dev user is seeded as `owner` of the default workspace by
-                // migration 20240123; mirror that here so the SPA's admin
-                // affordances light up offline.
-                workspace_role: Some("owner".to_string()),
-                // No IdP `picture` claim in dev-noop → SPA renders "DU" initials.
-                avatar_url: None,
-            },
+            users: dev_user_roster(),
         }
+    }
+}
+
+impl NoopAuthenticator {
+    /// The seeded dev roster (index 0 = default). Exposed so the
+    /// `/api/v1/dev/identities` endpoint can render the same list the
+    /// authenticator switches between.
+    pub fn roster(&self) -> &[AuthUser] {
+        &self.users
+    }
+
+    /// Resolve the active identity for a `mekhan_dev_user` cookie value:
+    /// the matching roster entry, or the default (index 0) when the value is
+    /// absent or unrecognised.
+    fn select(&self, requested: Option<&str>) -> &AuthUser {
+        requested
+            .and_then(|sub| self.users.iter().find(|u| u.subject == sub))
+            .unwrap_or(&self.users[0])
     }
 }
 
@@ -156,9 +211,10 @@ impl Authenticator for NoopAuthenticator {
     async fn authenticate(
         &self,
         _headers: &HeaderMap,
-        _jar: &CookieJar,
+        jar: &CookieJar,
     ) -> Result<AuthUser, AuthError> {
-        Ok(self.user.clone())
+        let requested = jar.get(DEV_USER_COOKIE).map(|c| c.value());
+        Ok(self.select(requested).clone())
     }
 }
 
@@ -175,5 +231,22 @@ mod tests {
             .expect("noop always authenticates");
         assert_eq!(user.subject, "dev-user");
         assert_eq!(user.email.as_deref(), Some("dev@local"));
+    }
+
+    #[tokio::test]
+    async fn noop_authenticator_switches_user_by_cookie() {
+        use axum_extra::extract::cookie::Cookie;
+        let auth = NoopAuthenticator::default();
+
+        // Known second identity → impersonated, landing in its own workspace.
+        let jar = CookieJar::new().add(Cookie::new(DEV_USER_COOKIE, "dev-user-2"));
+        let user = auth.authenticate(&HeaderMap::new(), &jar).await.unwrap();
+        assert_eq!(user.subject, "dev-user-2");
+        assert_eq!(user.workspace_id, Some(DEV_ORG2_WORKSPACE_ID));
+
+        // Unknown value → silently falls back to the default identity, never errors.
+        let jar = CookieJar::new().add(Cookie::new(DEV_USER_COOKIE, "ghost"));
+        let user = auth.authenticate(&HeaderMap::new(), &jar).await.unwrap();
+        assert_eq!(user.subject, "dev-user");
     }
 }

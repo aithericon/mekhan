@@ -449,7 +449,18 @@ async fn causality_full_pipeline() {
         "data": { "approved": "yes" },
         "completed_at": chrono::Utc::now().to_rfc3339()
     });
-    let subject = format!("human.completed.{net_id}.{review_place}");
+    // ADR-09: human-result subjects are workspace-namespaced
+    // (`human.{ws}.completed.{net}.{place}`). A 4-part subject is captured by no
+    // stream and silently dropped, so the net never leaves the human task. The
+    // engine resolves by `net_id` (ws is shape + observability); use the task's
+    // own workspace_id (nil fallback), matching the production `complete_task`.
+    let task_ws: Option<Uuid> = sqlx::query_scalar("SELECT workspace_id FROM hpi_tasks WHERE id = $1")
+        .bind(&task_id)
+        .fetch_one(&db)
+        .await
+        .expect("fetch task workspace_id");
+    let ws = task_ws.unwrap_or_else(Uuid::nil);
+    let subject = format!("human.{ws}.completed.{net_id}.{review_place}");
     nats.client()
         .publish(
             subject.clone(),

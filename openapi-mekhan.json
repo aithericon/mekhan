@@ -3762,6 +3762,76 @@
         }
       }
     },
+    "/api/v1/dev/identities": {
+      "get": {
+        "tags": [
+          "dev"
+        ],
+        "summary": "GET /api/v1/dev/identities",
+        "description": "List the dev identities `dev_noop` can impersonate, flagging the active\none. Returns an EMPTY list under any non-`dev_noop` auth mode — the SPA uses\nemptiness to hide the switcher entirely in real deployments.",
+        "operationId": "list_dev_identities",
+        "responses": {
+          "200": {
+            "description": "Selectable dev identities (empty unless dev_noop)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DevIdentity"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dev/identities/active": {
+      "post": {
+        "tags": [
+          "dev"
+        ],
+        "summary": "POST /api/v1/dev/identities/active",
+        "description": "Switch the acting dev user by setting the `mekhan_dev_user` cookie. Also\nCLEARS the active-workspace cookie so the new identity lands in its own\nseeded default workspace rather than inheriting the previous user's pick\n(a workspace the new identity may not even be a member of). 404 under any\nnon-`dev_noop` mode (the feature doesn't exist there); 400 for an unknown\nsubject.",
+        "operationId": "set_dev_identity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDevIdentityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Acting dev identity switched"
+          },
+          "400": {
+            "description": "Unknown dev identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not running in dev_noop mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
       "get": {
         "tags": [
@@ -20244,6 +20314,43 @@
           }
         }
       },
+      "DevIdentity": {
+        "type": "object",
+        "description": "One selectable dev identity.",
+        "required": [
+          "subject",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "True for the identity the current `mekhan_dev_user` cookie selects (or\nthe default identity when no/unknown cookie is set)."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace the identity lands in by default (its seeded membership pick)."
+          }
+        }
+      },
       "DimensionView": {
         "type": "object",
         "description": "A named dimension with its size (rows/cols/width/height/depth/time/…).",
@@ -30051,6 +30158,18 @@
             "type": "string",
             "format": "uuid",
             "description": "Target workspace id. The caller must already be a member."
+          }
+        }
+      },
+      "SetDevIdentityRequest": {
+        "type": "object",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "`subject` of a roster identity (e.g. `\"dev-user\"` or `\"dev-user-2\"`)."
           }
         }
       },

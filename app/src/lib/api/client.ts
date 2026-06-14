@@ -156,6 +156,7 @@ export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 export type WorkspaceMember = components['schemas']['WorkspaceMember'];
 export type AddMemberRequest = components['schemas']['AddMemberRequest'];
 export type CreateWorkspaceRequest = components['schemas']['CreateWorkspaceRequest'];
+export type DevIdentity = components['schemas']['DevIdentity'];
 export type Folder = components['schemas']['Folder'];
 export type CreateFolderRequest = components['schemas']['CreateFolderRequest'];
 export type UpdateFolderRequest = components['schemas']['UpdateFolderRequest'];
@@ -1520,6 +1521,20 @@ export async function setActiveWorkspace(workspaceId: string): Promise<void> {
 
 export async function clearActiveWorkspace(): Promise<void> {
 	const res = await client.DELETE('/api/v1/me/active-workspace', {});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+/// GET /api/v1/dev/identities — the seeded dev identities `dev_noop` can
+/// impersonate. Empty under any real auth mode, so the SPA hides the switcher.
+export async function listDevIdentities(): Promise<DevIdentity[]> {
+	return unwrap(await client.GET('/api/v1/dev/identities', {}));
+}
+
+/// POST /api/v1/dev/identities/active — switch the acting dev user (dev_noop
+/// only). Also clears the active-workspace cookie server-side.
+export async function setDevIdentity(subject: string): Promise<void> {
+	const res = await client.POST('/api/v1/dev/identities/active', { body: { subject } });
 	if (res.response.ok) return;
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
 }

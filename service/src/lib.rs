@@ -773,6 +773,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::me::set_active_workspace,
             handlers::me::clear_active_workspace
         ))
+        // Dev-only identity switcher — impersonate a seeded dev user under
+        // `dev_noop` (empty roster / 404 in any real auth mode).
+        .routes(routes!(handlers::dev_identity::list_dev_identities))
+        .routes(routes!(handlers::dev_identity::set_dev_identity))
         // Email → OIDC subject resolver (Phase B) — for the member-admin UI.
         .routes(routes!(handlers::users::resolve_user_by_email))
         // Batch UUID → profile resolver (identity seam) — the SPA's UserChip

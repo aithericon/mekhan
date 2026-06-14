@@ -1221,6 +1221,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dev/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/dev/identities
+         * @description List the dev identities `dev_noop` can impersonate, flagging the active
+         *     one. Returns an EMPTY list under any non-`dev_noop` auth mode — the SPA uses
+         *     emptiness to hide the switcher entirely in real deployments.
+         */
+        get: operations["list_dev_identities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/identities/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/dev/identities/active
+         * @description Switch the acting dev user by setting the `mekhan_dev_user` cookie. Also
+         *     CLEARS the active-workspace cookie so the new identity lands in its own
+         *     seeded default workspace rather than inheriting the previous user's pick
+         *     (a workspace the new identity may not even be a member of). 404 under any
+         *     non-`dev_noop` mode (the feature doesn't exist there); 400 for an unknown
+         *     subject.
+         */
+        post: operations["set_dev_identity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/executions/{execution_id}/channels/{channel}/data": {
         parameters: {
             query?: never;
@@ -7364,6 +7411,22 @@ export interface components {
             rows: string[][];
             title: string;
         };
+        /** @description One selectable dev identity. */
+        DevIdentity: {
+            /**
+             * @description True for the identity the current `mekhan_dev_user` cookie selects (or
+             *     the default identity when no/unknown cookie is set).
+             */
+            active: boolean;
+            display_name?: string | null;
+            email?: string | null;
+            subject: string;
+            /**
+             * Format: uuid
+             * @description Workspace the identity lands in by default (its seeded membership pick).
+             */
+            workspace_id?: string | null;
+        };
         /** @description A named dimension with its size (rows/cols/width/height/depth/time/…). */
         DimensionView: {
             name: string;
@@ -11982,6 +12045,10 @@ export interface components {
              * @description Target workspace id. The caller must already be a member.
              */
             workspace_id: string;
+        };
+        SetDevIdentityRequest: {
+            /** @description `subject` of a roster identity (e.g. `"dev-user"` or `"dev-user-2"`). */
+            subject: string;
         };
         /**
          * @description Set (or clear) the home folder of a template. `None` moves the template to
@@ -17038,6 +17105,66 @@ export interface operations {
             };
             /** @description Serving runner unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_dev_identities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selectable dev identities (empty unless dev_noop) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevIdentity"][];
+                };
+            };
+        };
+    };
+    set_dev_identity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetDevIdentityRequest"];
+            };
+        };
+        responses: {
+            /** @description Acting dev identity switched */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown dev identity */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not running in dev_noop mode */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
