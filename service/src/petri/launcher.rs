@@ -118,6 +118,13 @@ pub enum LaunchSpec<'a> {
         /// the engine creates for this net carries a `{workspace_id}` segment.
         /// `None` ⇒ the engine routes on its reserved `"default"` sentinel.
         workspace_id: Option<String>,
+        /// Per-run compiled `(graph, interface_json)` captured onto the instance
+        /// row for a DRAFT dev-run, so the instance UI renders what actually
+        /// ran instead of the template's stale (pre-publish) columns. `None`
+        /// for live/test_run runs, which read the immutable published template
+        /// version. See migration `20240185000000`.
+        graph_snapshot: Option<Value>,
+        interface_snapshot: Option<Value>,
     },
     PreAir {
         instance_id: Uuid,
@@ -189,6 +196,8 @@ impl<'a> InstanceLauncher<'a> {
             workspace_id,
             mode,
             test_id,
+            graph_snapshot,
+            interface_snapshot,
         ) = match spec {
             LaunchSpec::Templated {
                 instance_id,
@@ -205,6 +214,8 @@ impl<'a> InstanceLauncher<'a> {
                 dispatch_options,
                 net_parameters,
                 workspace_id,
+                graph_snapshot,
+                interface_snapshot,
             } => {
                 let parameterized = parameterize_air(
                     air_json,
@@ -228,6 +239,8 @@ impl<'a> InstanceLauncher<'a> {
                     workspace_id,
                     mode,
                     test_id,
+                    graph_snapshot,
+                    interface_snapshot,
                 )
             }
             LaunchSpec::PreAir {
@@ -268,6 +281,10 @@ impl<'a> InstanceLauncher<'a> {
                     // template-test runner / experiment-mode framing applies.
                     None,
                     None,
+                    // Pre-AIR runs are headless clinic templates with a frozen
+                    // published AIR — no live-Y.Doc draft to snapshot.
+                    None,
+                    None,
                 )
             }
         };
@@ -288,8 +305,8 @@ impl<'a> InstanceLauncher<'a> {
         let mode_str = mode.unwrap_or("live");
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, updated_by, started_at, metadata, mode, test_id, asset_pins)
-            VALUES ($1, $2, $3, $4, 'running', $5, $5, NOW(), $6, $7, $8, $9)
+            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, updated_by, started_at, metadata, mode, test_id, asset_pins, graph_snapshot, interface_snapshot)
+            VALUES ($1, $2, $3, $4, 'running', $5, $5, NOW(), $6, $7, $8, $9, $10, $11)
             RETURNING *
             "#,
         )
@@ -302,6 +319,8 @@ impl<'a> InstanceLauncher<'a> {
         .bind(mode_str)
         .bind(test_id)
         .bind(&asset_pins)
+        .bind(&graph_snapshot)
+        .bind(&interface_snapshot)
         .fetch_one(self.db)
         .await
         .map_err(|e| {

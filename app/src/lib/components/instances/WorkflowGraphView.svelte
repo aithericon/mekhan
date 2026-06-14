@@ -148,8 +148,18 @@
 		drawerNode ? (allocationsByNode.get(drawerNode.id) ?? []) : []
 	);
 
+	// Prefer the per-run snapshot captured on the instance. A DRAFT dev-run
+	// compiles from the live Y.Doc, so `template.graph` is the stale pre-publish
+	// topology — rendering it would show the canvas as it was BEFORE the user's
+	// edits (the "my changes aren't reflected in the run" bug). `graph_snapshot`
+	// is the graph that actually ran; NULL for live/test_run, where the
+	// immutable published `template.graph` is the correct source.
 	const graph = $derived<WorkflowGraph | null>(
-		template?.graph ? (template.graph as WorkflowGraph) : null
+		instance.graph_snapshot
+			? (instance.graph_snapshot as WorkflowGraph)
+			: template?.graph
+				? (template.graph as WorkflowGraph)
+				: null
 	);
 
 	// `node_id → WorkflowNode` lookup so the drawer can show the node's
@@ -165,7 +175,7 @@
 	// `template.interface_json` is typed as `unknown` over the wire; coerce
 	// once and look up by node id when opening the drawer.
 	const interfaceRegistry = $derived<InterfaceRegistry>(
-		parseInterfaceRegistry(template?.interface_json)
+		parseInterfaceRegistry(instance.interface_snapshot ?? template?.interface_json)
 	);
 
 	async function loadTemplate() {

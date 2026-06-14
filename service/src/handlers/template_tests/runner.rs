@@ -145,6 +145,11 @@ pub async fn run_test(
             // First-class tenant id so the test_run net's engine
             // subjects/streams/KV carry the owning workspace segment.
             workspace_id: Some(ctx.workspace_id.to_string()),
+            // Template-tests run against a PUBLISHED template version
+            // (`from_published`), whose `graph`/`interface_json` columns are the
+            // frozen truth — no per-run snapshot needed.
+            graph_snapshot: None,
+            interface_snapshot: None,
         })
         .await;
 

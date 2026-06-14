@@ -940,6 +940,10 @@ impl TriggerDispatcher {
                         test_id: None,
                         dispatch_options,
                         net_parameters,
+                        // Trigger-fired runs use the published template's frozen
+                        // AIR — no live-Y.Doc draft to snapshot.
+                        graph_snapshot: None,
+                        interface_snapshot: None,
                     })
                     .await
             }

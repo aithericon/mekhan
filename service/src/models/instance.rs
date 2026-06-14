@@ -59,6 +59,19 @@ pub struct WorkflowInstance {
     /// iteration). NULL for top-level instances.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spawn_seq: Option<i64>,
+    /// Per-run compiled graph for a DRAFT dev-run (`mode = 'draft'`). A draft
+    /// compiles from the live Y.Doc, so the template's `graph` column is stale
+    /// (it only updates on publish). The instance Workflow view prefers this
+    /// snapshot so it renders what actually ran. NULL for live/test_run
+    /// instances, which read the immutable published template version instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_snapshot: Option<serde_json::Value>,
+    /// Per-run compiled `interface_json` for a DRAFT dev-run — the sibling of
+    /// [`Self::graph_snapshot`]. The step-executions projector and the per-node
+    /// interface drawer prefer this over the (stale-for-drafts)
+    /// `template.interface_json`. NULL for live/test_run instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_snapshot: Option<serde_json::Value>,
     /// The caller's effective object role on THIS instance (`owner|admin|
     /// editor|viewer`), resolved by the Phase-3 ACL resolver in `get_instance`.
     /// NOT a database column — `#[sqlx(default)]` lets the `SELECT *` row map

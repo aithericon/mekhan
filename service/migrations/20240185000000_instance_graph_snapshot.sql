@@ -1,0 +1,21 @@
+-- Per-run graph + interface snapshot for DRAFT instances.
+--
+-- A draft dev-run (`mode = 'draft'`) compiles its AIR per-launch from the live
+-- Y.Doc — the authored canvas, NOT the template's `graph`/`interface_json`
+-- columns, which are only rewritten on publish and therefore stay frozen at
+-- the draft's fork-time topology. The run itself is correct (the compiled AIR
+-- carries the live edits and executes them), but every UI surface that
+-- visualizes an instance reads back through the TEMPLATE columns:
+--   * the instance Workflow tab renders `template.graph`;
+--   * the step-executions projector keys node status off `template.interface_json`.
+-- For a draft both are stale, so the user sees the pre-edit graph and an empty
+-- Steps tab and concludes "my changes were ignored" — even though they ran.
+--
+-- These columns capture what was ACTUALLY compiled for the instance so those
+-- surfaces can prefer the snapshot over the (stale-for-drafts) template
+-- columns. They are populated ONLY on the draft-run path; live/test_run
+-- instances leave them NULL and keep reading the immutable published template
+-- version (correct and stable there — publish freezes a version's columns and
+-- `new_version` mints a fresh row).
+ALTER TABLE workflow_instances ADD COLUMN graph_snapshot JSONB;
+ALTER TABLE workflow_instances ADD COLUMN interface_snapshot JSONB;

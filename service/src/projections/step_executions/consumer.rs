@@ -191,7 +191,13 @@ async fn load_instance_context(
     net_id: &str,
 ) -> Result<Option<InstanceContext>, sqlx::Error> {
     let row: Option<(Uuid, Uuid, i32, Option<serde_json::Value>)> = sqlx::query_as(
-        "SELECT wi.id, wi.template_id, wi.template_version, wt.interface_json \
+        // Draft dev-runs compile from the live Y.Doc, so the template's
+        // `interface_json` is stale (only publish writes it). Prefer the per-run
+        // `interface_snapshot` captured on the instance row; fall back to the
+        // template column for live/test_run instances (NULL snapshot). Without
+        // this a draft run projects no step rows (its template column is NULL).
+        "SELECT wi.id, wi.template_id, wi.template_version, \
+                COALESCE(wi.interface_snapshot, wt.interface_json) \
          FROM workflow_instances wi \
          JOIN workflow_templates wt \
              ON wt.id = wi.template_id AND wt.version = wi.template_version \

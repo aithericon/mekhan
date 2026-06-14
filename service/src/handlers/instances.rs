@@ -90,7 +90,7 @@ async fn compile_draft_air(
     user: &AuthUser,
     template: &WorkflowTemplate,
     instance_id: Uuid,
-) -> Result<(serde_json::Value, WorkflowGraph), ApiError> {
+) -> Result<DraftArtifacts, ApiError> {
     let (graph, mut ydoc_files) =
         graph_with_ydoc_fallback(state, template.id, template.graph.clone(), |g| {
             serde_json::from_value(g)
@@ -101,6 +101,8 @@ async fn compile_draft_air(
     let publisher = PublishService::new(state);
     let CompiledArtifacts {
         air_json,
+        graph_json,
+        interface_json,
         node_configs,
         ..
     } = publisher
@@ -134,7 +136,25 @@ async fn compile_draft_air(
         .await
         .map_err(|e| ApiError::internal(format!("draft-run S3 node-config upload failed: {e}")))?;
 
-    Ok((air_json, graph))
+    Ok(DraftArtifacts {
+        air_json,
+        graph,
+        graph_json,
+        interface_json,
+    })
+}
+
+/// The per-run compile output for a draft dev-run. `air_json` is deployed to
+/// the engine; `graph` validates start tokens at the launcher boundary; the
+/// `graph_json` / `interface_json` snapshots are persisted onto the instance
+/// row so the UI renders what actually ran (the template columns are stale for
+/// an unpublished draft — see [`compile_draft_air`] and migration
+/// `20240185000000`).
+struct DraftArtifacts {
+    air_json: serde_json::Value,
+    graph: WorkflowGraph,
+    graph_json: serde_json::Value,
+    interface_json: serde_json::Value,
 }
 
 /// POST /api/v1/instances
@@ -195,11 +215,14 @@ pub async fn create_instance(
     // graph rides along so parameterize_air can validate start_tokens against
     // each Start block's declared `initial` port — for the draft path that's
     // the freshly reconstructed graph, not the stale DB column.
-    let (air_json, graph) = match &template.air_json {
+    // `graph_snapshot` / `interface_snapshot` are populated ONLY on the draft
+    // path — a live run reads the immutable published template version, so its
+    // columns stay NULL and the UI falls back to the template (correct there).
+    let (air_json, graph, graph_snapshot, interface_snapshot) = match &template.air_json {
         Some(air) => {
             let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
                 .map_err(|e| ApiError::internal(format!("template graph is invalid: {e}")))?;
-            (air.clone(), graph)
+            (air.clone(), graph, None, None)
         }
         None => {
             // `resolve_run_mode` yields 'live' only for published rows, so a
@@ -212,7 +235,13 @@ pub async fn create_instance(
             if mode == "live" {
                 return Err(ApiError::internal("published template has no AIR JSON"));
             }
-            compile_draft_air(&state, &user, &template, instance_id).await?
+            let DraftArtifacts {
+                air_json,
+                graph,
+                graph_json,
+                interface_json,
+            } = compile_draft_air(&state, &user, &template, instance_id).await?;
+            (air_json, graph, Some(graph_json), Some(interface_json))
         }
     };
 
@@ -257,6 +286,11 @@ pub async fn create_instance(
             net_parameters: Some(json!({ "tenant_id": workspace_id.to_string() })),
             // First-class tenant id for engine subject/stream/KV namespacing.
             workspace_id: Some(workspace_id.to_string()),
+            // Draft-run only (Some on the compile-per-run path, None for a
+            // published/live run); lets the instance UI render the compiled
+            // graph instead of the template's stale pre-publish columns.
+            graph_snapshot,
+            interface_snapshot,
         })
         .await
         .map_err(|e| match e {
