@@ -531,6 +531,16 @@ pub enum DemoSeedError {
         origin: String,
         existing: uuid::Uuid,
     },
+    #[error(
+        "`templateKind: library_node` requires `presentation.category` so the Library \
+         palette can group it (vendor stays free text, category does not)"
+    )]
+    LibraryNodeMissingCategory,
+    #[error(
+        "library-node category `{category}` is not in the controlled vocabulary \
+         ({allowed}) — pick one or extend `LIBRARY_CATEGORIES`"
+    )]
+    UnknownLibraryCategory { category: String, allowed: String },
     #[error("db error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("compile failed: {0}")]
@@ -1668,6 +1678,22 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
                 origin: origin_val.to_string(),
                 existing,
             });
+        }
+
+        // Category must come from the controlled palette vocabulary (decision 6)
+        // so the Library palette's category → vendor grouping stays coherent.
+        let category = presentation
+            .and_then(|p| p.get("category"))
+            .and_then(|c| c.as_str());
+        match category {
+            None => return Err(DemoSeedError::LibraryNodeMissingCategory),
+            Some(c) if !crate::models::template::is_known_library_category(c) => {
+                return Err(DemoSeedError::UnknownLibraryCategory {
+                    category: c.to_string(),
+                    allowed: crate::models::template::LIBRARY_CATEGORIES.join(", "),
+                });
+            }
+            Some(_) => {}
         }
     }
 

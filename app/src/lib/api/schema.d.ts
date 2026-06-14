@@ -2536,6 +2536,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/node-library
+         * @description List the library nodes (branded, reusable `sub_workflow` building blocks)
+         *     the caller may drop onto a canvas. Returns the latest version of each
+         *     `library_node` family that is visible to the caller (public, or in the
+         *     caller's workspace) and not `retired`. `deprecated` nodes are excluded
+         *     unless `include_deprecated=true`. Ordered by category → vendor → name so
+         *     the palette can render its two-level grouping directly.
+         */
+        get: operations["list_node_library"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-types": {
         parameters: {
             query?: never;
@@ -8738,6 +8763,45 @@ export interface components {
              *     placement.
              */
             request?: unknown;
+        };
+        /**
+         * @description A library node as the editor palette consumes it: the stable coordinate,
+         *     display copy, branding, provenance, lifecycle, and the family + version a
+         *     drop should pin to. Mirrors the `NodeDescriptor` role for primitives, but
+         *     carries the embed coordinate instead of a wire name.
+         */
+        LibraryNodeDescriptor: {
+            /**
+             * @description Stable `vendor/slug` coordinate (decision 7) — the drop stamps this onto
+             *     the embedding sub-workflow node as `sourceCoordinate`.
+             */
+            coordinate: string;
+            /** @description Optional one-line description. */
+            description?: string | null;
+            /**
+             * @description Lifecycle: `active` (default) | `deprecated`. `retired` nodes are
+             *     excluded from this listing entirely.
+             */
+            lifecycleStatus: string;
+            /** @description Display name. */
+            name: string;
+            /**
+             * @description Trust axis: `system` (platform-seeded, read-only) | `workspace` |
+             *     `community`. Always present for a library node.
+             */
+            origin: string;
+            presentation?: null | components["schemas"]["Presentation"];
+            /**
+             * Format: uuid
+             * @description Template family id (`COALESCE(base_template_id, id)`) — the value stamped
+             *     as the dropped sub-workflow node's `templateId`.
+             */
+            templateId: string;
+            /**
+             * Format: int32
+             * @description Current latest version of the family; a drop pins to this version.
+             */
+            version: number;
         };
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
@@ -19731,6 +19795,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_node_library: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Include `deprecated` library nodes (default `false` — only `active`).
+                 *     `retired` nodes are always excluded; their pinned embeds still resolve
+                 *     via the version row, but they must not be droppable anew.
+                 */
+                include_deprecated?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible library nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryNodeDescriptor"][];
                 };
             };
         };

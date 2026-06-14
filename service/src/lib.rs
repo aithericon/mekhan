@@ -216,6 +216,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // dispatch. Companion to `/api/v1/backends`; the Svelte component
         // map and Lucide icons stay frontend-only.
         .routes(routes!(handlers::node_types::list_node_types))
+        // Library-node catalogue — the "Library" half of the editor palette
+        // (branded, reusable sub-workflow building blocks). Data-driven and
+        // ACL-filtered, unlike the static node-type registry above.
+        .routes(routes!(handlers::node_library::list_node_library))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these

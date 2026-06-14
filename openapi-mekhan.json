@@ -7686,6 +7686,42 @@
         }
       }
     },
+    "/api/v1/node-library": {
+      "get": {
+        "tags": [
+          "node-library"
+        ],
+        "summary": "GET /api/v1/node-library",
+        "description": "List the library nodes (branded, reusable `sub_workflow` building blocks)\nthe caller may drop onto a canvas. Returns the latest version of each\n`library_node` family that is visible to the caller (public, or in the\ncaller's workspace) and not `retired`. `deprecated` nodes are excluded\nunless `include_deprecated=true`. Ordered by category → vendor → name so\nthe palette can render its two-level grouping directly.",
+        "operationId": "list_node_library",
+        "parameters": [
+          {
+            "name": "include_deprecated",
+            "in": "query",
+            "description": "Include `deprecated` library nodes (default `false` — only `active`).\n`retired` nodes are always excluded; their pinned embeds still resolve\nvia the version row, but they must not be droppable anew.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible library nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LibraryNodeDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-types": {
       "get": {
         "tags": [
@@ -23520,6 +23556,64 @@
           },
           "request": {
             "description": "Claim-schema-shaped request params. For a `datacenter`:\n`gpu_count`/`gpu_type`/`max_duration_secs` (validated against the\ndatacenter kind's `claim_schema`). `None` ⇒ the provider's default\nplacement."
+          }
+        }
+      },
+      "LibraryNodeDescriptor": {
+        "type": "object",
+        "description": "A library node as the editor palette consumes it: the stable coordinate,\ndisplay copy, branding, provenance, lifecycle, and the family + version a\ndrop should pin to. Mirrors the `NodeDescriptor` role for primitives, but\ncarries the embed coordinate instead of a wire name.",
+        "required": [
+          "coordinate",
+          "templateId",
+          "version",
+          "name",
+          "origin",
+          "lifecycleStatus"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Stable `vendor/slug` coordinate (decision 7) — the drop stamps this onto\nthe embedding sub-workflow node as `sourceCoordinate`."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional one-line description."
+          },
+          "lifecycleStatus": {
+            "type": "string",
+            "description": "Lifecycle: `active` (default) | `deprecated`. `retired` nodes are\nexcluded from this listing entirely."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Trust axis: `system` (platform-seeded, read-only) | `workspace` |\n`community`. Always present for a library node."
+          },
+          "presentation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Presentation",
+                "description": "Branding blob (icon/color/vendor/category/badge), parsed from the row\nJSONB. Drives palette grouping (category → vendor) and the frozen card."
+              }
+            ]
+          },
+          "templateId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Template family id (`COALESCE(base_template_id, id)`) — the value stamped\nas the dropped sub-workflow node's `templateId`."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current latest version of the family; a drop pins to this version."
           }
         }
       },

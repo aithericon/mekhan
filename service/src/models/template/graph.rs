@@ -170,6 +170,34 @@ pub struct Presentation {
     pub badge: Option<String>,
 }
 
+/// Controlled vocabulary for a library node's palette `category` (decision 6).
+/// The category drives the two-level Library palette grouping (category →
+/// vendor), so it is constrained to keep that grouping coherent; the `vendor`
+/// field stays free text. Validated at seed time and (later) at promote time.
+/// Extend this list as new integration domains land — it is intentionally a
+/// plain constant, not a DB enum, so adding a category needs no migration.
+pub const LIBRARY_CATEGORIES: &[&str] = &[
+    "Examples",
+    "CFD",
+    "FEA",
+    "Micromagnetics",
+    "Molecular Dynamics",
+    "Quantum",
+    "Bioinformatics",
+    "ML",
+    "Robotics",
+    "Imaging",
+    "Data",
+    "Optimization",
+    "Simulation",
+];
+
+/// Whether `category` is a member of the controlled [`LIBRARY_CATEGORIES`]
+/// vocabulary. Match is case-sensitive — the listed casing is canonical.
+pub fn is_known_library_category(category: &str) -> bool {
+    LIBRARY_CATEGORIES.contains(&category)
+}
+
 // --- Visual editor data model (Section 2) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1412,6 +1440,24 @@ impl WorkflowGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_category_vocab_is_case_sensitive_and_covers_seeded_packs() {
+        // The two system packs seeded today must validate.
+        assert!(is_known_library_category("CFD"));
+        assert!(is_known_library_category("Examples"));
+        // Case-sensitive: the listed casing is canonical.
+        assert!(!is_known_library_category("cfd"));
+        assert!(!is_known_library_category("examples"));
+        // Unknown is rejected.
+        assert!(!is_known_library_category("Frobnication"));
+        // The vocab is non-empty and free of duplicates.
+        assert!(!LIBRARY_CATEGORIES.is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for c in LIBRARY_CATEGORIES {
+            assert!(seen.insert(*c), "duplicate category in LIBRARY_CATEGORIES: {c}");
+        }
+    }
 
     #[test]
     fn workflow_graph_definitions_roundtrip() {
