@@ -158,7 +158,9 @@ fn catalogue_register_event(sequence: u64, cmd: Value) -> Value {
 }
 
 async fn publish_event(js: &jetstream::Context, net_id: &str, suffix: &str, payload: &Value) {
-    let subject = format!("petri.events.{net_id}.{suffix}");
+    // Post-multi-tenancy subject scheme: petri.{ws}.{net}.events.{suffix}.
+    let ws = "00000000-0000-0000-0000-000000000000";
+    let subject = format!("petri.{ws}.{net_id}.events.{suffix}");
     let bytes = serde_json::to_vec(payload).unwrap();
     js.publish(subject, bytes.into())
         .await

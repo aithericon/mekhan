@@ -86,7 +86,10 @@ async fn get_instance_status(db: &sqlx::PgPool, instance_id: Uuid) -> String {
 
 /// Helper: publish a fake NetCompleted/NetCancelled event to NATS.
 async fn publish_lifecycle_event(js: &jetstream::Context, net_id: &str, event_type: &str) {
-    let subject = format!("petri.events.{net_id}.net.{event_type}");
+    // Post-multi-tenancy subject scheme: petri.{ws}.{net}.events.net.{type}
+    // (lifecycle listener filters on `petri.*.*.events.net.>`).
+    let ws = "00000000-0000-0000-0000-000000000000";
+    let subject = format!("petri.{ws}.{net_id}.events.net.{event_type}");
     // The lifecycle listener only parses the subject, not the payload.
     // Send a minimal valid JSON payload.
     let payload = serde_json::json!({

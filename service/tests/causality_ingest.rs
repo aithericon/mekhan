@@ -52,7 +52,13 @@ async fn publish_event(
     event_suffix: &str,
     payload: &serde_json::Value,
 ) {
-    let subject = format!("petri.events.{net_id}.{event_suffix}");
+    // Post-multi-tenancy subject scheme: petri.{ws}.{net}.events.{suffix}
+    // (the `events` category now follows the net; the ingest consumer filters
+    // on `petri.*.*.events.>`). The ws token is cosmetic here — the projector
+    // extracts net_id from subject index 2 and resolves the real workspace via
+    // DB, so the nil/default workspace token just satisfies the filter.
+    let ws = "00000000-0000-0000-0000-000000000000";
+    let subject = format!("petri.{ws}.{net_id}.events.{event_suffix}");
     let bytes = serde_json::to_vec(payload).unwrap();
     js.publish(subject, bytes.into())
         .await
