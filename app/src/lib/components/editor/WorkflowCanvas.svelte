@@ -32,6 +32,7 @@
 	import type { XYPosition } from '@xyflow/svelte';
 	import { edgeLaneColor, channelForSourceHandle } from '$lib/editor/edge-lane';
 	import { mintNodeId, mintEdgeId } from '$lib/editor/ids';
+	import { markLibraryNodeUsed } from '$lib/editor/library-registry.svelte';
 
 	type Props = {
 		graph: WorkflowGraph;
@@ -679,6 +680,34 @@
 		const dropPos = screenToFlowPos({ x: event.clientX, y: event.clientY });
 		const nodeId = mintNodeId();
 		const data = createDefaultNodeData(nodeType);
+
+		// Library-node drop: a library node arrives as a `sub_workflow` node plus
+		// a JSON descriptor payload. Pre-pin the family to the dropped version and
+		// stamp the frozen presentation + coordinate so the card renders branded
+		// immediately (decision 12). The io-contract fetch on selection later
+		// fills inputMapping/contracts from the resolved child, exactly as for a
+		// hand-picked sub-workflow.
+		if (nodeType === 'sub_workflow' && data.type === 'sub_workflow') {
+			const libRaw = event.dataTransfer.getData('application/mekhan-library-node');
+			if (libRaw) {
+				try {
+					const lib = JSON.parse(libRaw);
+					if (lib?.templateId) {
+						data.templateId = lib.templateId;
+						data.versionPin = { mode: 'pinned', version: lib.version };
+						data.sourceCoordinate = lib.coordinate;
+						if (lib.presentation) data.presentation = lib.presentation;
+						if (lib.name) data.label = lib.name;
+						if (lib.description) data.description = lib.description;
+						// Mark recent here (post-drop), not at dragstart — mutating
+						// palette state mid-drag detaches the dragged element.
+						if (lib.coordinate) markLibraryNodeUsed(lib.coordinate);
+					}
+				} catch {
+					/* malformed payload — fall back to a blank sub-workflow node */
+				}
+			}
+		}
 
 		// Container kinds get a default initial size so they're a valid drop
 		// target for future drag-into operations. Scope and Loop both behave

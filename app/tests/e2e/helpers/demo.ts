@@ -34,7 +34,7 @@ async function loadShowcaseGraph(): Promise<unknown> {
  * the showcase graph deterministically — sourced from the canonical disk
  * fixture so it stays aligned with what the service seeder publishes.
  */
-export async function gotoDemoEditor(page: Page) {
+export async function gotoDemoEditor(page: Page, overrides: Record<string, unknown> = {}) {
 	const graph = await loadShowcaseGraph();
 	await page.route('**/api/v1/templates/' + DEMO_ID, async (route) => {
 		if (route.request().method() === 'GET') {
@@ -50,7 +50,10 @@ export async function gotoDemoEditor(page: Page) {
 					published: false,
 					author_id: '00000000-0000-0000-0000-000000000000',
 					created_at: new Date().toISOString(),
-					updated_at: new Date().toISOString()
+					updated_at: new Date().toISOString(),
+					// Test-only overrides (e.g. published + my_effective_role to
+					// exercise governance affordances).
+					...overrides
 				})
 			});
 		} else {

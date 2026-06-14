@@ -2324,6 +2324,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/library/fork
+         * @description Deep-copy a (readable) library node's current version into a fresh, editable
+         *     `workspace`-visibility template family in the caller's active workspace,
+         *     recording `forked_from` provenance (decision 5). The fork is born a `workflow`
+         *     (the owner edits, then may re-promote it). Branding is copied so the fork
+         *     stays recognisable while editing. Body-based rather than `{coordinate}` in
+         *     the path because coordinates contain a slash.
+         */
+        post: operations["fork_library_node"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/upgrade-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/library/upgrade-preview?coordinate=vendor/slug&from=N
+         * @description Classify the upgrade from version `from` to the family's latest visible
+         *     version of a library node, by diffing the derived SubWorkflow input/output
+         *     contracts (`derive_child_io` — the same derivation the publish path freezes,
+         *     so the preview can't drift). Drives the editor's "vN+1 available" prompt and
+         *     tells it which input mappings a breaking change touches.
+         */
+        get: operations["library_upgrade_preview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/active-workspace": {
         parameters: {
             query?: never;
@@ -2577,6 +2626,54 @@ export interface paths {
          *     projected view (a synthesized `draining` view when no row exists).
          */
         post: operations["unload_model"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/node-library
+         * @description List the library nodes (branded, reusable `sub_workflow` building blocks)
+         *     the caller may drop onto a canvas. Returns the latest version of each
+         *     `library_node` family that is visible to the caller (public, or in the
+         *     caller's workspace) and not `retired`. `deprecated` nodes are excluded
+         *     unless `include_deprecated=true`. Ordered by category → vendor → name so
+         *     the palette can render its two-level grouping directly.
+         */
+        get: operations["list_node_library"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-library/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/node-library/categories
+         * @description The controlled category vocabulary a library node's `presentation.category`
+         *     must belong to (decision 6). Served from the single backend constant so the
+         *     promote form's category picker can never drift from what seed/promote
+         *     validation accepts.
+         */
+        get: operations["list_library_categories"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4024,6 +4121,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/demote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/demote
+         * @description Reverse of promote: drop a workspace library node back to a plain workflow,
+         *     freeing its coordinate and removing it from the Library palette. Existing
+         *     embeds are frozen (the presentation is snapshotted into the consumer's graph
+         *     at publish time) and are unaffected. Workspace Admin/Owner only; seeded
+         *     `system` nodes cannot be demoted via the API.
+         */
+        post: operations["demote_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/draft": {
         parameters: {
             query?: never;
@@ -4193,6 +4314,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/lifecycle
+         * @description Set a library node's lifecycle state across its whole version family
+         *     (decision 11). Admin/Owner on the node's workspace; seeded `system` nodes are
+         *     untouchable via the API. Never deletes version rows — `retired` only hides
+         *     the node from the palette while keeping pinned embeds resolvable.
+         */
+        post: operations["set_lifecycle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/new-version": {
         parameters: {
             query?: never;
@@ -4226,6 +4370,29 @@ export interface paths {
         get: operations["get_template_page"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/promote
+         * @description Advertise a published template as a workspace library node: stamp
+         *     `template_kind = library_node` + `origin` + `coordinate` + `presentation`
+         *     across the whole version family so embeds pinned to any version resolve by
+         *     coordinate and carry the branding. Workspace Admin/Owner only.
+         */
+        post: operations["promote_template"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6655,6 +6822,20 @@ export interface components {
          * @enum {string}
          */
         ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
+        /**
+         * @description Field-level diff of a library node's input + output [`Port`] contracts
+         *     between two versions. Inputs drive the breaking classification (a consumer's
+         *     `input_mapping`s target these); outputs are informational (the join just
+         *     maps whatever the child returns).
+         */
+        ContractDiff: {
+            inputAdded: components["schemas"]["FieldChange"][];
+            inputRemoved: components["schemas"]["FieldChange"][];
+            inputRetyped: components["schemas"]["FieldChange"][];
+            outputAdded: components["schemas"]["FieldChange"][];
+            outputRemoved: components["schemas"]["FieldChange"][];
+            outputRetyped: components["schemas"]["FieldChange"][];
+        };
         CopyConfig: {
             compress?: null | components["schemas"]["Compression"];
             decompress?: null | components["schemas"]["Compression"];
@@ -7656,6 +7837,21 @@ export interface components {
             test_id: string;
         };
         /**
+         * @description A single field-level change between two contract versions. `from_kind` /
+         *     `to_kind` are the serde wire names of the [`FieldKind`]; a retype carries
+         *     both, an add carries only `to_kind`, a remove only `from_kind`.
+         */
+        FieldChange: {
+            fromKind?: string | null;
+            name: string;
+            /**
+             * @description Whether the field is required in the target version (drives the
+             *     breaking-vs-compatible call for newly-added inputs).
+             */
+            required: boolean;
+            toKind?: string | null;
+        };
+        /**
          * @description Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
          *     (currently piggybacks on `Checkbox` in human-task forms), `Timestamp`
          *     (needed for trigger fire times and audit fields), and `Json` (opaque
@@ -7983,6 +8179,11 @@ export interface components {
             updated_by?: string | null;
             /** Format: uuid */
             workspace_id: string;
+        };
+        /** @description Body for `POST /api/v1/library/fork`. */
+        ForkLibraryRequest: {
+            /** @description Coordinate of the library node to fork (`vendor/slug`). */
+            coordinate: string;
         };
         /**
          * @description Normalized format-specific block: a discriminant plus the uniform
@@ -8801,6 +9002,61 @@ export interface components {
              *     placement.
              */
             request?: unknown;
+        };
+        /**
+         * @description A library node as the editor palette consumes it: the stable coordinate,
+         *     display copy, branding, provenance, lifecycle, and the family + version a
+         *     drop should pin to. Mirrors the `NodeDescriptor` role for primitives, but
+         *     carries the embed coordinate instead of a wire name.
+         */
+        LibraryNodeDescriptor: {
+            /**
+             * @description Stable `vendor/slug` coordinate (decision 7) — the drop stamps this onto
+             *     the embedding sub-workflow node as `sourceCoordinate`.
+             */
+            coordinate: string;
+            /** @description Optional one-line description. */
+            description?: string | null;
+            /**
+             * @description Lifecycle: `active` (default) | `deprecated`. `retired` nodes are
+             *     excluded from this listing entirely.
+             */
+            lifecycleStatus: string;
+            /** @description Display name. */
+            name: string;
+            /**
+             * @description Trust axis: `system` (platform-seeded, read-only) | `workspace` |
+             *     `community`. Always present for a library node.
+             */
+            origin: string;
+            presentation?: null | components["schemas"]["Presentation"];
+            /**
+             * @description Successor coordinate for a `deprecated` node (decision 11) — the palette
+             *     shows it as a "use X instead" hint. Absent for `active` nodes.
+             */
+            supersededBy?: string | null;
+            /**
+             * Format: uuid
+             * @description Template family id (`COALESCE(base_template_id, id)`) — the value stamped
+             *     as the dropped sub-workflow node's `templateId`.
+             */
+            templateId: string;
+            /**
+             * Format: int32
+             * @description Current latest version of the family; a drop pins to this version.
+             */
+            version: number;
+        };
+        /** @description Body for `POST /api/v1/templates/{id}/lifecycle`. */
+        LifecycleRequest: {
+            /** @description Target lifecycle state: `active` | `deprecated` | `retired`. */
+            status: string;
+            /**
+             * @description Optional successor coordinate (`vendor/slug`) shown to consumers of a
+             *     `deprecated`/`retired` node so they know what to migrate to. Cleared when
+             *     omitted. Only meaningful for non-`active` states.
+             */
+            superseded_by?: string | null;
         };
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
@@ -10639,6 +10895,28 @@ export interface components {
              */
             source: components["schemas"]["TriggerSource"];
         };
+        /**
+         * @description Branding for a library node — surfaced in the palette and frozen onto an
+         *     embedding `SubWorkflow` node so the canvas renders a vendor-branded card
+         *     (decisions 9, 13). `icon` is a key into the frontend icon registry (never
+         *     raw SVG); `color` is a hex/token accent. Stored as JSONB on the template
+         *     row; this typed shape feeds the OpenAPI surface (io-contract + node data).
+         */
+        Presentation: {
+            /** @description Optional short badge (e.g. a version tag `v2406`). */
+            badge?: string | null;
+            /** @description Palette grouping category (controlled vocab, e.g. `CFD`). */
+            category?: string | null;
+            /** @description Accent color (hex like `#1a73e8`, or a design-token name). */
+            color?: string | null;
+            /**
+             * @description Icon registry key (e.g. `openfoam`). Falls back to a generic icon when
+             *     unknown to the frontend registry.
+             */
+            icon?: string | null;
+            /** @description Vendor / publisher display name (e.g. `OpenFOAM`). */
+            vendor?: string | null;
+        };
         PreviewView: {
             columns: string[];
             /** @description Rows as display strings (cells stringified once, server-side). */
@@ -10809,6 +11087,22 @@ export interface components {
          * @enum {string}
          */
         PrometheusOperation: "query" | "query_range";
+        /** @description Body for `POST /api/v1/templates/{id}/promote`. */
+        PromoteTemplateRequest: {
+            /**
+             * @description Stable `vendor/slug` coordinate, e.g. `acme/mesh-prep`. Unique among the
+             *     current (`is_latest`) library nodes of this origin.
+             */
+            coordinate: string;
+            /**
+             * @description Origin axis. Only `workspace` (the default) is settable via the API in
+             *     v1; `community` (platform-admin review) and `system` (seed-only) are
+             *     rejected.
+             */
+            origin?: string | null;
+            /** @description Branding + palette metadata. `category` must be a known vocabulary entry. */
+            presentation: components["schemas"]["Presentation"];
+        };
         PromoteToTestRequest: {
             /** @description Name for the new test. Must be unique within the template family. */
             name: string;
@@ -12468,8 +12762,21 @@ export interface components {
          *     ports and one input-mapping row per child Start field.
          */
         TemplateIoContract: {
+            /**
+             * @description Stable `vendor/slug` coordinate when the child is a library node
+             *     (decision 7). Frozen onto the embedding node so the canvas can brand the
+             *     card and the upgrade prompt can track the source. Absent for plain
+             *     (non-library) sub-workflows.
+             */
+            coordinate?: string | null;
             input: components["schemas"]["Port"];
+            /**
+             * @description Child's display name — lets the editor brand a sub-workflow card with
+             *     the real template name instead of a truncated UUID.
+             */
+            name?: string | null;
             output: components["schemas"]["Port"];
+            presentation?: null | components["schemas"]["Presentation"];
         };
         /**
          * @description Structural metrics of a published [`WorkflowGraph`], computed once at
@@ -13012,6 +13319,27 @@ export interface components {
             human_answers?: unknown;
             name?: string | null;
             start_tokens?: components["schemas"]["StartToken"][] | null;
+        };
+        /** @description Result of comparing a pinned embed's version against the family's latest. */
+        UpgradePreview: {
+            /**
+             * @description Input field names a consumer must revisit on upgrade: removed, retyped,
+             *     or newly-required-added. The editor cross-references these against the
+             *     embedding node's `inputMapping` to flag exactly which rows to remap.
+             */
+            affectedInputFields: string[];
+            /**
+             * @description `up_to_date` (already on latest), `compatible` (drop-in), or `breaking`
+             *     (a consumed input was removed/retyped, or a new required input appeared —
+             *     the consumer's input mappings need attention before adopting).
+             */
+            classification: string;
+            contractDiff: components["schemas"]["ContractDiff"];
+            coordinate: string;
+            /** Format: int32 */
+            fromVersion: number;
+            /** Format: int32 */
+            toVersion: number;
         };
         /**
          * @description Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,
@@ -13840,6 +14168,15 @@ export interface components {
              *     child's End `terminal` port.
              */
             output?: components["schemas"]["Port"];
+            presentation?: null | components["schemas"]["Presentation"];
+            /**
+             * @description Stable `vendor/slug` coordinate of the child when it is a library
+             *     node (decision 7). Frozen onto the node by the editor's io-contract
+             *     fetch alongside `input_contract`/`output`; lets the canvas brand the
+             *     card and the upgrade prompt track the source. Absent ⇒ a plain
+             *     (non-library) sub-workflow embed.
+             */
+            sourceCoordinate?: string | null;
             /**
              * Format: uuid
              * @description Stable identity of the child template family (any version row's
@@ -13885,14 +14222,29 @@ export interface components {
             author_id: string;
             /** Format: uuid */
             base_template_id?: string | null;
+            /**
+             * @description Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),
+             *     unique within `origin`. NULL for plain workflows.
+             */
+            coordinate?: string | null;
             /** Format: date-time */
             created_at: string;
             description: string;
+            /**
+             * @description Fork provenance (`{coordinate, template_id, version}`) for a workspace
+             *     copy forked from an upstream library node. Raw JSONB.
+             */
+            forked_from?: unknown;
             graph: unknown;
             /** Format: uuid */
             id: string;
             interface_json?: unknown;
             is_latest: boolean;
+            /**
+             * @description Lifecycle of a library node: `active` (default) | `deprecated` |
+             *     `retired`. Never gates resolution of an already-pinned embed.
+             */
+            lifecycle_status?: string;
             /**
              * @description The caller's effective role (`owner|admin|editor|viewer`) on this
              *     template — annotated by `list_templates`/`get_template` so the SPA can
@@ -13902,6 +14254,11 @@ export interface components {
             my_effective_role?: string | null;
             name: string;
             /**
+             * @description Provenance/trust axis for library nodes: `system` (platform-seeded,
+             *     read-only) | `workspace` | `community`. NULL for plain workflows.
+             */
+            origin?: string | null;
+            /**
              * Format: uuid
              * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
              *     only when `visibility == "private"`. A private sub-workflow may be
@@ -13910,12 +14267,26 @@ export interface components {
             owner_template_id?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
+            /**
+             * @description Branding blob (`{icon, color, vendor, category, badge}`) for a library
+             *     node; raw JSONB to match the `graph`/`air_json` convention. NULL for
+             *     plain workflows.
+             */
+            presentation?: unknown;
             published: boolean;
             /** Format: date-time */
             published_at?: string | null;
             /** Format: uuid */
             published_by?: string | null;
             source_ref?: unknown;
+            /** @description Successor `vendor/slug` coordinate for a deprecated/retired node. */
+            superseded_by?: string | null;
+            /**
+             * @description Exclusive intent: `workflow` (default), `library_node` (a curated
+             *     reusable integration surfaced in the palette), or `private_child` (a
+             *     private sub-workflow). Drives palette/catalogue/ACL branching.
+             */
+            template_kind?: string;
             /** Format: date-time */
             updated_at: string;
             /**
@@ -19320,6 +19691,103 @@ export interface operations {
             };
         };
     };
+    fork_library_node: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkLibraryRequest"];
+            };
+        };
+        responses: {
+            /** @description Forked into a new editable template */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Caller cannot create in their workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Library node not found / not readable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    library_upgrade_preview: {
+        parameters: {
+            query: {
+                /**
+                 * @description Library node coordinate (`vendor/slug`). Query param rather than path
+                 *     because coordinates contain a slash.
+                 */
+                coordinate: string;
+                /** @description The version the consumer is currently pinned to. */
+                from: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Upgrade classification + contract diff */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradePreview"];
+                };
+            };
+            /** @description Library node / from-version not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     set_active_workspace: {
         parameters: {
             query?: never;
@@ -19813,6 +20281,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_node_library: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Include `deprecated` library nodes (default `false` — only `active`).
+                 *     `retired` nodes are always excluded; their pinned embeds still resolve
+                 *     via the version row, but they must not be droppable anew.
+                 */
+                include_deprecated?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible library nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryNodeDescriptor"][];
+                };
+            };
+        };
+    };
+    list_library_categories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Controlled library category vocabulary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };
@@ -22998,6 +23513,74 @@ export interface operations {
             };
         };
     };
+    demote_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version in the family) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Library node demoted to workflow */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Seeded system node */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template is not a library node */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     discard_draft: {
         parameters: {
             query?: never;
@@ -23417,6 +24000,78 @@ export interface operations {
             };
         };
     };
+    set_lifecycle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version in the family) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleRequest"];
+            };
+        };
+        responses: {
+            /** @description Lifecycle updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid status / successor / system node */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template is not a library node */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     new_version: {
         parameters: {
             query?: never;
@@ -23499,6 +24154,78 @@ export interface operations {
             };
             /** @description Template not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    promote_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version in the family) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Template promoted to library node */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid coordinate / category / origin */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not published, or coordinate already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

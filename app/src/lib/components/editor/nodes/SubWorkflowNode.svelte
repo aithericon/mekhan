@@ -4,9 +4,18 @@
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import WorkflowNodeCard, { workflowNodeHandleClass } from './WorkflowNodeCard.svelte';
 	import { NODE_WIDTH } from '$lib/editor/node-dimensions';
+	import { resolveNodeIcon } from '$lib/editor/icon-registry';
 
 	let { id, data, selected }: { id: string; data: SubWorkflowNodeData; selected?: boolean } =
 		$props();
+
+	// A branded library-node embed carries a frozen `presentation` snapshot
+	// (icon key + accent + vendor), set onto the node by the property panel's
+	// io-contract fetch. When present we render the vendor icon + accent instead
+	// of the generic teal sub-workflow chip; otherwise the card stays generic.
+	const presentation = $derived(data.presentation ?? undefined);
+	const nodeIcon = $derived(presentation?.icon ? resolveNodeIcon(presentation.icon) : Workflow);
+	const accentColor = $derived(presentation?.color ?? undefined);
 
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
@@ -21,10 +30,13 @@
 	const pinLabel = $derived(
 		data.versionPin?.mode === 'pinned' ? `v${data.versionPin.version}` : 'latest'
 	);
-	// `templateId` is the stable family id; the property panel carries a
-	// human name once picked. Fall back to a short id / unset hint.
+	// `templateId` is the stable family id. Prefer a branded coordinate/vendor
+	// (library node), then the frozen source coordinate, then a short id / unset
+	// hint — so the card never shows a bare UUID once it's a known integration.
 	const childLabel = $derived(
-		data.templateId ? data.templateId.slice(0, 8) : '— pick a template —'
+		presentation?.vendor ??
+			data.sourceCoordinate ??
+			(data.templateId ? data.templateId.slice(0, 8) : '— pick a template —')
 	);
 
 	const kindBadge: Record<string, string> = {
@@ -49,7 +61,8 @@
 <WorkflowNodeCard
 	nodeId={id}
 	kind="sub-workflow"
-	icon={Workflow}
+	icon={nodeIcon}
+	{accentColor}
 	label={data.label}
 	{selected}
 	width={NODE_WIDTH.sub_workflow}
@@ -60,11 +73,21 @@
 	<div class="space-y-1.5" data-testid="sub-workflow-body">
 		<div class="flex items-center justify-between gap-2">
 			<span class="truncate font-mono text-sm text-foreground/80">{childLabel}</span>
-			<span
-				class="shrink-0 rounded bg-node-sub-workflow/15 px-1.5 py-0.5 text-sm font-medium uppercase text-node-sub-workflow"
-			>
-				{pinLabel}
-			</span>
+			<div class="flex shrink-0 items-center gap-1">
+				{#if presentation?.badge}
+					<span
+						class="rounded px-1.5 py-0.5 text-sm font-medium text-white"
+						style={accentColor ? `background-color: ${accentColor}` : undefined}
+					>
+						{presentation.badge}
+					</span>
+				{/if}
+				<span
+					class="rounded bg-node-sub-workflow/15 px-1.5 py-0.5 text-sm font-medium uppercase text-node-sub-workflow"
+				>
+					{pinLabel}
+				</span>
+			</div>
 		</div>
 		{#if hasInputs}
 			<div class="space-y-0.5 border-t border-border/40 pt-1.5" data-testid="sub-workflow-inputs">

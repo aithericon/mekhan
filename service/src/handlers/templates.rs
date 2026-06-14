@@ -23,7 +23,7 @@ use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
     ApplyAirTemplateRequest, ApplyTemplateRequest, CompileRequest, CreateTemplateRequest,
-    DiscardDraftResponse, ExecutionBackendType, Port, Position, TemplateListExtras,
+    DiscardDraftResponse, ExecutionBackendType, Port, Position, Presentation, TemplateListExtras,
     UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
     WorkflowTemplateSummary,
 };
@@ -503,6 +503,20 @@ pub async fn get_template(
 pub struct TemplateIoContract {
     pub input: Port,
     pub output: Port,
+    /// Child's display name — lets the editor brand a sub-workflow card with
+    /// the real template name instead of a truncated UUID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Stable `vendor/slug` coordinate when the child is a library node
+    /// (decision 7). Frozen onto the embedding node so the canvas can brand the
+    /// card and the upgrade prompt can track the source. Absent for plain
+    /// (non-library) sub-workflows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinate: Option<String>,
+    /// Child's branding (decisions 9, 12) when it is a library node. Frozen onto
+    /// the embedding node alongside the contract; display-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<Presentation>,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -557,10 +571,26 @@ pub async fn get_io_contract(
 
     gate_template_read(&state, &user, &child).await?;
 
+    // Capture the branding surface before `child.graph` is moved into the
+    // parser. Only library nodes carry a coordinate/presentation; plain
+    // sub-workflows leave these None and the card renders generically.
+    let name = Some(child.name.clone());
+    let coordinate = child.coordinate.clone();
+    let presentation = child
+        .presentation
+        .clone()
+        .and_then(|v| serde_json::from_value::<Presentation>(v).ok());
+
     let graph: WorkflowGraph = serde_json::from_value(child.graph)
         .map_err(|e| ApiError::internal(format!("child graph is invalid: {e}")))?;
     let (input, output) = derive_child_io(&graph);
-    Ok(Json(TemplateIoContract { input, output }))
+    Ok(Json(TemplateIoContract {
+        input,
+        output,
+        name,
+        coordinate,
+        presentation,
+    }))
 }
 
 /// Authoring bundle for a template — graph plus inline per-node files. This
@@ -2503,6 +2533,13 @@ mod apply_mode_tests {
             workspace_id: Uuid::nil(),
             visibility: "workspace".into(),
             owner_template_id: None,
+            template_kind: "workflow".into(),
+            origin: None,
+            coordinate: None,
+            presentation: None,
+            lifecycle_status: "active".into(),
+            superseded_by: None,
+            forked_from: None,
             my_effective_role: None,
         }
     }

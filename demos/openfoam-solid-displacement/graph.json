@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 17 },
+      "data": {
+        "type": "start",
+        "label": "Firing curve",
+        "processName": "OpenFOAM firing eval",
+        "initial": {
+          "id": "in",
+          "label": "Firing curve",
+          "fields": [
+            { "name": "ramp_rate", "label": "Ramp rate [K/min]", "kind": "number", "required": true },
+            { "name": "cool_rate", "label": "Cool rate [K/min]", "kind": "number", "required": true },
+            { "name": "hold_time_s", "label": "Hold time [s]", "kind": "number", "required": true },
+            { "name": "hold_temp", "label": "Hold temperature [K] (default 1850)", "kind": "number", "required": false },
+            { "name": "sigma_limit", "label": "Crack threshold sigma_max [MPa] (default 80)", "kind": "number", "required": false },
+            { "name": "solver_mode", "label": "Solver: auto | docker | surrogate (default auto)", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "simulate",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "OpenFOAM solidDisplacementFoam",
+        "description": "Generate the complete solidDisplacementFoam case (zirconia puck, quarter symmetry, kiln-curve table BC) for the inbound firing curve, run blockMesh + solidDisplacementFoam in the opencfd/openfoam-default:2506 Docker image, and extract peak von-Mises stress, soak completeness (min core T during the hold window), and total cycle time. Emits a firing-curve/stress PNG via log_artifact (renderable media card). solver_mode=surrogate (or Docker unavailable in auto) evaluates a closed-form surrogate calibrated against three cluster-validated runs instead, flagged source=surrogate.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["matplotlib"],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Evaluation",
+          "fields": [
+            { "name": "sigma_max_mpa", "label": "Peak von-Mises stress [MPa]", "kind": "number", "required": true },
+            { "name": "soak_min_k", "label": "Min core T during hold [K]", "kind": "number", "required": true },
+            { "name": "cycle_h", "label": "Cycle time [h]", "kind": "number", "required": true },
+            { "name": "z", "label": "Cost (cycle + penalties)", "kind": "number", "required": true },
+            { "name": "verdict", "label": "Verdict", "kind": "text", "required": true },
+            { "name": "source", "label": "Evaluation source", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 660, "y": 17 },
+      "data": {
+        "type": "end",
+        "label": "Evaluation",
+        "resultMapping": [
+          { "targetField": "sigma_max_mpa", "expression": "simulate.sigma_max_mpa" },
+          { "targetField": "soak_min_k", "expression": "simulate.soak_min_k" },
+          { "targetField": "cycle_h", "expression": "simulate.cycle_h" },
+          { "targetField": "z", "expression": "simulate.z" },
+          { "targetField": "verdict", "expression": "simulate.verdict" },
+          { "targetField": "source", "expression": "simulate.source" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_simulate", "source": "start", "target": "simulate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_simulate_end",   "source": "simulate", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

@@ -61,6 +61,11 @@ export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse']
 export type PaginatedTemplateResponse =
 	components['schemas']['Paginated_WorkflowTemplateSummary'];
 
+// ─── Library-node governance (Phase 4) ───────────────────────────────────────
+export type Presentation = components['schemas']['Presentation'];
+export type PromoteTemplateRequest = components['schemas']['PromoteTemplateRequest'];
+export type ForkLibraryRequest = components['schemas']['ForkLibraryRequest'];
+
 // ─── Template tests ─────────────────────────────────────────────────────────
 export type TemplateTest = components['schemas']['TemplateTest'];
 export type TemplateTestRun = components['schemas']['TemplateTestRun'];
@@ -511,6 +516,60 @@ export async function discardDraft(id: string): Promise<DiscardDraftResponse> {
 	return unwrap(
 		await client.DELETE('/api/v1/templates/{id}/draft', { params: { path: { id } } })
 	);
+}
+
+// ── Library-node governance (Phase 4) ───────────────────────────────────────
+
+/** Advertise a published template as a workspace library node (Admin/Owner). */
+export async function promoteTemplate(
+	id: string,
+	body: PromoteTemplateRequest
+): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/promote', { params: { path: { id } }, body })
+	);
+}
+
+/** Drop a workspace library node back to a plain workflow (Admin/Owner). */
+export async function demoteTemplate(id: string): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/demote', { params: { path: { id } } })
+	);
+}
+
+/** Deep-copy a library node into a new editable workspace template the caller owns. */
+export async function forkLibraryNode(coordinate: string): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/library/fork', { body: { coordinate } })
+	);
+}
+
+/** The controlled category vocabulary for a library node's presentation. */
+export async function listLibraryCategories(): Promise<string[]> {
+	return unwrap(await client.GET('/api/v1/node-library/categories', {})) as unknown as string[];
+}
+
+// ── Library-node lifecycle + upgrades (Phase 5) ─────────────────────────────
+
+export type LifecycleRequest = components['schemas']['LifecycleRequest'];
+export type UpgradePreview = components['schemas']['UpgradePreview'];
+
+/** Set a library node's lifecycle state across its family (Admin/Owner). */
+export async function setLifecycle(id: string, body: LifecycleRequest): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/lifecycle', { params: { path: { id } }, body })
+	);
+}
+
+/**
+ * Classify the upgrade of a pinned library embed (version `from`) against the
+ * family's latest visible version: `up_to_date` | `compatible` | `breaking`,
+ * plus the field-level contract diff and which input fields need a remap.
+ */
+export async function getUpgradePreview(coordinate: string, from: number): Promise<UpgradePreview> {
+	return unwrap(
+		await client.GET('/api/v1/library/upgrade-preview', { params: { query: { coordinate, from } } })
+	) as unknown as UpgradePreview;
 }
 
 export async function getTemplateVersions(id: string): Promise<Template[]> {

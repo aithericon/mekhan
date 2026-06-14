@@ -78,6 +78,38 @@ pub struct WorkflowTemplate {
     /// only when `visibility == "private"`. A private sub-workflow may be
     /// embedded only by this family and never runs standalone.
     pub owner_template_id: Option<Uuid>,
+
+    // --- Library / vendor nodes (migration 20240184) ---
+    /// Exclusive intent: `workflow` (default), `library_node` (a curated
+    /// reusable integration surfaced in the palette), or `private_child` (a
+    /// private sub-workflow). Drives palette/catalogue/ACL branching.
+    #[serde(default = "default_template_kind")]
+    pub template_kind: String,
+    /// Provenance/trust axis for library nodes: `system` (platform-seeded,
+    /// read-only) | `workspace` | `community`. NULL for plain workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Stable `vendor/slug` coordinate (e.g. `openfoam/solid-displacement`),
+    /// unique within `origin`. NULL for plain workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate: Option<String>,
+    /// Branding blob (`{icon, color, vendor, category, badge}`) for a library
+    /// node; raw JSONB to match the `graph`/`air_json` convention. NULL for
+    /// plain workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<serde_json::Value>,
+    /// Lifecycle of a library node: `active` (default) | `deprecated` |
+    /// `retired`. Never gates resolution of an already-pinned embed.
+    #[serde(default = "default_lifecycle_status")]
+    pub lifecycle_status: String,
+    /// Successor `vendor/slug` coordinate for a deprecated/retired node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    /// Fork provenance (`{coordinate, template_id, version}`) for a workspace
+    /// copy forked from an upstream library node. Raw JSONB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<serde_json::Value>,
+
     /// The caller's effective role (`owner|admin|editor|viewer`) on this
     /// template — annotated by `list_templates`/`get_template` so the SPA can
     /// hide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps
@@ -171,6 +203,67 @@ impl crate::auth::AclAnnotated for WorkflowTemplateSummary {
     fn set_my_effective_role(&mut self, role: Option<String>) {
         self.my_effective_role = role;
     }
+}
+
+fn default_template_kind() -> String {
+    "workflow".to_string()
+}
+
+fn default_lifecycle_status() -> String {
+    "active".to_string()
+}
+
+/// Branding for a library node — surfaced in the palette and frozen onto an
+/// embedding `SubWorkflow` node so the canvas renders a vendor-branded card
+/// (decisions 9, 13). `icon` is a key into the frontend icon registry (never
+/// raw SVG); `color` is a hex/token accent. Stored as JSONB on the template
+/// row; this typed shape feeds the OpenAPI surface (io-contract + node data).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct Presentation {
+    /// Icon registry key (e.g. `openfoam`). Falls back to a generic icon when
+    /// unknown to the frontend registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Accent color (hex like `#1a73e8`, or a design-token name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Vendor / publisher display name (e.g. `OpenFOAM`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    /// Palette grouping category (controlled vocab, e.g. `CFD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Optional short badge (e.g. a version tag `v2406`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+}
+
+/// Controlled vocabulary for a library node's palette `category` (decision 6).
+/// The category drives the two-level Library palette grouping (category →
+/// vendor), so it is constrained to keep that grouping coherent; the `vendor`
+/// field stays free text. Validated at seed time and (later) at promote time.
+/// Extend this list as new integration domains land — it is intentionally a
+/// plain constant, not a DB enum, so adding a category needs no migration.
+pub const LIBRARY_CATEGORIES: &[&str] = &[
+    "Examples",
+    "CFD",
+    "FEA",
+    "Micromagnetics",
+    "Molecular Dynamics",
+    "Quantum",
+    "Bioinformatics",
+    "ML",
+    "Robotics",
+    "Imaging",
+    "Data",
+    "Optimization",
+    "Simulation",
+];
+
+/// Whether `category` is a member of the controlled [`LIBRARY_CATEGORIES`]
+/// vocabulary. Match is case-sensitive — the listed casing is canonical.
+pub fn is_known_library_category(category: &str) -> bool {
+    LIBRARY_CATEGORIES.contains(&category)
 }
 
 // --- Visual editor data model (Section 2) ---
@@ -1050,6 +1143,23 @@ pub enum WorkflowNodeData {
             default = "default_subworkflow_input_contract"
         )]
         input_contract: Port,
+        /// Stable `vendor/slug` coordinate of the child when it is a library
+        /// node (decision 7). Frozen onto the node by the editor's io-contract
+        /// fetch alongside `input_contract`/`output`; lets the canvas brand the
+        /// card and the upgrade prompt track the source. Absent ⇒ a plain
+        /// (non-library) sub-workflow embed.
+        #[serde(
+            rename = "sourceCoordinate",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        source_coordinate: Option<String>,
+        /// Frozen branding snapshot copied from the library-node child
+        /// (decisions 9, 12). Display-only — never feeds compilation. Refreshed
+        /// like `input_contract` from the io-contract fetch. Absent ⇒ render the
+        /// generic sub-workflow card.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presentation: Option<Presentation>,
     },
     /// Workflow-as-streaming-endpoint INGRESS (docs/25 §9 Phase 3). Declares
     /// `Out` [`Channel`]s an external producer feeds through a mekhan ingress
@@ -1398,6 +1508,24 @@ impl WorkflowGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_category_vocab_is_case_sensitive_and_covers_seeded_packs() {
+        // The two system packs seeded today must validate.
+        assert!(is_known_library_category("CFD"));
+        assert!(is_known_library_category("Examples"));
+        // Case-sensitive: the listed casing is canonical.
+        assert!(!is_known_library_category("cfd"));
+        assert!(!is_known_library_category("examples"));
+        // Unknown is rejected.
+        assert!(!is_known_library_category("Frobnication"));
+        // The vocab is non-empty and free of duplicates.
+        assert!(!LIBRARY_CATEGORIES.is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for c in LIBRARY_CATEGORIES {
+            assert!(seen.insert(*c), "duplicate category in LIBRARY_CATEGORIES: {c}");
+        }
+    }
 
     #[test]
     fn workflow_graph_definitions_roundtrip() {

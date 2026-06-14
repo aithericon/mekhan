@@ -159,12 +159,17 @@
 		class: className,
 		'data-testid': dataTestid,
 		nodeId,
+		accentColor,
 	}: {
 		kind: WorkflowNodeKind;
 		icon: Component<{ class?: string }>;
 		label: string;
 		selected?: boolean;
 		body?: Snippet;
+		/// Optional per-instance accent (hex) that overrides the kind's icon-chip
+		/// color — used by branded library nodes (frozen `presentation.color`) and
+		/// the lightweight any-node accent. Falsy ⇒ fall back to the kind palette.
+		accentColor?: string;
 		/// Fixed render width (px) from `node-dimensions.ts`. Applied inline so
 		/// the card's width is a function of its TYPE, not its content — long
 		/// titles / port names truncate inside this box instead of widening the
@@ -201,7 +206,13 @@
 			body ? `border-b ${HEADER_BORDER[kind]}` : '',
 		)}
 	>
-		<div class={cn('flex size-6 shrink-0 items-center justify-center rounded-md', ICON_BG[kind])}>
+		<div
+			class={cn(
+				'flex size-6 shrink-0 items-center justify-center rounded-md',
+				accentColor ? '' : ICON_BG[kind]
+			)}
+			style={accentColor ? `background-color: ${accentColor}` : undefined}
+		>
 			<Icon class="size-3.5 text-white" />
 		</div>
 		<span class="truncate text-sm font-medium text-foreground">{label}</span>

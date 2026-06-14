@@ -10,6 +10,7 @@
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import PromoteLibraryDialog from '$lib/components/editor/PromoteLibraryDialog.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
 	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
@@ -30,6 +31,9 @@
 		updateTemplate,
 		createNewVersion,
 		discardDraft,
+		demoteTemplate,
+		getUpgradePreview,
+		type UpgradePreview,
 		compileGraph,
 		ensureAttachedPage,
 		CompileApiError,
@@ -82,13 +86,31 @@
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 	let shareOpen = $state(false);
+	let promoteOpen = $state(false);
 	let discardConfirmOpen = $state(false);
 	let discarding = $state(false);
+	// Fork rebase hint (Phase 5): a fork carries `forked_from`; if the upstream
+	// library node has shipped a newer version since the fork, surface an
+	// informational nudge (no auto-merge in v1).
+	let rebaseHint = $state<UpgradePreview | null>(null);
+	let rebaseDismissed = $state(false);
 
 	// Object-Admins can manage sharing. `my_effective_role` rides the template
 	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
 	// (future) edit gates never show a stale role.
 	const canShare = $derived(roleAtLeast(template?.my_effective_role, 'admin'));
+
+	// Library-node governance (Phase 4): only a published template can be
+	// promoted, and only by an object Admin/Owner. A node already promoted shows
+	// "Manage" + "Demote" instead. Seeded `system` packs are managed by GitOps,
+	// not the UI.
+	const isLibraryNode = $derived(template?.template_kind === 'library_node');
+	const isSystemNode = $derived(isLibraryNode && template?.origin === 'system');
+	const canGovern = $derived(
+		!!template?.published &&
+			!isSystemNode &&
+			roleAtLeast(template?.my_effective_role, 'admin')
+	);
 
 	// Yjs session + binding — bound once for this component instance; the
 	// `{#key}` wrapper remounts it on id change, so the initial-value read is
@@ -137,6 +159,24 @@
 					ownerName = null;
 				}
 			}
+			// Fork rebase hint: compare the forked-from version against upstream's
+			// latest. Best-effort + non-blocking — a retired/unreadable upstream
+			// just yields no hint.
+			rebaseHint = null;
+			rebaseDismissed = false;
+			const ff = template?.forked_from as
+				| { coordinate?: string; version?: number }
+				| null
+				| undefined;
+			if (ff?.coordinate && typeof ff.version === 'number') {
+				const coord = ff.coordinate;
+				const ver = ff.version;
+				getUpgradePreview(coord, ver)
+					.then((p) => {
+						if (p.classification !== 'up_to_date') rebaseHint = p;
+					})
+					.catch(() => {});
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		} finally {
@@ -175,6 +215,18 @@
 			await goto(`/templates/${next.id}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create new version';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function handleDemote() {
+		if (!template || !isLibraryNode || saving) return;
+		try {
+			saving = true;
+			template = await demoteTemplate(template.id);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to demote library node';
 		} finally {
 			saving = false;
 		}
@@ -587,6 +639,9 @@
 				onnotes={template ? openNotes : undefined}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 				onshare={template && canShare ? () => (shareOpen = true) : undefined}
+				onpromote={canGovern ? () => (promoteOpen = true) : undefined}
+				ondemote={canGovern && isLibraryNode ? handleDemote : undefined}
+				{isLibraryNode}
 				onrename={handleRename}
 				onundo={() => binding.undo()}
 				onredo={() => binding.redo()}
@@ -609,6 +664,24 @@
 						type="button"
 						class="underline"
 						onclick={() => (error = null)}>dismiss</button
+					>
+				</div>
+			{/if}
+
+			{#if rebaseHint && !rebaseDismissed}
+				<div
+					class="flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-800"
+					data-testid="rebase-hint"
+				>
+					<span class="flex-1">
+						Upstream <span class="font-mono">{rebaseHint.coordinate}</span> has shipped
+						v{rebaseHint.toVersion} (you forked from v{rebaseHint.fromVersion}). Re-fork to
+						pick up upstream changes — there's no automatic merge.
+					</span>
+					<button
+						type="button"
+						class="underline"
+						onclick={() => (rebaseDismissed = true)}>dismiss</button
 					>
 				</div>
 			{/if}
@@ -766,5 +839,10 @@
 		objectName={template.name}
 		myEffectiveRole={template.my_effective_role}
 		onChanged={load}
+	/>
+	<PromoteLibraryDialog
+		bind:open={promoteOpen}
+		{template}
+		onpromoted={(t) => (template = t)}
 	/>
 {/if}

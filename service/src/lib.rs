@@ -216,6 +216,11 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // dispatch. Companion to `/api/v1/backends`; the Svelte component
         // map and Lucide icons stay frontend-only.
         .routes(routes!(handlers::node_types::list_node_types))
+        // Library-node catalogue — the "Library" half of the editor palette
+        // (branded, reusable sub-workflow building blocks). Data-driven and
+        // ACL-filtered, unlike the static node-type registry above.
+        .routes(routes!(handlers::node_library::list_node_library))
+        .routes(routes!(handlers::node_library::list_library_categories))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these
@@ -245,6 +250,11 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::get_io_contract))
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
+        .routes(routes!(handlers::governance::promote_template))
+        .routes(routes!(handlers::governance::demote_template))
+        .routes(routes!(handlers::governance::fork_library_node))
+        .routes(routes!(handlers::governance::set_lifecycle))
+        .routes(routes!(handlers::governance::library_upgrade_preview))
         .routes(routes!(handlers::templates::discard_draft))
         .routes(routes!(handlers::templates::apply_template))
         .routes(routes!(handlers::templates::list_versions))

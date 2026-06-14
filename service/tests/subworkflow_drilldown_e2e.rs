@@ -96,6 +96,8 @@ fn subworkflow(id: &str, child_family: Uuid, pin: VersionPin) -> WorkflowNode {
             input_mapping: Vec::new(),
             output: default_subworkflow_output_port(),
             input_contract: mekhan_service::models::template::default_subworkflow_input_contract(),
+            source_coordinate: None,
+            presentation: None,
         },
         parent_id: None,
         width: None,

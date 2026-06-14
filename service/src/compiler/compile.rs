@@ -194,6 +194,15 @@ pub struct ResolvedChild {
     /// and the borrow resolver all read the true contract; the editor reads it
     /// via the `io-contract` endpoint. Empty fields ⇒ opaque pass-through.
     pub output_contract: Port,
+    /// The child's stable `vendor/slug` coordinate when it is a library node
+    /// (decision 7). `None` for a plain (non-library) child. The publish path
+    /// stamps this onto the embedding SubWorkflow node so the persisted graph
+    /// carries the branding independent of editor staleness.
+    pub coordinate: Option<String>,
+    /// The child's branding blob when it is a library node (decision 9), raw
+    /// JSON. `None` for a plain child. Stamped onto the embedding node by the
+    /// publish path alongside [`coordinate`](Self::coordinate).
+    pub presentation: Option<Value>,
 }
 
 /// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
@@ -4508,6 +4517,8 @@ mod tests {
                     }],
                 },
                 input_contract: crate::models::template::Port::empty_input(),
+                source_coordinate: None,
+                presentation: None,
             },
             parent_id: None,
             width: None,
@@ -4592,6 +4603,8 @@ mod tests {
                 template_id: child_id.to_string(),
                 input_contract: Port::empty_input(),
                 output_contract: Port::empty_input(),
+                coordinate: None,
+                presentation: None,
             },
         );
 

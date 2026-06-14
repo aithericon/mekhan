@@ -90,6 +90,27 @@ pub struct DemoMetadata {
     /// (they're hidden from the catalogue and never filed into a folder).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// Library-node intent (decision 1). Absent ⇒ `workflow`. Set
+    /// `"library_node"` to surface this demo as a branded, reusable palette
+    /// node (e.g. an OpenFOAM integration). `"private_child"` is implied by
+    /// `visibility: private` and need not be set explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_kind: Option<String>,
+    /// Trust/provenance axis for a library node (decision 3). Absent on a
+    /// library-node demo ⇒ `system` (platform-shipped, read-only), since demos
+    /// are seeded by the platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// Stable `vendor/slug` coordinate (decision 7), e.g.
+    /// `openfoam/solid-displacement`. Required for a library node so embeds and
+    /// the upgrade prompt can resolve it by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate: Option<String>,
+    /// Branding blob (`{icon, color, vendor, category, badge}`, decision 9) for
+    /// a library node. Raw JSON, stored verbatim into the row's `presentation`
+    /// JSONB column and frozen onto embedding nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<serde_json::Value>,
 }
 
 /// One parsed demo directory.
@@ -496,6 +517,30 @@ pub enum DemoSeedError {
     PrivateMissingOwner,
     #[error("`ownerTemplateId` is only valid with `visibility: private`")]
     OwnerOnNonPrivate,
+    #[error(
+        "`templateKind: library_node` requires a `coordinate` (vendor/slug, e.g. \
+         `openfoam/solid-displacement`) so embeds and the upgrade prompt can resolve it"
+    )]
+    LibraryNodeMissingCoordinate,
+    #[error(
+        "coordinate `{coordinate}` (origin `{origin}`) is already claimed by another \
+         template family `{existing}` — pick a unique vendor/slug"
+    )]
+    CoordinateConflict {
+        coordinate: String,
+        origin: String,
+        existing: uuid::Uuid,
+    },
+    #[error(
+        "`templateKind: library_node` requires `presentation.category` so the Library \
+         palette can group it (vendor stays free text, category does not)"
+    )]
+    LibraryNodeMissingCategory,
+    #[error(
+        "library-node category `{category}` is not in the controlled vocabulary \
+         ({allowed}) — pick one or extend `LIBRARY_CATEGORIES`"
+    )]
+    UnknownLibraryCategory { category: String, allowed: String },
     #[error("db error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("compile failed: {0}")]
@@ -627,6 +672,13 @@ const DEMO_CATEGORIES: &[DemoCategory] = &[
         slug: "examples",
         display_name: "Examples",
         description: "End-to-end example workflows that tie the primitives together.",
+    },
+    DemoCategory {
+        slug: "library",
+        display_name: "Library Nodes",
+        description: "Branded, reusable integration nodes (OpenFOAM, …) — published \
+                      templates that drop onto any canvas as a sub-workflow building \
+                      block. See `templateKind: library_node`.",
     },
 ];
 
@@ -1569,6 +1621,23 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         (other, _) => return Err(DemoSeedError::InvalidVisibility(other.to_string())),
     };
 
+    // Library-node metadata (decisions 1/3/7/9). A demo is a plain `workflow`
+    // unless it declares `templateKind: library_node`; private children are
+    // stamped `private_child` so the intent enum stays exclusive. Seeded
+    // library nodes default to `origin: system` (platform-shipped, read-only).
+    let template_kind: &str = match (demo.metadata.template_kind.as_deref(), visibility) {
+        (Some(k), _) => k,
+        (None, "private") => "private_child",
+        (None, _) => "workflow",
+    };
+    let origin: Option<&str> = if template_kind == "library_node" {
+        Some(demo.metadata.origin.as_deref().unwrap_or("system"))
+    } else {
+        demo.metadata.origin.as_deref()
+    };
+    let coordinate: Option<&str> = demo.metadata.coordinate.as_deref();
+    let presentation: Option<&serde_json::Value> = demo.metadata.presentation.as_ref();
+
     // Idempotency: the stable id is the contract with the rest of the
     // platform (frontend lookup, e2e tests, hand-edited copies). If a
     // row already exists under it — whether seeded last boot or
@@ -1580,6 +1649,52 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             .await?;
     if exists.is_some() {
         return Ok(SeedOutcome::AlreadyPresent);
+    }
+
+    // Library-node coordinate invariants (decision 7). A library node MUST
+    // carry a coordinate, and the coordinate must be unique within its origin
+    // among *live* (is_latest) families. The DB partial unique index enforces
+    // the latter, but a pre-insert check turns the opaque 23505 constraint
+    // violation into an actionable seed-error line naming the colliding family.
+    // (Seeding runs single-threaded at startup, so there is no race between the
+    // SELECT and the INSERT below.)
+    if template_kind == "library_node" {
+        let coord = coordinate.ok_or(DemoSeedError::LibraryNodeMissingCoordinate)?;
+        let origin_val = origin.unwrap_or("system");
+        let clash: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT base_template_id FROM workflow_templates \
+             WHERE coordinate = $1 AND origin IS NOT DISTINCT FROM $2 \
+               AND is_latest AND base_template_id <> $3 \
+             LIMIT 1",
+        )
+        .bind(coord)
+        .bind(origin_val)
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((existing,)) = clash {
+            return Err(DemoSeedError::CoordinateConflict {
+                coordinate: coord.to_string(),
+                origin: origin_val.to_string(),
+                existing,
+            });
+        }
+
+        // Category must come from the controlled palette vocabulary (decision 6)
+        // so the Library palette's category → vendor grouping stays coherent.
+        let category = presentation
+            .and_then(|p| p.get("category"))
+            .and_then(|c| c.as_str());
+        match category {
+            None => return Err(DemoSeedError::LibraryNodeMissingCategory),
+            Some(c) if !crate::models::template::is_known_library_category(c) => {
+                return Err(DemoSeedError::UnknownLibraryCategory {
+                    category: c.to_string(),
+                    allowed: crate::models::template::LIBRARY_CATEGORIES.join(", "),
+                });
+            }
+            Some(_) => {}
+        }
     }
 
     // File the demo into its declared folder (default "Demos") BEFORE compiling.
@@ -1670,8 +1785,9 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, author_id, workspace_id, visibility, owner_template_id,
-             metrics)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10, $11)
+             metrics, template_kind, origin, coordinate, presentation)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15)
         RETURNING *
         "#,
     )
@@ -1686,6 +1802,10 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .bind(visibility)
     .bind(owner_template_id)
     .bind(&metrics)
+    .bind(template_kind)
+    .bind(origin)
+    .bind(coordinate)
+    .bind(presentation)
     .fetch_one(&state.db)
     .await?;
 
@@ -1696,10 +1816,18 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     // executor will run. Non-fatal on failure (the executor reads AIR
     // from S3, not the Y.Doc) but a missing Y.Doc means the editor opens
     // an empty workspace.
+    //
+    // Init from the PERSISTED (stamped) graph, not the raw `demo.graph`, so the
+    // seeded editor matches the row — in particular it carries the library-node
+    // branding `stamp_subworkflow_presentation` froze onto embedding SubWorkflow
+    // nodes at compile time (decision 12). Falls back to the raw graph if the
+    // persisted JSON somehow won't reparse.
+    let seeded_graph: crate::models::template::WorkflowGraph =
+        serde_json::from_value(graph_json.clone()).unwrap_or_else(|_| demo.graph.clone());
     if let Err(e) = state
         .yjs
         .persistence
-        .init_doc_from_graph_with_files(template_id, &demo.graph, &files)
+        .init_doc_from_graph_with_files(template_id, &seeded_graph, &files)
         .await
     {
         tracing::warn!(template_id = %template_id, error = %e, "y.doc init failed for seeded demo");
@@ -2818,6 +2946,8 @@ mod tests {
                 template_id: "00000000-0000-0000-0000-00000000008a".to_string(),
                 input_contract: crate::models::template::Port::empty_input(),
                 output_contract: crate::models::template::Port::empty_input(),
+                coordinate: None,
+                presentation: None,
             },
         );
         // Second tool: the `collect_feedback` HumanTask-form SubWorkflow (09b).
@@ -2835,6 +2965,8 @@ mod tests {
                 template_id: "00000000-0000-0000-0000-00000000009b".to_string(),
                 input_contract: crate::models::template::Port::empty_input(),
                 output_contract: crate::models::template::Port::empty_input(),
+                coordinate: None,
+                presentation: None,
             },
         );
 

@@ -1375,6 +1375,8 @@ fn subworkflow_tool(id: &str, label: &str, child_template_id: uuid::Uuid) -> Wor
                 }],
             },
             input_contract: mekhan_service::models::template::default_subworkflow_input_contract(),
+            source_coordinate: None,
+            presentation: None,
         },
         parent_id: None,
         width: None,
@@ -1414,6 +1416,8 @@ fn sub_air_with_contract(
             template_id: child_template_id.to_string(),
             input_contract,
             output_contract: Port::empty_input(),
+            coordinate: None,
+            presentation: None,
         },
     );
     sa

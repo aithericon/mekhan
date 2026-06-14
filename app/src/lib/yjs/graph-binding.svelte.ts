@@ -480,6 +480,20 @@ export class YjsGraphBinding {
 									config.inputContract as SubWorkflowNodeData['inputContract']
 							}
 						: {}),
+					// Frozen library-node branding snapshot (decision 12) — round-trips
+					// like inputContract so the canvas renders the branded card.
+					...(config?.sourceCoordinate
+						? {
+								sourceCoordinate:
+									config.sourceCoordinate as SubWorkflowNodeData['sourceCoordinate']
+							}
+						: {}),
+					...(config?.presentation
+						? {
+								presentation:
+									config.presentation as SubWorkflowNodeData['presentation']
+							}
+						: {}),
 					output:
 						(config?.output as SubWorkflowNodeData['output']) ?? {
 							id: 'out',
@@ -1330,6 +1344,18 @@ export class YjsGraphBinding {
 					config.set('inputContract', data.inputContract);
 				} else {
 					config.delete('inputContract');
+				}
+				// Library-node branding snapshot (decision 12) — persist/clear
+				// symmetric with inputContract so it round-trips through the ydoc.
+				if (data.sourceCoordinate) {
+					config.set('sourceCoordinate', data.sourceCoordinate);
+				} else {
+					config.delete('sourceCoordinate');
+				}
+				if (data.presentation) {
+					config.set('presentation', data.presentation);
+				} else {
+					config.delete('presentation');
 				}
 				config.set(
 					'output',
