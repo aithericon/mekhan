@@ -4822,7 +4822,26 @@ export interface paths {
         get: operations["get_workspace"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * DELETE /api/v1/workspaces/{id}
+         * @description **Soft-deletes (archives)** a workspace. Owner-gated — deleting the tenant is
+         *     the most destructive control-plane action, so it sits above `admin`.
+         *
+         *     Archiving sets `archived_at` and nothing else: every row (templates,
+         *     instances, members, catalogue, …) is preserved for audit / recovery. The
+         *     workspace immediately drops out of the tenant picker, the membership
+         *     listing, and auth resolution. A hard purge is a deliberately separate
+         *     operation.
+         *
+         *     Refuses (409) to archive:
+         *       - a **system** workspace (`is_system`) or the seeded `default` — they are
+         *         platform-owned and load-bearing for unbound principals;
+         *       - a workspace with **live instances** (`created` / `running`) — tear those
+         *         down first so no orphaned nets keep executing against a dead tenant.
+         *
+         *     Idempotent: archiving an already-archived workspace returns 204.
+         */
+        delete: operations["delete_workspace"];
         options?: never;
         head?: never;
         patch?: never;
@@ -24604,6 +24623,54 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace archived (or already archived) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Owner role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description System/default workspace, or has live instances */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

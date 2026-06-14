@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import Mail from '@lucide/svelte/icons/mail';
 	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
@@ -36,6 +38,8 @@
 	} from '$lib/api/invites';
 	import { updateMemberRole } from '$lib/api/iam';
 	import { auth } from '$lib/auth/store.svelte';
+	import { workspaces as workspaceStore } from '$lib/workspaces/store.svelte';
+	import { ApiError } from '$lib/api/client';
 
 	const workspaceId = $derived($page.params.id ?? '');
 
@@ -49,6 +53,14 @@
 	let members = $state<WorkspaceMember[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	// Deleting the workspace is owner-only and only on the *active* workspace
+	// (the resolved role applies there). System workspaces are undeletable.
+	const canDelete = $derived(
+		auth.isWorkspaceOwner &&
+			auth.session?.user.workspaceId === workspaceId &&
+			workspace?.is_system === false
+	);
 
 	// Add-member form state
 	let newMemberEmail = $state('');
@@ -172,6 +184,37 @@
 		}
 	}
 
+	// ── Danger zone: soft-delete (archive) the workspace ──────────────────────
+	// Typed confirmation (must match the slug) guards the irreversible-feeling
+	// action; the server still re-checks owner role, system flag, and live nets.
+	let deleteConfirm = $state('');
+	let deleting = $state(false);
+	let deleteError = $state<string | null>(null);
+	const deleteArmed = $derived(!!workspace && deleteConfirm.trim() === workspace.slug);
+
+	async function deleteWorkspace() {
+		if (!workspace || !deleteArmed || deleting) return;
+		deleting = true;
+		deleteError = null;
+		try {
+			await workspaceStore.delete(workspaceId);
+			// We just archived the active workspace; a full navigation lets the BFF
+			// resolve a fresh active workspace before the next page paints.
+			if (typeof window !== 'undefined') {
+				window.location.href = '/workspaces';
+			} else {
+				await goto('/workspaces');
+			}
+		} catch (e) {
+			deleteError =
+				e instanceof ApiError
+					? (e.body.error ?? `Delete failed (${e.status})`)
+					: e instanceof Error
+						? e.message
+						: 'Failed to delete workspace';
+			deleting = false;
+		}
+	}
 </script>
 
 <PageShell testid="workspace-detail">
@@ -388,6 +431,46 @@
 				</CardContent>
 			</Card>
 		</div>
+
+		{#if canDelete}
+			<Card class="mt-6 border-destructive/40" data-testid="danger-zone-card">
+				<CardHeader>
+					<CardTitle class="flex items-center gap-2 text-destructive">
+						<TriangleAlert class="size-4" />
+						Delete workspace
+					</CardTitle>
+					<CardDescription>
+						Archives this workspace and removes it from your tenant list. Its
+						data is retained but it can no longer be opened or run against.
+						Refused while live instances are still running. Type the slug
+						<span class="font-mono font-medium text-foreground">{workspace?.slug}</span>
+						to confirm.
+					</CardDescription>
+				</CardHeader>
+				<CardContent class="space-y-3">
+					<div class="flex gap-2">
+						<Input
+							placeholder={workspace?.slug}
+							bind:value={deleteConfirm}
+							data-testid="input-delete-confirm"
+							class="max-w-xs font-mono"
+						/>
+						<Button
+							variant="destructive"
+							disabled={!deleteArmed || deleting}
+							onclick={deleteWorkspace}
+							data-testid="btn-delete-workspace"
+						>
+							<Trash2 class="size-4" />
+							{deleting ? 'Deleting…' : 'Delete workspace'}
+						</Button>
+					</div>
+					{#if deleteError}
+						<div class="text-xs text-destructive" data-testid="delete-error">{deleteError}</div>
+					{/if}
+				</CardContent>
+			</Card>
+		{/if}
 	{/if}
 </PageShell>
 

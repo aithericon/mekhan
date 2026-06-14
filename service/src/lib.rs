@@ -676,7 +676,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::workspaces::list_workspaces,
             handlers::workspaces::create_workspace
         ))
-        .routes(routes!(handlers::workspaces::get_workspace))
+        .routes(routes!(
+            handlers::workspaces::get_workspace,
+            handlers::workspaces::delete_workspace
+        ))
         .routes(routes!(
             handlers::workspaces::list_members,
             handlers::workspaces::add_member

@@ -67,6 +67,15 @@ class AuthStore {
 	}
 
 	/**
+	 * Whether the caller is an `owner` in their resolved workspace. Gates the
+	 * owner-only destructive actions (e.g. deleting the workspace). The server
+	 * is authoritative; this only hides the affordance.
+	 */
+	get isWorkspaceOwner(): boolean {
+		return this.#session?.user.workspaceRole === 'owner';
+	}
+
+	/**
 	 * Probe the server for the current session. Idempotent — safe to call
 	 * from the layout guard on every navigation; the cookie does the work.
 	 */
