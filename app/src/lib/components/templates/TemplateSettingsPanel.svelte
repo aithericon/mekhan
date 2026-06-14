@@ -13,11 +13,14 @@
 		getTemplateTags,
 		setTemplateTags,
 		setTemplateVisibility,
-		type Template
+		type TemplateSummary
 	} from '$lib/api/client';
 
 	interface Props {
-		template: Template;
+		// Reads only id/name/description/visibility/published — accepts a
+		// lightweight list summary (templates page) or a full template (editor),
+		// since the full row is a structural superset of the summary.
+		template: TemplateSummary;
 		/** Persist a new name (parent owns the API call + state).
 		 *  Rejects on failure so we can surface it inline. */
 		onrename?: (name: string) => Promise<void>;

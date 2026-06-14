@@ -105,6 +105,74 @@ impl crate::auth::AclAnnotated for WorkflowTemplate {
     }
 }
 
+/// Lightweight list-row projection of [`WorkflowTemplate`].
+///
+/// The paginated `GET /api/v1/templates` list returns this instead of the full
+/// row. It deliberately OMITS the four heavy JSONB blobs — `graph`, `air_json`,
+/// `interface_json`, `source_ref` — which the detail endpoint
+/// (`GET /api/v1/templates/{id}`) still serves. Those blobs are each a full
+/// workflow graph / compiled AIR; carrying them per-row blew a 20-row page up
+/// to ~20 MB. Every remaining field mirrors `WorkflowTemplate` exactly (same
+/// names + serde shape), so the summary is a strict subset of the detail DTO
+/// and the frontend can consume either interchangeably.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
+pub struct WorkflowTemplateSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+
+    // Version chain
+    pub base_template_id: Option<Uuid>,
+    pub parent_id: Option<Uuid>,
+    pub version: i32,
+    pub is_latest: bool,
+
+    // Publishing
+    pub published: bool,
+    pub published_at: Option<DateTime<Utc>>,
+    pub published_by: Option<Uuid>,
+
+    // Metadata
+    pub author_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+
+    // Workspace + visibility
+    pub workspace_id: Uuid,
+    pub visibility: String,
+    pub owner_template_id: Option<Uuid>,
+
+    /// Compact I/O preview for list cards: the Start nodes' declared input
+    /// field names. Computed server-side from the `graph` column (so the list
+    /// needn't ship the whole graph). Skipped when empty — which also keeps the
+    /// full [`WorkflowTemplate`] (no such field) assignable to this summary on
+    /// the frontend. See `list_templates`.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub io_inputs: Vec<String>,
+    /// Deduped End-node result-mapping target fields — the workflow's declared
+    /// outputs. Companion to [`Self::io_inputs`].
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub io_outputs: Vec<String>,
+
+    /// Caller's effective role — annotated by `list_templates`, never a column.
+    #[sqlx(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_effective_role: Option<String>,
+}
+
+impl crate::auth::AclAnnotated for WorkflowTemplateSummary {
+    fn acl_id(&self) -> Uuid {
+        self.id
+    }
+    fn set_my_effective_role(&mut self, role: Option<String>) {
+        self.my_effective_role = role;
+    }
+}
+
 // --- Visual editor data model (Section 2) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

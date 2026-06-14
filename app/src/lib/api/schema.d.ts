@@ -10358,11 +10358,10 @@ export interface components {
             total_pages: number;
         };
         /** @description Paginated response wrapper. */
-        Paginated_WorkflowTemplate: {
+        Paginated_WorkflowTemplateSummary: {
             has_next: boolean;
             has_previous: boolean;
             items: {
-                air_json?: unknown;
                 /** Format: uuid */
                 author_id: string;
                 /** Format: uuid */
@@ -10370,25 +10369,26 @@ export interface components {
                 /** Format: date-time */
                 created_at: string;
                 description: string;
-                graph: unknown;
                 /** Format: uuid */
                 id: string;
-                interface_json?: unknown;
-                is_latest: boolean;
                 /**
-                 * @description The caller's effective role (`owner|admin|editor|viewer`) on this
-                 *     template — annotated by `list_templates`/`get_template` so the SPA can
-                 *     hide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps
-                 *     `FromRow` working); the backend still enforces on every mutate path.
+                 * @description Compact I/O preview for list cards: the Start nodes' declared input
+                 *     field names. Computed server-side from the `graph` column (so the list
+                 *     needn't ship the whole graph). Skipped when empty — which also keeps the
+                 *     full [`WorkflowTemplate`] (no such field) assignable to this summary on
+                 *     the frontend. See `list_templates`.
                  */
+                io_inputs?: string[];
+                /**
+                 * @description Deduped End-node result-mapping target fields — the workflow's declared
+                 *     outputs. Companion to [`Self::io_inputs`].
+                 */
+                io_outputs?: string[];
+                is_latest: boolean;
+                /** @description Caller's effective role — annotated by `list_templates`, never a column. */
                 my_effective_role?: string | null;
                 name: string;
-                /**
-                 * Format: uuid
-                 * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
-                 *     only when `visibility == "private"`. A private sub-workflow may be
-                 *     embedded only by this family and never runs standalone.
-                 */
+                /** Format: uuid */
                 owner_template_id?: string | null;
                 /** Format: uuid */
                 parent_id?: string | null;
@@ -10397,15 +10397,9 @@ export interface components {
                 published_at?: string | null;
                 /** Format: uuid */
                 published_by?: string | null;
-                source_ref?: unknown;
                 /** Format: date-time */
                 updated_at: string;
-                /**
-                 * Format: uuid
-                 * @description `subject_as_uuid()` of whoever last mutated the template (Phase 2).
-                 *     Backfilled to `author_id` for pre-migration rows; NULL only on a row
-                 *     written before the migration that somehow had a NULL author.
-                 */
+                /** Format: uuid */
                 updated_by?: string | null;
                 /** Format: int32 */
                 version: number;
@@ -13293,8 +13287,23 @@ export interface components {
             /** Format: uuid */
             created_by: string;
             current_step?: string | null;
+            /**
+             * @description Per-run compiled graph for a DRAFT dev-run (`mode = 'draft'`). A draft
+             *     compiles from the live Y.Doc, so the template's `graph` column is stale
+             *     (it only updates on publish). The instance Workflow view prefers this
+             *     snapshot so it renders what actually ran. NULL for live/test_run
+             *     instances, which read the immutable published template version instead.
+             */
+            graph_snapshot?: unknown;
             /** Format: uuid */
             id: string;
+            /**
+             * @description Per-run compiled `interface_json` for a DRAFT dev-run — the sibling of
+             *     [`Self::graph_snapshot`]. The step-executions projector and the per-node
+             *     interface drawer prefer this over the (stale-for-drafts)
+             *     `template.interface_json`. NULL for live/test_run instances.
+             */
+            interface_snapshot?: unknown;
             metadata: unknown;
             /**
              * @description Categorizes the instance. `live` (default) is a production run.
@@ -13915,6 +13924,64 @@ export interface components {
              *     Backfilled to `author_id` for pre-migration rows; NULL only on a row
              *     written before the migration that somehow had a NULL author.
              */
+            updated_by?: string | null;
+            /** Format: int32 */
+            version: number;
+            visibility: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Lightweight list-row projection of [`WorkflowTemplate`].
+         *
+         *     The paginated `GET /api/v1/templates` list returns this instead of the full
+         *     row. It deliberately OMITS the four heavy JSONB blobs — `graph`, `air_json`,
+         *     `interface_json`, `source_ref` — which the detail endpoint
+         *     (`GET /api/v1/templates/{id}`) still serves. Those blobs are each a full
+         *     workflow graph / compiled AIR; carrying them per-row blew a 20-row page up
+         *     to ~20 MB. Every remaining field mirrors `WorkflowTemplate` exactly (same
+         *     names + serde shape), so the summary is a strict subset of the detail DTO
+         *     and the frontend can consume either interchangeably.
+         */
+        WorkflowTemplateSummary: {
+            /** Format: uuid */
+            author_id: string;
+            /** Format: uuid */
+            base_template_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description Compact I/O preview for list cards: the Start nodes' declared input
+             *     field names. Computed server-side from the `graph` column (so the list
+             *     needn't ship the whole graph). Skipped when empty — which also keeps the
+             *     full [`WorkflowTemplate`] (no such field) assignable to this summary on
+             *     the frontend. See `list_templates`.
+             */
+            io_inputs?: string[];
+            /**
+             * @description Deduped End-node result-mapping target fields — the workflow's declared
+             *     outputs. Companion to [`Self::io_inputs`].
+             */
+            io_outputs?: string[];
+            is_latest: boolean;
+            /** @description Caller's effective role — annotated by `list_templates`, never a column. */
+            my_effective_role?: string | null;
+            name: string;
+            /** Format: uuid */
+            owner_template_id?: string | null;
+            /** Format: uuid */
+            parent_id?: string | null;
+            published: boolean;
+            /** Format: date-time */
+            published_at?: string | null;
+            /** Format: uuid */
+            published_by?: string | null;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
             updated_by?: string | null;
             /** Format: int32 */
             version: number;
@@ -22390,13 +22457,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Paginated list of templates */
+            /** @description Paginated list of template summaries */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Paginated_WorkflowTemplate"];
+                    "application/json": components["schemas"]["Paginated_WorkflowTemplateSummary"];
                 };
             };
             /** @description Invalid query DSL */

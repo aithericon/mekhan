@@ -50,14 +50,16 @@ client.use(sessionExpiryMiddleware);
 
 // ─── Templates ──────────────────────────────────────────────────────────────
 export type Template = components['schemas']['WorkflowTemplate'];
-/** Backend returns full WorkflowTemplate rows; "summary" is a frontend label. */
-export type TemplateSummary = Template;
+/** Lightweight list-row projection returned by `GET /api/v1/templates` — the
+ *  full {@link Template} minus the heavy graph/AIR JSON blobs (which the detail
+ *  `getTemplate` still carries). A strict subset of {@link Template}. */
+export type TemplateSummary = components['schemas']['WorkflowTemplateSummary'];
 export type CreateTemplateRequest = components['schemas']['CreateTemplateRequest'];
 export type UpdateTemplateRequest = components['schemas']['UpdateTemplateRequest'];
 export type CompileRequest = components['schemas']['CompileRequest'];
 export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse'];
 export type PaginatedTemplateResponse =
-	components['schemas']['Paginated_WorkflowTemplate'];
+	components['schemas']['Paginated_WorkflowTemplateSummary'];
 
 // ─── Template tests ─────────────────────────────────────────────────────────
 export type TemplateTest = components['schemas']['TemplateTest'];

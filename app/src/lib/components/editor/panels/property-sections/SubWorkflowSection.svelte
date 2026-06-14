@@ -7,7 +7,7 @@
 		createTemplate,
 		setTemplateVisibility,
 		getTemplateIoContract,
-		type Template
+		type TemplateSummary
 	} from '$lib/api/client';
 	import { untrack } from 'svelte';
 	import { portsEqual } from '$lib/editor/port-utils';
@@ -45,7 +45,7 @@
 
 	let { data, readonly = false, onchange, templateId, scope = [] }: Props = $props();
 
-	let templates = $state<Template[]>([]);
+	let templates = $state<TemplateSummary[]>([]);
 	let loadError = $state<string | null>(null);
 	let creating = $state(false);
 	let privacyBusy = $state(false);
@@ -68,11 +68,11 @@
 			listTemplates({ pageSize: 100, published: true }),
 			owner
 				? listTemplates({ pageSize: 100, ownerTemplateId: owner })
-				: Promise.resolve({ items: [] as Template[] })
+				: Promise.resolve({ items: [] as TemplateSummary[] })
 		])
 			.then(([shared, mine]) => {
 				if (cancelled) return;
-				const byFamily = new Map<string, Template>();
+				const byFamily = new Map<string, TemplateSummary>();
 				for (const t of [...(shared.items ?? []), ...(mine.items ?? [])]) {
 					if (t.id === templateId || familyId(t) === templateId) continue;
 					byFamily.set(familyId(t), t);

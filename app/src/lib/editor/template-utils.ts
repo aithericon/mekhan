@@ -14,6 +14,6 @@ import type { Template } from '$lib/api/client';
  * A v1 row has no `base_template_id` (it IS the family root), so we fall
  * back to `id`. Every subsequent version carries `base_template_id = v1.id`.
  */
-export function familyId(t: Template): string {
+export function familyId(t: Pick<Template, 'id' | 'base_template_id'>): string {
 	return t.base_template_id ?? t.id;
 }

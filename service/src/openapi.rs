@@ -355,6 +355,11 @@ use utoipa::OpenApi;
             // auto-discovery doesn't fully walk; register explicitly so the
             // frontend codegen emits matching TS types.
             crate::models::template::TemplateMetrics,
+            // Lightweight list-row projection returned by `GET /api/v1/templates`
+            // (the full `WorkflowTemplate` minus the heavy graph/AIR blobs). The
+            // body wraps it in `Paginated<_>`, which utoipa's auto-discovery
+            // doesn't fully walk, so register it explicitly for frontend codegen.
+            crate::models::template::WorkflowTemplateSummary,
             crate::analytics::model::TemplateAnalytics,
             crate::analytics::model::TemplateUsageSummary,
             crate::analytics::model::RunsByOutcome,

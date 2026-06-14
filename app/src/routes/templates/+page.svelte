@@ -9,8 +9,7 @@
 		createNewVersion,
 		createInstance,
 		listInstances,
-		type TemplateSummary,
-		type WorkflowGraph
+		type TemplateSummary
 	} from '$lib/api/client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -304,31 +303,13 @@
 
 	// Surface the workflow's typed boundary on the list: Start `initial` field
 	// names (inputs) and the union of End `resultMapping` target keys (outputs).
-	// Multi-End templates collapse to the union — the editor card is where you
-	// see per-End shape. `graph` ships with the list payload (typed `unknown`
-	// in the schema), so no second fetch is needed.
-	function summarize(graphRaw: unknown): { inputs: string[]; outputs: string[] } {
-		const graph = graphRaw as WorkflowGraph | undefined;
-		const nodes = graph?.nodes ?? [];
-		const inputs: string[] = [];
-		const outputs: string[] = [];
-		const seenOutput = new Set<string>();
-		for (const n of nodes) {
-			if (n.data.type === 'start') {
-				for (const f of n.data.initial?.fields ?? []) if (f.name) inputs.push(f.name);
-			} else if (n.data.type === 'end') {
-				for (const m of n.data.resultMapping ?? []) {
-					if (m.targetField && !seenOutput.has(m.targetField)) {
-						seenOutput.add(m.targetField);
-						outputs.push(m.targetField);
-					}
-				}
-			}
-		}
-		return { inputs, outputs };
-	}
+	// The list payload no longer ships the full `graph` (it was ~20 MB / page);
+	// the server now computes this compact preview straight from the graph and
+	// returns it as `io_inputs` / `io_outputs` on each summary.
 	const ioByTemplate = $derived(
-		new Map(templates.map((t) => [t.id, summarize(t.graph)]))
+		new Map(
+			templates.map((t) => [t.id, { inputs: t.io_inputs ?? [], outputs: t.io_outputs ?? [] }])
+		)
 	);
 
 	onMount(loadFirst);

@@ -11461,11 +11461,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated list of templates",
+            "description": "Paginated list of template summaries",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Paginated_WorkflowTemplate"
+                  "$ref": "#/components/schemas/Paginated_WorkflowTemplateSummary"
                 }
               }
             }
@@ -27126,7 +27126,7 @@
           }
         }
       },
-      "Paginated_WorkflowTemplate": {
+      "Paginated_WorkflowTemplateSummary": {
         "type": "object",
         "description": "Paginated response wrapper.",
         "required": [
@@ -27149,6 +27149,7 @@
             "type": "array",
             "items": {
               "type": "object",
+              "description": "Lightweight list-row projection of [`WorkflowTemplate`].\n\nThe paginated `GET /api/v1/templates` list returns this instead of the full\nrow. It deliberately OMITS the four heavy JSONB blobs — `graph`, `air_json`,\n`interface_json`, `source_ref` — which the detail endpoint\n(`GET /api/v1/templates/{id}`) still serves. Those blobs are each a full\nworkflow graph / compiled AIR; carrying them per-row blew a 20-row page up\nto ~20 MB. Every remaining field mirrors `WorkflowTemplate` exactly (same\nnames + serde shape), so the summary is a strict subset of the detail DTO\nand the frontend can consume either interchangeably.",
               "required": [
                 "id",
                 "name",
@@ -27156,7 +27157,6 @@
                 "version",
                 "is_latest",
                 "published",
-                "graph",
                 "author_id",
                 "created_at",
                 "updated_at",
@@ -27164,7 +27164,6 @@
                 "visibility"
               ],
               "properties": {
-                "air_json": {},
                 "author_id": {
                   "type": "string",
                   "format": "uuid"
@@ -27183,12 +27182,24 @@
                 "description": {
                   "type": "string"
                 },
-                "graph": {},
                 "id": {
                   "type": "string",
                   "format": "uuid"
                 },
-                "interface_json": {},
+                "io_inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Compact I/O preview for list cards: the Start nodes' declared input\nfield names. Computed server-side from the `graph` column (so the list\nneedn't ship the whole graph). Skipped when empty — which also keeps the\nfull [`WorkflowTemplate`] (no such field) assignable to this summary on\nthe frontend. See `list_templates`."
+                },
+                "io_outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Deduped End-node result-mapping target fields — the workflow's declared\noutputs. Companion to [`Self::io_inputs`]."
+                },
                 "is_latest": {
                   "type": "boolean"
                 },
@@ -27197,7 +27208,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "The caller's effective role (`owner|admin|editor|viewer`) on this\ntemplate — annotated by `list_templates`/`get_template` so the SPA can\nhide stale edit affordances. Not a DB column (`#[sqlx(default)]` keeps\n`FromRow` working); the backend still enforces on every mutate path."
+                  "description": "Caller's effective role — annotated by `list_templates`, never a column."
                 },
                 "name": {
                   "type": "string"
@@ -27207,8 +27218,7 @@
                     "string",
                     "null"
                   ],
-                  "format": "uuid",
-                  "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
+                  "format": "uuid"
                 },
                 "parent_id": {
                   "type": [
@@ -27234,7 +27244,6 @@
                   ],
                   "format": "uuid"
                 },
-                "source_ref": {},
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
@@ -27244,8 +27253,7 @@
                     "string",
                     "null"
                   ],
-                  "format": "uuid",
-                  "description": "`subject_as_uuid()` of whoever last mutated the template (Phase 2).\nBackfilled to `author_id` for pre-migration rows; NULL only on a row\nwritten before the migration that somehow had a NULL author."
+                  "format": "uuid"
                 },
                 "version": {
                   "type": "integer",
@@ -32854,9 +32862,15 @@
               "null"
             ]
           },
+          "graph_snapshot": {
+            "description": "Per-run compiled graph for a DRAFT dev-run (`mode = 'draft'`). A draft\ncompiles from the live Y.Doc, so the template's `graph` column is stale\n(it only updates on publish). The instance Workflow view prefers this\nsnapshot so it renders what actually ran. NULL for live/test_run\ninstances, which read the immutable published template version instead."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "interface_snapshot": {
+            "description": "Per-run compiled `interface_json` for a DRAFT dev-run — the sibling of\n[`Self::graph_snapshot`]. The step-executions projector and the per-node\ninterface drawer prefer this over the (stale-for-drafts)\n`template.interface_json`. NULL for live/test_run instances."
           },
           "metadata": {},
           "mode": {
@@ -34032,6 +34046,127 @@
             ],
             "format": "uuid",
             "description": "`subject_as_uuid()` of whoever last mutated the template (Phase 2).\nBackfilled to `author_id` for pre-migration rows; NULL only on a row\nwritten before the migration that somehow had a NULL author."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkflowTemplateSummary": {
+        "type": "object",
+        "description": "Lightweight list-row projection of [`WorkflowTemplate`].\n\nThe paginated `GET /api/v1/templates` list returns this instead of the full\nrow. It deliberately OMITS the four heavy JSONB blobs — `graph`, `air_json`,\n`interface_json`, `source_ref` — which the detail endpoint\n(`GET /api/v1/templates/{id}`) still serves. Those blobs are each a full\nworkflow graph / compiled AIR; carrying them per-row blew a 20-row page up\nto ~20 MB. Every remaining field mirrors `WorkflowTemplate` exactly (same\nnames + serde shape), so the summary is a strict subset of the detail DTO\nand the frontend can consume either interchangeably.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "is_latest",
+          "published",
+          "author_id",
+          "created_at",
+          "updated_at",
+          "workspace_id",
+          "visibility"
+        ],
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "io_inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Compact I/O preview for list cards: the Start nodes' declared input\nfield names. Computed server-side from the `graph` column (so the list\nneedn't ship the whole graph). Skipped when empty — which also keeps the\nfull [`WorkflowTemplate`] (no such field) assignable to this summary on\nthe frontend. See `list_templates`."
+          },
+          "io_outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Deduped End-node result-mapping target fields — the workflow's declared\noutputs. Companion to [`Self::io_inputs`]."
+          },
+          "is_latest": {
+            "type": "boolean"
+          },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caller's effective role — annotated by `list_templates`, never a column."
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "published_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "version": {
             "type": "integer",

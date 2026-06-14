@@ -7,7 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
-	import { listTemplates, setTemplateFolder, type Template } from '$lib/api/client';
+	import { listTemplates, setTemplateFolder, type TemplateSummary } from '$lib/api/client';
 
 	type Props = {
 		folderId: string;
@@ -15,11 +15,11 @@
 	let { folderId }: Props = $props();
 
 	// `recursive` stays false: only direct members here.
-	let homed = $state<Template[]>([]);
+	let homed = $state<TemplateSummary[]>([]);
 
 	// Add-template state — set the picked template's home folder to this one.
 	let addQuery = $state('');
-	let addResults = $state<Template[]>([]);
+	let addResults = $state<TemplateSummary[]>([]);
 	let addSearching = $state(false);
 	let addError = $state<string | null>(null);
 
@@ -58,7 +58,7 @@
 		}
 	}
 
-	async function setHome(t: Template) {
+	async function setHome(t: TemplateSummary) {
 		addError = null;
 		try {
 			await setTemplateFolder(t.id, { folder_id: folderId });
@@ -69,7 +69,7 @@
 		}
 	}
 
-	async function clearHome(t: Template) {
+	async function clearHome(t: TemplateSummary) {
 		if (!confirm(`Move '${t.name}' out of this folder (to the workspace root)?`)) return;
 		try {
 			await setTemplateFolder(t.id, { folder_id: null });

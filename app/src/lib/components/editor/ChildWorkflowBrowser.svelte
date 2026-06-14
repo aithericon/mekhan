@@ -11,7 +11,7 @@
 		listTemplates,
 		listFolders,
 		listWorkspaceTags,
-		type Template,
+		type TemplateSummary,
 		type Folder
 	} from '$lib/api/client';
 	import { workspaces } from '$lib/workspaces/store.svelte';
@@ -30,7 +30,7 @@
 
 	let folders = $state<Folder[]>([]);
 	let tags = $state<string[]>([]);
-	let templates = $state<Template[]>([]);
+	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
@@ -105,12 +105,12 @@
 		);
 	});
 
-	function pick(t: Template) {
+	function pick(t: TemplateSummary) {
 		onselect(familyId(t));
 		open = false;
 	}
 
-	function openInTab(t: Template, e: MouseEvent) {
+	function openInTab(t: TemplateSummary, e: MouseEvent) {
 		e.stopPropagation();
 		window.open(`/templates/${t.id}`, '_blank');
 	}

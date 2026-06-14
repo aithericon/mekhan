@@ -25,6 +25,7 @@ use crate::models::template::{
     ApplyAirTemplateRequest, ApplyTemplateRequest, CompileRequest, CreateTemplateRequest,
     DiscardDraftResponse, ExecutionBackendType, Port, Position, TemplateListExtras,
     UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
+    WorkflowTemplateSummary,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{
@@ -120,11 +121,11 @@ async fn gate_template_write(
 /// query. Keyed by the per-version row id (the resolver collapses to the chain
 /// root internally), so each row gets the caller's effective role for the
 /// SPA's edit-affordance hinting.
-async fn annotate_template_roles(
+async fn annotate_template_roles<T: crate::auth::AclAnnotated>(
     state: &AppState,
     user: &AuthUser,
     workspace_id: Uuid,
-    items: &mut [WorkflowTemplate],
+    items: &mut [T],
 ) -> Result<(), ApiError> {
     // Keep-all on purpose: a template only becomes restricted via an ancestor
     // folder, and detail access is gated by `require_object_role`.
@@ -300,6 +301,36 @@ fn append_template_where(
     Ok(())
 }
 
+/// Two correlated `text[]` subquery columns (`io_inputs`, `io_outputs`) that
+/// compute a template's compact I/O preview straight from its `graph` JSONB —
+/// Start-node input field names and deduped End-node result-mapping targets.
+/// This is the Rust/SQL mirror of the frontend's old `summarize(graph)` pass;
+/// doing it server-side lets `GET /api/v1/templates` keep the per-card I/O
+/// badges WITHOUT shipping the whole graph to the browser. `graph_expr` is the
+/// table-qualified column (`"graph"` or `"t.graph"`). The `jsonb_typeof` guard
+/// keeps a malformed node from erroring the whole list. Node shape mirrors
+/// `WorkflowNodeData` (serde `tag = "type"`, camelCase: `initial.fields[].name`,
+/// `resultMapping[].targetField`).
+fn io_summary_cols(graph_expr: &str) -> String {
+    format!(
+        "COALESCE((SELECT array_agg(f->>'name') \
+            FROM jsonb_array_elements({g}->'nodes') n \
+            CROSS JOIN LATERAL jsonb_array_elements( \
+              CASE WHEN n->'data'->>'type' = 'start' \
+                     AND jsonb_typeof(n->'data'->'initial'->'fields') = 'array' \
+                   THEN n->'data'->'initial'->'fields' ELSE '[]'::jsonb END) f \
+            WHERE f->>'name' IS NOT NULL), ARRAY[]::text[]) AS io_inputs, \
+         COALESCE((SELECT array_agg(DISTINCT m->>'targetField') \
+            FROM jsonb_array_elements({g}->'nodes') n \
+            CROSS JOIN LATERAL jsonb_array_elements( \
+              CASE WHEN n->'data'->>'type' = 'end' \
+                     AND jsonb_typeof(n->'data'->'resultMapping') = 'array' \
+                   THEN n->'data'->'resultMapping' ELSE '[]'::jsonb END) m \
+            WHERE m->>'targetField' IS NOT NULL), ARRAY[]::text[]) AS io_outputs",
+        g = graph_expr
+    )
+}
+
 /// GET /api/v1/templates
 ///
 /// Latest-version catalogue listing driven by the generic list DSL:
@@ -317,7 +348,7 @@ fn append_template_where(
     path = "/api/v1/templates",
     params(TemplateListExtras),
     responses(
-        (status = 200, description = "Paginated list of templates", body = Paginated<WorkflowTemplate>),
+        (status = 200, description = "Paginated list of template summaries", body = Paginated<WorkflowTemplateSummary>),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
     ),
     tag = "templates",
@@ -330,6 +361,15 @@ pub async fn list_templates(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     use sqlx::{Postgres, QueryBuilder};
 
+    // Summary projection — every `WorkflowTemplateSummary` column (i.e. all of
+    // `WorkflowTemplate` MINUS the heavy `graph`/`air_json`/`interface_json`/
+    // `source_ref` JSONB blobs the detail endpoint serves). Selecting these
+    // explicitly instead of `*`/`t.*` keeps a 20-row page from dragging the
+    // full compiled graphs over the wire (~20 MB → a few KB).
+    const SUMMARY_COLS: &str = "id, name, description, base_template_id, parent_id, version, \
+        is_latest, published, published_at, published_by, author_id, updated_by, created_at, \
+        updated_at, workspace_id, visibility, owner_template_id";
+
     let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
     // The version-chain listing (base_template_id != None) is a separate
@@ -338,12 +378,13 @@ pub async fn list_templates(
     // workspace (versions inherit it, since `new_version` keeps the same
     // workspace_id by default per the DB column DEFAULT).
     if let Some(base_id) = extras.base_template_id {
-        let mut items = sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates \
+        let mut items = sqlx::query_as::<_, WorkflowTemplateSummary>(&format!(
+            "SELECT {SUMMARY_COLS}, {io} FROM workflow_templates \
               WHERE base_template_id = $1 \
                 AND (workspace_id = $2 OR visibility = 'public') \
               ORDER BY version DESC LIMIT $3 OFFSET $4",
-        )
+            io = io_summary_cols("graph")
+        ))
         .bind(base_id)
         .bind(workspace_id)
         .bind(params.page.limit())
@@ -384,8 +425,19 @@ pub async fn list_templates(
             .0
     };
 
-    let mut items: Vec<WorkflowTemplate> = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT t.* FROM workflow_templates t");
+    let mut items: Vec<WorkflowTemplateSummary> = {
+        // `t.`-prefixed summary projection (the `FROM ... t` alias is shared
+        // with the COUNT + `append_template_where` predicates).
+        let select = format!(
+            "SELECT {}, {io} FROM workflow_templates t",
+            SUMMARY_COLS
+                .split(", ")
+                .map(|c| format!("t.{c}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            io = io_summary_cols("t.graph")
+        );
+        let mut qb = QueryBuilder::<Postgres>::new(select);
         append_template_where(&mut qb, workspace_id, &extras, &params).map_err(query_err_to_api)?;
         match params.sort {
             Some(ref sort) => {
@@ -402,7 +454,7 @@ pub async fn list_templates(
             }
         }
         builder::build_pagination(&mut qb, &params.page);
-        qb.build_query_as::<WorkflowTemplate>()
+        qb.build_query_as::<WorkflowTemplateSummary>()
             .fetch_all(&state.db)
             .await
             .map_err(|e| query_err_to_api(QueryError::Database(e)))?
