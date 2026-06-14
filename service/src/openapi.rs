@@ -44,6 +44,9 @@ use utoipa::OpenApi;
             // reached only through this, so register it too.
             crate::handlers::node_library::LibraryNodeDescriptor,
             crate::models::template::Presentation,
+            // Phase 4 governance — promote/demote/fork request bodies.
+            crate::handlers::governance::PromoteTemplateRequest,
+            crate::handlers::governance::ForkLibraryRequest,
             // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
             // these directly but utoipa's auto-discovery only walks the
             // handler signature; nested types (e.g. ResourceTypeInfo

@@ -150,7 +150,7 @@ fn default_lifecycle_status() -> String {
 /// (decisions 9, 13). `icon` is a key into the frontend icon registry (never
 /// raw SVG); `color` is a hex/token accent. Stored as JSONB on the template
 /// row; this typed shape feeds the OpenAPI surface (io-contract + node data).
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct Presentation {
     /// Icon registry key (e.g. `openfoam`). Falls back to a generic icon when
     /// unknown to the frontend registry.

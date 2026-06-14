@@ -7047,6 +7047,68 @@
         }
       }
     },
+    "/api/v1/library/fork": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "POST /api/v1/library/fork",
+        "description": "Deep-copy a (readable) library node's current version into a fresh, editable\n`workspace`-visibility template family in the caller's active workspace,\nrecording `forked_from` provenance (decision 5). The fork is born a `workflow`\n(the owner edits, then may re-promote it). Branding is copied so the fork\nstays recognisable while editing. Body-based rather than `{coordinate}` in\nthe path because coordinates contain a slash.",
+        "operationId": "fork_library_node",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkLibraryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Forked into a new editable template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller cannot create in their workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Library node not found / not readable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me/active-workspace": {
       "post": {
         "tags": [
@@ -7714,6 +7776,31 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/LibraryNodeDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/node-library/categories": {
+      "get": {
+        "tags": [
+          "node-library"
+        ],
+        "summary": "GET /api/v1/node-library/categories",
+        "description": "The controlled category vocabulary a library node's `presentation.category`\nmust belong to (decision 6). Served from the single backend constant so the\npromote form's category picker can never drift from what seed/promote\nvalidation accepts.",
+        "operationId": "list_library_categories",
+        "responses": {
+          "200": {
+            "description": "Controlled library category vocabulary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
                   }
                 }
               }
@@ -12138,6 +12225,90 @@
         }
       }
     },
+    "/api/v1/templates/{id}/demote": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "POST /api/v1/templates/{id}/demote",
+        "description": "Reverse of promote: drop a workspace library node back to a plain workflow,\nfreeing its coordinate and removing it from the Library palette. Existing\nembeds are frozen (the presentation is snapshotted into the consumer's graph\nat publish time) and are unaffected. Workspace Admin/Owner only; seeded\n`system` nodes cannot be demoted via the API.",
+        "operationId": "demote_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version in the family)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Library node demoted to workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Seeded system node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks workspace Admin/Owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Template is not a library node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/draft": {
       "delete": {
         "tags": [
@@ -12813,6 +12984,100 @@
           },
           "404": {
             "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/promote": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "POST /api/v1/templates/{id}/promote",
+        "description": "Advertise a published template as a workspace library node: stamp\n`template_kind = library_node` + `origin` + `coordinate` + `presentation`\nacross the whole version family so embeds pinned to any version resolve by\ncoordinate and carry the branding. Workspace Admin/Owner only.",
+        "operationId": "promote_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version in the family)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Template promoted to library node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid coordinate / category / origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks workspace Admin/Owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not published, or coordinate already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -21675,6 +21940,19 @@
           }
         }
       },
+      "ForkLibraryRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/library/fork`.",
+        "required": [
+          "coordinate"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Coordinate of the library node to fork (`vendor/slug`)."
+          }
+        }
+      },
       "FormatDetailsView": {
         "type": "object",
         "description": "Normalized format-specific block: a discriminant plus the uniform\nfields/tables decomposition of whatever `format_specific` carried.",
@@ -27944,6 +28222,31 @@
           "query",
           "query_range"
         ]
+      },
+      "PromoteTemplateRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/templates/{id}/promote`.",
+        "required": [
+          "coordinate",
+          "presentation"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Stable `vendor/slug` coordinate, e.g. `acme/mesh-prep`. Unique among the\ncurrent (`is_latest`) library nodes of this origin."
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Origin axis. Only `workspace` (the default) is settable via the API in\nv1; `community` (platform-admin review) and `system` (seed-only) are\nrejected."
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/Presentation",
+            "description": "Branding + palette metadata. `category` must be a known vocabulary entry."
+          }
+        }
       },
       "PromoteToTestRequest": {
         "type": "object",

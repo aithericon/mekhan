@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import GitFork from '@lucide/svelte/icons/git-fork';
+	import { forkLibraryNode } from '$lib/api/client';
 	import { loadNodeTypes, nodeList } from '$lib/editor/node-registry.svelte';
 	import {
 		loadLibraryNodes,
@@ -101,6 +104,21 @@
 		// re-renders the palette and detaches the in-flight dragged element,
 		// hanging the drag. The canvas marks it used on a successful drop.
 	}
+
+	// Fork-to-workspace (decision 5): deep-copy the library node into a new
+	// editable private template the caller owns, then open its editor.
+	let forking = $state<string | null>(null);
+	async function onFork(node: LibraryNodeDescriptor) {
+		if (forking) return;
+		forking = node.coordinate;
+		try {
+			const forked = await forkLibraryNode(node.coordinate);
+			await goto(`/templates/${forked.id}`);
+		} catch {
+			// Surfaced by the destination load failing; reset so the user can retry.
+			forking = null;
+		}
+	}
 </script>
 
 {#snippet libraryItem(node: LibraryNodeDescriptor)}
@@ -126,6 +144,23 @@
 				{node.coordinate}{node.lifecycleStatus === 'deprecated' ? ' · deprecated' : ''}
 			</div>
 		</div>
+		<!-- Fork-to-workspace: hidden until hover so it doesn't crowd the card.
+		     Not draggable; stops propagation so a click never starts a drag. -->
+		<button
+			type="button"
+			class="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100 disabled:opacity-50"
+			title="Fork to workspace"
+			aria-label="Fork {node.name} to workspace"
+			data-testid="palette-library-fork-{node.coordinate}"
+			disabled={forking === node.coordinate}
+			onclick={(e) => {
+				e.stopPropagation();
+				onFork(node);
+			}}
+			ondragstart={(e) => e.preventDefault()}
+		>
+			<GitFork class="size-3.5" />
+		</button>
 	</div>
 {/snippet}
 

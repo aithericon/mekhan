@@ -10,6 +10,7 @@
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import PromoteLibraryDialog from '$lib/components/editor/PromoteLibraryDialog.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
 	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
@@ -30,6 +31,7 @@
 		updateTemplate,
 		createNewVersion,
 		discardDraft,
+		demoteTemplate,
 		compileGraph,
 		ensureAttachedPage,
 		CompileApiError,
@@ -82,6 +84,7 @@
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 	let shareOpen = $state(false);
+	let promoteOpen = $state(false);
 	let discardConfirmOpen = $state(false);
 	let discarding = $state(false);
 
@@ -89,6 +92,18 @@
 	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
 	// (future) edit gates never show a stale role.
 	const canShare = $derived(roleAtLeast(template?.my_effective_role, 'admin'));
+
+	// Library-node governance (Phase 4): only a published template can be
+	// promoted, and only by an object Admin/Owner. A node already promoted shows
+	// "Manage" + "Demote" instead. Seeded `system` packs are managed by GitOps,
+	// not the UI.
+	const isLibraryNode = $derived(template?.template_kind === 'library_node');
+	const isSystemNode = $derived(isLibraryNode && template?.origin === 'system');
+	const canGovern = $derived(
+		!!template?.published &&
+			!isSystemNode &&
+			roleAtLeast(template?.my_effective_role, 'admin')
+	);
 
 	// Yjs session + binding — bound once for this component instance; the
 	// `{#key}` wrapper remounts it on id change, so the initial-value read is
@@ -175,6 +190,18 @@
 			await goto(`/templates/${next.id}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create new version';
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function handleDemote() {
+		if (!template || !isLibraryNode || saving) return;
+		try {
+			saving = true;
+			template = await demoteTemplate(template.id);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to demote library node';
 		} finally {
 			saving = false;
 		}
@@ -587,6 +614,9 @@
 				onnotes={template ? openNotes : undefined}
 				onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 				onshare={template && canShare ? () => (shareOpen = true) : undefined}
+				onpromote={canGovern ? () => (promoteOpen = true) : undefined}
+				ondemote={canGovern && isLibraryNode ? handleDemote : undefined}
+				{isLibraryNode}
 				onrename={handleRename}
 				onundo={() => binding.undo()}
 				onredo={() => binding.redo()}
@@ -766,5 +796,10 @@
 		objectName={template.name}
 		myEffectiveRole={template.my_effective_role}
 		onChanged={load}
+	/>
+	<PromoteLibraryDialog
+		bind:open={promoteOpen}
+		{template}
+		onpromoted={(t) => (template = t)}
 	/>
 {/if}

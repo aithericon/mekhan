@@ -2277,6 +2277,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/library/fork
+         * @description Deep-copy a (readable) library node's current version into a fresh, editable
+         *     `workspace`-visibility template family in the caller's active workspace,
+         *     recording `forked_from` provenance (decision 5). The fork is born a `workflow`
+         *     (the owner edits, then may re-promote it). Branding is copied so the fork
+         *     stays recognisable while editing. Body-based rather than `{coordinate}` in
+         *     the path because coordinates contain a slash.
+         */
+        post: operations["fork_library_node"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/active-workspace": {
         parameters: {
             query?: never;
@@ -2553,6 +2578,29 @@ export interface paths {
          *     the palette can render its two-level grouping directly.
          */
         get: operations["list_node_library"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-library/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/node-library/categories
+         * @description The controlled category vocabulary a library node's `presentation.category`
+         *     must belong to (decision 6). Served from the single backend constant so the
+         *     promote form's category picker can never drift from what seed/promote
+         *     validation accepts.
+         */
+        get: operations["list_library_categories"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4002,6 +4050,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/demote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/demote
+         * @description Reverse of promote: drop a workspace library node back to a plain workflow,
+         *     freeing its coordinate and removing it from the Library palette. Existing
+         *     embeds are frozen (the presentation is snapshotted into the consumer's graph
+         *     at publish time) and are unaffected. Workspace Admin/Owner only; seeded
+         *     `system` nodes cannot be demoted via the API.
+         */
+        post: operations["demote_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/draft": {
         parameters: {
             query?: never;
@@ -4204,6 +4276,29 @@ export interface paths {
         get: operations["get_template_page"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/promote
+         * @description Advertise a published template as a workspace library node: stamp
+         *     `template_kind = library_node` + `origin` + `coordinate` + `presentation`
+         *     across the whole version family so embeds pinned to any version resolve by
+         *     coordinate and carry the branding. Workspace Admin/Owner only.
+         */
+        post: operations["promote_template"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7946,6 +8041,11 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /** @description Body for `POST /api/v1/library/fork`. */
+        ForkLibraryRequest: {
+            /** @description Coordinate of the library node to fork (`vendor/slug`). */
+            coordinate: string;
+        };
         /**
          * @description Normalized format-specific block: a discriminant plus the uniform
          *     fields/tables decomposition of whatever `format_specific` carried.
@@ -10872,6 +10972,22 @@ export interface components {
          * @enum {string}
          */
         PrometheusOperation: "query" | "query_range";
+        /** @description Body for `POST /api/v1/templates/{id}/promote`. */
+        PromoteTemplateRequest: {
+            /**
+             * @description Stable `vendor/slug` coordinate, e.g. `acme/mesh-prep`. Unique among the
+             *     current (`is_latest`) library nodes of this origin.
+             */
+            coordinate: string;
+            /**
+             * @description Origin axis. Only `workspace` (the default) is settable via the API in
+             *     v1; `community` (platform-admin review) and `system` (seed-only) are
+             *     rejected.
+             */
+            origin?: string | null;
+            /** @description Branding + palette metadata. `category` must be a known vocabulary entry. */
+            presentation: components["schemas"]["Presentation"];
+        };
         PromoteToTestRequest: {
             /** @description Name for the new test. Must be unique within the template family. */
             name: string;
@@ -19302,6 +19418,57 @@ export interface operations {
             };
         };
     };
+    fork_library_node: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkLibraryRequest"];
+            };
+        };
+        responses: {
+            /** @description Forked into a new editable template */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Caller cannot create in their workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Library node not found / not readable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     set_active_workspace: {
         parameters: {
             query?: never;
@@ -19822,6 +19989,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibraryNodeDescriptor"][];
+                };
+            };
+        };
+    };
+    list_library_categories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Controlled library category vocabulary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };
@@ -23007,6 +23194,74 @@ export interface operations {
             };
         };
     };
+    demote_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version in the family) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Library node demoted to workflow */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Seeded system node */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template is not a library node */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     discard_draft: {
         parameters: {
             query?: never;
@@ -23508,6 +23763,78 @@ export interface operations {
             };
             /** @description Template not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    promote_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version in the family) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Template promoted to library node */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid coordinate / category / origin */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Caller lacks workspace Admin/Owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not published, or coordinate already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

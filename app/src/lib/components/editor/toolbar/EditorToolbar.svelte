@@ -12,6 +12,8 @@
 	import NotebookPen from '@lucide/svelte/icons/notebook-pen';
 	import Settings from '@lucide/svelte/icons/settings';
 	import Share2 from '@lucide/svelte/icons/share-2';
+	import Package from '@lucide/svelte/icons/package';
+	import PackageMinus from '@lucide/svelte/icons/package-minus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Lock from '@lucide/svelte/icons/lock';
 	import type { Awareness } from 'y-protocols/awareness';
@@ -63,6 +65,14 @@
 		/** Open the object-grant Share dialog (object-Admin only; the page
 		 *  passes this conditionally on `my_effective_role`). */
 		onshare?: () => void;
+		/** Open the promote/manage-library-node dialog (Admin+ on a published
+		 *  template; passed conditionally by the page). */
+		onpromote?: () => void;
+		/** Demote this library node back to a plain workflow (Admin+). */
+		ondemote?: () => void;
+		/** Whether this template is currently a library node (drives the
+		 *  Promote-vs-Manage label + the Demote affordance). */
+		isLibraryNode?: boolean;
 		/** Commit a new template name (parent does the API call + state). */
 		onrename?: (name: string) => void;
 		/** Undo/redo over the local Yjs edit stack (drafts only). */
@@ -94,6 +104,9 @@
 		onnotes,
 		onsettings,
 		onshare,
+		onpromote,
+		ondemote,
+		isLibraryNode = false,
 		onrename,
 		onundo,
 		onredo,
@@ -292,6 +305,36 @@
 			<Button variant="ghost" size="sm" data-testid="btn-share-template" onclick={onshare}>
 				<Share2 class="size-3.5" />
 				Share
+			</Button>
+		{/if}
+
+		{#if onpromote}
+			<Button
+				variant="ghost"
+				size="sm"
+				data-testid="btn-promote-library"
+				onclick={onpromote}
+				title={isLibraryNode
+					? 'Manage this library node’s branding'
+					: 'Promote this template to a reusable library node'}
+			>
+				<Package class="size-3.5" />
+				{isLibraryNode ? 'Manage node' : 'Promote'}
+			</Button>
+		{/if}
+
+		{#if ondemote}
+			<Button
+				variant="ghost"
+				size="sm"
+				class="text-destructive hover:text-destructive"
+				data-testid="btn-demote-library"
+				disabled={saving}
+				onclick={ondemote}
+				title="Demote this library node back to a plain workflow"
+			>
+				<PackageMinus class="size-3.5" />
+				Demote
 			</Button>
 		{/if}
 

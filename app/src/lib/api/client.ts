@@ -59,6 +59,11 @@ export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse']
 export type PaginatedTemplateResponse =
 	components['schemas']['Paginated_WorkflowTemplate'];
 
+// ─── Library-node governance (Phase 4) ───────────────────────────────────────
+export type Presentation = components['schemas']['Presentation'];
+export type PromoteTemplateRequest = components['schemas']['PromoteTemplateRequest'];
+export type ForkLibraryRequest = components['schemas']['ForkLibraryRequest'];
+
 // ─── Template tests ─────────────────────────────────────────────────────────
 export type TemplateTest = components['schemas']['TemplateTest'];
 export type TemplateTestRun = components['schemas']['TemplateTestRun'];
@@ -508,6 +513,37 @@ export async function discardDraft(id: string): Promise<DiscardDraftResponse> {
 	return unwrap(
 		await client.DELETE('/api/v1/templates/{id}/draft', { params: { path: { id } } })
 	);
+}
+
+// ── Library-node governance (Phase 4) ───────────────────────────────────────
+
+/** Advertise a published template as a workspace library node (Admin/Owner). */
+export async function promoteTemplate(
+	id: string,
+	body: PromoteTemplateRequest
+): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/promote', { params: { path: { id } }, body })
+	);
+}
+
+/** Drop a workspace library node back to a plain workflow (Admin/Owner). */
+export async function demoteTemplate(id: string): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/demote', { params: { path: { id } } })
+	);
+}
+
+/** Deep-copy a library node into a new editable workspace template the caller owns. */
+export async function forkLibraryNode(coordinate: string): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/library/fork', { body: { coordinate } })
+	);
+}
+
+/** The controlled category vocabulary for a library node's presentation. */
+export async function listLibraryCategories(): Promise<string[]> {
+	return unwrap(await client.GET('/api/v1/node-library/categories', {})) as unknown as string[];
 }
 
 export async function getTemplateVersions(id: string): Promise<Template[]> {

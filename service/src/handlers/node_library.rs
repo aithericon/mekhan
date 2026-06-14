@@ -140,3 +140,26 @@ pub async fn list_node_library(
 
     Ok(Json(items))
 }
+
+/// GET /api/v1/node-library/categories
+///
+/// The controlled category vocabulary a library node's `presentation.category`
+/// must belong to (decision 6). Served from the single backend constant so the
+/// promote form's category picker can never drift from what seed/promote
+/// validation accepts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/node-library/categories",
+    responses(
+        (status = 200, description = "Controlled library category vocabulary", body = Vec<String>),
+    ),
+    tag = "node-library",
+)]
+pub async fn list_library_categories() -> Json<Vec<String>> {
+    Json(
+        crate::models::template::LIBRARY_CATEGORIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    )
+}

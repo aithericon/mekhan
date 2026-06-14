@@ -12,6 +12,7 @@ pub mod executions;
 pub mod files;
 pub mod fleet_engines;
 pub mod folders;
+pub mod governance;
 pub mod health;
 pub mod inference_metering;
 pub mod inference_telemetry;
