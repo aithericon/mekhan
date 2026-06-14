@@ -7,7 +7,10 @@ use tokio::sync::OnceCell;
 
 struct SharedVisionOllama {
     base_url: String,
-    _container: testcontainers::ContainerAsync<GenericImage>,
+    // `None` when `TEST_OLLAMA_URL` points us at an externally-managed daemon
+    // (the native `ollama serve` that `just dev up-ollama` runs on :11434);
+    // `Some` when we spun up our own hermetic testcontainer.
+    _container: Option<testcontainers::ContainerAsync<GenericImage>>,
 }
 
 static SHARED_VISION_OLLAMA: OnceCell<SharedVisionOllama> = OnceCell::const_new();
@@ -17,19 +20,33 @@ const VISION_MODEL: &str = "glm-ocr:q8_0";
 async fn shared_vision_ollama() -> &'static SharedVisionOllama {
     SHARED_VISION_OLLAMA
         .get_or_init(|| async {
-            let container = GenericImage::new("ollama/ollama", "latest")
-                .with_exposed_port(11434.into())
-                .with_wait_for(WaitFor::message_on_stderr("Listening on"))
-                .start()
-                .await
-                .expect("Failed to start Ollama vision testcontainer");
+            // Prefer an externally-managed daemon when pointed at one (shares
+            // the `TEST_OLLAMA_URL` knob with the LLM harness — one daemon
+            // serves both, models differ only by tag); container is the
+            // hermetic bare-CI fallback. See `ollama.rs` for the rationale.
+            let (base_url, container) = match std::env::var(crate::ollama::OLLAMA_URL_ENV) {
+                Ok(url) if !url.trim().is_empty() => {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    eprintln!("Using externally-managed Ollama at {url} (vision)");
+                    (url, None)
+                }
+                _ => {
+                    let container = GenericImage::new("ollama/ollama", "latest")
+                        .with_exposed_port(11434.into())
+                        .with_wait_for(WaitFor::message_on_stderr("Listening on"))
+                        .start()
+                        .await
+                        .expect("Failed to start Ollama vision testcontainer");
 
-            let host = container.get_host().await.expect("get_host");
-            let port = container
-                .get_host_port_ipv4(11434)
-                .await
-                .expect("get_port");
-            let base_url = format!("http://{host}:{port}");
+                    let host = container.get_host().await.expect("get_host");
+                    let port = container
+                        .get_host_port_ipv4(11434)
+                        .await
+                        .expect("get_port");
+                    let base_url = format!("http://{host}:{port}");
+                    (base_url, Some(container))
+                }
+            };
 
             // Wait for API to be ready
             let client = reqwest::Client::new();

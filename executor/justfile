@@ -45,6 +45,16 @@ nats-subscribe:
 test-integration:
     cargo test -p aithericon-executor-service --tests
 
+# LLM conformance suite against an ALREADY-RUNNING Ollama (the native daemon
+# `just dev up-ollama` manages on :11434). On Apple Silicon this is the only
+# way the suite actually runs: with TEST_OLLAMA_URL unset the harness spins up
+# the hermetic `ollama/ollama` testcontainer, whose Linux/CPU model loader
+# crashes at inference under Docker's VM (so the suite self-skips). Pointing it
+# at the native Metal daemon makes it genuinely green. On Linux CI leave
+# TEST_OLLAMA_URL unset to keep the self-contained container path.
+test-conformance-llm ollama_url="http://localhost:11434":
+    TEST_OLLAMA_URL={{ollama_url}} cargo test -p aithericon-executor-llm --test conformance -- --nocapture
+
 # Generate Python gRPC stubs from proto (uses a temp venv for grpcio-tools)
 gen-python-proto:
     #!/usr/bin/env bash

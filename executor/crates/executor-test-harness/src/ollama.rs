@@ -7,26 +7,50 @@ use tokio::sync::OnceCell;
 
 struct SharedOllama {
     base_url: String,
-    _container: testcontainers::ContainerAsync<GenericImage>,
+    // `None` when `TEST_OLLAMA_URL` points us at an externally-managed daemon
+    // (e.g. the native `ollama serve` that `just dev up-ollama` runs on
+    // :11434); `Some` when we spun up our own hermetic testcontainer.
+    _container: Option<testcontainers::ContainerAsync<GenericImage>>,
 }
 
 static SHARED_OLLAMA: OnceCell<SharedOllama> = OnceCell::const_new();
 
 const OLLAMA_MODEL: &str = "qwen2.5:3b";
 
+/// Env var pointing the suite at an already-running Ollama (e.g.
+/// `http://localhost:11434`, the native daemon `just dev up-ollama` manages).
+/// When set we skip the testcontainer entirely and just ensure the test model
+/// is pulled. The container path only makes sense on Linux hosts where Docker
+/// runs Ollama natively; on Apple Silicon the containerized Linux/CPU model
+/// loader crashes at inference time (see `conformance.rs` `skip_reason`), so a
+/// dev machine should export this to run against its native Metal daemon.
+pub(crate) const OLLAMA_URL_ENV: &str = "TEST_OLLAMA_URL";
+
 async fn shared_ollama() -> &'static SharedOllama {
     SHARED_OLLAMA
         .get_or_init(|| async {
-            let container = GenericImage::new("ollama/ollama", "latest")
-                .with_exposed_port(11434.into())
-                .with_wait_for(WaitFor::message_on_stderr("Listening on"))
-                .start()
-                .await
-                .expect("Failed to start Ollama testcontainer");
+            // Prefer an externally-managed daemon when pointed at one; only
+            // spin up our own container as the hermetic (bare-CI) fallback.
+            let (base_url, container) = match std::env::var(OLLAMA_URL_ENV) {
+                Ok(url) if !url.trim().is_empty() => {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    eprintln!("Using externally-managed Ollama at {url} (via {OLLAMA_URL_ENV})");
+                    (url, None)
+                }
+                _ => {
+                    let container = GenericImage::new("ollama/ollama", "latest")
+                        .with_exposed_port(11434.into())
+                        .with_wait_for(WaitFor::message_on_stderr("Listening on"))
+                        .start()
+                        .await
+                        .expect("Failed to start Ollama testcontainer");
 
-            let host = container.get_host().await.expect("get_host");
-            let port = container.get_host_port_ipv4(11434).await.expect("get_port");
-            let base_url = format!("http://{host}:{port}");
+                    let host = container.get_host().await.expect("get_host");
+                    let port = container.get_host_port_ipv4(11434).await.expect("get_port");
+                    let base_url = format!("http://{host}:{port}");
+                    (base_url, Some(container))
+                }
+            };
 
             // Wait for API to be ready
             let client = reqwest::Client::new();
@@ -37,7 +61,8 @@ async fn shared_ollama() -> &'static SharedOllama {
                 }
             }
 
-            // Pull the model (blocks until download completes)
+            // Pull the model (idempotent — Ollama no-ops if the tag is already
+            // present; the ~/.ollama blob store is shared with the dev daemon).
             eprintln!(
                 "Pulling Ollama model {OLLAMA_MODEL} (this may take a few minutes on first run)..."
             );
