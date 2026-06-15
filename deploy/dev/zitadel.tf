@@ -238,6 +238,10 @@ resource "zitadel_org_member" "token_broker" {
 # broker credential from silently expiring. To rotate, `tofu taint` this
 # resource (or bump expiration_date) and re-apply.
 resource "zitadel_personal_access_token" "token_broker" {
+  # org_id is REQUIRED here: without it the provider resolves the broker user
+  # against its default org (the cluster's), not the Mekhan Testers org where
+  # the machine user actually lives → "User could not be found".
+  org_id          = zitadel_org.mekhan_testers.id
   user_id         = zitadel_machine_user.token_broker.id
   expiration_date = "2099-01-01T00:00:00Z"
 }
