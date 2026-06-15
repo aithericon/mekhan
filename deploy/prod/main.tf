@@ -13,6 +13,10 @@ resource "nomad_job" "mekhan_service" {
     # The job's template stanzas read these at alloc start — write them first.
     vault_kv_secret_v2.mekhan_runtime,
     vault_kv_secret_v2.mekhan_storage,
+    # …and the read grants must exist before the workload-identity token reads
+    # them (the vault {} policies are passed as strings, so TF can't infer this).
+    vault_policy.mekhan_nats_read,
+    vault_policy.mekhan_resources_rw,
   ]
 
   jobspec = templatefile("${path.module}/mekhan.nomad.hcl.tpl", {

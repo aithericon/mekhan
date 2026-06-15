@@ -4,8 +4,12 @@
 # =============================================================================
 
 resource "nomad_job" "executor" {
-  # The job's storage.env template reads this at alloc start — write it first.
-  depends_on = [vault_kv_secret_v2.mekhan_storage]
+  # The job's storage.env template reads this at alloc start — write it (and the
+  # read grant) first. The vault {} policy is a string arg, so TF can't infer it.
+  depends_on = [
+    vault_kv_secret_v2.mekhan_storage,
+    vault_policy.mekhan_nats_read,
+  ]
 
   jobspec = templatefile("${path.module}/executor.nomad.hcl.tpl", {
     namespace           = var.nomad_namespace
