@@ -74,8 +74,11 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      # Deploy the SHA this manual run targets. Override the literal for a replay.
-      - just ci::deploy-prod "$CI_COMMIT_SHA"
+      # TEMP: 30-build is disabled, so $CI_COMMIT_SHA has no image in the
+      # registry. Pin the same known-built SHA dev deploys (service/engine/
+      # executor images all tagged with it). Restore "$CI_COMMIT_SHA" when
+      # 30-build is back.
+      - just ci::deploy-prod "01a7aa1f3c975d66adbfccaec35b015e71174cc0"
     depends_on: []
 
   - name: verify-prod
