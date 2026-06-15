@@ -48,6 +48,14 @@ resource "nomad_job" "mekhan_service" {
     auth_introspection_client_secret = zitadel_application_api.introspect.client_secret
     auth_broker_pat                  = zitadel_personal_access_token.token_broker.token
 
+    email_mode            = var.email_mode
+    email_from_address    = var.email_from_address
+    email_public_base_url = "https://${var.hostname}"
+    email_smtp_host       = var.email_smtp_host
+    email_smtp_port       = var.email_smtp_port
+    email_smtp_username   = var.email_smtp_username
+    email_smtp_password   = var.email_smtp_password
+
 
     engine_image        = "${var.engine_image_repository}:${var.image_tag}"
     engine_service_port = var.engine_service_port
