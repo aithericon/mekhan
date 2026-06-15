@@ -1,0 +1,31 @@
+{% extends "base/layout.html" %}
+{% block title %}You've been invited to {{ workspace_name }}{% endblock %}
+{% block content %}
+<h1>You've been invited</h1>
+
+<p>Hi{% if recipient_name %} {{ recipient_name }}{% endif %},</p>
+
+<p>
+  <strong>{{ inviter_name }}</strong> has invited you to join the
+  <strong>{{ workspace_name }}</strong> workspace on {{ product_name }}
+  as <strong>{{ role }}</strong>.
+</p>
+
+<p>
+  <a href="{{ accept_url | safe }}" class="button">Accept invitation</a>
+</p>
+
+<div class="meta">
+  {% if existing_user %}
+  <p style="margin:0;">You already have a {{ product_name }} account — accepting will add this
+  workspace to it. Sign in if prompted.</p>
+  {% else %}
+  <p style="margin:0;">You'll be guided through setting up your account when you accept.</p>
+  {% endif %}
+</div>
+
+<p class="text-muted">This invitation expires {{ expires }}. If the button doesn't work,
+copy and paste this link into your browser:<br>{{ accept_url | safe }}</p>
+
+<p class="text-muted">If you weren't expecting this invitation, you can safely ignore this email.</p>
+{% endblock %}

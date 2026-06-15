@@ -1,0 +1,23 @@
+{% extends "base/layout.html" %}
+{% block title %}A {{ object_kind }} was shared with you{% endblock %}
+{% block content %}
+<h1>Something was shared with you</h1>
+
+<p>Hi{% if recipient_name %} {{ recipient_name }}{% endif %},</p>
+
+<p>
+  <strong>{{ sharer_name }}</strong> shared the {{ object_kind }}
+  <strong>{{ object_name }}</strong> with you in the
+  <strong>{{ workspace_name }}</strong> workspace.
+</p>
+
+<div class="meta">
+  <p style="margin:0;">Your access: <strong>{{ role }}</strong></p>
+</div>
+
+<p>
+  <a href="{{ url | safe }}" class="button">Open {{ object_kind }}</a>
+</p>
+
+<p class="text-muted">If the button doesn't work, copy and paste this link into your browser:<br>{{ url | safe }}</p>
+{% endblock %}

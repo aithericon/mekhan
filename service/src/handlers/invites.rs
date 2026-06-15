@@ -64,6 +64,36 @@ fn accept_url(state: &AppState, token: &str) -> String {
     )
 }
 
+/// Render + send the workspace-invite email. Best-effort: a delivery failure is
+/// logged, never propagated — the invite row already exists and an Admin can
+/// resend. Delivery defaults to the offline log mailer.
+async fn send_invite_email(
+    state: &AppState,
+    to_email: &str,
+    token: &str,
+    workspace_name: &str,
+    inviter_name: &str,
+    role: &str,
+    expires_at: chrono::DateTime<Utc>,
+) {
+    let msg = crate::notify::email::WorkspaceInvite {
+        recipient_name: None,
+        inviter_name: inviter_name.to_string(),
+        workspace_name: workspace_name.to_string(),
+        role: role.to_string(),
+        accept_url: accept_url(state, token),
+        expires: format!("on {}", expires_at.format("%Y-%m-%d")),
+        existing_user: false,
+    };
+    if let Err(e) = state
+        .email
+        .send(&crate::notify::email::Recipient::new(to_email), &msg)
+        .await
+    {
+        tracing::warn!(%to_email, "invite email send failed: {e}");
+    }
+}
+
 // ── admin endpoints ──────────────────────────────────────────────────────────
 
 /// POST /api/v1/workspaces/{id}/invites — Admin-gated. Creates (or rotates a
@@ -228,13 +258,10 @@ pub async fn create_invite(
         .display_name
         .clone()
         .unwrap_or_else(|| "an admin".into());
-    if let Err(e) = state
-        .email
-        .send_invite(&email, &accept_url(&state, &token), &ws_name, &inviter)
-        .await
-    {
-        tracing::warn!(%email, "invite created but email send failed: {e}");
-    }
+    send_invite_email(
+        &state, &email, &token, &ws_name, &inviter, &req.role, expires_at,
+    )
+    .await;
 
     let summary = load_invite_summary(&state, invite_id)
         .await?
@@ -307,9 +334,9 @@ pub async fn resend_invite(
     let token_hash = hash_token(&token);
     let expires_at = Utc::now() + Duration::seconds(state.config.email.invite_ttl_secs);
 
-    let updated: Option<(String,)> = sqlx::query_as(
+    let updated: Option<(String, String)> = sqlx::query_as(
         "UPDATE pending_invites SET token_hash = $3, expires_at = $4, created_at = now() \
-          WHERE id = $1 AND workspace_id = $2 AND status = 'pending' RETURNING email",
+          WHERE id = $1 AND workspace_id = $2 AND status = 'pending' RETURNING email, role",
     )
     .bind(invite_id)
     .bind(workspace_id)
@@ -317,7 +344,7 @@ pub async fn resend_invite(
     .bind(expires_at)
     .fetch_optional(&state.db)
     .await?;
-    let (email,) = updated.ok_or_else(|| ApiError::not_found("no pending invite"))?;
+    let (email, role) = updated.ok_or_else(|| ApiError::not_found("no pending invite"))?;
 
     let ws_name: String = sqlx::query_scalar("SELECT display_name FROM workspaces WHERE id = $1")
         .bind(workspace_id)
@@ -330,13 +357,10 @@ pub async fn resend_invite(
         .display_name
         .clone()
         .unwrap_or_else(|| "an admin".into());
-    if let Err(e) = state
-        .email
-        .send_invite(&email, &accept_url(&state, &token), &ws_name, &inviter)
-        .await
-    {
-        tracing::warn!(%email, "invite rotated but email resend failed: {e}");
-    }
+    send_invite_email(
+        &state, &email, &token, &ws_name, &inviter, &role, expires_at,
+    )
+    .await;
 
     let summary = load_invite_summary(&state, invite_id)
         .await?
@@ -472,7 +496,7 @@ pub async fn accept_invite(
 
     // Provision FIRST (idempotent by resolve-by-email) so a tx failure can't
     // orphan a freshly created IdP user.
-    let (subject, _newly) = provisioner
+    let (subject, newly) = provisioner
         .provision_or_resolve(&email, None)
         .await
         .map_err(|e| {
@@ -532,6 +556,13 @@ pub async fn accept_invite(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+
+    // Welcome a genuinely new account (skip returning users re-accepting). The
+    // local-part stands in for a display name we don't have yet. Best-effort.
+    if newly {
+        let display = email.split('@').next().unwrap_or(email.as_str());
+        crate::notify::dispatch::welcome(&state, &email, display, Some(workspace_id)).await;
+    }
 
     // Under dev_noop the synthetic sub never backs a real session; the SPA stays
     // on the fixed dev user. Any real auth mode → the invitee must log in.

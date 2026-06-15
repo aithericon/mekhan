@@ -68,7 +68,9 @@ fn harness_consumer_prefix() -> &'static str {
 /// per-process durable-consumer prefix so the in-process mekhan never shares a
 /// durable cursor on `PETRI_GLOBAL` with a live `just dev` daemon. Use this in
 /// place of a bare `MekhanNats::connect(url, None)` in every harness helper.
-async fn connect_harness_nats(nats_url: &str) -> Result<MekhanNats, mekhan_service::nats::NatsError> {
+async fn connect_harness_nats(
+    nats_url: &str,
+) -> Result<MekhanNats, mekhan_service::nats::NatsError> {
     Ok(MekhanNats::connect(nats_url, None)
         .await?
         .with_consumer_prefix(harness_consumer_prefix()))
@@ -122,12 +124,8 @@ pub async fn seed_dev_worker_partition(state: &AppState) {
         eprintln!("seed_dev_worker_partition: delete migration default failed: {e:?}");
         return;
     }
-    if let Err(e) = mekhan_service::worker_groups::ensure_default_worker_group(
-        state,
-        ws,
-        Some(partition),
-    )
-    .await
+    if let Err(e) =
+        mekhan_service::worker_groups::ensure_default_worker_group(state, ws, Some(partition)).await
     {
         // Best-effort: a failure here just leaves the test to surface the hang
         // with its own (clearer) "instance did not complete" timeout.
@@ -303,7 +301,7 @@ pub async fn test_app_with_authenticator(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -364,7 +362,7 @@ pub async fn test_app_with_introspection(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -423,7 +421,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -484,7 +482,7 @@ pub async fn test_app() -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -545,7 +543,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -608,7 +606,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -681,7 +679,7 @@ pub async fn test_app_waiters(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 
@@ -754,7 +752,7 @@ pub async fn test_app_with_petri_url_and_triggers(
         asset_resolver: std::sync::Arc::new(
             mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
-        email: std::sync::Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 

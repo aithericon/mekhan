@@ -177,10 +177,12 @@ async fn main() -> anyhow::Result<()> {
     // set-based file_inventory upserts (+ catalogue coupling on hash). The
     // scale path for multi-million-file campaigns — per-file rows never touch
     // the engine or the causality projector.
-    tokio::spawn(mekhan_service::inventory::fold::start_inventory_fold_ingest(
-        mekhan_nats.clone(),
-        db.clone(),
-    ));
+    tokio::spawn(
+        mekhan_service::inventory::fold::start_inventory_fold_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
 
     // Step-executions projection (PETRI_GLOBAL domain events → step_execution
     // table). Folds per-step inputs/outputs/metrics for the instance-view
@@ -447,7 +449,7 @@ async fn main() -> anyhow::Result<()> {
     // log-mode (offline); the provisioner is the deterministic Noop under
     // dev_noop and the real Zitadel broker under any auth mode. The boot
     // invariant rejects a synthetic provisioner under a real auth mode.
-    let email = mekhan_service::notify::email::build_email_sender(&config);
+    let email = mekhan_service::notify::email::build_mailer(&config);
     let user_provisioner = mekhan_service::auth::provisioner::build_user_provisioner(&config);
     mekhan_service::auth::provisioner::assert_provisioner_invariant(
         config.auth.mode,
