@@ -67,13 +67,21 @@ pub const TRANSITION_FIRED_EVENTS_FILTER: &str = "petri.*.*.events.transition.fi
 /// safe for service-side purge/stream-by-net (the caller has the net id but
 /// not always the workspace).
 pub fn net_events_filter(net_id: &str) -> String {
-    format!("{}.*.{net_id}.{}.>", Subjects::PETRI_ROOT, Subjects::EVENTS_CATEGORY)
+    format!(
+        "{}.*.{net_id}.{}.>",
+        Subjects::PETRI_ROOT,
+        Subjects::EVENTS_CATEGORY
+    )
 }
 
 /// `petri.*.{net_id}.signal.>` — every external signal targeting one net,
 /// across whichever workspace owns it.
 pub fn net_signals_filter(net_id: &str) -> String {
-    format!("{}.*.{net_id}.{}.>", Subjects::PETRI_ROOT, Subjects::SIGNAL_CATEGORY)
+    format!(
+        "{}.*.{net_id}.{}.>",
+        Subjects::PETRI_ROOT,
+        Subjects::SIGNAL_CATEGORY
+    )
 }
 
 // ==================== Service-owned streams/subjects ====================
@@ -124,7 +132,11 @@ mod tests {
         );
         assert_eq!(
             BRIDGE_ALL,
-            format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::BRIDGE_CATEGORY)
+            format!(
+                "{}.*.*.{}.>",
+                Subjects::PETRI_ROOT,
+                Subjects::BRIDGE_CATEGORY
+            )
         );
         assert_eq!(
             EVENTS_CATEGORY_ALL,

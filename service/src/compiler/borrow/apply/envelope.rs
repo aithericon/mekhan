@@ -42,80 +42,84 @@ pub(crate) fn apply_envelope_borrows(
     let prepare_idxs = prepare_transition_indices(scenario, consumer_id);
     for t_idx in prepare_idxs {
         let t = &mut scenario.transitions[t_idx];
-    let mut pushes = String::new();
-    // Per staged asset, the names of its `File`-kind fields — collected here so
-    // a single `__asset_files.json` sidecar is staged after the per-asset
-    // pushes, telling the runner which record fields to wrap as `File` objects.
-    let mut asset_file_map: Vec<(String, Vec<String>)> = Vec::new();
-    for b in consumer_borrows {
-        let (stage_name, value_expr) = match &b.resolution {
-            BorrowResolution::PythonEnvelope => {
-                let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
-                    continue;
-                };
-                let value_expr =
-                    build_hoisted_envelope_expr(interfaces, &b.producer_node, &var, &mut pushes);
-                (b.slug.clone(), value_expr)
-            }
-            BorrowResolution::ResourceEnvelope { name, .. } => {
-                // Publish handler splices `let __resources = #{ ... };` at the
-                // top of this transition's logic before AIR is persisted —
-                // the expression below indexes that map.
-                (name.clone(), format!(r#"__resources["{name}"]"#))
-            }
-            BorrowResolution::AssetStaging {
-                alias, file_fields, ..
-            } => {
-                // Publish handler splices `let __assets = #{ ... };` at the top
-                // of this transition's logic before AIR is persisted (the asset
-                // resolver materializes the pinned records into that map). The
-                // expression below indexes it. The staged value is the asset's
-                // business data (its record rows) — it rides `job_inputs`
-                // staging, never the control token (docs/10).
-                if !file_fields.is_empty() {
-                    asset_file_map.push((alias.clone(), file_fields.clone()));
+        let mut pushes = String::new();
+        // Per staged asset, the names of its `File`-kind fields — collected here so
+        // a single `__asset_files.json` sidecar is staged after the per-asset
+        // pushes, telling the runner which record fields to wrap as `File` objects.
+        let mut asset_file_map: Vec<(String, Vec<String>)> = Vec::new();
+        for b in consumer_borrows {
+            let (stage_name, value_expr) = match &b.resolution {
+                BorrowResolution::PythonEnvelope => {
+                    let Some(var) = wire_read_arc(t, &b.producer_node, interfaces, true) else {
+                        continue;
+                    };
+                    let value_expr = build_hoisted_envelope_expr(
+                        interfaces,
+                        &b.producer_node,
+                        &var,
+                        &mut pushes,
+                    );
+                    (b.slug.clone(), value_expr)
                 }
-                (alias.clone(), format!(r#"__assets["{alias}"]"#))
-            }
-            BorrowResolution::MapItemVarEnvelope { item_var } => {
-                // The Map scatter stamped `<item_var>` onto each body token;
-                // the prepare transition binds that token as `input` (both the
-                // inline and pooled lowerings open with `let d = input` /
-                // `let input = pending.input`). Stage the element as
-                // `<item_var>.json` so an Envelope backend's Tera context
-                // exposes the bare item var — matching how a Python body reads
-                // the runner global. No read-arc: the value is on the firing
-                // token, not a parked place.
-                (item_var.clone(), format!("input[{:?}]", item_var))
-            }
-            _ => continue, // unreachable per `EnvelopeStageStrategy::handles`
-        };
-        pushes.push_str(&format!(
+                BorrowResolution::ResourceEnvelope { name, .. } => {
+                    // Publish handler splices `let __resources = #{ ... };` at the
+                    // top of this transition's logic before AIR is persisted —
+                    // the expression below indexes that map.
+                    (name.clone(), format!(r#"__resources["{name}"]"#))
+                }
+                BorrowResolution::AssetStaging {
+                    alias, file_fields, ..
+                } => {
+                    // Publish handler splices `let __assets = #{ ... };` at the top
+                    // of this transition's logic before AIR is persisted (the asset
+                    // resolver materializes the pinned records into that map). The
+                    // expression below indexes it. The staged value is the asset's
+                    // business data (its record rows) — it rides `job_inputs`
+                    // staging, never the control token (docs/10).
+                    if !file_fields.is_empty() {
+                        asset_file_map.push((alias.clone(), file_fields.clone()));
+                    }
+                    (alias.clone(), format!(r#"__assets["{alias}"]"#))
+                }
+                BorrowResolution::MapItemVarEnvelope { item_var } => {
+                    // The Map scatter stamped `<item_var>` onto each body token;
+                    // the prepare transition binds that token as `input` (both the
+                    // inline and pooled lowerings open with `let d = input` /
+                    // `let input = pending.input`). Stage the element as
+                    // `<item_var>.json` so an Envelope backend's Tera context
+                    // exposes the bare item var — matching how a Python body reads
+                    // the runner global. No read-arc: the value is on the firing
+                    // token, not a parked place.
+                    (item_var.clone(), format!("input[{:?}]", item_var))
+                }
+                _ => continue, // unreachable per `EnvelopeStageStrategy::handles`
+            };
+            pushes.push_str(&format!(
             r#"job_inputs.push(#{{ "name": "{stage_name}.json", "source": #{{ "type": "inline", "value": {value_expr} }} }}); "#,
         ));
-    }
-    // Stage the File-field sidecar once for this consumer: a static
-    // `{ asset_ref_key: [file_field, …] }` map (compile-time constant from the
-    // asset type schema). The runner reads `__asset_files.json` and deep-wraps
-    // each listed field's storage-path value into an `aithericon.File`.
-    if !asset_file_map.is_empty() {
-        let entries = asset_file_map
-            .iter()
-            .map(|(alias, fields)| {
-                let arr = fields
-                    .iter()
-                    .map(|f| format!(r#""{f}""#))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!(r#""{alias}": [{arr}]"#)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        pushes.push_str(&format!(
+        }
+        // Stage the File-field sidecar once for this consumer: a static
+        // `{ asset_ref_key: [file_field, …] }` map (compile-time constant from the
+        // asset type schema). The runner reads `__asset_files.json` and deep-wraps
+        // each listed field's storage-path value into an `aithericon.File`.
+        if !asset_file_map.is_empty() {
+            let entries = asset_file_map
+                .iter()
+                .map(|(alias, fields)| {
+                    let arr = fields
+                        .iter()
+                        .map(|f| format!(r#""{f}""#))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(r#""{alias}": [{arr}]"#)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            pushes.push_str(&format!(
             r#"job_inputs.push(#{{ "name": "__asset_files.json", "source": #{{ "type": "inline", "value": #{{ {entries} }} }} }}); "#,
         ));
-    }
-    splice_at_marker(t, &pushes);
+        }
+        splice_at_marker(t, &pushes);
     }
 }
 

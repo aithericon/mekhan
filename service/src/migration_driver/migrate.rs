@@ -133,7 +133,15 @@ pub async fn migrate(
         };
 
         // 1. REAL copy op (same relative path; cross-"backend" Local→Local).
-        if let Err(e) = copy_one(&src_op, &src_storage.prefix, &dst_op, &dst_storage.prefix, &row.path).await {
+        if let Err(e) = copy_one(
+            &src_op,
+            &src_storage.prefix,
+            &dst_op,
+            &dst_storage.prefix,
+            &row.path,
+        )
+        .await
+        {
             warn!(path = %row.path, error = %e, "migrate: copy failed");
             record_migrate_failure(pool, row.id, &row.path, "copy_failed").await?;
             counts.failed += 1;
@@ -141,7 +149,8 @@ pub async fn migrate(
         }
 
         // 2. REAL probe op on the destination → verify hash.
-        let digest = match probe_dest(&dst_op, &dst_storage.prefix, &row.path, run_dir.path()).await {
+        let digest = match probe_dest(&dst_op, &dst_storage.prefix, &row.path, run_dir.path()).await
+        {
             Ok(d) => d,
             Err(e) => {
                 warn!(path = %row.path, error = %e, "migrate: dest probe failed");
@@ -194,15 +203,17 @@ async fn select_source_rows(
     selector: &MigrateSelector,
 ) -> Result<Vec<SourceRow>, DriverError> {
     let rows = match selector {
-        MigrateSelector::Hash(hash) => sqlx::query_as::<_, SourceRow>(
-            "SELECT id, content_hash, path, size_bytes FROM file_inventory \
+        MigrateSelector::Hash(hash) => {
+            sqlx::query_as::<_, SourceRow>(
+                "SELECT id, content_hash, path, size_bytes FROM file_inventory \
              WHERE file_server_id = $1 AND content_hash = $2 \
              ORDER BY path",
-        )
-        .bind(source_server)
-        .bind(hash)
-        .fetch_all(pool)
-        .await?,
+            )
+            .bind(source_server)
+            .bind(hash)
+            .fetch_all(pool)
+            .await?
+        }
         MigrateSelector::AllCanonical { respect_target } => {
             if *respect_target {
                 sqlx::query_as::<_, SourceRow>(
@@ -254,9 +265,11 @@ async fn copy_one(
         decompress: None,
         compress: None,
     };
-    aithericon_executor_file_ops::ops::copy::execute(&config, src_op, src_prefix, dst_op, dst_prefix)
-        .await
-        .map_err(|e| DriverError::Crawl(e.to_string()))?;
+    aithericon_executor_file_ops::ops::copy::execute(
+        &config, src_op, src_prefix, dst_op, dst_prefix,
+    )
+    .await
+    .map_err(|e| DriverError::Crawl(e.to_string()))?;
     Ok(())
 }
 
@@ -273,9 +286,10 @@ async fn probe_dest(
         storage: None,
         checksum_algo: Some(ChecksumAlgorithm::Sha256),
     };
-    let outputs = aithericon_executor_file_ops::ops::probe::execute(&config, dst_op, prefix, run_dir)
-        .await
-        .map_err(|e| DriverError::Probe(e.to_string()))?;
+    let outputs =
+        aithericon_executor_file_ops::ops::probe::execute(&config, dst_op, prefix, run_dir)
+            .await
+            .map_err(|e| DriverError::Probe(e.to_string()))?;
     outputs
         .get("checksum_digest")
         .and_then(Value::as_str)

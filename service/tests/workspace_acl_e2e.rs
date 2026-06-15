@@ -499,7 +499,7 @@ async fn test_app_with_authenticator_and_petri_url(
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
         )),
-        email: Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
     (build_router(state), db)

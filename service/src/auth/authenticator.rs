@@ -39,8 +39,7 @@ pub const DEV_USER_COOKIE: &str = "mekhan_dev_user";
 /// by `dev-user-2`. Hard-coded here so the noop roster lands that identity in
 /// its own tenant by default — the parallel of `dev-user` landing in
 /// `Uuid::nil()` (the `default` workspace).
-pub const DEV_ORG2_WORKSPACE_ID: uuid::Uuid =
-    uuid::uuid!("00000000-0000-0000-0000-000000000002");
+pub const DEV_ORG2_WORKSPACE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000002");
 
 /// The dev identities the [`NoopAuthenticator`] can impersonate. Index 0 is the
 /// default — returned when no `mekhan_dev_user` cookie is present. Each entry is

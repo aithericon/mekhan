@@ -1,0 +1,18 @@
+{% extends "base/layout.html" %}
+{% block title %}Welcome to {{ product_name }}{% endblock %}
+{% block content %}
+<h1>Welcome to {{ product_name }}</h1>
+
+<p>Hi {{ user_name }},</p>
+
+<p>
+  Your account is ready{% if workspace_name %} and you've joined the
+  <strong>{{ workspace_name }}</strong> workspace{% endif %}. We're glad you're here.
+</p>
+
+<p>
+  <a href="{{ login_url | safe }}" class="button">Get started</a>
+</p>
+
+<p class="text-muted">If the button doesn't work, copy and paste this link into your browser:<br>{{ login_url | safe }}</p>
+{% endblock %}

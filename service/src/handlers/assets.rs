@@ -401,8 +401,12 @@ pub async fn create_asset_type(
     Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetTypeRequest>,
 ) -> Result<(StatusCode, Json<AssetTypeDetail>), ApiError> {
-    let (scope_kind, scope_id) =
-        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) = resolve_create_scope(
+        &user,
+        scope_q.scope.as_deref(),
+        req.scope_kind,
+        req.scope_id,
+    )?;
     require_editor(&state, &user, scope_kind, scope_id).await?;
     let principal = user.subject_as_uuid();
     let detail = create_asset_type_internal(&state, &req, scope_kind, scope_id, principal).await?;
@@ -793,8 +797,12 @@ pub async fn create_asset(
     Query(scope_q): Query<CreateScopeQuery>,
     Json(req): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<AssetSummary>), ApiError> {
-    let (scope_kind, scope_id) =
-        resolve_create_scope(&user, scope_q.scope.as_deref(), req.scope_kind, req.scope_id)?;
+    let (scope_kind, scope_id) = resolve_create_scope(
+        &user,
+        scope_q.scope.as_deref(),
+        req.scope_kind,
+        req.scope_id,
+    )?;
     // Placement gate: Editor on the scope you create into. Workspace scope uses
     // the membership gate; folder/template scopes use the object ACL (so a
     // restricted folder's grants govern who can add assets to it).
@@ -806,9 +814,14 @@ pub async fn create_asset(
                 .map_err(map_to_api_error)?;
         }
         ScopeKind::Template => {
-            require_object_role(&state.db, &user, ObjectRef::template(scope_id), Role::Editor)
-                .await
-                .map_err(map_to_api_error)?;
+            require_object_role(
+                &state.db,
+                &user,
+                ObjectRef::template(scope_id),
+                Role::Editor,
+            )
+            .await
+            .map_err(map_to_api_error)?;
         }
     }
     let principal = user.subject_as_uuid();
@@ -1236,10 +1249,12 @@ pub async fn delete_asset(
     .await?;
 
     // Object grants are polymorphic with no FK — drop them on delete.
-    sqlx::query("DELETE FROM object_grants WHERE object_type = 'asset'::object_kind AND object_id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "DELETE FROM object_grants WHERE object_type = 'asset'::object_kind AND object_id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

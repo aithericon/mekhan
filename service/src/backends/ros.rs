@@ -246,9 +246,7 @@ fn derive_output_port(config: &Value) -> Port {
                     kind: FieldKind::Number,
                     required: false,
                     options: None,
-                    description: Some(
-                        "Total messages captured across all recorded topics.".into(),
-                    ),
+                    description: Some("Total messages captured across all recorded topics.".into()),
                     accept: None,
                     schema: None,
                 },
@@ -281,7 +279,9 @@ fn derive_output_port(config: &Value) -> Port {
                 kind: FieldKind::Number,
                 required: false,
                 options: None,
-                description: Some("Number of planning-scene snapshots streamed to the twin.".into()),
+                description: Some(
+                    "Number of planning-scene snapshots streamed to the twin.".into(),
+                ),
                 accept: None,
                 schema: None,
             }],
@@ -645,7 +645,11 @@ mod tests {
             .find(|f| f.name == "messages_recorded")
             .unwrap();
         assert_eq!(mr.kind, FieldKind::Number);
-        let tc = port.fields.iter().find(|f| f.name == "topic_count").unwrap();
+        let tc = port
+            .fields
+            .iter()
+            .find(|f| f.name == "topic_count")
+            .unwrap();
         assert_eq!(tc.kind, FieldKind::Number);
     }
 

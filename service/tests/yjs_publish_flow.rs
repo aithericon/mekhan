@@ -197,12 +197,11 @@ async fn create_template_seeds_ydoc() {
     let template_id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
 
     // Verify Y.Doc row exists
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
-            .bind(template_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
+        .bind(template_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
     assert!(
         count >= 1,
         "create_template should seed Y.Doc, got {count} rows"

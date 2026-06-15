@@ -8,7 +8,9 @@ use crate::inventory::model::{
     InventoryEntry, InventoryIndexRequest, InventoryIndexResponse, InventoryRegisterRequest,
     InventoryRegisterResponse, InventoryStats,
 };
-use crate::inventory::reconcile::{self, DuplicateGroup, ObservedItem, OrphanDbRow, ReconcileCounts};
+use crate::inventory::reconcile::{
+    self, DuplicateGroup, ObservedItem, OrphanDbRow, ReconcileCounts,
+};
 use crate::inventory::repository::{InventoryRepository, PgInventoryRepository};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::query::extractor::QueryParams;
@@ -264,7 +266,9 @@ pub async fn reconcile_orphans(
             tracing::warn!("reconcile orphans: {e}");
             ApiError::bad_request(e.to_string())
         })?;
-    Ok(Json(serde_json::to_value(page).unwrap_or(serde_json::json!({}))))
+    Ok(Json(
+        serde_json::to_value(page).unwrap_or(serde_json::json!({})),
+    ))
 }
 
 /// GET /api/v1/reconcile/duplicates — paginated duplicate content groups.
@@ -287,5 +291,7 @@ pub async fn reconcile_duplicates(
             tracing::warn!("reconcile duplicates: {e}");
             ApiError::bad_request(e.to_string())
         })?;
-    Ok(Json(serde_json::to_value(page).unwrap_or(serde_json::json!({}))))
+    Ok(Json(
+        serde_json::to_value(page).unwrap_or(serde_json::json!({})),
+    ))
 }

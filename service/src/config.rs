@@ -60,20 +60,32 @@ pub struct AppConfig {
     pub email: EmailConfig,
 }
 
-/// Invite-email delivery + accept-link construction (Phase 4).
+/// Transactional-email configuration. Maps onto [`aithericon_email::MailerConfig`]
+/// via [`EmailConfig::to_mailer_config`]; the hexagonal `Mailer` port then picks
+/// the SMTP / Brevo / log adapter at runtime. Default `mode = log` is the
+/// offline dev path (rendered mail goes to `tracing`, no creds needed).
 #[derive(Debug, Deserialize, Clone)]
 pub struct EmailConfig {
-    /// `log` (default — emit the accept URL to the tracing log; offline-friendly)
-    /// or `smtp` (send via the configured relay).
+    /// `log` (default — render to the tracing log; offline-friendly), `smtp`
+    /// (relay via lettre) or `brevo` (Brevo transactional HTTP API).
     #[serde(default)]
     pub mode: EmailMode,
-    /// From-address on outgoing invite mail.
+    /// From-address on outgoing mail.
     #[serde(default = "default_email_from")]
     pub from_address: String,
-    /// Public origin the accept link is built against:
+    /// From display name on outgoing mail. Defaults to the product name.
+    #[serde(default = "default_product_name")]
+    pub from_name: String,
+    /// Public origin links (accept, resource, login) are built against, e.g.
     /// `{public_base_url}/invite/accept?token=...`. Defaults to the dev SPA.
     #[serde(default = "default_public_base_url")]
     pub public_base_url: String,
+    /// Product name shown in email headers/footers/subjects.
+    #[serde(default = "default_product_name")]
+    pub product_name: String,
+    /// Support / reply-to address surfaced in the email footer.
+    #[serde(default = "default_support_address")]
+    pub support_address: String,
     /// Invite lifetime in seconds (default 7 days).
     #[serde(default = "default_invite_ttl_secs")]
     pub invite_ttl_secs: i64,
@@ -86,6 +98,13 @@ pub struct EmailConfig {
     pub smtp_username: Option<String>,
     #[serde(default)]
     pub smtp_password: Option<String>,
+    /// SMTP TLS mode: `auto` (default — 465 implicit, else STARTTLS),
+    /// `implicit`, `starttls`, or `none` (plaintext dev relays like MailHog).
+    #[serde(default)]
+    pub smtp_tls: Option<String>,
+    /// Brevo API key (only read when `mode = brevo`).
+    #[serde(default)]
+    pub brevo_api_key: Option<String>,
 }
 
 impl Default for EmailConfig {
@@ -93,12 +112,63 @@ impl Default for EmailConfig {
         Self {
             mode: EmailMode::default(),
             from_address: default_email_from(),
+            from_name: default_product_name(),
             public_base_url: default_public_base_url(),
+            product_name: default_product_name(),
+            support_address: default_support_address(),
             invite_ttl_secs: default_invite_ttl_secs(),
             smtp_host: None,
             smtp_port: None,
             smtp_username: None,
             smtp_password: None,
+            smtp_tls: None,
+            brevo_api_key: None,
+        }
+    }
+}
+
+impl EmailConfig {
+    /// Project this service config onto the email crate's runtime config. The
+    /// crate's `build_mailer` chooses the adapter and falls back to the log
+    /// mailer (with a warning) if the selected provider's creds are missing.
+    pub fn to_mailer_config(&self) -> aithericon_email::MailerConfig {
+        use aithericon_email::{Branding, BrevoSettings, EmailProvider, SmtpSettings, SmtpTls};
+
+        let provider = match self.mode {
+            EmailMode::Log => EmailProvider::Log,
+            EmailMode::Smtp => EmailProvider::Smtp,
+            EmailMode::Brevo => EmailProvider::Brevo,
+        };
+
+        let smtp = self.smtp_host.clone().map(|host| SmtpSettings {
+            host,
+            port: self.smtp_port.unwrap_or(587),
+            username: self.smtp_username.clone(),
+            password: self.smtp_password.clone(),
+            tls: self
+                .smtp_tls
+                .as_deref()
+                .map(SmtpTls::parse)
+                .unwrap_or_default(),
+        });
+
+        let brevo = self
+            .brevo_api_key
+            .clone()
+            .filter(|k| !k.trim().is_empty())
+            .map(|api_key| BrevoSettings { api_key });
+
+        aithericon_email::MailerConfig {
+            provider,
+            from_address: self.from_address.clone(),
+            from_name: self.from_name.clone(),
+            branding: Branding {
+                product_name: self.product_name.clone(),
+                base_url: self.public_base_url.clone(),
+                support_address: self.support_address.clone(),
+            },
+            smtp,
+            brevo,
         }
     }
 }
@@ -106,11 +176,13 @@ impl Default for EmailConfig {
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EmailMode {
-    /// Log the accept URL instead of sending (default; offline dev).
+    /// Render to the tracing log instead of sending (default; offline dev).
     #[default]
     Log,
-    /// Send via SMTP relay.
+    /// Send via SMTP relay (lettre).
     Smtp,
+    /// Send via the Brevo transactional HTTP API.
+    Brevo,
 }
 
 fn default_email_from() -> String {
@@ -118,6 +190,12 @@ fn default_email_from() -> String {
 }
 fn default_public_base_url() -> String {
     "http://localhost:15173".to_string()
+}
+fn default_product_name() -> String {
+    "Aithericon".to_string()
+}
+fn default_support_address() -> String {
+    "support@aithericon.com".to_string()
 }
 fn default_invite_ttl_secs() -> i64 {
     7 * 24 * 60 * 60
@@ -447,5 +525,65 @@ impl AppConfig {
             .build()?;
 
         config.try_deserialize()
+    }
+}
+
+#[cfg(test)]
+mod email_config_tests {
+    use super::*;
+    use aithericon_email::{EmailProvider, SmtpTls};
+
+    #[test]
+    fn default_maps_to_log_provider() {
+        let mc = EmailConfig::default().to_mailer_config();
+        assert_eq!(mc.provider, EmailProvider::Log);
+        assert!(mc.smtp.is_none());
+        assert!(mc.brevo.is_none());
+    }
+
+    #[test]
+    fn smtp_mode_maps_settings_and_tls() {
+        let cfg = EmailConfig {
+            mode: EmailMode::Smtp,
+            smtp_host: Some("smtp.example.com".into()),
+            smtp_port: Some(465),
+            smtp_username: Some("u".into()),
+            smtp_password: Some("p".into()),
+            smtp_tls: Some("implicit".into()),
+            ..Default::default()
+        };
+        let mc = cfg.to_mailer_config();
+        assert_eq!(mc.provider, EmailProvider::Smtp);
+        let smtp = mc.smtp.expect("smtp settings");
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.port, 465);
+        assert_eq!(smtp.tls, SmtpTls::Implicit);
+    }
+
+    #[test]
+    fn smtp_tls_defaults_to_auto_and_port_to_587() {
+        let cfg = EmailConfig {
+            mode: EmailMode::Smtp,
+            smtp_host: Some("relay.internal".into()),
+            ..Default::default()
+        };
+        let smtp = cfg.to_mailer_config().smtp.expect("smtp settings");
+        assert_eq!(smtp.port, 587);
+        assert_eq!(smtp.tls, SmtpTls::Auto);
+    }
+
+    #[test]
+    fn brevo_blank_key_is_dropped() {
+        let cfg = EmailConfig {
+            mode: EmailMode::Brevo,
+            brevo_api_key: Some("   ".into()),
+            ..Default::default()
+        };
+        let mc = cfg.to_mailer_config();
+        assert_eq!(mc.provider, EmailProvider::Brevo);
+        assert!(
+            mc.brevo.is_none(),
+            "blank key dropped → build_mailer falls back to log"
+        );
     }
 }

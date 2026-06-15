@@ -18,8 +18,8 @@ pub type LineSource = Box<dyn BufRead>;
 /// Open `path` for streaming line reads. If the path ends in `.gz` the bytes
 /// are inflated on the fly. The returned reader is buffered.
 pub fn open(path: &Path) -> Result<LineSource> {
-    let file = File::open(path)
-        .with_context(|| format!("open collection file {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("open collection file {}", path.display()))?;
     let is_gz = path
         .extension()
         .map(|e| e.eq_ignore_ascii_case("gz"))

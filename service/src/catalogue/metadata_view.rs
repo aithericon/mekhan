@@ -266,10 +266,13 @@ impl FileMetadataView {
                 algorithm: checksum_algo_name(c),
                 digest: c.digest.clone(),
             }),
-            schema_fingerprint: fm.schema_fingerprint.as_ref().map(|f| SchemaFingerprintView {
-                digest: f.digest.clone(),
-                version: f.version,
-            }),
+            schema_fingerprint: fm
+                .schema_fingerprint
+                .as_ref()
+                .map(|f| SchemaFingerprintView {
+                    digest: f.digest.clone(),
+                    version: f.version,
+                }),
             data_quality: fm.data_quality.as_ref().map(|q| DataQualityView {
                 completeness: q.completeness,
                 columns: q
@@ -714,8 +717,14 @@ mod tests {
         let d = v.details.unwrap();
         assert_eq!(d.kind, "csv");
         assert!(d.tables.is_empty());
-        assert!(d.fields.iter().any(|f| f.label == "has header" && f.value == "true"));
-        assert!(d.fields.iter().any(|f| f.label == "encoding" && f.value == "utf-8"));
+        assert!(d
+            .fields
+            .iter()
+            .any(|f| f.label == "has header" && f.value == "true"));
+        assert!(d
+            .fields
+            .iter()
+            .any(|f| f.label == "encoding" && f.value == "utf-8"));
     }
 
     #[test]
@@ -737,9 +746,16 @@ mod tests {
         let d = v.details.unwrap();
         assert_eq!(d.kind, "parquet");
         // scalar fields present
-        assert!(d.fields.iter().any(|f| f.label == "compression" && f.value == "SNAPPY"));
+        assert!(d
+            .fields
+            .iter()
+            .any(|f| f.label == "compression" && f.value == "SNAPPY"));
         // row_groups → table
-        let t = d.tables.iter().find(|t| t.title == "row groups").expect("table");
+        let t = d
+            .tables
+            .iter()
+            .find(|t| t.title == "row groups")
+            .expect("table");
         assert!(t.columns.iter().any(|c| c == "num rows"));
         assert_eq!(t.rows.len(), 1);
     }

@@ -414,11 +414,7 @@ mod tests {
         let mut extra = BTreeMap::new();
         extra.insert(
             ZITADEL_ROLES_CLAIM.into(),
-            roles_claim(&[
-                ("editor", "org-a"),
-                ("admin", "org-b"),
-                ("viewer", "org-b"),
-            ]),
+            roles_claim(&[("editor", "org-a"), ("admin", "org-b"), ("viewer", "org-b")]),
         );
         let ids = org_ids_from_claims(&claims_with(extra));
         assert_eq!(ids.len(), 2);

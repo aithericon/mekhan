@@ -229,9 +229,13 @@ async fn meta_filters_and_sort_via_list_entries() {
 
     // filter[meta.num_rows][gte]=100 → only the 1000-row csv (e2 has 50; the
     // png/netcdf/empty rows have NO num_rows key → NULL → excluded).
-    let page = list_entries(&pool, Uuid::nil(), &scoped(&exec, "filter[meta.num_rows][gte]=100"))
-        .await
-        .expect("meta.num_rows gte");
+    let page = list_entries(
+        &pool,
+        Uuid::nil(),
+        &scoped(&exec, "filter[meta.num_rows][gte]=100"),
+    )
+    .await
+    .expect("meta.num_rows gte");
     assert_eq!(ids(&page), ["e1"], "only the 1000-row csv passes gte=100");
     assert_eq!(page.total, 1);
 
@@ -269,8 +273,8 @@ async fn meta_filters_and_sort_via_list_entries() {
         Uuid::nil(),
         &scoped(&exec, "filter[meta.completeness][gte]=0.9"),
     )
-        .await
-        .expect("meta.completeness gte");
+    .await
+    .expect("meta.completeness gte");
     assert_eq!(ids(&page), ["e1"], "only the 0.98-complete csv");
 
     // Virtual fields compose with native ones + format_specific projections.
@@ -293,14 +297,18 @@ async fn meta_filters_and_sort_via_list_entries() {
         Uuid::nil(),
         &scoped(&exec, "filter[meta.sample_rate][gte]=40000"),
     )
-        .await
-        .expect("meta.sample_rate gte");
+    .await
+    .expect("meta.sample_rate gte");
     assert_eq!(ids(&page), ["e6"], "only the 44.1 kHz mp3 has sample_rate");
 
     // Unknown meta field → InvalidField, no SQL executed.
-    let err = list_entries(&pool, Uuid::nil(), &scoped(&exec, "filter[meta.bogus][eq]=x"))
-        .await
-        .unwrap_err();
+    let err = list_entries(
+        &pool,
+        Uuid::nil(),
+        &scoped(&exec, "filter[meta.bogus][eq]=x"),
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(
             err,
@@ -326,9 +334,15 @@ async fn facets_bucket_math_exact() {
     let limit = clamp_limit(None);
 
     // --- format ---------------------------------------------------------------
-    let by_format = facets(&pool, Uuid::nil(), &params, CatalogueDimension::Format, limit)
-        .await
-        .expect("format facets");
+    let by_format = facets(
+        &pool,
+        Uuid::nil(),
+        &params,
+        CatalogueDimension::Format,
+        limit,
+    )
+    .await
+    .expect("format facets");
     assert_eq!(by_format.group_by, "format");
     let csv = bucket(&by_format, "csv").expect("csv bucket");
     assert_eq!((csv.count, csv.bytes), (2, 6500));
@@ -351,9 +365,15 @@ async fn facets_bucket_math_exact() {
     assert_eq!(keys, ["csv", "mp3", "netcdf", "png", "unknown"]);
 
     // --- column (lateral unnest of column_names) -------------------------------
-    let by_col = facets(&pool, Uuid::nil(), &params, CatalogueDimension::Column, limit)
-        .await
-        .expect("column facets");
+    let by_col = facets(
+        &pool,
+        Uuid::nil(),
+        &params,
+        CatalogueDimension::Column,
+        limit,
+    )
+    .await
+    .expect("column facets");
     let email = bucket(&by_col, "email").expect("email column");
     assert_eq!(
         (email.count, email.bytes),
@@ -372,9 +392,15 @@ async fn facets_bucket_math_exact() {
     assert_eq!(by_col.total_count, 6, "totals cover the whole scope");
 
     // --- classification (per-entry DISTINCT categories) ------------------------
-    let by_cls = facets(&pool, Uuid::nil(), &params, CatalogueDimension::Classification, limit)
-        .await
-        .expect("classification facets");
+    let by_cls = facets(
+        &pool,
+        Uuid::nil(),
+        &params,
+        CatalogueDimension::Classification,
+        limit,
+    )
+    .await
+    .expect("classification facets");
     let email = bucket(&by_cls, "email").expect("email class");
     assert_eq!(
         (email.count, email.bytes),
@@ -386,18 +412,30 @@ async fn facets_bucket_math_exact() {
     assert_eq!(by_cls.buckets.len(), 2);
 
     // --- category + scope composition ------------------------------------------
-    let by_cat = facets(&pool, Uuid::nil(), &params, CatalogueDimension::Category, limit)
-        .await
-        .expect("category facets");
+    let by_cat = facets(
+        &pool,
+        Uuid::nil(),
+        &params,
+        CatalogueDimension::Category,
+        limit,
+    )
+    .await
+    .expect("category facets");
     assert_eq!(bucket(&by_cat, "dataset").expect("dataset").count, 3);
     assert_eq!(bucket(&by_cat, "plot").expect("plot").count, 1);
     assert_eq!(bucket(&by_cat, "log").expect("log").count, 1);
 
     // The facet scope honours meta.* filters too.
     let csv_only = scoped(&exec, "filter[meta.format][eq]=csv");
-    let by_col_csv = facets(&pool, Uuid::nil(), &csv_only, CatalogueDimension::Column, limit)
-        .await
-        .expect("column facets over csv scope");
+    let by_col_csv = facets(
+        &pool,
+        Uuid::nil(),
+        &csv_only,
+        CatalogueDimension::Column,
+        limit,
+    )
+    .await
+    .expect("column facets over csv scope");
     assert_eq!(by_col_csv.total_count, 2);
     assert_eq!(bucket(&by_col_csv, "email").expect("email").count, 2);
 

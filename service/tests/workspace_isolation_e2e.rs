@@ -77,7 +77,11 @@ async fn list_as_workspace(app: &axum::Router, ws: Uuid) -> Value {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "catalogue list should be 200");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "catalogue list should be 200"
+    );
     body_json(resp.into_body()).await
 }
 
@@ -163,13 +167,12 @@ async fn catalogue_content_hash_is_per_workspace() {
     seed_entry(&db, ws_b, "shared-b", "report", Some(&shared)).await;
 
     // Both rows physically exist, one per workspace.
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM catalogue_entries WHERE content_hash = $1",
-    )
-    .bind(&shared)
-    .fetch_one(&db)
-    .await
-    .expect("count shared-hash rows");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM catalogue_entries WHERE content_hash = $1")
+            .bind(&shared)
+            .fetch_one(&db)
+            .await
+            .expect("count shared-hash rows");
     assert_eq!(count, 2, "same content_hash must coexist across workspaces");
 
     // And each workspace's catalogue read returns only its own copy.

@@ -327,7 +327,7 @@ async fn causality_full_pipeline() {
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
         )),
-        email: Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
     // Re-point the nil workspace's `default` worker group to the live executor's
@@ -454,11 +454,12 @@ async fn causality_full_pipeline() {
     // stream and silently dropped, so the net never leaves the human task. The
     // engine resolves by `net_id` (ws is shape + observability); use the task's
     // own workspace_id (nil fallback), matching the production `complete_task`.
-    let task_ws: Option<Uuid> = sqlx::query_scalar("SELECT workspace_id FROM hpi_tasks WHERE id = $1")
-        .bind(&task_id)
-        .fetch_one(&db)
-        .await
-        .expect("fetch task workspace_id");
+    let task_ws: Option<Uuid> =
+        sqlx::query_scalar("SELECT workspace_id FROM hpi_tasks WHERE id = $1")
+            .bind(&task_id)
+            .fetch_one(&db)
+            .await
+            .expect("fetch task workspace_id");
     let ws = task_ws.unwrap_or_else(Uuid::nil);
     let subject = format!("human.{ws}.completed.{net_id}.{review_place}");
     nats.client()
@@ -1126,7 +1127,11 @@ async fn rrv_bare_end_result_is_full_token_body() {
         .await
         .expect("bare End surfaces the full terminal-token body as result (full-body fallback)");
     // The supplied Start field survives verbatim.
-    assert_eq!(result["x"], json!(1), "Start field carried through: {result}");
+    assert_eq!(
+        result["x"],
+        json!(1),
+        "Start field carried through: {result}"
+    );
     // The provenance fields stamped at instance creation are present (their
     // exact values are per-run / non-deterministic, so we assert presence and
     // the one we can pin — `_instance_id` == this instance).
@@ -1135,7 +1140,12 @@ async fn rrv_bare_end_result_is_full_token_body() {
         json!(id.to_string()),
         "_instance_id stamped: {result}"
     );
-    for k in ["_template_id", "_template_version", "_created_at", "_created_by"] {
+    for k in [
+        "_template_id",
+        "_template_version",
+        "_created_at",
+        "_created_by",
+    ] {
         assert!(
             result.get(k).is_some(),
             "provenance field {k} present in bare-End result: {result}"

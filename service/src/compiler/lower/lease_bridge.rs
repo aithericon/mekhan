@@ -191,8 +191,7 @@ pub(super) fn emit_lease_bridge(
     // pool's guarded `t_grant` (`satisfies(claim.requirements, unit.caps)`) admits
     // only a runner whose advertised caps match. A scheduler (datacenter) lease's
     // claim stays byte-identical — no `requirements` key — so its AIR is unchanged.
-    let is_presence =
-        binding.backend == aithericon_resources::pool::PoolBackend::Presence;
+    let is_presence = binding.backend == aithericon_resources::pool::PoolBackend::Presence;
     let claim_payload = if is_presence {
         format!(
             "#{{ grant_id: gid, request: {}, requirements: {} }}",

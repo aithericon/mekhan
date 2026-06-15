@@ -135,7 +135,10 @@ fn fold_serving_inventory(
 ) -> HashMap<Uuid, Vec<crate::models::runner::ModelEntry>> {
     let mut inventory: HashMap<Uuid, Vec<crate::models::runner::ModelEntry>> = HashMap::new();
     for (runner_id, catalog) in rows {
-        inventory.entry(runner_id).or_default().extend(catalog.models);
+        inventory
+            .entry(runner_id)
+            .or_default()
+            .extend(catalog.models);
     }
     inventory
 }
@@ -384,13 +387,12 @@ pub async fn list_loaded_models(
 ) -> Result<Json<Vec<ModelSetView>>, ApiError> {
     let workspace_id = caller_workspace(&user);
 
-    let rows: Vec<ModelStateRow> = sqlx::query_as(
-        "SELECT * FROM model_states WHERE workspace_id = $1 ORDER BY model_id",
-    )
-    .bind(workspace_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
+    let rows: Vec<ModelStateRow> =
+        sqlx::query_as("SELECT * FROM model_states WHERE workspace_id = $1 ORDER BY model_id")
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
     let counts = serving_runner_counts(&state.db, &state.runner_presence, workspace_id).await;
     let replicas = replica_map(&state.db, workspace_id).await;
@@ -439,14 +441,13 @@ pub async fn get_model(
 ) -> Result<Json<ModelSetView>, ApiError> {
     let workspace_id = caller_workspace(&user);
 
-    let row: Option<ModelStateRow> = sqlx::query_as(
-        "SELECT * FROM model_states WHERE workspace_id = $1 AND model_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(&model_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
+    let row: Option<ModelStateRow> =
+        sqlx::query_as("SELECT * FROM model_states WHERE workspace_id = $1 AND model_id = $2")
+            .bind(workspace_id)
+            .bind(&model_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
     let row = row.ok_or_else(|| ApiError::not_found("no such model in this workspace"))?;
 
@@ -1006,7 +1007,11 @@ mod tests {
         let e1 = inv.get(&r1).expect("runner 1 retained");
         assert_eq!(e1.len(), 1);
         assert_eq!(e1[0].model_id, "B");
-        assert_eq!(e1[0].max_num_seqs, Some(8), "per-engine C survives the fork");
+        assert_eq!(
+            e1[0].max_num_seqs,
+            Some(8),
+            "per-engine C survives the fork"
+        );
 
         let e2 = inv.get(&r2).expect("runner 2 retained");
         assert_eq!(e2.len(), 2, "base + its LoRA both retained on the node");
@@ -1028,8 +1033,14 @@ mod tests {
         present.insert(live);
 
         let rows = vec![
-            (live, serde_json::to_value(catalog(vec![base("B", 4)])).unwrap()),
-            (dead, serde_json::to_value(catalog(vec![base("B", 4)])).unwrap()),
+            (
+                live,
+                serde_json::to_value(catalog(vec![base("B", 4)])).unwrap(),
+            ),
+            (
+                dead,
+                serde_json::to_value(catalog(vec![base("B", 4)])).unwrap(),
+            ),
             (live, serde_json::json!({ "not": "a catalog", "models": 7 })),
         ];
 

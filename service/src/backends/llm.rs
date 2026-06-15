@@ -697,7 +697,8 @@ mod tests {
             "base_url": "https://evil.example.com/v1",
             "api_key": "sk-leak",
         });
-        let (wire, _inputs) = validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
+        let (wire, _inputs) =
+            validate_cfg(&cfg).expect("internal with vestigial overrides must pass");
         assert_eq!(
             wire.get("provider").and_then(|v| v.as_str()),
             Some("openai"),

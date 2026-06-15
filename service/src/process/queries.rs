@@ -623,8 +623,10 @@ pub async fn list_process_artifacts(
         qb.push_bind(process_id.to_string());
         // ...OR the content was produced by this process / its net (producer edge):
         // recovers re-runs whose catalogue row deduped on content_hash.
-        qb.push(") OR content_hash IN (\
-            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ");
+        qb.push(
+            ") OR content_hash IN (\
+            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ",
+        );
         qb.push_bind(process_id.to_string());
         qb.push(" OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = ");
         qb.push_bind(process_id.to_string());
@@ -655,8 +657,10 @@ pub async fn list_process_artifacts(
         qb.push_bind(process_id.to_string());
         // ...OR the content was produced by this process / its net (producer edge):
         // recovers re-runs whose catalogue row deduped on content_hash.
-        qb.push(") OR content_hash IN (\
-            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ");
+        qb.push(
+            ") OR content_hash IN (\
+            SELECT cp.content_hash FROM catalogue_producers cp WHERE cp.process_id = ",
+        );
         qb.push_bind(process_id.to_string());
         qb.push(" OR cp.source_net = (SELECT net_id FROM hpi_processes WHERE process_id = ");
         qb.push_bind(process_id.to_string());

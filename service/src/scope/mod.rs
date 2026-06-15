@@ -348,8 +348,10 @@ pub async fn visible_scopes_for(
                     .await?;
                     let (folders, workspace) = match home {
                         Some((home_id, ws)) => {
-                            let chain: Vec<(Uuid,)> =
-                                sqlx::query_as(CHAIN_SQL).bind(home_id).fetch_all(db).await?;
+                            let chain: Vec<(Uuid,)> = sqlx::query_as(CHAIN_SQL)
+                                .bind(home_id)
+                                .fetch_all(db)
+                                .await?;
                             (chain.into_iter().map(|(f,)| f).collect(), Some(ws))
                         }
                         None => (Vec::new(), None),

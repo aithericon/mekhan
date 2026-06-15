@@ -697,17 +697,18 @@ async fn discover_asset_globals(
         .collect();
 
     for ref_key in &ref_keys {
-        let resolved = resolve_one_visible(&visible, ref_key, candidates.clone()).map_err(|clash| {
-            let view = crate::compiler::CompileError::AssetBindingAmbiguous {
-                node_id: String::new(),
-                ref_key: ref_key.clone(),
-                detail: clash.to_string(),
-            };
-            ApiError::compile(
-                format!("asset reference ambiguous: {view}"),
-                vec![view.to_view()],
-            )
-        })?;
+        let resolved =
+            resolve_one_visible(&visible, ref_key, candidates.clone()).map_err(|clash| {
+                let view = crate::compiler::CompileError::AssetBindingAmbiguous {
+                    node_id: String::new(),
+                    ref_key: ref_key.clone(),
+                    detail: clash.to_string(),
+                };
+                ApiError::compile(
+                    format!("asset reference ambiguous: {view}"),
+                    vec![view.to_view()],
+                )
+            })?;
         let Some(item) = resolved else {
             // An unresolved DECLARED binding hard-fails in strict mode (symmetric
             // with the resource path); a control-flow-only head falls through to

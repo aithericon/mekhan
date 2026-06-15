@@ -38,7 +38,10 @@ const FOLDER_COLS: &str =
 /// Display names stay free-form (`display_name`); only the path key is locked
 /// down. Matches the existing kebab convention (`materials-lab`, `online-clinic`).
 fn validate_slug(slug: &str) -> Result<(), ApiError> {
-    if slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    if slug.is_empty()
+        || !slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
     {
         return Err(ApiError::bad_request(format!(
             "invalid folder slug '{slug}' — use lowercase letters, digits, and hyphens only"
@@ -148,8 +151,9 @@ pub async fn list_folders(
     // Split owned vs. shared: only owned folders get the real ACL resolve
     // (the resolver keys roles off the passed workspace, so running it over a
     // foreign folder would falsely report the caller's active-workspace role).
-    let (mut owned, mut shared): (Vec<Folder>, Vec<Folder>) =
-        rows.into_iter().partition(|f| f.workspace_id == workspace_id);
+    let (mut owned, mut shared): (Vec<Folder>, Vec<Folder>) = rows
+        .into_iter()
+        .partition(|f| f.workspace_id == workspace_id);
 
     // Annotate owned rows with the caller's effective object role (one query for
     // the whole page) so the SPA can gate edit/Share affordances; the backend
@@ -547,11 +551,10 @@ pub async fn delete_folder(
     // can be closed after commit (a still-connected editor would otherwise keep
     // failing `store_update` on the deleted rows). Reparented child folders keep
     // their own pages.
-    let folder_page_ids: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM pages WHERE folder_id = $1")
-            .bind(folder_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let folder_page_ids: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM pages WHERE folder_id = $1")
+        .bind(folder_id)
+        .fetch_all(&mut *tx)
+        .await?;
     for (pid,) in &folder_page_ids {
         sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
             .bind(pid)

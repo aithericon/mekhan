@@ -74,12 +74,11 @@ async fn load_rollups(pool: &PgPool) -> Result<Rollups, sqlx::Error> {
 /// Resource `path`s that exist (non-deleted) in this workspace — used to flag
 /// whether an endpoint's `resource_ref` still resolves.
 async fn resource_paths(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT path FROM resources WHERE workspace_id = $1 AND deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT path FROM resources WHERE workspace_id = $1 AND deleted_at IS NULL")
+            .bind(workspace_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
@@ -255,10 +254,7 @@ pub async fn inventory_endpoint_root(
 /// sibling of [`inventory_endpoint_root`] for the endpoint's `group_id`.
 /// Most-common-wins for the same reason: a server's copies are registered by
 /// the co-located runner, so the modal group is the one that can read them.
-pub async fn inventory_serve_group(
-    pool: &PgPool,
-    key: &str,
-) -> Result<Option<String>, QueryError> {
+pub async fn inventory_serve_group(pool: &PgPool, key: &str) -> Result<Option<String>, QueryError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT provenance->>'serve_group' AS grp \
          FROM file_inventory \
@@ -477,12 +473,11 @@ pub async fn delete_endpoint(
     file_server_id: Uuid,
     endpoint_id: Uuid,
 ) -> Result<bool, QueryError> {
-    let r =
-        sqlx::query("DELETE FROM file_server_endpoints WHERE file_server_id = $1 AND id = $2")
-            .bind(file_server_id)
-            .bind(endpoint_id)
-            .execute(pool)
-            .await?;
+    let r = sqlx::query("DELETE FROM file_server_endpoints WHERE file_server_id = $1 AND id = $2")
+        .bind(file_server_id)
+        .bind(endpoint_id)
+        .execute(pool)
+        .await?;
     Ok(r.rows_affected() > 0)
 }
 

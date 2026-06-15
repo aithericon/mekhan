@@ -68,7 +68,9 @@ pub async fn list_entries(
 
         builder::build_pagination(&mut qb, &params.page);
 
-        qb.build_query_as::<InventoryEntry>().fetch_all(pool).await?
+        qb.build_query_as::<InventoryEntry>()
+            .fetch_all(pool)
+            .await?
     };
 
     Ok(Paginated::new(entries, count, &params.page))

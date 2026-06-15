@@ -300,8 +300,14 @@ impl TriggerDispatcher {
                 "scheduling catalog trigger backfill"
             );
             tokio::spawn(async move {
-                super::sources::catalog::backfill_one(dispatcher, node_id, workspace_id, filters, db)
-                    .await;
+                super::sources::catalog::backfill_one(
+                    dispatcher,
+                    node_id,
+                    workspace_id,
+                    filters,
+                    db,
+                )
+                .await;
             });
         }
 
@@ -1055,9 +1061,8 @@ impl TriggerDispatcher {
         let workspace = record.workspace_id.to_string();
         let mut delivered = 0;
         for (net_id,) in &nets {
-            let subject = crate::nats::subjects::Subjects::signal_transfer(
-                &workspace, net_id, &place_id,
-            );
+            let subject =
+                crate::nats::subjects::Subjects::signal_transfer(&workspace, net_id, &place_id);
             let payload_bytes = match serde_json::to_vec(&payload) {
                 Ok(b) => b,
                 Err(e) => {

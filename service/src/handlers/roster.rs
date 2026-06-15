@@ -234,7 +234,9 @@ pub async fn my_enrollments(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(rows.into_iter().map(RosterMemberDetail::from).collect()))
+    Ok(Json(
+        rows.into_iter().map(RosterMemberDetail::from).collect(),
+    ))
 }
 
 /// `GET /api/v1/human-presence` — live in-memory presence snapshot of the human
@@ -350,13 +352,13 @@ pub async fn update_roster_member(
 
     // A supplied availability config is serialized to JSONB; an omitted one leaves
     // the stored column untouched (the COALESCE keeps the existing value).
-    let availability = match req.availability {
-        Some(cfg) => Some(
-            serde_json::to_value(cfg)
-                .map_err(|e| ApiError::internal(format!("could not serialize availability: {e}")))?,
-        ),
-        None => None,
-    };
+    let availability =
+        match req.availability {
+            Some(cfg) => Some(serde_json::to_value(cfg).map_err(|e| {
+                ApiError::internal(format!("could not serialize availability: {e}"))
+            })?),
+            None => None,
+        };
     let concurrency = req.concurrency.map(|c| c.max(1) as i32);
 
     let row = sqlx::query_as::<_, RosterMemberRow>(
@@ -463,9 +465,7 @@ pub async fn set_availability(
     .execute(&state.db)
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(ApiError::not_found(
-            "you are not enrolled in that capacity",
-        ));
+        return Err(ApiError::not_found("you are not enrolled in that capacity"));
     }
 
     // The durable row above is the source of truth; this publish is the live edge
