@@ -1172,6 +1172,29 @@ struct ModelStateFixture {
     /// Optional `path` of the `model_registry` resource backing this model.
     #[serde(default)]
     registry_resource: Option<String>,
+    /// Folded-in autoscale policy (model-pool P4) — the same nullable
+    /// `model_states` columns `PUT /api/v1/models/{id}/policy` writes. Absent ⇒
+    /// the model is seeded with NO policy (autoscaler ignores it, the historical
+    /// default). `mode` is one of `manual | scale_to_zero | keep_warm`.
+    #[serde(default)]
+    autoscale_mode: Option<String>,
+    /// Runner-count target / ceiling for the policy (the single per-model COUNT
+    /// field — both the demand-slot ceiling and the `manual` seed).
+    #[serde(default)]
+    desired_replicas: Option<i32>,
+    #[serde(default)]
+    scale_up_threshold: Option<f64>,
+    #[serde(default)]
+    scale_down_threshold: Option<f64>,
+    #[serde(default)]
+    cooldown_secs: Option<i64>,
+    #[serde(default)]
+    residency_zone: Option<String>,
+    /// Opt-in idle-eviction: let the placement controller sleep this model's
+    /// resident base back to zero on sustained zero demand (past the warm window).
+    /// Required for `scale_to_zero` to actually return to zero, not just wake.
+    #[serde(default)]
+    idle_evict: bool,
 }
 
 /// Seed the `model_states` projection rows that the model-pool demos rely on
@@ -1237,14 +1260,23 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
         };
         let res = sqlx::query(
             "INSERT INTO model_states \
-                 (workspace_id, registry_resource_id, model_id, state, base, replicas, note) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 (workspace_id, registry_resource_id, model_id, state, base, replicas, note, \
+                  autoscale_mode, desired_replicas, scale_up_threshold, scale_down_threshold, \
+                  cooldown_secs, residency_zone, idle_evict) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (workspace_id, model_id) DO UPDATE SET \
                  registry_resource_id = EXCLUDED.registry_resource_id, \
                  state = EXCLUDED.state, \
                  base = EXCLUDED.base, \
                  replicas = EXCLUDED.replicas, \
                  note = EXCLUDED.note, \
+                 autoscale_mode = EXCLUDED.autoscale_mode, \
+                 desired_replicas = EXCLUDED.desired_replicas, \
+                 scale_up_threshold = EXCLUDED.scale_up_threshold, \
+                 scale_down_threshold = EXCLUDED.scale_down_threshold, \
+                 cooldown_secs = EXCLUDED.cooldown_secs, \
+                 residency_zone = EXCLUDED.residency_zone, \
+                 idle_evict = EXCLUDED.idle_evict, \
                  last_transition_at = NOW()",
         )
         .bind(DEMO_WORKSPACE_ID)
@@ -1254,6 +1286,13 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
         .bind(&fx.base)
         .bind(fx.replicas)
         .bind(&fx.note)
+        .bind(&fx.autoscale_mode)
+        .bind(fx.desired_replicas)
+        .bind(fx.scale_up_threshold)
+        .bind(fx.scale_down_threshold)
+        .bind(fx.cooldown_secs)
+        .bind(&fx.residency_zone)
+        .bind(fx.idle_evict)
         .execute(&state.db)
         .await;
         match res {

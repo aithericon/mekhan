@@ -3,5 +3,8 @@
   "state": "loaded",
   "replicas": 1,
   "registry_resource": "internal_pool_registry",
-  "note": "Seeded loaded for the internal-pool demos (36/37). Small/fast (~1.3 GB) so the degenerate Agent inference completes inside the 60s template-test wall clock; pulled by up-ollama (DEMO36_MODEL) and loaded resident by up-model-runner → the live-runner AND-gate flips available=true. Served through internal_pool_router → the in-cluster inference router."
+  "autoscale_mode": "scale_to_zero",
+  "desired_replicas": 1,
+  "idle_evict": true,
+  "note": "Seeded loaded for the internal-pool demos (36/37) with a scale_to_zero autoscale policy: the placement controller (L2 reactive — AUTOSCALER_DEMAND_URL is wired in up-mekhan) wakes it on the first inference request's starved-demand signal and idle-evicts it back to zero after the warm window. Small/fast (~1.3 GB) so the degenerate Agent inference completes inside the 60s template-test wall clock; pulled by up-ollama (DEMO36_MODEL) and serveable resident on up-model-runner. Served through internal_pool_router → the in-cluster inference router."
 }
