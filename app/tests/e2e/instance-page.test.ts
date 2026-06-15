@@ -130,7 +130,9 @@ test.describe('Instance Page', () => {
 		// Header (the always-visible summary) renders with status + net id.
 		await expect(page.getByTestId('instance-page')).toBeVisible();
 		await expect(page.getByText('completed', { exact: true })).toBeVisible();
-		await expect(page.getByText(NET_ID)).toBeVisible();
+		// The header surfaces a shortened net id as visible text; the full
+		// `mekhan-<uuid>` lives in the badge's `title` attribute + copy button.
+		await expect(page.getByTitle(NET_ID)).toBeVisible();
 
 		// A started/completed run has a net → the tab bar offers the
 		// engine-backed Petri-net tab (the redesign's home for the marking view
@@ -238,10 +240,11 @@ test.describe('Instance Page', () => {
 		await expect(page.getByTestId('instance-page')).toBeVisible();
 		await expect(page.getByText('created', { exact: true })).toBeVisible();
 
-		// A `created` instance has no net (`hasNet` is false): the layout shows
-		// the "not started yet" message and exposes no runtime tabs, so no net
-		// state or step projection is ever fetched.
-		await expect(page.getByText('Instance has not started yet. No Petri net is available.')).toBeVisible();
+		// A `created` instance has no net (`hasNet` is false): bare
+		// `/instances/{id}` redirects to the Process tab, which shows its
+		// not-started empty state, and exposes no runtime tabs, so no net state
+		// or step projection is ever fetched.
+		await expect(page.getByText('No process for this run yet.')).toBeVisible();
 		await expect(page.getByTestId('instance-tab-petri-net')).toHaveCount(0);
 		await expect(page.getByTestId('instance-tab-steps')).toHaveCount(0);
 		expect(stateFetched).toBe(false);
