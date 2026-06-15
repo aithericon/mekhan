@@ -216,9 +216,12 @@ resource "zitadel_application_api" "introspect" {
 # Management API. One machine user, one PAT — the bootstrap script's old
 # "delete-and-remint on every run" pattern is unnecessary in TF because the
 # PAT secret is captured in tfstate at create-time.
+# user_name is env-suffixed: Zitadel enforces instance-wide unique usernames,
+# so dev's `mekhan-token-broker-dev` and prod's `mekhan-token-broker-prod` can
+# coexist (they live in separate orgs but share the instance).
 resource "zitadel_machine_user" "token_broker" {
   org_id      = zitadel_org.mekhan_testers.id
-  user_name   = "mekhan-token-broker"
+  user_name   = "mekhan-token-broker-${local.env}"
   name        = "Mekhan Token Broker"
   description = "Brokers per-user automation PATs for the embedded /api/auth/tokens feature"
 }

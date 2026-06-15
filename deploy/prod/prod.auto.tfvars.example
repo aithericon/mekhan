@@ -60,12 +60,14 @@ email_smtp_port    = 587
 # Bootstrap admin for prod's "Testers" workspace (one-time). Random initial
 # password published to Vault at secret/services/mekhan/prod/testers/mekhan_admin.
 # All other onboarding is in-app via invites.
+# NOTE: username + email must be globally UNIQUE across envs — Zitadel enforces
+# instance-wide uniqueness, and dev already owns mekhan-admin@aithericon.eu.
 tester_users = {
   mekhan_admin = {
-    username   = "mekhan-admin"
+    username   = "mekhan-admin-prod"
     first_name = "Mekhan"
     last_name  = "Admin"
-    email      = "mekhan-admin@aithericon.eu"
+    email      = "mekhan-admin-prod@aithericon.eu"
     role       = "mekhan_admin"
   }
 }
