@@ -50,14 +50,12 @@ job "${job_id}" {
     task "executor" {
       driver = "docker"
 
+      # No registry auth block — node-level docker auth on the Nomad clients
+      # (HetznerCluster setup-docker-auth.sh) keeps pull creds out of the job.
       config {
         image = "${image}"
         # No port mapping — executor is NATS-driven, cancel HTTP is opt-in
         # via EXECUTOR_CANCEL__HTTP=true and not enabled here.
-        auth {
-          username = "${registry_user}"
-          password = "${registry_password}"
-        }
       }
 
       template {
@@ -87,6 +85,20 @@ EXECUTOR_WORKER_REG_TOKEN={{ .Data.data.worker_reg_token }}
 EOH
       }
 
+      # S3 artifact-store keys from Vault at alloc start (env = true) — values
+      # never appear in the rendered job. Shared `storage` KV with the service.
+      template {
+        destination = "secrets/storage.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${storage_secret_path}" }}
+EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY={{ .Data.data.s3_access_key }}
+EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY={{ .Data.data.s3_secret_key }}
+{{- end }}
+EOH
+      }
+
       env {
         # Executor reads EXECUTOR_* (not MEKHAN__*) — see Dockerfile.executor
         # lines 175-185.
@@ -105,12 +117,11 @@ EOH
         EXECUTOR_PYTHON__PREFER_UV = "true"
         EXECUTOR_CANCEL__HTTP = "false"
 
-        EXECUTOR_STORAGE__BACKEND                  = "s3"
-        EXECUTOR_STORAGE__ENDPOINT                 = "${s3_endpoint}"
-        EXECUTOR_STORAGE__BUCKET                   = "${s3_bucket}"
-        EXECUTOR_STORAGE__REGION                   = "fsn1"
-        EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY  = "${s3_access_key}"
-        EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY  = "${s3_secret_key}"
+        EXECUTOR_STORAGE__BACKEND  = "s3"
+        EXECUTOR_STORAGE__ENDPOINT = "${s3_endpoint}"
+        EXECUTOR_STORAGE__BUCKET   = "${s3_bucket}"
+        EXECUTOR_STORAGE__REGION   = "fsn1"
+        # ACCESS_KEY / SECRET_KEY come from the storage.env Vault template above.
         # Vault — executor calls vault_unwrap_secrets() with the per-job
         # wrapping token as auth (X-Vault-Token: <wrapping>), so VAULT_TOKEN
         # is intentionally NOT used by the unwrap path. Only VAULT_ADDR is

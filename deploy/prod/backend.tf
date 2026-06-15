@@ -1,15 +1,17 @@
 # =============================================================================
 # Terraform state backend — Hetzner Object Storage (S3-compatible)
 # =============================================================================
-# Mirrors deploy/dev/backend.tf exactly — same bucket/endpoint/region — except
-# the state key, which is namespaced `mekhan/prod/...` so dev and prod can't
-# collide. This is the ONLY .tf file that legitimately differs from deploy/dev;
-# everything else is byte-identical (diff deploy/dev deploy/prod to confirm).
+# State key is namespaced by environment so dev + prod can't collide. Bucket /
+# endpoint / region are inlined here — they aren't secret and never differ
+# per operator, so the partial-backend-config dance was overkill.
 #
-# AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY come from .envrc / the CI step env
-# (loaded via direnv locally), so `tofu init` alone is enough — no
-# -backend-config flag. The state file is AES-GCM encrypted client-side using
-# TF_VAR_state_encryption_passphrase, the cluster-wide convention.
+# AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY come from .envrc (loaded via
+# direnv), so `tofu init` alone is enough — no -backend-config flag.
+#
+# The state file is encrypted client-side (AES-GCM via PBKDF2-derived key)
+# using TF_VAR_state_encryption_passphrase from .envrc. Cluster-wide
+# convention — every Terragrunt layer in HetznerCluster encrypts the same
+# way, so mekhan's state file isn't the odd plaintext object in the bucket.
 # =============================================================================
 
 terraform {

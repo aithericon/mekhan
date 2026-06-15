@@ -136,14 +136,13 @@ job "${job_id}" {
     task "service" {
       driver = "docker"
 
+      # No registry `auth {}` block — the Nomad clients are docker-logged-in to
+      # forge.aithericon.eu at the node level (HetznerCluster
+      # layers/06b_postgres_db/setup-docker-auth.sh), so the pull credentials
+      # never appear in the rendered jobspec. Same convention as web-platform.
       config {
         image = "${image}"
         ports = ["http"]
-
-        auth {
-          username = "${registry_user}"
-          password = "${registry_password}"
-        }
       }
 
 
@@ -158,38 +157,62 @@ job "${job_id}" {
 EOH
       }
 
+      # Secret env vars rendered from Vault at alloc start (env = true), so the
+      # VALUES never land in the rendered Nomad job — only the paths above do.
+      # `runtime` = service-only secrets; `storage` = S3 keys (shared w/ executor).
+      template {
+        destination = "secrets/runtime.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${runtime_secret_path}" }}
+MEKHAN__DATABASE_URL={{ .Data.data.database_url }}
+MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET={{ .Data.data.introspection_client_secret }}
+MEKHAN__AUTH__BROKER_PAT={{ .Data.data.broker_pat }}
+MEKHAN__EMAIL__SMTP_USERNAME={{ .Data.data.smtp_username }}
+MEKHAN__EMAIL__SMTP_PASSWORD={{ .Data.data.smtp_password }}
+{{- end }}
+EOH
+      }
+
+      template {
+        destination = "secrets/storage.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${storage_secret_path}" }}
+MEKHAN__S3__ACCESS_KEY={{ .Data.data.s3_access_key }}
+MEKHAN__S3__SECRET_KEY={{ .Data.data.s3_secret_key }}
+{{- end }}
+EOH
+      }
+
       env {
-        MEKHAN__HOST           = "0.0.0.0"
-        MEKHAN__PORT           = "${service_port}"
-        MEKHAN__DATABASE_URL   = "${database_url}"
-        MEKHAN__NATS_URL       = "${nats_url}"
-        MEKHAN__NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
-        MEKHAN__PETRI_LAB_URL  = "${petri_lab_url}"
-        MEKHAN__S3__ENDPOINT   = "${s3_endpoint}"
-        MEKHAN__S3__BUCKET     = "${s3_bucket}"
-        MEKHAN__S3__ACCESS_KEY = "${s3_access_key}"
-        MEKHAN__S3__SECRET_KEY = "${s3_secret_key}"
-        MEKHAN__AUTH__MODE         = "${auth_mode}"
-        MEKHAN__AUTH__ISSUER_URL   = "${auth_issuer_url}"
-        MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
-        MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
-        MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
+        MEKHAN__HOST          = "0.0.0.0"
+        MEKHAN__PORT          = "${service_port}"
+        MEKHAN__NATS_URL      = "${nats_url}"
+        MEKHAN__NATS_CREDS    = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        MEKHAN__PETRI_LAB_URL = "${petri_lab_url}"
+        MEKHAN__S3__ENDPOINT  = "${s3_endpoint}"
+        MEKHAN__S3__BUCKET    = "${s3_bucket}"
+        MEKHAN__AUTH__MODE                = "${auth_mode}"
+        MEKHAN__AUTH__ISSUER_URL          = "${auth_issuer_url}"
+        MEKHAN__AUTH__CLIENT_ID           = "${auth_client_id}"
+        MEKHAN__AUTH__AUDIENCE            = "${auth_audience}"
+        MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
-        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
-        MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
-        MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
         # Invite-email delivery (Phase 4). mode=smtp makes the in-app invite
         # feature actually send the accept link via the relay; mode=log just
         # writes the link to the service log. PUBLIC_BASE_URL must be the
         # externally reachable origin so the accept link resolves for invitees.
+        # (SMTP username/password come from the runtime.env template above.)
         MEKHAN__EMAIL__MODE            = "${email_mode}"
         MEKHAN__EMAIL__FROM_ADDRESS    = "${email_from_address}"
         MEKHAN__EMAIL__PUBLIC_BASE_URL = "${email_public_base_url}"
         MEKHAN__EMAIL__SMTP_HOST       = "${email_smtp_host}"
         MEKHAN__EMAIL__SMTP_PORT       = "${email_smtp_port}"
-        MEKHAN__EMAIL__SMTP_USERNAME   = "${email_smtp_username}"
-        MEKHAN__EMAIL__SMTP_PASSWORD   = "${email_smtp_password}"
-        MEKHAN__DEMOS__SEED        = "true"
+        MEKHAN__DEMOS__SEED            = "true"
         # Vault — VaultResourceStore writes resource version secrets to
         # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
         # stanza above already injects VAULT_TOKEN into the task env (workload-
@@ -198,8 +221,8 @@ EOH
         # to task env automatically. Without VAULT_ADDR set, service/src/main.rs
         # falls back to InMemoryResourceStore and logs a WARN — see the
         # `resource_store:` log line at boot.
-        VAULT_ADDR                 = "${vault_addr}"
-        RUST_LOG                   = "${rust_log}"
+        VAULT_ADDR = "${vault_addr}"
+        RUST_LOG   = "${rust_log}"
       }
 
       resources {
@@ -211,14 +234,10 @@ EOH
     task "engine" {
       driver = "docker"
 
+      # No registry auth block — node-level docker auth (see the service task).
       config {
         image = "${engine_image}"
         ports = ["engine"]
-
-        auth {
-          username = "${registry_user}"
-          password = "${registry_password}"
-        }
       }
 
       template {

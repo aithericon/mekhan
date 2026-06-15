@@ -57,6 +57,14 @@ locals {
   resources_kv_prefix = "aithericon/resources"
   svc_secrets_path    = "services/mekhan/${local.env}"
 
+  # Runtime secret KVs (written by vault.tf, read by the jobspec `template`
+  # stanzas at alloc start so secret VALUES never land in the rendered Nomad
+  # job — only these paths do). `runtime` = service-only secrets (DB URL,
+  # Zitadel introspection secret + broker PAT, SMTP creds); `storage` = S3 keys
+  # (read by both the service and executor). KV v2 → "secret/data/<path>".
+  runtime_secret_read_path = "secret/data/${local.svc_secrets_path}/runtime"
+  storage_secret_read_path = "secret/data/${local.svc_secrets_path}/storage"
+
   vault_policy_nats_read    = "mekhan-${local.env}-nats-read"
   vault_policy_resources_rw = "mekhan-${local.env}-resources-rw"
   vault_policy_wrap         = "mekhan-${local.env}-wrap"

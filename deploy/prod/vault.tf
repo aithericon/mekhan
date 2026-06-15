@@ -64,6 +64,17 @@ resource "vault_policy" "mekhan_nats_read" {
   path "secret/data/${local.executor_reg_token_path}" {
     capabilities = ["read"]
   }
+
+  # S3 artifact-store keys — rendered into the storage.env template by BOTH the
+  # service and the executor (both need bucket access), so the read lives in
+  # this shared policy. The secret VALUES are written by vault.tf, never baked
+  # into the jobspec.
+  path "secret/data/${local.svc_secrets_path}/storage" {
+    capabilities = ["read"]
+  }
+  path "secret/metadata/${local.svc_secrets_path}/storage" {
+    capabilities = ["read"]
+  }
   EOT
 }
 
@@ -86,6 +97,16 @@ resource "vault_policy" "mekhan_resources_rw" {
   # if that turns out to be more surface than we want.
   path "secret/metadata/${local.resources_kv_prefix}/*" {
     capabilities = ["read", "list", "delete"]
+  }
+
+  # Service-only runtime secrets (DB URL, Zitadel introspection secret + broker
+  # PAT, SMTP creds) rendered into the runtime.env template at alloc start. Only
+  # the mekhan-service role gets this — the executor never reads them.
+  path "secret/data/${local.svc_secrets_path}/runtime" {
+    capabilities = ["read"]
+  }
+  path "secret/metadata/${local.svc_secrets_path}/runtime" {
+    capabilities = ["read"]
   }
   EOT
 }
@@ -156,4 +177,38 @@ resource "vault_jwt_auth_backend_role" "mekhan_executor" {
     "nomad-workloads",
     vault_policy.mekhan_nats_read.name,
   ]
+}
+
+# =============================================================================
+# Runtime secret KVs — the values the jobspec used to bake into `env {}`
+# =============================================================================
+# Written here by Terraform so the secret VALUES live only in Vault (+ tfstate)
+# and the rendered Nomad job carries just the read PATHS. The mekhan/executor
+# tasks render them via `template { env = true; ... }` at alloc start. This is
+# the web-platform pattern (deploy/modules/database-credentials/main.tf).
+#
+# Split by audience: `runtime` is service-only; `storage` is read by both the
+# service and the executor (see the policy grants above).
+
+resource "vault_kv_secret_v2" "mekhan_runtime" {
+  mount = "secret"
+  name  = "${local.svc_secrets_path}/runtime"
+
+  data_json = jsonencode({
+    database_url                = local.database_url
+    introspection_client_secret = zitadel_application_api.introspect.client_secret
+    broker_pat                  = zitadel_personal_access_token.token_broker.token
+    smtp_username               = var.email_smtp_username
+    smtp_password               = var.email_smtp_password
+  })
+}
+
+resource "vault_kv_secret_v2" "mekhan_storage" {
+  mount = "secret"
+  name  = "${local.svc_secrets_path}/storage"
+
+  data_json = jsonencode({
+    s3_access_key = var.s3_access_key
+    s3_secret_key = var.s3_secret_key
+  })
 }
