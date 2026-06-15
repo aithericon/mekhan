@@ -63,8 +63,8 @@ tester_users = {
     username   = "mekhan-admin"
     first_name = "Mekhan"
     last_name  = "Admin"
-    email      = "sah@aithericon.eu"
-    role       = "mekhan_admin"
+    email = "mekhan-admin@aithericon.eu"
+    role  = "mekhan_admin"
   }
 }
 

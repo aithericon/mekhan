@@ -61,6 +61,12 @@ steps:
       - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
       - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/dev)
 
+      # SMTP relay creds for the in-app invite emails (email_mode=smtp). Stored
+      # alongside the other mekhan/dev secrets. Add them with:
+      #   vault kv patch secret/services/mekhan/dev smtp_username=... smtp_password=...
+      - export TF_VAR_email_smtp_username=$(vault kv get -field=smtp_username secret/services/mekhan/dev)
+      - export TF_VAR_email_smtp_password=$(vault kv get -field=smtp_password secret/services/mekhan/dev)
+
       - vault kv get -field=key secret/zitadel/iac-jwt > /tmp/zitadel-iac-jwt.json
       - export TF_VAR_zitadel_jwt_file=/tmp/zitadel-iac-jwt.json
       # Cluster's default org ID — required by every resource in
