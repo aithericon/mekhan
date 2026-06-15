@@ -207,10 +207,7 @@ fn outbound_client() -> Result<reqwest::Client, String> {
 /// capabilities, and a pull count.
 async fn fetch_ollama(q: &str) -> Result<Vec<CatalogModel>, String> {
     let client = outbound_client()?;
-    let url = format!(
-        "https://ollama.com/search?q={}",
-        urlencoding_encode(q)
-    );
+    let url = format!("https://ollama.com/search?q={}", urlencoding_encode(q));
     let resp = client
         .get(&url)
         .send()

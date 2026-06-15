@@ -95,8 +95,12 @@ async fn list_slugs(app: &axum::Router, subject: &str) -> Vec<String> {
 /// Create a fresh workspace owned by `subject` and return its id + slug.
 async fn make_workspace(app: &axum::Router, subject: &str) -> (Uuid, String) {
     let uniq = Uuid::new_v4().simple().to_string();
-    let (status, body) =
-        create_as(app, subject, json!({ "display_name": format!("Disposable {uniq}") })).await;
+    let (status, body) = create_as(
+        app,
+        subject,
+        json!({ "display_name": format!("Disposable {uniq}") }),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "create body: {body}");
     let id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
     (id, body["slug"].as_str().unwrap().to_string())
@@ -125,13 +129,12 @@ async fn owner_can_archive_and_it_disappears() {
     assert_eq!(delete_as(&app, &subject, id).await, StatusCode::NO_CONTENT);
 
     // Row preserved; only archived_at flipped.
-    let (archived, present): (Option<chrono::DateTime<chrono::Utc>>, bool) = sqlx::query_as(
-        "SELECT archived_at, TRUE FROM workspaces WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let (archived, present): (Option<chrono::DateTime<chrono::Utc>>, bool) =
+        sqlx::query_as("SELECT archived_at, TRUE FROM workspaces WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert!(present, "workspace row must still exist (soft delete)");
     assert!(archived.is_some(), "archived_at must be set");
 

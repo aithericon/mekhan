@@ -26,10 +26,11 @@ const MSG_SYNC_UPDATE: u8 = 2;
 /// migrations seed a default workspace; page ACL resolves via the HOST (the
 /// attached template), not this column, so any valid workspace row works.
 async fn any_workspace(db: &sqlx::PgPool) -> Uuid {
-    let (id,): (Uuid,) = sqlx::query_as("SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1")
-        .fetch_one(db)
-        .await
-        .expect("at least the default workspace should be seeded");
+    let (id,): (Uuid,) =
+        sqlx::query_as("SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1")
+            .fetch_one(db)
+            .await
+            .expect("at least the default workspace should be seeded");
     id
 }
 
@@ -98,12 +99,13 @@ async fn send_page_update(
 }
 
 async fn page_row_count(db: &sqlx::PgPool, page_id: Uuid) -> i64 {
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1 AND doc_kind = 'page'")
-            .bind(page_id)
-            .fetch_one(db)
-            .await
-            .unwrap();
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1 AND doc_kind = 'page'",
+    )
+    .bind(page_id)
+    .fetch_one(db)
+    .await
+    .unwrap();
     count
 }
 
@@ -133,7 +135,11 @@ async fn page_update_persists_with_doc_kind_page_and_survives_reconnect() {
     let page_id = create_page_on_template(&db, template_id).await;
 
     // A page starts with ZERO yjs rows (lazy creation on first write).
-    assert_eq!(page_row_count(&db, page_id).await, 0, "page doc starts empty");
+    assert_eq!(
+        page_row_count(&db, page_id).await,
+        0,
+        "page doc starts empty"
+    );
 
     let url = format!("ws://{addr}/api/yjs/page/{page_id}");
     let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
@@ -219,7 +225,10 @@ async fn delete_page_reaps_yjs_rows() {
     let _initial = ws.next().await.unwrap().unwrap();
     send_page_update(&mut ws, "k", "v").await;
     ws.close(None).await.ok();
-    assert!(page_row_count(&db, page_id).await >= 1, "precondition: page owns yjs rows");
+    assert!(
+        page_row_count(&db, page_id).await >= 1,
+        "precondition: page owns yjs rows"
+    );
 
     // dev_noop is Editor; no cookie needed.
     let resp = reqwest::Client::new()
@@ -243,7 +252,10 @@ async fn delete_page_reaps_yjs_rows() {
         .fetch_one(&db)
         .await
         .unwrap();
-    assert_eq!(snap, 0, "deleting the page must reap its yjs_snapshots rows too");
+    assert_eq!(
+        snap, 0,
+        "deleting the page must reap its yjs_snapshots rows too"
+    );
     let (row,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pages WHERE id = $1")
         .bind(page_id)
         .fetch_one(&db)

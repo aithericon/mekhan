@@ -149,7 +149,10 @@ pub fn plan_placements(
     desired_n: u32,
 ) -> PlacementPlan {
     let n = desired_n.max(1) as usize;
-    let wanted_base = policy.base.clone().unwrap_or_else(|| policy.model_id.clone());
+    let wanted_base = policy
+        .base
+        .clone()
+        .unwrap_or_else(|| policy.model_id.clone());
 
     if policy.base.is_some() {
         // ── (a) LoRA adapter ──────────────────────────────────────────────────
@@ -377,7 +380,8 @@ pub async fn reconcile_placement(
         if reactive && demand_zero {
             if policy.idle_evict == Some(true) {
                 if let Err(e) =
-                    apply_idle_eviction(db, nats, workspace_id, &model_id, &policy, &inv.slots).await
+                    apply_idle_eviction(db, nats, workspace_id, &model_id, &policy, &inv.slots)
+                        .await
                 {
                     tracing::warn!(%workspace_id, %model_id, "idle-eviction failed: {e}");
                     mark_placement_failed(db, workspace_id, &model_id, &policy, &e).await;

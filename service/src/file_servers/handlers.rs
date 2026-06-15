@@ -52,7 +52,9 @@ async fn auto_probe_all(state: &AppState, ws: Uuid, server_key: &str, server_id:
                 auto_probe(state, ws, server_key, ep);
             }
         }
-        Err(e) => tracing::warn!(server = server_key, error = %e, "auto-probe: list endpoints failed"),
+        Err(e) => {
+            tracing::warn!(server = server_key, error = %e, "auto-probe: list endpoints failed")
+        }
     }
 }
 
@@ -277,7 +279,9 @@ pub async fn delete(
     if removed {
         Ok(axum::http::StatusCode::NO_CONTENT)
     } else {
-        Err(ApiError::not_found(format!("file server {key:?} not found")))
+        Err(ApiError::not_found(format!(
+            "file server {key:?} not found"
+        )))
     }
 }
 

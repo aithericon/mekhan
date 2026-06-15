@@ -554,15 +554,20 @@ async fn reconcile_couples_catalogue_and_collapses_dup_paths() {
     // segment, neutral category `file` (crawl-discovered physical content —
     // never migration-flavored vocabulary), legacy owner stamped into
     // user_metadata, fmeta blob + mime enriched from the item's metadata.
-    let cat: (String, Option<String>, serde_json::Value, Option<String>, serde_json::Value) =
-        sqlx::query_as(
-            "SELECT category, name, user_metadata, mime_type, file_metadata \
+    let cat: (
+        String,
+        Option<String>,
+        serde_json::Value,
+        Option<String>,
+        serde_json::Value,
+    ) = sqlx::query_as(
+        "SELECT category, name, user_metadata, mime_type, file_metadata \
              FROM catalogue_entries WHERE content_hash = $1",
-        )
-        .bind(&hash_observed)
-        .fetch_one(&pool)
-        .await
-        .expect("catalogue row coupled");
+    )
+    .bind(&hash_observed)
+    .fetch_one(&pool)
+    .await
+    .expect("catalogue row coupled");
     assert_eq!(cat.0, "file");
     assert_eq!(cat.1.as_deref(), Some("probed.bin"));
     assert_eq!(

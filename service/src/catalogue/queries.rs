@@ -721,7 +721,10 @@ pub async fn distinct_values(
         "SELECT DISTINCT {field} FROM catalogue_entries \
          WHERE workspace_id = $1 AND {field} IS NOT NULL ORDER BY {field}"
     );
-    let rows: Vec<(String,)> = sqlx::query_as(&sql).bind(workspace_id).fetch_all(pool).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(&sql)
+        .bind(workspace_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.into_iter().map(|(v,)| v).collect())
 }
 

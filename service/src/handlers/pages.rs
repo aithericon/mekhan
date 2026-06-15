@@ -30,7 +30,11 @@ use crate::AppState;
 /// guarantees exactly one arm is reachable for a persisted row. A page's
 /// effective role IS its host's — there is no per-page ACL.
 fn page_host_ref(page: &Page) -> ObjectRef {
-    match (page.attached_kind.as_deref(), page.attached_id, page.folder_id) {
+    match (
+        page.attached_kind.as_deref(),
+        page.attached_id,
+        page.folder_id,
+    ) {
         (Some("template"), Some(id), _) => ObjectRef::template(id),
         (Some("instance"), Some(id), _) => ObjectRef::instance(id),
         (_, _, Some(fid)) => ObjectRef::folder(fid),
@@ -80,7 +84,11 @@ async fn host_workspace(state: &AppState, kind: &str, id: Uuid) -> Result<Uuid, 
             .fetch_optional(&state.db)
             .await?
         }
-        _ => return Err(ApiError::bad_request("attached_kind must be 'template' or 'instance'")),
+        _ => {
+            return Err(ApiError::bad_request(
+                "attached_kind must be 'template' or 'instance'",
+            ))
+        }
     };
     row.map(|(w,)| w)
         .ok_or_else(|| ApiError::not_found("attached host not found"))
@@ -125,9 +133,9 @@ pub async fn create_page(
         let kind = req.attached_kind.as_deref().ok_or_else(|| {
             ApiError::bad_request("attached_kind is required with an attached page")
         })?;
-        let raw_id = req
-            .attached_id
-            .ok_or_else(|| ApiError::bad_request("attached_id is required with an attached page"))?;
+        let raw_id = req.attached_id.ok_or_else(|| {
+            ApiError::bad_request("attached_id is required with an attached page")
+        })?;
         if kind != "template" && kind != "instance" {
             return Err(ApiError::bad_request(
                 "attached_kind must be 'template' or 'instance'",
@@ -493,12 +501,11 @@ pub async fn get_template_page(
     let role = require_object_role(&state.db, &user, ObjectRef::template(host_id), Role::Viewer)
         .await
         .map_err(map_to_api_error)?;
-    let page: Option<Page> = sqlx::query_as(
-        "SELECT * FROM pages WHERE attached_kind = 'template' AND attached_id = $1",
-    )
-    .bind(host_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let page: Option<Page> =
+        sqlx::query_as("SELECT * FROM pages WHERE attached_kind = 'template' AND attached_id = $1")
+            .bind(host_id)
+            .fetch_optional(&state.db)
+            .await?;
     Ok(Json(page.map(|p| stamp(p, role))))
 }
 
@@ -521,16 +528,19 @@ pub async fn get_instance_page(
     user: AuthUser,
     Path(instance_id): Path<Uuid>,
 ) -> Result<Json<Option<Page>>, ApiError> {
-    let role =
-        require_object_role(&state.db, &user, ObjectRef::instance(instance_id), Role::Viewer)
-            .await
-            .map_err(map_to_api_error)?;
-    let page: Option<Page> = sqlx::query_as(
-        "SELECT * FROM pages WHERE attached_kind = 'instance' AND attached_id = $1",
+    let role = require_object_role(
+        &state.db,
+        &user,
+        ObjectRef::instance(instance_id),
+        Role::Viewer,
     )
-    .bind(instance_id)
-    .fetch_optional(&state.db)
-    .await?;
+    .await
+    .map_err(map_to_api_error)?;
+    let page: Option<Page> =
+        sqlx::query_as("SELECT * FROM pages WHERE attached_kind = 'instance' AND attached_id = $1")
+            .bind(instance_id)
+            .fetch_optional(&state.db)
+            .await?;
     Ok(Json(page.map(|p| stamp(p, role))))
 }
 

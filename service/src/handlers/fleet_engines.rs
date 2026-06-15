@@ -126,9 +126,12 @@ pub async fn list_fleet_engines(
     // Provisioned-to-disk superset per node (the "ready to load" set). Resident
     // bases are subtracted below so a node lists only what it could load without
     // a re-download.
-    let mut pulled_by_node =
-        crate::handlers::model_pool::serving_runner_pulled(&state.db, &state.runner_presence, workspace_id)
-            .await;
+    let mut pulled_by_node = crate::handlers::model_pool::serving_runner_pulled(
+        &state.db,
+        &state.runner_presence,
+        workspace_id,
+    )
+    .await;
 
     // Router in-flight poll for headroom. Constructed per-request from the same
     // env knob the autoscaler uses (`AUTOSCALER_DEMAND_URL`); unset/empty ⇒ no

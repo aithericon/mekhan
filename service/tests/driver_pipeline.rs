@@ -126,14 +126,13 @@ async fn driver_pipeline_crawl_reconcile_hash_register() {
 
     // -- orphan_db: in baseline, NOT on disk → no inventory row + appears in
     //    the reconcile_orphan_db report.
-    let orphan_db_inv: Option<(String,)> = sqlx::query_as(
-        "SELECT path FROM file_inventory WHERE file_server_id = $1 AND path = $2",
-    )
-    .bind(&file_server_id)
-    .bind(&nas.orphan_db_path)
-    .fetch_optional(&pool)
-    .await
-    .expect("query orphan_db inventory");
+    let orphan_db_inv: Option<(String,)> =
+        sqlx::query_as("SELECT path FROM file_inventory WHERE file_server_id = $1 AND path = $2")
+            .bind(&file_server_id)
+            .bind(&nas.orphan_db_path)
+            .fetch_optional(&pool)
+            .await
+            .expect("query orphan_db inventory");
     assert!(orphan_db_inv.is_none(), "orphan_db has NO inventory row");
 
     let orphan_db_report: i64 = sqlx::query_scalar(
@@ -145,13 +144,19 @@ async fn driver_pipeline_crawl_reconcile_hash_register() {
     .fetch_one(&pool)
     .await
     .expect("orphan_db report");
-    assert_eq!(orphan_db_report, 1, "orphan_db appears in reconcile_orphan_db");
+    assert_eq!(
+        orphan_db_report, 1,
+        "orphan_db appears in reconcile_orphan_db"
+    );
 
     // === Phase B: hash-pending (real probe op → register) ==================
     let hp = migration_driver::hash_pending(&pool, &file_server_id, &root, 0)
         .await
         .expect("hash-pending");
-    assert_eq!(hp.orphan_disk_registered, 1, "one orphan_disk hashed+registered");
+    assert_eq!(
+        hp.orphan_disk_registered, 1,
+        "one orphan_disk hashed+registered"
+    );
     assert_eq!(hp.mismatch_rehashed, 1, "one mismatch re-hashed");
     assert_eq!(hp.probe_failed, 0, "no probe failures");
 
@@ -166,7 +171,10 @@ async fn driver_pipeline_crawl_reconcile_hash_register() {
     .fetch_one(&pool)
     .await
     .expect("orphan_disk row after hashing");
-    assert_eq!(o2_status, "verified", "orphan_disk → verified after hashing");
+    assert_eq!(
+        o2_status, "verified",
+        "orphan_disk → verified after hashing"
+    );
     assert_eq!(
         o2_hash.as_deref(),
         Some(nas.orphan_disk.sha256.as_str()),
@@ -180,7 +188,10 @@ async fn driver_pipeline_crawl_reconcile_hash_register() {
     .fetch_one(&pool)
     .await
     .expect("catalogue lookup");
-    assert_eq!(cat_count, 1, "catalogue row exists for the orphan_disk hash");
+    assert_eq!(
+        cat_count, 1,
+        "catalogue row exists for the orphan_disk hash"
+    );
 
     // -- mismatch stays mismatch but now carries the freshly-probed hash in
     //    provenance (the on-disk bytes' real sha256).

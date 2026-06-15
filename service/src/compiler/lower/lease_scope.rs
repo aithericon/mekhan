@@ -322,8 +322,7 @@ mod presence_lease_tests {
         let known_globals = globals_from_resources(&known);
         let mut graph = presence_lease_graph();
         for n in &mut graph.nodes {
-            if let crate::models::template::WorkflowNodeData::LeaseScope { lease, .. } =
-                &mut n.data
+            if let crate::models::template::WorkflowNodeData::LeaseScope { lease, .. } = &mut n.data
             {
                 lease.pool = "limit".to_string();
             }
@@ -380,9 +379,7 @@ mod presence_lease_tests {
             .and_then(|a| a.as_array())
             .expect("inputs array")
             .iter()
-            .find(|a| {
-                a.get("place").and_then(|v| v.as_str()) == Some("p_lease_held")
-            })
+            .find(|a| a.get("place").and_then(|v| v.as_str()) == Some("p_lease_held"))
             .expect("finalizer must consume p_lease_held");
         assert_ne!(
             held_arc.get("read").and_then(|v| v.as_bool()),

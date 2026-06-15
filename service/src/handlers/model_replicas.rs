@@ -71,14 +71,13 @@ pub async fn get_model_replica(
     Path(model_id): Path<String>,
 ) -> Result<Json<ModelReplicaRow>, ApiError> {
     let workspace_id = caller_workspace(&user);
-    let row: Option<ModelReplicaRow> = sqlx::query_as(
-        "SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(&model_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("model_replicas lookup: {e}")))?;
+    let row: Option<ModelReplicaRow> =
+        sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2")
+            .bind(workspace_id)
+            .bind(&model_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("model_replicas lookup: {e}")))?;
     let row = row.ok_or_else(|| {
         ApiError::not_found(
             "no replica row for that model yet (the autoscaler creates it on its first reconcile)",

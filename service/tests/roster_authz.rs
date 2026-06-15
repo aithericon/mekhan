@@ -67,7 +67,11 @@ fn enroll_req(subject: &str, ws: Uuid, capacity_id: Uuid, member: Uuid) -> Reque
 async fn viewer_cannot_enroll_into_roster() {
     let (app, db) = header_driven_app().await;
 
-    let ws = seed_workspace(&db, &format!("ws-roster-viewer-{}", Uuid::new_v4().simple())).await;
+    let ws = seed_workspace(
+        &db,
+        &format!("ws-roster-viewer-{}", Uuid::new_v4().simple()),
+    )
+    .await;
     // The actor is a plain viewer; the enrollee is some other member.
     seed_member(&db, ws, "val", "viewer").await;
     seed_member(&db, ws, "mona", "viewer").await;
@@ -96,7 +100,11 @@ async fn viewer_cannot_enroll_into_roster() {
 async fn editor_cannot_enroll_into_roster() {
     let (app, db) = header_driven_app().await;
 
-    let ws = seed_workspace(&db, &format!("ws-roster-editor-{}", Uuid::new_v4().simple())).await;
+    let ws = seed_workspace(
+        &db,
+        &format!("ws-roster-editor-{}", Uuid::new_v4().simple()),
+    )
+    .await;
     seed_member(&db, ws, "ed", "editor").await;
     seed_member(&db, ws, "mona", "viewer").await;
 
@@ -180,7 +188,11 @@ async fn admin_passes_the_roster_admin_gate() {
 async fn non_member_cannot_enroll_into_roster() {
     let (app, db) = header_driven_app().await;
 
-    let ws = seed_workspace(&db, &format!("ws-roster-stranger-{}", Uuid::new_v4().simple())).await;
+    let ws = seed_workspace(
+        &db,
+        &format!("ws-roster-stranger-{}", Uuid::new_v4().simple()),
+    )
+    .await;
     // `stranger` is NOT seeded as a member of `ws`.
     seed_member(&db, ws, "mona", "viewer").await;
 

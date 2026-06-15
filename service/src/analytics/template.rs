@@ -151,16 +151,15 @@ async fn summary(
 
     // Distinct callers + most-recent run (mode-agnostic — template_user_runs
     // carries no mode column).
-    let (distinct_users, last_run): (i64, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as(
-            "SELECT COUNT(DISTINCT u.user_id)::bigint, MAX(u.last_run) \
+    let (distinct_users, last_run): (i64, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT u.user_id)::bigint, MAX(u.last_run) \
              FROM template_user_runs u \
              JOIN workflow_templates t ON t.id = u.template_id \
              WHERE t.base_template_id = $1 OR t.id = $1",
-        )
-        .bind(base_id)
-        .fetch_one(pool)
-        .await?;
+    )
+    .bind(base_id)
+    .fetch_one(pool)
+    .await?;
 
     // On-demand percentiles over terminal instances (the rollup can't answer
     // these). `archived` rows are previously-terminal runs whose duration is
@@ -398,11 +397,9 @@ pub async fn backfill_template_rollups_if_empty(db: PgPool) {
 pub async fn rebuild_template_rollups(db: &PgPool) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
 
-    sqlx::query(
-        "TRUNCATE template_run_rollup, template_user_runs, template_node_rollup",
-    )
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("TRUNCATE template_run_rollup, template_user_runs, template_node_rollup")
+        .execute(&mut *tx)
+        .await?;
 
     // template_run_rollup ← terminal workflow_instances.
     sqlx::query(

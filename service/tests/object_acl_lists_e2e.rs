@@ -382,7 +382,13 @@ async fn public_template_folder_surfaces_in_other_workspaces() {
     file_in(&app, ws_a, ws_tpl, local_folder).await;
 
     // Bob, in workspace B, lists B's folder tree.
-    let body = get_as(&app, "bob", ws_b, &format!("/api/v1/workspaces/{ws_b}/folders")).await;
+    let body = get_as(
+        &app,
+        "bob",
+        ws_b,
+        &format!("/api/v1/workspaces/{ws_b}/folders"),
+    )
+    .await;
     let folders = body.as_array().unwrap();
 
     // The public template's folder surfaces — read-only, still owned by A.
@@ -405,7 +411,13 @@ async fn public_template_folder_surfaces_in_other_workspaces() {
     );
 
     // And in A itself, alice still sees her own folders with real roles, no dupes.
-    let body = get_as(&app, "alice", ws_a, &format!("/api/v1/workspaces/{ws_a}/folders")).await;
+    let body = get_as(
+        &app,
+        "alice",
+        ws_a,
+        &format!("/api/v1/workspaces/{ws_a}/folders"),
+    )
+    .await;
     let a_folders = body.as_array().unwrap();
     assert_eq!(
         find_by_id(a_folders, shared_folder).unwrap()["my_effective_role"],

@@ -29,11 +29,7 @@ async fn body_json(body: Body) -> Value {
 }
 
 /// POST /api/v1/workspaces as `subject`, returning (status, parsed body).
-async fn create_as(
-    app: &axum::Router,
-    subject: &str,
-    payload: Value,
-) -> (StatusCode, Value) {
+async fn create_as(app: &axum::Router, subject: &str, payload: Value) -> (StatusCode, Value) {
     let resp = app
         .clone()
         .oneshot(
@@ -83,7 +79,8 @@ async fn create_workspace_makes_caller_owner() {
     // the seeded dev-user's default/demos memberships.
     let subject = format!("creator-{}", Uuid::new_v4().simple());
 
-    let (status, body) = create_as(&app, &subject, json!({ "display_name": "Acme Robotics" })).await;
+    let (status, body) =
+        create_as(&app, &subject, json!({ "display_name": "Acme Robotics" })).await;
     assert_eq!(status, StatusCode::CREATED, "create body: {body}");
     assert_eq!(body["slug"], "acme-robotics");
     assert_eq!(body["display_name"], "Acme Robotics");
@@ -91,13 +88,12 @@ async fn create_workspace_makes_caller_owner() {
     let ws_id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
 
     // The DB row carries exactly one member — the creator, as owner.
-    let owners: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT user_id, role FROM workspace_members WHERE workspace_id = $1",
-    )
-    .bind(ws_id)
-    .fetch_all(&db)
-    .await
-    .unwrap();
+    let owners: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT user_id, role FROM workspace_members WHERE workspace_id = $1")
+            .bind(ws_id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
     assert_eq!(owners.len(), 1, "exactly one member at birth");
     assert_eq!(owners[0].1, "owner");
 

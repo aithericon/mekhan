@@ -101,7 +101,10 @@ pub async fn build(pool: &PgPool, file_server_id: &str) -> Result<SyntheticNas, 
 
     let verified = SyntheticFile::new("docs/report.txt", b"hello verified world\n");
     let mismatch = SyntheticFile::new("data/corrupt.bin", b"these-bytes-are-on-disk-now");
-    let orphan_disk = SyntheticFile::new("misc/sub/found.dat", b"i-am-on-disk-but-not-in-the-baseline");
+    let orphan_disk = SyntheticFile::new(
+        "misc/sub/found.dat",
+        b"i-am-on-disk-but-not-in-the-baseline",
+    );
 
     // Write the three real files.
     write_file(&root, &verified).await?;
@@ -110,10 +113,24 @@ pub async fn build(pool: &PgPool, file_server_id: &str) -> Result<SyntheticNas, 
 
     // Baseline: verified (matching size), mismatch (WRONG size), orphan_db
     // (path with no on-disk file). orphan_disk gets NO baseline row.
-    insert_legacy(pool, file_server_id, &verified.path, &verified.sha256, verified.size()).await?;
+    insert_legacy(
+        pool,
+        file_server_id,
+        &verified.path,
+        &verified.sha256,
+        verified.size(),
+    )
+    .await?;
     // Deliberately record a size that DIFFERS from the on-disk size → mismatch.
     let wrong_size = mismatch.size() + 999;
-    insert_legacy(pool, file_server_id, &mismatch.path, &mismatch.sha256, wrong_size).await?;
+    insert_legacy(
+        pool,
+        file_server_id,
+        &mismatch.path,
+        &mismatch.sha256,
+        wrong_size,
+    )
+    .await?;
 
     let orphan_db_path = "archive/gone.txt".to_string();
     let orphan_db_hash = sha256_hex(b"this file was deleted from the NAS but lingers in arango");

@@ -151,9 +151,15 @@ pub struct UpdateEndpointRequest {
     pub access_method: Option<String>,
     #[serde(default)]
     pub root: Option<String>,
-    #[serde(default, deserialize_with = "crate::file_servers::model::double_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::file_servers::model::double_option"
+    )]
     pub resource_ref: Option<Option<String>>,
-    #[serde(default, deserialize_with = "crate::file_servers::model::double_option")]
+    #[serde(
+        default,
+        deserialize_with = "crate::file_servers::model::double_option"
+    )]
     pub group_id: Option<Option<String>>,
     #[serde(default)]
     pub status: Option<String>,

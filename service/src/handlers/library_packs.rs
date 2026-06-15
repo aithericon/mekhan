@@ -521,7 +521,10 @@ pub async fn import_pack(
             })?;
         validate_category(&presentation)?;
         let graph: WorkflowGraph = serde_json::from_value(node.graph.clone()).map_err(|e| {
-            ApiError::bad_request(format!("node `{}` has an invalid graph: {e}", node.coordinate))
+            ApiError::bad_request(format!(
+                "node `{}` has an invalid graph: {e}",
+                node.coordinate
+            ))
         })?;
         prepared.push(PreparedNode {
             coordinate: node.coordinate.clone(),
@@ -541,7 +544,9 @@ pub async fn import_pack(
     for asset in &bundle.assets {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(asset.data_base64.as_bytes())
-            .map_err(|e| ApiError::bad_request(format!("asset `{}` is not valid base64: {e}", asset.r#ref)))?;
+            .map_err(|e| {
+                ApiError::bad_request(format!("asset `{}` is not valid base64: {e}", asset.r#ref))
+            })?;
         let new_token = store_library_icon(&state, &bytes, &asset.mime).await?;
         icon_rewrite.insert(asset.r#ref.clone(), new_token);
     }
@@ -801,67 +806,64 @@ pub async fn export_pack(
 
     // Resolve the manifest + the node rows. `packId` is exact; `vendor` collects
     // visible (own-workspace or public) library nodes by their branding vendor.
-    let (manifest, node_rows): (PackManifest, Vec<ExportNodeRow>) = if let Some(pack_id) =
-        params.pack_id
-    {
-        let pack = load_visible_pack(&state, workspace_id, pack_id).await?;
-        let rows = sqlx::query_as::<_, ExportNodeRow>(
-            "SELECT id, coordinate, name, description, presentation, graph \
+    let (manifest, node_rows): (PackManifest, Vec<ExportNodeRow>) =
+        if let Some(pack_id) = params.pack_id {
+            let pack = load_visible_pack(&state, workspace_id, pack_id).await?;
+            let rows = sqlx::query_as::<_, ExportNodeRow>(
+                "SELECT id, coordinate, name, description, presentation, graph \
                FROM workflow_templates \
               WHERE pack_id = $1 AND is_latest = TRUE \
                 AND template_kind = 'library_node' AND coordinate IS NOT NULL \
               ORDER BY coordinate",
-        )
-        .bind(pack_id)
-        .fetch_all(&state.db)
-        .await?;
-        let manifest = PackManifest {
-            vendor: pack.vendor,
-            slug: pack.slug,
-            version: pack.version,
-            name: pack.name,
-            description: pack.description,
-        };
-        (manifest, rows)
-    } else if let Some(vendor) = params.vendor {
-        let rows = sqlx::query_as::<_, ExportNodeRow>(
-            "SELECT id, coordinate, name, description, presentation, graph \
+            )
+            .bind(pack_id)
+            .fetch_all(&state.db)
+            .await?;
+            let manifest = PackManifest {
+                vendor: pack.vendor,
+                slug: pack.slug,
+                version: pack.version,
+                name: pack.name,
+                description: pack.description,
+            };
+            (manifest, rows)
+        } else if let Some(vendor) = params.vendor {
+            let rows = sqlx::query_as::<_, ExportNodeRow>(
+                "SELECT id, coordinate, name, description, presentation, graph \
                FROM workflow_templates \
               WHERE is_latest = TRUE AND template_kind = 'library_node' \
                 AND coordinate IS NOT NULL \
                 AND presentation->>'vendor' = $1 \
                 AND (workspace_id = $2 OR visibility = 'public') \
               ORDER BY coordinate",
-        )
-        .bind(&vendor)
-        .bind(workspace_id)
-        .fetch_all(&state.db)
-        .await?;
-        if rows.is_empty() {
-            return Err(ApiError::not_found(format!(
-                "no visible library nodes for vendor `{vendor}`"
-            )));
-        }
-        // Derive a manifest slug from the first node's coordinate vendor half.
-        let slug = rows[0]
-            .coordinate
-            .split('/')
-            .next()
-            .unwrap_or("vendor")
-            .to_string();
-        let manifest = PackManifest {
-            vendor: vendor.clone(),
-            slug,
-            version: "1".to_string(),
-            name: vendor,
-            description: String::new(),
+            )
+            .bind(&vendor)
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await?;
+            if rows.is_empty() {
+                return Err(ApiError::not_found(format!(
+                    "no visible library nodes for vendor `{vendor}`"
+                )));
+            }
+            // Derive a manifest slug from the first node's coordinate vendor half.
+            let slug = rows[0]
+                .coordinate
+                .split('/')
+                .next()
+                .unwrap_or("vendor")
+                .to_string();
+            let manifest = PackManifest {
+                vendor: vendor.clone(),
+                slug,
+                version: "1".to_string(),
+                name: vendor,
+                description: String::new(),
+            };
+            (manifest, rows)
+        } else {
+            return Err(ApiError::bad_request("supply either `packId` or `vendor`"));
         };
-        (manifest, rows)
-    } else {
-        return Err(ApiError::bad_request(
-            "supply either `packId` or `vendor`",
-        ));
-    };
 
     // Build the node list + collect referenced asset tokens (deduped).
     let mut nodes: Vec<PackNode> = Vec::with_capacity(node_rows.len());

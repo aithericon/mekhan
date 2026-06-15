@@ -146,7 +146,9 @@ fn age_case_expr(col: &'static str) -> String {
 
 /// Escape LIKE metacharacters for use with `ESCAPE '\'`.
 pub(crate) fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Normalize an `under` prefix: strip slashes at both ends so descent keys
@@ -166,10 +168,7 @@ pub(crate) fn normalize_under(under: Option<&str>) -> Option<String> {
 fn directory_rest_expr(under: Option<&str>) -> String {
     match under {
         None => "ltrim(path, '/')".to_string(),
-        Some(u) => format!(
-            "substring(ltrim(path, '/') from {})",
-            u.chars().count() + 2
-        ),
+        Some(u) => format!("substring(ltrim(path, '/') from {})", u.chars().count() + 2),
     }
 }
 
@@ -252,9 +251,7 @@ pub async fn breakdown(
         Dimension::Age => age_case_expr("first_seen"),
         Dimension::MtimeAge => age_case_expr("mtime"),
         Dimension::Owner => "coalesce(uid::text, 'unknown')".to_string(),
-        Dimension::Directory => {
-            directory_key_expr(&directory_rest_expr(under), depth)
-        }
+        Dimension::Directory => directory_key_expr(&directory_rest_expr(under), depth),
     };
 
     // -- buckets --
@@ -277,7 +274,9 @@ pub async fn breakdown(
         qb.push(format!(
             " GROUP BY 1 ORDER BY bytes DESC, key ASC LIMIT {limit}"
         ));
-        qb.build_query_as::<BreakdownBucket>().fetch_all(pool).await?
+        qb.build_query_as::<BreakdownBucket>()
+            .fetch_all(pool)
+            .await?
     };
 
     // -- totals over the same scope (NOT just the returned buckets) --

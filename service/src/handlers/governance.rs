@@ -341,11 +341,10 @@ pub async fn fork_library_node(
     // The authored graph lives in the source's Y.Doc, not the `graph` column
     // (publish/edit never write the column back — see `new_version`). Copy from
     // the Y.Doc, falling back to the column for legacy rows.
-    let (graph, files) =
-        graph_with_ydoc_fallback(&state, source.id, source.graph.clone(), |g| {
-            Ok(serde_json::from_value(g).unwrap_or_else(|_| WorkflowGraph::default_graph()))
-        })
-        .await?;
+    let (graph, files) = graph_with_ydoc_fallback(&state, source.id, source.graph.clone(), |g| {
+        Ok(serde_json::from_value(g).unwrap_or_else(|_| WorkflowGraph::default_graph()))
+    })
+    .await?;
     let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let new_id = Uuid::new_v4();
@@ -820,7 +819,8 @@ mod tests {
             fld("b", FieldKind::Text, false),
         ]);
         let (added, removed, retyped) = diff_ports(&base, &add_opt);
-        let breaking = !removed.is_empty() || !retyped.is_empty() || added.iter().any(|f| f.required);
+        let breaking =
+            !removed.is_empty() || !retyped.is_empty() || added.iter().any(|f| f.required);
         assert!(!breaking, "optional add is compatible");
 
         // Adding a REQUIRED field is breaking.

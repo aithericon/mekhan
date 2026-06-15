@@ -251,10 +251,8 @@ pub fn route_candidates(
             .cmp(&a.endpoint.priority)
             // 2. cost ASC.
             .then_with(|| {
-                effective_cost(&a.endpoint.access_method, proxy_s3_reads).cmp(&effective_cost(
-                    &b.endpoint.access_method,
-                    proxy_s3_reads,
-                ))
+                effective_cost(&a.endpoint.access_method, proxy_s3_reads)
+                    .cmp(&effective_cost(&b.endpoint.access_method, proxy_s3_reads))
             })
             // 3. verified before unverified.
             .then_with(|| {
@@ -448,47 +446,47 @@ pub async fn resolve_remote_target(
     .await
     .map_err(|e| RemoteReadError::Db(e.to_string()))?;
 
-    let (vault_path, public_config) =
-        vrow.ok_or_else(|| RemoteReadError::ResourceNotFound {
-            path: resource_ref.to_string(),
-        })?;
+    let (vault_path, public_config) = vrow.ok_or_else(|| RemoteReadError::ResourceNotFound {
+        path: resource_ref.to_string(),
+    })?;
 
     // Read one field — public from `public_config`, secret from Vault.
-    let read_field =
-        |src: FieldSource| -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, RemoteReadError>> + Send>> {
-            let public_config = public_config.clone();
-            let vault_path = vault_path.clone();
-            let path = resource_ref.to_string();
-            Box::pin(async move {
-                match src {
-                    FieldSource::Public(name) => public_config
-                        .get(name)
-                        .map(|v| match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        })
-                        .ok_or(RemoteReadError::MissingField {
-                            path,
-                            field: name.to_string(),
-                        }),
-                    FieldSource::Secret(name) => {
-                        let key = format!("{vault_path}#{name}");
-                        secrets.get(&key).await.map_err(|e| match e {
-                            aithericon_secrets::SecretError::NotFound(_) => {
-                                RemoteReadError::MissingField {
-                                    path,
-                                    field: name.to_string(),
-                                }
-                            }
-                            source => RemoteReadError::Secret {
+    let read_field = |src: FieldSource| -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, RemoteReadError>> + Send>,
+    > {
+        let public_config = public_config.clone();
+        let vault_path = vault_path.clone();
+        let path = resource_ref.to_string();
+        Box::pin(async move {
+            match src {
+                FieldSource::Public(name) => public_config
+                    .get(name)
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .ok_or(RemoteReadError::MissingField {
+                        path,
+                        field: name.to_string(),
+                    }),
+                FieldSource::Secret(name) => {
+                    let key = format!("{vault_path}#{name}");
+                    secrets.get(&key).await.map_err(|e| match e {
+                        aithericon_secrets::SecretError::NotFound(_) => {
+                            RemoteReadError::MissingField {
+                                path,
                                 field: name.to_string(),
-                                source,
-                            },
-                        })
-                    }
+                            }
+                        }
+                        source => RemoteReadError::Secret {
+                            field: name.to_string(),
+                            source,
+                        },
+                    })
                 }
-            })
-        };
+            }
+        })
+    };
 
     match endpoint.access_method.as_str() {
         "s3" => {
@@ -835,7 +833,10 @@ async fn stream_remote(
     if let Ok(v) = header::HeaderValue::from_str(&body_len.to_string()) {
         resp_headers.insert(header::CONTENT_LENGTH, v);
     }
-    resp_headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+    resp_headers.insert(
+        header::ACCEPT_RANGES,
+        header::HeaderValue::from_static("bytes"),
+    );
     let disposition = format!("inline; filename=\"{}\"", sanitize_filename(filename));
     if let Ok(v) = header::HeaderValue::from_str(&disposition) {
         resp_headers.insert(header::CONTENT_DISPOSITION, v);
@@ -1038,7 +1039,10 @@ pub async fn serve_local_mount(
             resp_headers.insert(header::CONTENT_LENGTH, v);
         }
     }
-    resp_headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+    resp_headers.insert(
+        header::ACCEPT_RANGES,
+        header::HeaderValue::from_static("bytes"),
+    );
     let disposition = format!("inline; filename=\"{}\"", sanitize_filename(filename));
     if let Ok(v) = header::HeaderValue::from_str(&disposition) {
         resp_headers.insert(header::CONTENT_DISPOSITION, v);
@@ -1138,7 +1142,11 @@ pub async fn read_local_bytes(
     // (1) First frame: OPEN (begin) or ERROR (terminal).
     let first = match tokio::time::timeout(FIRST_FRAME_TIMEOUT, frames.next_frame()).await {
         Ok(Some(f)) => f,
-        Ok(None) => return Err(LocalReadError::Io("reply stream closed before any frame".into())),
+        Ok(None) => {
+            return Err(LocalReadError::Io(
+                "reply stream closed before any frame".into(),
+            ))
+        }
         Err(_) => {
             return Err(LocalReadError::Io(
                 "timed out waiting for serving runner (group has no live worker?)".into(),
@@ -1370,7 +1378,8 @@ mod tests {
 
     #[test]
     fn reply_frame_open_parses_from_runner_shape() {
-        let json = r#"{"type":"open","req_id":"r","seq":0,"content_type":"text/plain","total_size":42}"#;
+        let json =
+            r#"{"type":"open","req_id":"r","seq":0,"content_type":"text/plain","total_size":42}"#;
         let f: ReplyFrame = serde_json::from_str(json).unwrap();
         match f {
             ReplyFrame::Open {
@@ -1541,9 +1550,15 @@ mod tests {
         let r = error_frame_to_response(ServeErrorKind::PathJail, "esc");
         assert_eq!(r.into_response().status(), StatusCode::NOT_FOUND);
         let r = error_frame_to_response(ServeErrorKind::Io, "io");
-        assert_eq!(r.into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            r.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
         let r = error_frame_to_response(ServeErrorKind::ReadError, "rd");
-        assert_eq!(r.into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            r.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1636,7 +1651,10 @@ mod tests {
     #[test]
     fn remote_read_error_status_mapping() {
         assert_eq!(
-            RemoteReadError::MissingResourceRef { method: "s3".into() }.status(),
+            RemoteReadError::MissingResourceRef {
+                method: "s3".into()
+            }
+            .status(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
@@ -1673,7 +1691,10 @@ mod tests {
         // Path-style endpoint → host + bucket + composed key in the path.
         assert!(url.starts_with("http://minio.local:9000"), "url: {url}");
         assert!(url.contains("lab-data"), "bucket in url: {url}");
-        assert!(url.contains("datasets/runs/a.h5"), "composed key in url: {url}");
+        assert!(
+            url.contains("datasets/runs/a.h5"),
+            "composed key in url: {url}"
+        );
         // AWS SigV4 query params present → it's actually signed.
         assert!(
             url.contains("X-Amz-Signature") && url.contains("X-Amz-Expires"),

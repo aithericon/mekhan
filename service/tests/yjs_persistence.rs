@@ -52,12 +52,11 @@ async fn init_doc_from_graph_stores_update() {
     assert!(persistence.has_doc(template_id).await.unwrap());
 
     // Verify row exists in yjs_documents
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
-            .bind(template_id)
-            .fetch_one(persistence.pool())
-            .await
-            .unwrap();
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
+        .bind(template_id)
+        .fetch_one(persistence.pool())
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 
     // Verify stored bytes are non-empty
@@ -142,7 +141,11 @@ async fn store_update_appends_incrementally() {
         txn.encode_state_as_update_v1(&StateVector::default())
     };
     persistence
-        .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra_update)
+        .store_update(
+            template_id,
+            mekhan_service::yjs::DocKind::Graph,
+            &extra_update,
+        )
         .await
         .unwrap();
 
@@ -179,8 +182,14 @@ async fn load_raw_updates_shape() {
         let txn = doc.transact();
         txn.encode_state_as_update_v1(&StateVector::default())
     };
-    persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra).await.unwrap();
-    persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra).await.unwrap();
+    persistence
+        .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra)
+        .await
+        .unwrap();
+    persistence
+        .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra)
+        .await
+        .unwrap();
 
     let (snapshot, updates) = persistence.load_raw_updates(template_id).await.unwrap();
 
@@ -210,7 +219,10 @@ async fn compaction_merges_to_snapshot() {
         txn.encode_state_as_update_v1(&StateVector::default())
     };
     for _ in 0..101 {
-        persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra).await.unwrap();
+        persistence
+            .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra)
+            .await
+            .unwrap();
     }
 
     // Compaction runs in a background tokio::spawn; wait for it to finish
@@ -286,7 +298,10 @@ async fn has_doc_true_after_compaction() {
         txn.encode_state_as_update_v1(&StateVector::default())
     };
     for _ in 0..101 {
-        persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra).await.unwrap();
+        persistence
+            .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &extra)
+            .await
+            .unwrap();
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -355,7 +370,11 @@ async fn ytext_content_roundtrips_through_persistence() {
 
     // Step 3: Store the update (simulating the WS handler persisting the client's update)
     persistence
-        .store_update(template_id, mekhan_service::yjs::DocKind::Graph, &file_update)
+        .store_update(
+            template_id,
+            mekhan_service::yjs::DocKind::Graph,
+            &file_update,
+        )
         .await
         .unwrap();
 
@@ -463,7 +482,11 @@ async fn ytext_content_roundtrips_via_diff_updates() {
             };
             // Store diff update 1
             tokio::runtime::Handle::current()
-                .block_on(persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &diff1))
+                .block_on(persistence.store_update(
+                    template_id,
+                    mekhan_service::yjs::DocKind::Graph,
+                    &diff1,
+                ))
                 .unwrap();
 
             // Client types content character by character (like yCollab)
@@ -490,7 +513,11 @@ async fn ytext_content_roundtrips_via_diff_updates() {
                                 };
                                 // Store each character as a separate diff update
                                 tokio::runtime::Handle::current()
-                                    .block_on(persistence.store_update(template_id, mekhan_service::yjs::DocKind::Graph, &diff))
+                                    .block_on(persistence.store_update(
+                                        template_id,
+                                        mekhan_service::yjs::DocKind::Graph,
+                                        &diff,
+                                    ))
                                     .unwrap();
                             }
                         }

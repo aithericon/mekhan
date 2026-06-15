@@ -104,25 +104,18 @@ pub async fn entry_content(
     let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
 
     // 1. Resolve copies → endpoints (priority-ordered).
-    let candidates = match crate::file_servers::queries::serve_candidates(
-        &state.db,
-        ws,
-        &content_hash,
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(%content_hash, error = %e, "serve: candidate resolution failed");
-            return ApiError::internal(format!("serve resolution failed: {e}")).into_response();
-        }
-    };
+    let candidates =
+        match crate::file_servers::queries::serve_candidates(&state.db, ws, &content_hash).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(%content_hash, error = %e, "serve: candidate resolution failed");
+                return ApiError::internal(format!("serve resolution failed: {e}")).into_response();
+            }
+        };
 
     if candidates.is_empty() {
-        return ApiError::not_found(format!(
-            "no servable copy for content hash {content_hash}"
-        ))
-        .into_response();
+        return ApiError::not_found(format!("no servable copy for content hash {content_hash}"))
+            .into_response();
     }
 
     // 2. Build the ordered try-list.

@@ -412,8 +412,12 @@ async fn wait_for_result_returns_envelope_no_leak() {
             StatusCode::ACCEPTED,
             "async /fire spawn is 202"
         );
-        let iid = Uuid::parse_str(body_json(resp.into_body()).await["instance_id"].as_str().unwrap())
-            .expect("202 body carries the instance id");
+        let iid = Uuid::parse_str(
+            body_json(resp.into_body()).await["instance_id"]
+                .as_str()
+                .unwrap(),
+        )
+        .expect("202 body carries the instance id");
 
         let resp = app
             .clone()
@@ -442,7 +446,10 @@ async fn wait_for_result_returns_envelope_no_leak() {
         let (kind, _) = events
             .first()
             .unwrap_or_else(|| panic!("empty SSE body: {body:?}"));
-        assert_eq!(kind, "connected", "first SSE event is `connected`: {events:?}");
+        assert_eq!(
+            kind, "connected",
+            "first SSE event is `connected`: {events:?}"
+        );
         // Stream closed on a terminal `result` carrying the success envelope.
         let (rkind, rdata) = events
             .last()

@@ -293,9 +293,7 @@ impl ModelStateRow {
             idle_evict: self.idle_evict,
             // The reconciliation row (when present) owns the live count + status;
             // with no row yet, fall back to the policy's `desired_replicas`.
-            desired_count: replica
-                .map(|r| r.desired_count)
-                .or(self.desired_replicas),
+            desired_count: replica.map(|r| r.desired_count).or(self.desired_replicas),
             status: replica.map(|r| r.status.clone()),
             last_error: replica.and_then(|r| r.last_error.clone()),
         });
@@ -440,7 +438,11 @@ mod tests {
         // Draining still serving → no transition (still draining).
         assert_eq!(reconcile_observed_state(ModelState::Draining, 3), None);
         // Steady states never reconcile, regardless of the observed count.
-        for s in [ModelState::Approved, ModelState::Loaded, ModelState::Unloaded] {
+        for s in [
+            ModelState::Approved,
+            ModelState::Loaded,
+            ModelState::Unloaded,
+        ] {
             assert_eq!(reconcile_observed_state(s, 0), None);
             assert_eq!(reconcile_observed_state(s, 7), None);
         }

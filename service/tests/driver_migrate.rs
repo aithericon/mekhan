@@ -197,7 +197,9 @@ async fn driver_migrate_then_retire_with_safety_gate() {
     }
 
     // -- bytes exist on B disk + B probe hash == content_hash
-    let f1_b_bytes = tokio::fs::read(b.join(f1_path)).await.expect("f1 on B disk");
+    let f1_b_bytes = tokio::fs::read(b.join(f1_path))
+        .await
+        .expect("f1 on B disk");
     assert_eq!(&f1_b_bytes, f1_bytes, "f1 bytes copied to B");
     assert_eq!(sha256_hex(&f1_b_bytes), f1_hash, "B copy hash matches");
 
@@ -226,12 +228,11 @@ async fn driver_migrate_then_retire_with_safety_gate() {
         !a.join(f1_path).exists(),
         "f1 removed from A disk after retire"
     );
-    let f1_a_status: String =
-        sqlx::query_scalar("SELECT status FROM file_inventory WHERE id = $1")
-            .bind(f1_id)
-            .fetch_one(&pool)
-            .await
-            .expect("f1 A row");
+    let f1_a_status: String = sqlx::query_scalar("SELECT status FROM file_inventory WHERE id = $1")
+        .bind(f1_id)
+        .fetch_one(&pool)
+        .await
+        .expect("f1 A row");
     assert_eq!(f1_a_status, "deleted", "f1 A row status=deleted");
 
     // -- SAFETY: f2 still on A disk, status UNCHANGED (no copy → never deleted)
@@ -296,9 +297,15 @@ async fn driver_migrate_then_retire_with_safety_gate() {
     assert_eq!(dr.deleted, 1, "dry-run lists f2 as eligible");
     // f1+f3 are already 'deleted' (excluded by status <> 'deleted'); f4 has no
     // copy → skipped.
-    assert_eq!(dr.skipped_no_verified_copy, 1, "f4 still skipped in dry-run");
+    assert_eq!(
+        dr.skipped_no_verified_copy, 1,
+        "f4 still skipped in dry-run"
+    );
     // DRY-RUN changed NOTHING: f2 still on disk + status unchanged.
-    assert!(a.join(f2_path).exists(), "dry-run did NOT delete f2 from disk");
+    assert!(
+        a.join(f2_path).exists(),
+        "dry-run did NOT delete f2 from disk"
+    );
     let f2_status_after: String = sqlx::query_scalar(
         "SELECT status FROM file_inventory WHERE file_server_id = $1 AND path = $2",
     )

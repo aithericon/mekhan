@@ -810,19 +810,17 @@ pub async fn delete_template(
         // (doc_id + doc_kind) DROPPED the `workflow_templates` FK, so the old
         // `ON DELETE CASCADE` no longer reaps these rows. Delete them
         // explicitly (the graph doc is keyed on the version id).
-        if let Err(e) =
-            sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
-                .bind(vid)
-                .execute(&state.db)
-                .await
+        if let Err(e) = sqlx::query("DELETE FROM yjs_documents WHERE doc_id = $1")
+            .bind(vid)
+            .execute(&state.db)
+            .await
         {
             tracing::error!("failed to delete yjs_documents for template version {vid}: {e}");
         }
-        if let Err(e) =
-            sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
-                .bind(vid)
-                .execute(&state.db)
-                .await
+        if let Err(e) = sqlx::query("DELETE FROM yjs_snapshots WHERE doc_id = $1")
+            .bind(vid)
+            .execute(&state.db)
+            .await
         {
             tracing::error!("failed to delete yjs_snapshots for template version {vid}: {e}");
         }

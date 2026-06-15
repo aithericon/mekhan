@@ -42,6 +42,8 @@ pub async fn publish_runner_model_command(
 ) -> Result<StatusCode, ApiError> {
     publish_model_command(&state.nats, runner_id, &cmd)
         .await
-        .map_err(|e| ApiError::internal(format!("publish model command to runner {runner_id}: {e}")))?;
+        .map_err(|e| {
+            ApiError::internal(format!("publish model command to runner {runner_id}: {e}"))
+        })?;
     Ok(StatusCode::ACCEPTED)
 }

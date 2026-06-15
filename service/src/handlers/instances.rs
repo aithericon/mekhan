@@ -195,8 +195,8 @@ pub async fn create_instance(
 
     // Mode-aware publication gate: a published version runs in any public
     // mode; an unpublished draft is runnable ONLY as a draft dev-run.
-    let mode = resolve_run_mode(template.published, req.mode.as_deref())
-        .map_err(ApiError::bad_request)?;
+    let mode =
+        resolve_run_mode(template.published, req.mode.as_deref()).map_err(ApiError::bad_request)?;
 
     if template.visibility == "private" {
         return Err(ApiError::bad_request(

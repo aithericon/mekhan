@@ -37,7 +37,12 @@ use mekhan_service::migration_driver::{self, synthetic};
 struct Cli {
     /// Postgres URL. Defaults to `$MEKHAN__DATABASE_URL` (the service's
     /// canonical var) then `$MEKHAN_DATABASE_URL`.
-    #[arg(long, value_name = "URL", env = "MEKHAN__DATABASE_URL", default_value = "")]
+    #[arg(
+        long,
+        value_name = "URL",
+        env = "MEKHAN__DATABASE_URL",
+        default_value = ""
+    )]
     database_url: String,
 
     #[command(subcommand)]
@@ -156,9 +161,10 @@ async fn main() -> Result<()> {
             root,
             batch_size,
         } => {
-            let counts = migration_driver::index_reconcile(&pool, &file_server_id, &root, batch_size)
-                .await
-                .context("index-reconcile")?;
+            let counts =
+                migration_driver::index_reconcile(&pool, &file_server_id, &root, batch_size)
+                    .await
+                    .context("index-reconcile")?;
             println!(
                 "index-reconcile: verified={} mismatch={} orphan_disk={}",
                 counts.verified, counts.mismatch, counts.orphan_disk
@@ -169,9 +175,10 @@ async fn main() -> Result<()> {
             root,
             sample_verified,
         } => {
-            let counts = migration_driver::hash_pending(&pool, &file_server_id, &root, sample_verified)
-                .await
-                .context("hash-pending")?;
+            let counts =
+                migration_driver::hash_pending(&pool, &file_server_id, &root, sample_verified)
+                    .await
+                    .context("hash-pending")?;
             println!(
                 "hash-pending: orphan_disk_registered={} mismatch_rehashed={} \
                  verified_sampled={} probe_failed={}",

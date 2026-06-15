@@ -104,22 +104,24 @@ impl Respond for ChatResponder {
 
         let prompt = self.0.prompt_tokens;
         let completion = self.0.completion_tokens;
-        ResponseTemplate::new(200).set_delay(delay).set_body_json(json!({
-            "id": "chatcmpl-fake",
-            "object": "chat.completion",
-            "created": 0,
-            "model": requested_model,
-            "choices": [{
-                "index": 0,
-                "message": { "role": "assistant", "content": self.0.content },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": prompt,
-                "completion_tokens": completion,
-                "total_tokens": prompt + completion
-            }
-        }))
+        ResponseTemplate::new(200)
+            .set_delay(delay)
+            .set_body_json(json!({
+                "id": "chatcmpl-fake",
+                "object": "chat.completion",
+                "created": 0,
+                "model": requested_model,
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": self.0.content },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion,
+                    "total_tokens": prompt + completion
+                }
+            }))
     }
 }
 

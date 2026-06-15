@@ -926,12 +926,14 @@ async fn seed_demo_capability_types(state: &crate::AppState, root: &Path) {
 fn interpolate_env(raw: &str) -> String {
     let re = regex::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
         .expect("static env-interpolation regex is valid");
-    re.replace_all(raw, |caps: &regex::Captures| match std::env::var(&caps[1]) {
-        Ok(v) => v,
-        Err(_) => caps
-            .get(2)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default(),
+    re.replace_all(raw, |caps: &regex::Captures| {
+        match std::env::var(&caps[1]) {
+            Ok(v) => v,
+            Err(_) => caps
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default(),
+        }
     })
     .into_owned()
 }

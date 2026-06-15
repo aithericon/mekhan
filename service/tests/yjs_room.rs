@@ -48,7 +48,12 @@ async fn setup_room() -> (Arc<YjsRoom>, YjsPersistence, Uuid) {
 
     let persistence_clone = persistence.clone();
     let room = tokio::task::spawn_blocking(move || {
-        Arc::new(YjsRoom::from_doc(template_id, mekhan_service::yjs::DocKind::Graph, &doc, persistence_clone))
+        Arc::new(YjsRoom::from_doc(
+            template_id,
+            mekhan_service::yjs::DocKind::Graph,
+            &doc,
+            persistence_clone,
+        ))
     })
     .await
     .unwrap();
@@ -175,12 +180,11 @@ async fn sync_step2_applies_and_persists() {
     assert!(response.is_none(), "SyncStep2 should return None");
 
     // Check that a new row was persisted
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
-            .bind(template_id)
-            .fetch_one(persistence.pool())
-            .await
-            .unwrap();
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE doc_id = $1")
+        .bind(template_id)
+        .fetch_one(persistence.pool())
+        .await
+        .unwrap();
 
     // init_doc_from_graph stored 1 row, handle_message stored another
     assert_eq!(count, 2, "should have 2 update rows (init + SyncStep2)");
