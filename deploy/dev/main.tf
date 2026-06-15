@@ -14,6 +14,16 @@ resource "nomad_job" "mekhan_service" {
 
   jobspec = templatefile("${path.module}/mekhan.nomad.hcl.tpl", {
     namespace         = var.nomad_namespace
+    environment       = var.environment
+    job_id            = local.service_job_id
+    service_name      = local.service_consul_name
+    engine_name       = local.engine_consul_name
+    router            = local.traefik_router
+    router_http       = local.traefik_router_http
+    engine_router     = local.engine_router
+    vault_role        = local.vault_role_service
+    vault_policies    = jsonencode(local.service_vault_policies)
+    nats_user_kv_path = local.nats_user_kv_path
     datacenters       = jsonencode(var.nomad_datacenters)
     node_class        = var.node_class
     image             = "${var.image_repository}:${var.image_tag}"
@@ -28,7 +38,7 @@ resource "nomad_job" "mekhan_service" {
     database_url      = local.database_url
     nats_url          = var.nats_url
     vault_addr        = var.vault_addr
-    petri_lab_url     = var.petri_lab_url
+    petri_lab_url     = local.petri_lab_url
     s3_endpoint       = var.s3_endpoint
     s3_bucket         = var.s3_bucket
     s3_access_key     = var.s3_access_key

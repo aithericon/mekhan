@@ -1,7 +1,12 @@
 # =============================================================================
-# mekhan-service Nomad job spec — dev
+# mekhan-service Nomad job spec — env-parameterized (dev | prod)
 # =============================================================================
-# Templated by Terraform (deploy/dev/main.tf). $${var} interpolations happen
+# Identical in deploy/dev and deploy/prod. The job ID, Consul service names,
+# Traefik routers, Vault role/policies, and NATS creds path are all injected
+# from locals.tf via main.tf so the two envs never collide on the shared
+# cluster — see job "${job_id}" below.
+#
+# Templated by Terraform (main.tf). $${var} interpolations happen
 # at terraform plan time; literal $${NOMAD_*} env refs that survive into Nomad
 # are escaped with a leading backslash where needed (none here today).
 #
@@ -14,7 +19,7 @@
 #   - update.canary + auto_revert for safe rolling deploys
 # =============================================================================
 
-job "mekhan-service" {
+job "${job_id}" {
   namespace   = "${namespace}"
   datacenters = ${datacenters}
   type        = "service"
@@ -52,23 +57,23 @@ job "mekhan-service" {
     }
 
     service {
-      name     = "mekhan-service"
+      name     = "${service_name}"
       port     = "http"
       provider = "consul"
 
       tags = [
         "mekhan",
         "traefik.enable=${traefik_enabled}",
-        "traefik.http.routers.mekhan.rule=Host(`${hostname}`)",
-        "traefik.http.routers.mekhan.entrypoints=websecure",
-        "traefik.http.routers.mekhan.tls=true",
-        "traefik.http.routers.mekhan.tls.certresolver=letsencrypt",
-        "traefik.http.routers.mekhan.service=mekhan-service",
+        "traefik.http.routers.${router}.rule=Host(`${hostname}`)",
+        "traefik.http.routers.${router}.entrypoints=websecure",
+        "traefik.http.routers.${router}.tls=true",
+        "traefik.http.routers.${router}.tls.certresolver=letsencrypt",
+        "traefik.http.routers.${router}.service=${service_name}",
         # HTTP → HTTPS redirect
-        "traefik.http.routers.mekhan-http.rule=Host(`${hostname}`)",
-        "traefik.http.routers.mekhan-http.entrypoints=web",
-        "traefik.http.routers.mekhan-http.middlewares=https-redirect@file",
-        "traefik.http.routers.mekhan-http.service=mekhan-service",
+        "traefik.http.routers.${router_http}.rule=Host(`${hostname}`)",
+        "traefik.http.routers.${router_http}.entrypoints=web",
+        "traefik.http.routers.${router_http}.middlewares=https-redirect@file",
+        "traefik.http.routers.${router_http}.service=${service_name}",
       ]
 
       check {
@@ -81,7 +86,7 @@ job "mekhan-service" {
 
 
     service {
-      name     = "engine"
+      name     = "${engine_name}"
       port     = "engine"
       provider = "consul"
 
@@ -89,14 +94,14 @@ job "mekhan-service" {
         "engine",
         "mekhan",
         "traefik.enable=true",
-        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
-        "traefik.http.routers.engine.priority=200",
-        "traefik.http.routers.engine.entrypoints=websecure",
-        "traefik.http.routers.engine.tls=true",
-        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
-        "traefik.http.routers.engine.middlewares=engine-stripprefix",
-        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
-        "traefik.http.routers.engine.service=engine",
+        "traefik.http.routers.${engine_router}.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.${engine_router}.priority=200",
+        "traefik.http.routers.${engine_router}.entrypoints=websecure",
+        "traefik.http.routers.${engine_router}.tls=true",
+        "traefik.http.routers.${engine_router}.tls.certresolver=letsencrypt",
+        "traefik.http.routers.${engine_router}.middlewares=${engine_router}-stripprefix",
+        "traefik.http.middlewares.${engine_router}-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.${engine_router}.service=${engine_name}",
       ]
 
       # TCP check rather than HTTP — the engine doesn't expose /health
@@ -116,16 +121,16 @@ job "mekhan-service" {
       mode     = "delay"
     }
 
-    # Authenticate to Vault using Nomad workload identity. The `mekhan-service`
-    # JWT role + matching policies live in deploy/dev/vault.tf and are bound to
-    # nomad_job_id="mekhan-service" + namespace="${namespace}". The policies
+    # Authenticate to Vault using Nomad workload identity. The `${vault_role}`
+    # JWT role + matching policies live in vault.tf and are bound to
+    # nomad_job_id="${job_id}" + namespace="${namespace}". The policies
     # grant: (a) read on the NATS user creds path used below, (b) CRUD on
     # secret/data/aithericon/resources/* for VaultResourceStore (write side)
     # and the engine's secret-wrapping read side, (c) update on
     # sys/wrapping/wrap for cubbyhole response wrapping at job dispatch.
     vault {
-      policies = ["nomad-workloads", "mekhan-nats-read", "mekhan-resources-rw", "mekhan-wrap"]
-      role     = "mekhan-service"
+      policies = ${vault_policies}
+      role     = "${vault_role}"
     }
 
     task "service" {
@@ -147,7 +152,7 @@ job "mekhan-service" {
         change_mode = "restart"
         perms       = "0644"
         data        = <<-EOH
-{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{- with secret "secret/data/${nats_user_kv_path}" -}}
 {{ .Data.data.creds }}
 {{- end -}}
 EOH
@@ -221,7 +226,7 @@ EOH
         change_mode = "restart"
         perms       = "0644"
         data        = <<-EOH
-{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{- with secret "secret/data/${nats_user_kv_path}" -}}
 {{ .Data.data.creds }}
 {{- end -}}
 EOH
@@ -256,7 +261,7 @@ EOH
 
   meta {
     project      = "mekhan"
-    environment  = "dev"
+    environment  = "${environment}"
     image_tag    = "${image_tag}"
     hostname     = "${hostname}"
   }

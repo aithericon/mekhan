@@ -486,21 +486,19 @@ deploy-dev image_tag:
     rm -f plan.out
     echo "✓ dev deploy applied"
 
-# Plan + apply against the prod layer. Same shape as deploy-dev.
+# Plan + apply against the prod layer. Same shape as deploy-dev — the backend
+# is inlined in backend.tf (state key mekhan/prod/...), so `tofu init` alone is
+# enough; no -backend-config. AWS_* creds come from the env (.envrc / CI step).
 deploy-prod image_tag:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ../deploy/prod
-    if [ ! -f backend.hcl ]; then
-      echo "✗ deploy/prod/backend.hcl missing." >&2
-      exit 1
-    fi
     if [ ! -f prod.auto.tfvars ]; then
-      echo "✗ deploy/prod/prod.auto.tfvars missing." >&2
+      echo "✗ deploy/prod/prod.auto.tfvars missing. Copy prod.auto.tfvars.example." >&2
       exit 1
     fi
     echo "▶ tofu init (prod)"
-    tofu init -input=false -backend-config=backend.hcl
+    tofu init -input=false
     echo "▶ tofu plan (image_tag={{image_tag}})"
     tofu plan -input=false -var="image_tag={{image_tag}}" -out=plan.out
     echo "▶ tofu apply"

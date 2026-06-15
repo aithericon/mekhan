@@ -1,11 +1,14 @@
+# Local state + lock (the real state lives in the S3 backend)
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.backup
 
-backend.hcl
-prod.auto.tfvars
+# Per-operator config — secrets MUST NOT be committed
+.envrc
+dev.auto.tfvars
 *.tfvars
 !*.tfvars.example
 
+# Plan output produced by `tofu plan -out=…`
 plan.out

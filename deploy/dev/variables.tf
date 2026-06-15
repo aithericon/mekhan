@@ -6,6 +6,23 @@
 # Secrets are passed via TF_VAR_<name> env vars sourced from Woodpecker secrets.
 # =============================================================================
 
+# ── Environment ─────────────────────────────────────────────────────────────
+# The single knob that distinguishes the two deployments on the shared cluster.
+# Drives every env-suffixed name in locals.tf (job IDs, Consul services,
+# Traefik routers, DB, NATS account, Vault roles, Zitadel org). The *.tf files
+# in deploy/dev and deploy/prod are identical; only this value (set in each
+# env's *.auto.tfvars) and the backend state key differ.
+
+variable "environment" {
+  description = "Deployment environment: dev or prod. Set in <env>.auto.tfvars; everything else derives from it via locals.tf."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be \"dev\" or \"prod\"."
+  }
+}
+
 # ── Terraform state encryption ──────────────────────────────────────────────
 
 variable "state_encryption_passphrase" {
@@ -17,7 +34,7 @@ variable "state_encryption_passphrase" {
 # ── Nomad target ────────────────────────────────────────────────────────────
 
 variable "nomad_address" {
-  description = "Dev Nomad HTTP API endpoint. From HetznerCluster/environments/dev/env.hcl: https://10.30.0.10:4646 (Tailscale/WireGuard internal IP)."
+  description = "Nomad HTTP API endpoint of the shared HetznerCluster. Both envs target https://10.20.0.10:4646 (reachable only over NetBird)."
   type        = string
 }
 
@@ -119,8 +136,9 @@ variable "vault_addr" {
 }
 
 variable "petri_lab_url" {
-  description = "URL of the engine (core-engine) the dev mekhan-service talks to"
+  description = "Override for the engine (core-engine) URL mekhan-service talks to. Leave empty (default) to derive it from the env-suffixed engine Consul service + engine_service_port in locals.tf — set it only to point at an out-of-band engine."
   type        = string
+  default     = ""
 }
 
 variable "s3_endpoint" {
@@ -168,6 +186,11 @@ variable "zitadel_issuer_url" {
   description = "Public Zitadel issuer URL — baked into MEKHAN__AUTH__ISSUER_URL on the service."
   type        = string
   default     = "https://id.aithericon.eu"
+}
+
+variable "zitadel_org_name" {
+  description = "Name of the dedicated Zitadel org Mekhan provisions for this env. Separate org per env = separate users/apps/callback URLs, so a dev login can't reach prod. e.g. \"Mekhan Testers\" (dev) / \"Mekhan\" (prod)."
+  type        = string
 }
 
 variable "zitadel_org_id" {

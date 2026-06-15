@@ -1,6 +1,16 @@
-# Copy to prod.auto.tfvars (gitignored). Values from HetznerCluster/environments/prod/env.hcl.
+# Copy to prod.auto.tfvars (gitignored).
+#
+# This is the *prod* environment. It runs on the SAME HetznerCluster as dev
+# (deploy/dev) but is fully isolated: distinct Nomad job (mekhan-service-prod),
+# Consul services, Traefik router, Postgres DB (mekhan_prod), NATS account
+# (mekhan-prod), S3 bucket, Vault role, and Zitadel org. All of that divergence
+# flows from `environment` below via locals.tf — the *.tf files are identical
+# to deploy/dev's (only backend.tf's state key differs).
 
-# ── Nomad target — prod cluster, 10.20.x subnet ─────────────────────────────
+# ── Environment ──────────────────────────────────────────────────────────────
+environment = "prod"
+
+# ── Nomad target — the shared cluster (10.20.x subnet) ──────────────────────
 nomad_address     = "https://10.20.0.10:4646"
 nomad_region      = "global"
 nomad_namespace   = "default"
@@ -11,14 +21,24 @@ node_class        = "stateless"
 image_repository = "forge.aithericon.eu/milanender/mekhan-service"
 
 # ── External exposure ───────────────────────────────────────────────────────
+# prod owns the canonical hostname; dev lives on mekhan.dev.aithericon.eu.
 hostname        = "mekhan.aithericon.eu"
 traefik_enabled = true
 
-# ── Runtime endpoints ───────────────────────────────────────────────────────
-nats_url      = "nats://nats.service.consul:4222"
-petri_lab_url = "http://engine.service.consul:3030"
+# ── Ports ─────────────────────────────────────────────────────────────────────
+# DISTINCT from dev's defaults (3100 / 3030). The jobs use STATIC host ports, so
+# if dev and prod land on the same stateless node they'd collide — keep these
+# non-overlapping. (Running >1 replica also needs these to become dynamic; the
+# job is count=1 today.)
+service_port        = 3200
+engine_service_port = 3130
 
-# Hetzner Object Storage.
+# ── Runtime endpoints (resolved via Consul DNS on the cluster) ──────────────
+# petri_lab_url is intentionally NOT set — it derives from the env-suffixed
+# engine Consul service (engine-prod.service.consul:3130) in locals.tf.
+nats_url = "nats://nats.service.consul:4222"
+
+# Hetzner Object Storage. prod gets the canonical (un-suffixed) artifact bucket.
 s3_endpoint = "https://fsn1.your-objectstorage.com"
 s3_bucket   = "mekhan-artifacts"
 
@@ -26,7 +46,31 @@ s3_bucket   = "mekhan-artifacts"
 auth_mode = "bff"
 rust_log  = "info"
 
+# Dedicated Zitadel org for prod (the isolation boundary for users/apps).
+zitadel_org_name = "Mekhan"
+
+# ── Invite email ──────────────────────────────────────────────────────────────
+# Same relay as dev; username/password are secrets injected in CI via
+# TF_VAR_email_smtp_username / TF_VAR_email_smtp_password (from Vault).
+email_mode         = "smtp"
+email_from_address = "id@aithericon.eu"
+email_smtp_host    = "mail.your-server.de"
+email_smtp_port    = 587
+
+# Bootstrap admin for prod's "Testers" workspace (one-time). Random initial
+# password published to Vault at secret/services/mekhan/prod/testers/mekhan_admin.
+# All other onboarding is in-app via invites.
+tester_users = {
+  mekhan_admin = {
+    username   = "mekhan-admin"
+    first_name = "Mekhan"
+    last_name  = "Admin"
+    email      = "mekhan-admin@aithericon.eu"
+    role       = "mekhan_admin"
+  }
+}
+workspace_owner_user_key = "mekhan_admin"
+
 # ── Resources ───────────────────────────────────────────────────────────────
-service_count = 2
-cpu_mhz       = 1000
-memory_mb     = 1024
+cpu_mhz   = 1000
+memory_mb = 1024
