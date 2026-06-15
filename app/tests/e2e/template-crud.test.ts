@@ -161,6 +161,7 @@ test.describe('Template CRUD', () => {
 							is_latest: true,
 							published: false,
 							published_at: null,
+							my_effective_role: 'owner',
 							created_at: '2025-01-01T00:00:00Z',
 							updated_at: '2025-01-01T00:00:00Z'
 						}
@@ -197,6 +198,7 @@ test.describe('Template CRUD', () => {
 							is_latest: true,
 							published: true,
 							published_at: '2025-01-02T00:00:00Z',
+							my_effective_role: 'owner',
 							created_at: '2025-01-01T00:00:00Z',
 							updated_at: '2025-01-02T00:00:00Z'
 						}
