@@ -166,7 +166,15 @@ pub const CATALOGUE_FIELD_SPECS: &[FieldSpec] = &[
     // Virtual meta.* fields — projections into file_metadata (fmeta JSONB).
     // Fields with serde `skip_serializing_if` are ABSENT when empty, so the
     // exprs yield NULL there (is_null/is_not_null work as expected).
-    spec("meta.format", "(file_metadata->>'format')"),
+    // `FileFormat::Unknown` serializes as `{"unknown":"<name>"}`; unwrap it so
+    // a `meta.format:<name>` filter matches probe-unknown formats by their bare
+    // name (the same value the facet rail and detail view display).
+    spec(
+        "meta.format",
+        "(CASE jsonb_typeof(file_metadata->'format') \
+          WHEN 'object' THEN file_metadata->'format'->>'unknown' \
+          ELSE file_metadata->>'format' END)",
+    ),
     fspec(
         "meta.num_rows",
         "((file_metadata->>'num_rows')::bigint)",
@@ -1263,7 +1271,7 @@ mod tests {
         let sql = qb.sql().to_string();
         assert!(sql.contains("workspace_id = "));
         assert!(sql.contains("((file_metadata->>'num_rows')::bigint) >= "));
-        assert!(sql.contains("(file_metadata->>'format') = "));
+        assert!(sql.contains("ELSE file_metadata->>'format' END) = "));
 
         let sort = params.sort.take().expect("sort parsed");
         let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 FROM catalogue_entries");

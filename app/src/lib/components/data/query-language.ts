@@ -241,12 +241,13 @@ function isComparableValue(field: string, value: string): boolean {
 // ---------------------------------------------------------------------------
 
 function containFragment(
-	term: Extract<QueryTerm, { kind: 'contain' }>,
-	lowercaseFormat: boolean
+	term: Extract<QueryTerm, { kind: 'contain' }>
 ): Record<string, unknown> {
 	switch (term.term) {
 		case 'format':
-			return { format: lowercaseFormat ? term.value.toLowerCase() : term.value };
+			// Only reached by the parse-time accumulator (duplicate detection);
+			// compile routes `format:` to a `meta.format` filter, not containment.
+			return { format: term.value };
 		case 'col':
 			return { column_names: [term.value] };
 		case 'dim':
@@ -302,7 +303,7 @@ export function parseQuery(input: string): { terms: QueryTerm[]; errors: ParseEr
 		}
 		const term = c.term;
 		if (term.kind === 'contain') {
-			const merged = tryMerge(containAcc ?? {}, containFragment(term, false));
+			const merged = tryMerge(containAcc ?? {}, containFragment(term));
 			if (!merged.ok) {
 				errors.push({ raw: tok.raw, index: tok.index, message: `duplicate ${term.term} term` });
 				continue;
@@ -441,10 +442,18 @@ export function compileQuery(
 				value = coerceValue(t.field, t.value, now);
 			}
 			filters.push({ field: t.field, op: t.op, value });
+		} else if (t.term === 'format') {
+			// `format` is a top-level scalar, not an array/nested containment like
+			// col/dim/pii — compile it to a `meta.format` equality instead of a
+			// JSONB `@>` fragment. The server unwraps `FileFormat::Unknown`'s
+			// `{"unknown":…}` envelope behind that expr, so `format:fasta` matches
+			// probe-unknown formats too — which containment never could.
+			// Lowercased to match the snake_case `FileFormat` wire strings.
+			filters.push({ field: 'meta.format', op: 'eq', value: t.value.toLowerCase() });
 		} else {
 			// Conflicting fragments were already flagged at parse time; here we
 			// keep the first writer and silently skip the conflicting term.
-			const merged = tryMerge(meta ?? {}, containFragment(t, true));
+			const merged = tryMerge(meta ?? {}, containFragment(t));
 			if (merged.ok) meta = merged.value;
 		}
 	}
@@ -457,8 +466,9 @@ export function compileQuery(
 
 /**
  * Formats asserted by the terms, for scoping format-specific UI: `format:`
- * containment (lowercased, matching compile) plus `meta.format` eq / in
- * filters. Negative / null ops assert nothing. Deduped, order-preserving.
+ * sugar (lowercased, matching compile) plus `meta.format` eq / in filters —
+ * both compile to the same meta.format equality. Negative / null ops assert
+ * nothing. Deduped, order-preserving.
  */
 export function activeFormats(terms: QueryTerm[]): string[] {
 	const out: string[] = [];

@@ -106,7 +106,18 @@ impl CatalogueDimension {
     /// [`facets`] instead.
     fn key_expr(self) -> Option<&'static str> {
         match self {
-            Self::Format => Some("coalesce(file_metadata->>'format', 'unknown')"),
+            // `FileFormat::Unknown("fasta")` serializes as the externally
+            // tagged object `{"unknown":"fasta"}`; collapse it to its inner
+            // name so the facet lists `fasta` like every typed format rather
+            // than the raw `{"unknown":…}` envelope (mirrors `format_name` in
+            // metadata_view.rs).
+            Self::Format => Some(
+                "coalesce(\
+                 CASE jsonb_typeof(file_metadata->'format') \
+                   WHEN 'object' THEN file_metadata->'format'->>'unknown' \
+                   ELSE file_metadata->>'format' END, \
+                 'unknown')",
+            ),
             Self::Category => Some("coalesce(nullif(category, ''), 'uncategorized')"),
             Self::MimeType => Some("coalesce(mime_type, 'unknown')"),
             Self::SourceNet => Some("coalesce(source_net, 'none')"),
@@ -249,7 +260,13 @@ mod tests {
     fn key_expr_selection_per_dimension() {
         assert_eq!(
             CatalogueDimension::Format.key_expr(),
-            Some("coalesce(file_metadata->>'format', 'unknown')")
+            Some(
+                "coalesce(\
+                 CASE jsonb_typeof(file_metadata->'format') \
+                   WHEN 'object' THEN file_metadata->'format'->>'unknown' \
+                   ELSE file_metadata->>'format' END, \
+                 'unknown')"
+            )
         );
         assert_eq!(
             CatalogueDimension::Category.key_expr(),

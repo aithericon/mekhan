@@ -362,8 +362,7 @@ describe('compileQuery — relative-date coercion (fixed now)', () => {
 });
 
 describe('compileQuery — fileMetadata containment', () => {
-	it('compiles each sugar to its fragment (format lowercased)', () => {
-		expect(compile('format:CSV').fileMetadata).toEqual({ format: 'csv' });
+	it('compiles each containment sugar to its fragment', () => {
 		expect(compile('col:age').fileMetadata).toEqual({ column_names: ['age'] });
 		expect(compile('dim:time').fileMetadata).toEqual({ dimensions: [{ name: 'time' }] });
 		expect(compile('pii:EMAIL').fileMetadata).toEqual({
@@ -382,8 +381,7 @@ describe('compileQuery — fileMetadata containment', () => {
 				{ classifications: [{ category: 'SSN' }] }
 			]
 		});
-		expect(compile('format:CSV col:age dim:time attr:a=1 attr:b=2').fileMetadata).toEqual({
-			format: 'csv',
+		expect(compile('col:age dim:time attr:a=1 attr:b=2').fileMetadata).toEqual({
 			column_names: ['age'],
 			dimensions: [{ name: 'time' }],
 			attributes: {
@@ -395,10 +393,29 @@ describe('compileQuery — fileMetadata containment', () => {
 
 	it('on a scalar conflict fed directly to compile, the first writer wins', () => {
 		const t: QueryTerm[] = [
-			{ kind: 'contain', term: 'format', value: 'csv', raw: 'format:csv' },
-			{ kind: 'contain', term: 'format', value: 'parquet', raw: 'format:parquet' }
+			{ kind: 'contain', term: 'attr', key: 'k', value: 'a', raw: 'attr:k=a' },
+			{ kind: 'contain', term: 'attr', key: 'k', value: 'b', raw: 'attr:k=b' }
 		];
-		expect(compileQuery(t, NOW).fileMetadata).toEqual({ format: 'csv' });
+		expect(compileQuery(t, NOW).fileMetadata).toEqual({
+			attributes: { k: { type: 'String', value: 'a' } }
+		});
+	});
+});
+
+describe('compileQuery — format', () => {
+	it('compiles format: to a meta.format equality (lowercased), not containment', () => {
+		expect(compile('format:CSV').filters).toEqual([
+			{ field: 'meta.format', op: 'eq', value: 'csv' }
+		]);
+		expect(compile('format:CSV').fileMetadata).toBeUndefined();
+	});
+
+	it('matches probe-unknown formats the same as typed ones (server unwraps)', () => {
+		// `fasta` has no typed FileFormat variant — it rides the same meta.format
+		// eq path, so there is no first-class vs. unknown split in the query.
+		expect(compile('format:fasta').filters).toEqual([
+			{ field: 'meta.format', op: 'eq', value: 'fasta' }
+		]);
 	});
 });
 
@@ -444,9 +461,10 @@ describe('compileQuery — datatype resolution', () => {
 		const c = compileWith('name:alice datatype:two format:CSV');
 		expect(c.filters).toEqual([
 			{ field: 'name', op: 'eq', value: 'alice' },
-			{ field: 'meta.schema', op: 'in', value: 'abc123,def456' }
+			{ field: 'meta.schema', op: 'in', value: 'abc123,def456' },
+			{ field: 'meta.format', op: 'eq', value: 'csv' }
 		]);
-		expect(c.fileMetadata).toEqual({ format: 'csv' });
+		expect(c.fileMetadata).toBeUndefined();
 	});
 });
 
