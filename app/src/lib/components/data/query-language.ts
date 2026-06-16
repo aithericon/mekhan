@@ -504,8 +504,19 @@ export function activeFormats(terms: QueryTerm[]): string[] {
 }
 
 /**
- * Semantic validation against the server field registry (exact names only)
- * and, when `datatypeNames` is provided, the registered data-type names
+ * Open-ended JSONB-key field families (mirrors the server's `DynJsonbField`):
+ * `umeta.<key>` projects any `user_metadata` key, so it can't be enumerated in
+ * the static registry — any non-empty key is valid. Keep this list in sync with
+ * `CATALOGUE_DYN_FIELDS` in the backend.
+ */
+function isOpenJsonbField(field: string): boolean {
+	return field.startsWith('umeta.') && field.length > 'umeta.'.length;
+}
+
+/**
+ * Semantic validation against the server field registry (exact names only,
+ * plus open-ended JSONB-key families like `umeta.<key>`) and, when
+ * `datatypeNames` is provided, the registered data-type names
  * (`null`/`undefined` registry = skip datatype validation, e.g. not loaded
  * yet). `index` is the term's position in the `terms` array.
  */
@@ -516,7 +527,7 @@ export function validateTerms(
 ): ParseError[] {
 	const errors: ParseError[] = [];
 	terms.forEach((t, i) => {
-		if (t.kind === 'filter' && !knownFields.has(t.field)) {
+		if (t.kind === 'filter' && !knownFields.has(t.field) && !isOpenJsonbField(t.field)) {
 			errors.push({ raw: t.raw, index: i, message: `unknown field "${t.field}"` });
 		} else if (t.kind === 'datatype' && datatypeNames != null && !datatypeNames.has(t.name)) {
 			errors.push({ raw: t.raw, index: i, message: `unknown data type "${t.name}"` });

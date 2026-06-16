@@ -6545,15 +6545,16 @@ export interface components {
         CatalogTrigger: {
             /**
              * @description If true, the dispatcher walks existing catalogue entries matching the
-             *     filters when the trigger is first registered.
+             *     query when the trigger is first registered.
              */
             backfill?: boolean;
-            /** @description Same filter shape as `CatalogueSubscription.filters`. */
-            filters?: {
-                [key: string]: {
-                    [key: string]: string;
-                };
-            };
+            /**
+             * @description Catalogue query DSL (the SAME text the data browser submits, e.g.
+             *     `category:model filename~report meta.format:fasta created_at>-7d`). The
+             *     trigger fires when a newly ingested artifact would appear in this query.
+             *     Compiled server-side at eval time so relative dates re-resolve per fire.
+             */
+            query?: string;
         };
         /**
          * @description A registered data type: a named set of schema digests with the canonical
@@ -16412,7 +16413,13 @@ export interface operations {
     };
     list_entries: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.
+                 *     Compiled server-side; relative dates re-resolve per request.
+                 */
+                q?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -16791,6 +16798,11 @@ export interface operations {
                  *     cover the whole scope.
                  */
                 limit?: number | null;
+                /**
+                 * @description Optional catalogue query DSL scope (canonical; supersedes the
+                 *     bracket-notation `filter[..]` / `search` / `file_metadata` params).
+                 */
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -17036,7 +17048,13 @@ export interface operations {
     };
     stats: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.
+                 *     Compiled server-side; relative dates re-resolve per request.
+                 */
+                q?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -17549,7 +17567,13 @@ export interface operations {
     };
     data_entries: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.
+                 *     Compiled server-side; relative dates re-resolve per request.
+                 */
+                q?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;

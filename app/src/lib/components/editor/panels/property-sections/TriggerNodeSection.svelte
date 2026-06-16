@@ -16,6 +16,9 @@
 	import { onMount } from 'svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { listTriggers, getTriggerSourceScope, setTriggerEnabled } from '$lib/api/client';
+	import QueryBar from '$lib/components/data/QueryBar.svelte';
+	import { EntriesQueryState } from '$lib/components/data/entries-query.svelte';
+	import { getCatalogueQueryFields } from '$lib/api/data';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type PortField = components['schemas']['PortField'];
@@ -265,6 +268,55 @@
 		onchange({ ...data, [key]: value });
 	}
 
+	// ── Catalogue trigger query bar ──────────────────────────────────────────
+	// The catalog source's filter IS a catalogue query DSL string (the same DSL
+	// the data browser submits). Seed a local EntriesQueryState from
+	// `source.query`, embed the shared QueryBar, and write the applied text back
+	// into the source on apply. URL-sync is OFF (this is an editor panel, not the
+	// /data browser — it must not push `?q=` onto the editor page URL).
+	const catalogQueryDsl = $derived(
+		source && source.kind === 'catalog' ? (source.query ?? '') : ''
+	);
+	// svelte-ignore state_referenced_locally — initial seed only; the $effect below keeps it in sync
+	const catalogQuery = new EntriesQueryState(catalogQueryDsl, false);
+
+	// Reseed when the node/source changes externally (selecting a different
+	// trigger node, Yjs remote edit) so the bar reflects the persisted query.
+	$effect(() => {
+		const q = catalogQueryDsl;
+		if (catalogQuery.applied !== q) {
+			catalogQuery.applied = q;
+			catalogQuery.draft = q;
+		}
+	});
+
+	// Persist the applied query text back into the catalog source. Guarded so it
+	// only writes through when the value actually diverged (avoids an onchange
+	// loop with the reseed effect above).
+	$effect(() => {
+		const applied = catalogQuery.applied;
+		if (source && source.kind === 'catalog' && (source.query ?? '') !== applied) {
+			update('source', { ...source, query: applied });
+		}
+	});
+
+	// Known filter fields for the query bar's unknown-field validation — same
+	// server registry the data browser uses (native + meta names), module-cached.
+	let catalogKnownFields = $state<Set<string> | null>(null);
+	$effect(() => {
+		if (sourceKind !== 'catalog') return;
+		let cancelled = false;
+		getCatalogueQueryFields()
+			.then((r) => {
+				if (!cancelled)
+					catalogKnownFields = new Set([...r.native, ...r.meta].map((f) => f.name));
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	function updateSourceKind(kind: TriggerNodeData['source']['kind']) {
 		// Reset source-specific fields when the kind changes — each variant carries
 		// different config so we can't preserve fields across kinds.
@@ -272,7 +324,7 @@
 			kind === 'cron'
 				? { kind: 'cron', schedule: '0 9 * * MON-FRI', timezone: 'UTC', jitterSecs: 0 }
 				: kind === 'catalog'
-					? { kind: 'catalog', filters: {}, backfill: false }
+					? { kind: 'catalog', query: '', backfill: false }
 					: kind === 'net_completion'
 						? {
 								kind: 'net_completion',
@@ -371,66 +423,21 @@
 		<CronPreview schedule={source.schedule} timezone={source.timezone ?? 'UTC'} />
 	{:else if source?.kind === 'catalog'}
 		<div class="space-y-1.5">
-			<div class="flex items-center justify-between">
-				<span class="text-sm font-medium text-muted-foreground">Filters (eq only)</span>
-				{#if !readonly}
-					<Button
-						variant="ghost"
-						size="sm"
-						onclick={() => {
-							const next = { ...(source.filters ?? {}) };
-							const key = `field${Object.keys(next).length + 1}`;
-							next[key] = { eq: '' };
-							update('source', { ...source, filters: next });
-						}}
-					>
-						<Plus class="size-3.5" />
-						Add
-					</Button>
-				{/if}
-			</div>
-			{#each Object.entries(source.filters ?? {}) as [field, ops] (field)}
-				<div class="flex items-center gap-1.5">
-					<Input
-						type="text"
-						value={field}
-						disabled={readonly}
-						placeholder="field"
-						oninput={(e) => {
-							const next = { ...(source.filters ?? {}) };
-							delete next[field];
-							next[(e.currentTarget as HTMLInputElement).value] = ops;
-							update('source', { ...source, filters: next });
-						}}
-					/>
-					<span class="text-sm text-muted-foreground">=</span>
-					<Input
-						type="text"
-						value={ops.eq ?? ''}
-						disabled={readonly}
-						placeholder="value"
-						oninput={(e) => {
-							const next = { ...(source.filters ?? {}) };
-							next[field] = { eq: (e.currentTarget as HTMLInputElement).value };
-							update('source', { ...source, filters: next });
-						}}
-					/>
-					{#if !readonly}
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => {
-								const next = { ...(source.filters ?? {}) };
-								delete next[field];
-								update('source', { ...source, filters: next });
-							}}
-							aria-label="Remove"
-						>
-							<Trash2 class="size-3.5" />
-						</Button>
-					{/if}
+			<span class="text-sm font-medium text-muted-foreground">Match query</span>
+			<p class="text-xs text-muted-foreground">
+				The trigger fires for each newly catalogued artifact that matches this query —
+				the same query language the Data browser uses.
+			</p>
+			{#if readonly}
+				<div
+					class="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 font-mono text-sm text-foreground"
+					data-testid="catalog-query-readonly"
+				>
+					{source.query?.trim() ? source.query : 'All artifacts'}
 				</div>
-			{/each}
+			{:else}
+				<QueryBar entries={catalogQuery} knownFields={catalogKnownFields} />
+			{/if}
 			<label class="flex items-center gap-2 pt-1">
 				<Checkbox
 					checked={source.backfill ?? false}

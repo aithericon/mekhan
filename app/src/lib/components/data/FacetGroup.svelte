@@ -6,7 +6,6 @@
 	// classification dimensions are LATERAL jsonb unnests server-side; don't
 	// pay for groups the user never opens).
 	import { getCatalogueFacets, type FacetBucket } from '$lib/api/data';
-	import { parseQuery, compileQuery, type DatatypeResolver } from './query-language';
 	import { formatCount } from './format';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -17,8 +16,7 @@
 		termPrefix,
 		query,
 		onAdd,
-		defaultExpanded = false,
-		resolveDatatype
+		defaultExpanded = false
 	}: {
 		/** Server facet dimension (`group_by` value). */
 		dim: string;
@@ -30,8 +28,6 @@
 		/** Called with the DSL term to add, e.g. `format:csv`. */
 		onAdd: (term: string) => void;
 		defaultExpanded?: boolean;
-		/** Resolves `datatype:` terms in the query (fail-closed when absent). */
-		resolveDatatype?: DatatypeResolver;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally — initial value only, by design
@@ -47,14 +43,8 @@
 		loading = true;
 		error = null;
 		try {
-			const compiled = compileQuery(parseQuery(q).terms, undefined, resolveDatatype);
-			const resp = await getCatalogueFacets({
-				group_by: dim,
-				limit: 30,
-				search: compiled.search,
-				filters: compiled.filters,
-				file_metadata: compiled.fileMetadata ? JSON.stringify(compiled.fileMetadata) : undefined
-			});
+			// Raw DSL → server-side compiler (canonical filter scope).
+			const resp = await getCatalogueFacets({ group_by: dim, limit: 30, q });
 			buckets = resp.buckets;
 			loadedFor = q;
 		} catch (e) {

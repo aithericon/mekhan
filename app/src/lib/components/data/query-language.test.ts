@@ -636,6 +636,17 @@ describe('validateTerms', () => {
 		expect(validateTerms(t, new Set())).toHaveLength(2);
 	});
 
+	it('accepts umeta.<key> open-ended fields without a registry entry', () => {
+		// `umeta.<key>` is a server-side dynamic field family (user_metadata) and
+		// can't be enumerated; any non-empty key is valid, even on an empty registry.
+		expect(validateTerms(terms('umeta.kind:bo_observation'), new Set())).toEqual([]);
+		expect(validateTerms(terms('umeta.run>5 umeta.tag~foo'), new Set())).toEqual([]);
+		// A bare `umeta.` (empty key) is still an unknown field.
+		expect(validateTerms(terms('umeta.:x'), new Set())).toEqual([
+			{ raw: 'umeta.:x', index: 0, message: 'unknown field "umeta."' }
+		]);
+	});
+
 	it('warns on unknown data-type names when a registry is provided', () => {
 		const t = terms('datatype:nope name:alice');
 		expect(validateTerms(t, new Set(['name']), new Set(['gene_table']))).toEqual([

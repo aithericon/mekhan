@@ -2153,6 +2153,20 @@
         "summary": "GET /api/v1/catalogue",
         "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
         "operationId": "list_entries",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.\nCompiled server-side; relative dates re-resolve per request.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Paginated catalogue entries",
@@ -2638,6 +2652,18 @@
               ],
               "format": "int64"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Optional catalogue query DSL scope (canonical; supersedes the\nbracket-notation `filter[..]` / `search` / `file_metadata` params).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2936,6 +2962,20 @@
         "summary": "GET /api/v1/catalogue/stats",
         "description": "Aggregate statistics. Accepts the same filter params as the list endpoint,\nso you can get stats for a subset (e.g., stats for a specific net or category).",
         "operationId": "stats",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.\nCompiled server-side; relative dates re-resolve per request.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Aggregate stats",
@@ -3651,6 +3691,20 @@
         "summary": "GET /api/v1/data/entries",
         "description": "Paginated catalogued entries (same filter/sort DSL as `/api/v1/catalogue`),\neach with its physical `copies` (joined by `content_hash`, server names\nresolved), plus a capped `uncatalogued` peek + total `uncatalogued_count`.",
         "operationId": "data_entries",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.\nCompiled server-side; relative dates re-resolve per request.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Catalogued entries with copies + uncatalogued peek",
@@ -18484,23 +18538,11 @@
         "properties": {
           "backfill": {
             "type": "boolean",
-            "description": "If true, the dispatcher walks existing catalogue entries matching the\nfilters when the trigger is first registered."
+            "description": "If true, the dispatcher walks existing catalogue entries matching the\nquery when the trigger is first registered."
           },
-          "filters": {
-            "type": "object",
-            "description": "Same filter shape as `CatalogueSubscription.filters`.",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              },
-              "propertyNames": {
-                "type": "string"
-              }
-            },
-            "propertyNames": {
-              "type": "string"
-            }
+          "query": {
+            "type": "string",
+            "description": "Catalogue query DSL (the SAME text the data browser submits, e.g.\n`category:model filename~report meta.format:fasta created_at>-7d`). The\ntrigger fires when a newly ingested artifact would appear in this query.\nCompiled server-side at eval time so relative dates re-resolve per fire."
           }
         }
       },

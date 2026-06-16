@@ -14,6 +14,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
+use crate::catalogue::handlers::{apply_query_dsl, CatalogueQ};
 use crate::data::model::DataEntriesResponse;
 use crate::data::queries;
 use crate::data::serve;
@@ -33,6 +34,7 @@ use uuid::Uuid;
     get,
     path = "/api/v1/data/entries",
     operation_id = "data_entries",
+    params(CatalogueQ),
     responses(
         (status = 200, description = "Catalogued entries with copies + uncatalogued peek", body = DataEntriesResponse),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -42,9 +44,14 @@ use uuid::Uuid;
 pub async fn entries(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(q): Query<CatalogueQ>,
     params: QueryParams,
 ) -> Result<Json<DataEntriesResponse>, ApiError> {
     let ws = user.require_workspace()?;
+    // `?q=<DSL>` (when present) is the canonical filter scope, superseding any
+    // bracket-notation filter[..]/search/file_metadata — same as the catalogue
+    // list endpoint. Pagination + sort still ride the bracket-notation params.
+    let params = apply_query_dsl(&state.db, q.q, params).await?;
     let resp = queries::list_entries(&state.db, ws, &params)
         .await
         .map_err(|e| {

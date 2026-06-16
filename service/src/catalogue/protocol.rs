@@ -103,8 +103,10 @@ pub struct SubscribeRequest {
     /// (legacy/SDK/dev) resolves to the nil workspace.
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// Catalogue query DSL string (same grammar as the data browser and catalog
+    /// triggers). Compiled server-side at evaluation time. Empty = match all.
     #[serde(default)]
-    pub filters: HashMap<String, HashMap<String, String>>,
+    pub query: String,
     #[serde(default)]
     pub backfill: bool,
 }

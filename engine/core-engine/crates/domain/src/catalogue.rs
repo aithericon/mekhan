@@ -158,9 +158,12 @@ pub struct CatalogueSubscribeRequest {
     pub net_id: String,
     /// Place to inject matching catalogue entries into.
     pub signal_place: String,
-    /// Filter fields: field_name -> { operator -> value }.
+    /// Catalogue query DSL string (the same grammar the data browser submits,
+    /// e.g. `category:model filename~report created_at>-7d`). Compiled
+    /// server-side by Mekhan at evaluation time so relative dates re-resolve
+    /// per fire. An empty string matches every entry.
     #[serde(default)]
-    pub filters: HashMap<String, HashMap<String, String>>,
+    pub query: String,
     /// Whether to backfill existing matching entries on subscribe.
     #[serde(default)]
     pub backfill: bool,

@@ -89,6 +89,12 @@ impl TriggerDispatcher {
         }
     }
 
+    /// Borrow the connection pool. Used by the catalog trigger source to run
+    /// the catalogue list query for the live membership test (`entry_satisfies`).
+    pub fn db(&self) -> &PgPool {
+        &self.db
+    }
+
     /// Snapshot of fire counters per source kind. Cheap clone.
     pub fn metrics_snapshot(&self) -> std::collections::HashMap<String, FireMetrics> {
         self.metrics
@@ -290,7 +296,7 @@ impl TriggerDispatcher {
             let crate::models::template::TriggerSource::Catalog(cat) = &rec.source else {
                 continue;
             };
-            let filters = cat.filters.clone();
+            let query = cat.query.clone();
             let workspace_id = rec.workspace_id;
             let dispatcher = Arc::clone(self);
             let db = self.db.clone();
@@ -304,7 +310,7 @@ impl TriggerDispatcher {
                     dispatcher,
                     node_id,
                     workspace_id,
-                    filters,
+                    query,
                     db,
                 )
                 .await;

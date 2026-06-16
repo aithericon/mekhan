@@ -40,6 +40,15 @@ export async function listDataEntries(params?: {
 	search?: string;
 	source_net?: string;
 	content_hash?: string;
+	/**
+	 * Raw catalogue query DSL (the same text the QueryBar shows). When present
+	 * it is the CANONICAL filter scope: the server compiles it (a single
+	 * server-side compiler, relative dates re-resolved per request) and it
+	 * supersedes `filters` / `search` / `file_metadata`. Pagination + sort still
+	 * apply. This replaces the old client-side `compileQuery` → bracket-notation
+	 * path for the data browser.
+	 */
+	q?: string;
 	/** Generic catalogue filter triples — `filter[FIELD][OP]=VALUE`. */
 	filters?: FilterTriple[];
 	/** Raw JSON object passed to the catalogue `file_metadata` JSONB filter. */
@@ -49,12 +58,18 @@ export async function listDataEntries(params?: {
 	page_size?: number;
 }): Promise<DataEntriesResponse> {
 	const qs = new URLSearchParams();
-	if (params?.category) qs.set('filter[category][eq]', params.category);
-	if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
-	if (params?.content_hash) qs.set('filter[content_hash][eq]', params.content_hash);
-	setFilters(qs, params?.filters);
-	if (params?.search) qs.set('search', params.search);
-	if (params?.file_metadata) qs.set('file_metadata', params.file_metadata);
+	if (params?.q && params.q.trim()) {
+		// Canonical DSL scope — server-compiled. Skip the structured filter/search
+		// params (the server would ignore them anyway when `q` is present).
+		qs.set('q', params.q);
+	} else {
+		if (params?.category) qs.set('filter[category][eq]', params.category);
+		if (params?.source_net) qs.set('filter[source_net][eq]', params.source_net);
+		if (params?.content_hash) qs.set('filter[content_hash][eq]', params.content_hash);
+		setFilters(qs, params?.filters);
+		if (params?.search) qs.set('search', params.search);
+		if (params?.file_metadata) qs.set('file_metadata', params.file_metadata);
+	}
 	if (params?.sort) qs.set('sort', params.sort);
 	if (params?.page !== undefined) qs.set('page', String(params.page));
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
@@ -68,6 +83,9 @@ export async function listDataEntries(params?: {
 export async function getCatalogueFacets(params: {
 	group_by: string;
 	limit?: number;
+	/** Raw catalogue query DSL — canonical filter scope (supersedes the
+	 *  structured `search`/`filters`/`file_metadata` when present). */
+	q?: string;
 	search?: string;
 	filters?: FilterTriple[];
 	/** Raw JSON object passed to the catalogue `file_metadata` JSONB filter. */
@@ -76,9 +94,13 @@ export async function getCatalogueFacets(params: {
 	const qs = new URLSearchParams();
 	qs.set('group_by', params.group_by);
 	if (params.limit !== undefined) qs.set('limit', String(params.limit));
-	setFilters(qs, params.filters);
-	if (params.search) qs.set('search', params.search);
-	if (params.file_metadata) qs.set('file_metadata', params.file_metadata);
+	if (params.q && params.q.trim()) {
+		qs.set('q', params.q);
+	} else {
+		setFilters(qs, params.filters);
+		if (params.search) qs.set('search', params.search);
+		if (params.file_metadata) qs.set('file_metadata', params.file_metadata);
+	}
 	return rawJson(`/catalogue/facets?${qs.toString()}`);
 }
 

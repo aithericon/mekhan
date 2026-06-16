@@ -9,7 +9,7 @@
 	import { getCatalogueStats, type CatalogueStats } from '$lib/api/client';
 	import { ArtifactCard } from '$lib/components/catalogue';
 	import { formatBytes } from './format';
-	import { parseQuery, compileQuery, quoteIfNeeded } from './query-language';
+	import { parseQuery, quoteIfNeeded } from './query-language';
 	import type { EntriesQueryState } from './entries-query.svelte';
 	import type { DataTypesState } from './data-types.svelte';
 	import QueryBar from './QueryBar.svelte';
@@ -92,13 +92,13 @@
 		loading = true;
 		error = null;
 		try {
-			// Parse errors are excluded from `terms` — fetch with the valid ones.
-			const compiled = compileQuery(parseQuery(q).terms, undefined, datatypes.resolveDigests);
+			// Submit the raw DSL as `q` — a single server-side compiler resolves it
+			// (relative dates re-resolved per request, `datatype:`/`format:`/contain
+			// sugars unwrapped server-side). The TS compiler no longer drives the
+			// request; it stays for the live chip/validation UX only.
 			const [listResult, statsResult] = await Promise.all([
 				listDataEntries({
-					search: compiled.search,
-					filters: compiled.filters,
-					file_metadata: compiled.fileMetadata ? JSON.stringify(compiled.fileMetadata) : undefined,
+					q,
 					sort,
 					page: pg,
 					page_size: 25

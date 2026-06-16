@@ -7,7 +7,7 @@
 	// groups never read `query`, so they neither fetch on mount nor refetch
 	// on apply; `loadedFor` dedupes collapse/re-expand.
 	import { getCatalogueFacets, type FacetBucket } from '$lib/api/data';
-	import { parseQuery, compileQuery, quoteIfNeeded } from './query-language';
+	import { quoteIfNeeded } from './query-language';
 	import type { DataTypesState } from './data-types.svelte';
 	import DataTypeDialog from './DataTypeDialog.svelte';
 	import { formatCount } from './format';
@@ -43,14 +43,9 @@
 		loading = true;
 		error = null;
 		try {
-			const compiled = compileQuery(parseQuery(q).terms, undefined, datatypes.resolveDigests);
-			const resp = await getCatalogueFacets({
-				group_by: 'schema',
-				limit: 30,
-				search: compiled.search,
-				filters: compiled.filters,
-				file_metadata: compiled.fileMetadata ? JSON.stringify(compiled.fileMetadata) : undefined
-			});
+			// Raw DSL → server-side compiler (resolves `datatype:` itself). The
+			// `datatypes` registry is still used below for the digest→name join.
+			const resp = await getCatalogueFacets({ group_by: 'schema', limit: 30, q });
 			buckets = resp.buckets;
 			loadedFor = q;
 		} catch (e) {

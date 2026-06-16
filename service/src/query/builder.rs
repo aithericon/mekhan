@@ -113,23 +113,75 @@ pub fn build_where_conditions_with_prefix(
     Ok(())
 }
 
+/// An open-ended JSONB-key field family: a filter field named `<prefix><key>`
+/// (e.g. `umeta.kind`) compiles to `(<column> ->> $key)` with the JSONB **key
+/// BOUND** as a parameter — never inlined — preserving the server-constant-LHS
+/// security invariant for arbitrary user-supplied keys. The projected value is
+/// always `text`, so comparison values are bound as text too (numeric/bool DSL
+/// values are stringified; see `text_value`). Lets a caller expose a whole
+/// JSONB map (`user_metadata`) for filtering without a static [`FieldSpec`] per
+/// key, which is impossible since the keys are user-defined.
+pub struct DynJsonbField {
+    /// Field-name prefix that selects this family, e.g. `"umeta."`.
+    pub prefix: &'static str,
+    /// The JSONB column the key is read out of, e.g. `"user_metadata"`.
+    pub column: &'static str,
+}
+
 /// Spec-based sibling of [`build_where_conditions`]: the SQL left-hand side is
 /// `spec.expr` (a server-side constant — see [`FieldSpec`]) and the
 /// `::timestamptz` value cast is driven by `spec.timestamp` instead of the
-/// `_at`-suffix heuristic. Unknown field → [`QueryError::InvalidField`].
+/// `_at`-suffix heuristic. Unknown field → [`QueryError::InvalidField`], unless
+/// it matches a [`DynJsonbField`] prefix (open-ended JSONB-key access).
 pub fn build_where_conditions_specs(
     qb: &mut QueryBuilder<'_, Postgres>,
     filter: &Filter,
     specs: &[FieldSpec],
+    dyn_fields: &[DynJsonbField],
 ) -> Result<(), QueryError> {
     for (i, condition) in filter.conditions.iter().enumerate() {
         if i > 0 {
             qb.push(" AND ");
         }
+        // Open-ended JSONB-key families (e.g. `umeta.<key>`) before the static
+        // spec table: a non-empty key after a registered prefix projects
+        // `(<column> ->> $key)` with the key bound.
+        if let Some((dynf, key)) = dyn_fields.iter().find_map(|d| {
+            condition
+                .field
+                .strip_prefix(d.prefix)
+                .filter(|k| !k.is_empty())
+                .map(|k| (d, k))
+        }) {
+            qb.push("(");
+            qb.push(dynf.column);
+            qb.push(" ->> ");
+            qb.push_bind(key.to_string());
+            qb.push(")");
+            let text_cond = FilterCondition {
+                field: condition.field.clone(),
+                operator: condition.operator,
+                value: text_value(&condition.value),
+            };
+            push_predicate(qb, &text_cond, &condition.field, false)?;
+            continue;
+        }
         let spec = find_spec(&condition.field, specs)?;
         push_condition(qb, spec.expr, condition, spec.name, spec.timestamp)?;
     }
     Ok(())
+}
+
+/// Coerce a filter value to its `text` form so it binds compatibly against a
+/// `->>` JSONB projection (which is always `text`). String / list / null pass
+/// through; numeric and boolean DSL values stringify.
+fn text_value(v: &FilterValue) -> FilterValue {
+    match v {
+        FilterValue::Int(i) => FilterValue::String(i.to_string()),
+        FilterValue::Float(f) => FilterValue::String(f.to_string()),
+        FilterValue::Bool(b) => FilterValue::String(b.to_string()),
+        other => other.clone(),
+    }
 }
 
 /// Emit one `<col> <op> <bound value>` condition. `col` is ALWAYS a
@@ -142,107 +194,119 @@ fn push_condition(
     field_label: &str,
     is_timestamp: bool,
 ) -> Result<(), QueryError> {
+    qb.push(col);
+    push_predicate(qb, condition, field_label, is_timestamp)
+}
+
+/// Emit the ` <op> <bound value>` tail of a condition, assuming the LHS
+/// expression has ALREADY been pushed. Split out of [`push_condition`] so a
+/// dynamic LHS (e.g. a bound-key JSONB projection) can reuse the operator
+/// handling. `field_label` only feeds error messages.
+fn push_predicate(
+    qb: &mut QueryBuilder<'_, Postgres>,
+    condition: &FilterCondition,
+    field_label: &str,
+    is_timestamp: bool,
+) -> Result<(), QueryError> {
     let field = field_label.to_string();
-    {
-        match condition.operator {
-            FilterOperator::Eq => {
-                qb.push(format!("{col} = "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
+    match condition.operator {
+        FilterOperator::Eq => {
+            qb.push(" = ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Ne => {
+            qb.push(" != ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Gt => {
+            qb.push(" > ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Gte => {
+            qb.push(" >= ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Lt => {
+            qb.push(" < ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Lte => {
+            qb.push(" <= ");
+            push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::Contains => {
+            qb.push(" ILIKE ");
+            if let FilterValue::String(s) = &condition.value {
+                qb.push_bind(format!("%{s}%"));
+            } else {
+                return Err(QueryError::InvalidValue {
+                    field,
+                    reason: "contains requires a string value".into(),
+                });
             }
-            FilterOperator::Ne => {
-                qb.push(format!("{col} != "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::StartsWith => {
+            qb.push(" ILIKE ");
+            if let FilterValue::String(s) = &condition.value {
+                qb.push_bind(format!("{s}%"));
+            } else {
+                return Err(QueryError::InvalidValue {
+                    field,
+                    reason: "starts_with requires a string value".into(),
+                });
             }
-            FilterOperator::Gt => {
-                qb.push(format!("{col} > "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::EndsWith => {
+            qb.push(" ILIKE ");
+            if let FilterValue::String(s) = &condition.value {
+                qb.push_bind(format!("%{s}"));
+            } else {
+                return Err(QueryError::InvalidValue {
+                    field,
+                    reason: "ends_with requires a string value".into(),
+                });
             }
-            FilterOperator::Gte => {
-                qb.push(format!("{col} >= "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::In => {
+            if let FilterValue::StringList(list) = &condition.value {
+                qb.push(" = ANY(");
+                qb.push_bind(list.clone());
+                qb.push(")");
+            } else if let FilterValue::String(s) = &condition.value {
+                // Comma-separated string → list
+                let list: Vec<String> = s.split(',').map(|v| v.trim().to_string()).collect();
+                qb.push(" = ANY(");
+                qb.push_bind(list);
+                qb.push(")");
+            } else {
+                return Err(QueryError::InvalidValue {
+                    field,
+                    reason: "in requires a string list".into(),
+                });
             }
-            FilterOperator::Lt => {
-                qb.push(format!("{col} < "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
+        }
+        FilterOperator::NotIn => {
+            if let FilterValue::StringList(list) = &condition.value {
+                qb.push(" != ALL(");
+                qb.push_bind(list.clone());
+                qb.push(")");
+            } else if let FilterValue::String(s) = &condition.value {
+                let list: Vec<String> = s.split(',').map(|v| v.trim().to_string()).collect();
+                qb.push(" != ALL(");
+                qb.push_bind(list);
+                qb.push(")");
+            } else {
+                return Err(QueryError::InvalidValue {
+                    field,
+                    reason: "not_in requires a string list".into(),
+                });
             }
-            FilterOperator::Lte => {
-                qb.push(format!("{col} <= "));
-                push_value(qb, &condition.value, &field, is_timestamp)?;
-            }
-            FilterOperator::Contains => {
-                qb.push(format!("{col} ILIKE "));
-                if let FilterValue::String(s) = &condition.value {
-                    qb.push_bind(format!("%{s}%"));
-                } else {
-                    return Err(QueryError::InvalidValue {
-                        field,
-                        reason: "contains requires a string value".into(),
-                    });
-                }
-            }
-            FilterOperator::StartsWith => {
-                qb.push(format!("{col} ILIKE "));
-                if let FilterValue::String(s) = &condition.value {
-                    qb.push_bind(format!("{s}%"));
-                } else {
-                    return Err(QueryError::InvalidValue {
-                        field,
-                        reason: "starts_with requires a string value".into(),
-                    });
-                }
-            }
-            FilterOperator::EndsWith => {
-                qb.push(format!("{col} ILIKE "));
-                if let FilterValue::String(s) = &condition.value {
-                    qb.push_bind(format!("%{s}"));
-                } else {
-                    return Err(QueryError::InvalidValue {
-                        field,
-                        reason: "ends_with requires a string value".into(),
-                    });
-                }
-            }
-            FilterOperator::In => {
-                if let FilterValue::StringList(list) = &condition.value {
-                    qb.push(format!("{col} = ANY("));
-                    qb.push_bind(list.clone());
-                    qb.push(")");
-                } else if let FilterValue::String(s) = &condition.value {
-                    // Comma-separated string → list
-                    let list: Vec<String> = s.split(',').map(|v| v.trim().to_string()).collect();
-                    qb.push(format!("{col} = ANY("));
-                    qb.push_bind(list);
-                    qb.push(")");
-                } else {
-                    return Err(QueryError::InvalidValue {
-                        field,
-                        reason: "in requires a string list".into(),
-                    });
-                }
-            }
-            FilterOperator::NotIn => {
-                if let FilterValue::StringList(list) = &condition.value {
-                    qb.push(format!("{col} != ALL("));
-                    qb.push_bind(list.clone());
-                    qb.push(")");
-                } else if let FilterValue::String(s) = &condition.value {
-                    let list: Vec<String> = s.split(',').map(|v| v.trim().to_string()).collect();
-                    qb.push(format!("{col} != ALL("));
-                    qb.push_bind(list);
-                    qb.push(")");
-                } else {
-                    return Err(QueryError::InvalidValue {
-                        field,
-                        reason: "not_in requires a string list".into(),
-                    });
-                }
-            }
-            FilterOperator::IsNull => {
-                qb.push(format!("{col} IS NULL"));
-            }
-            FilterOperator::IsNotNull => {
-                qb.push(format!("{col} IS NOT NULL"));
-            }
+        }
+        FilterOperator::IsNull => {
+            qb.push(" IS NULL");
+        }
+        FilterOperator::IsNotNull => {
+            qb.push(" IS NOT NULL");
         }
     }
 
@@ -428,7 +492,7 @@ mod tests {
             operator: op,
             value,
         }]);
-        build_where_conditions_specs(&mut qb, &filter, SPECS)?;
+        build_where_conditions_specs(&mut qb, &filter, SPECS, &[])?;
         Ok(qb.sql().to_string())
     }
 
@@ -537,7 +601,7 @@ mod tests {
                 operator: FilterOperator::Gte,
                 value: FilterValue::Float(24.0),
             }]);
-            build_where_conditions_specs(&mut qb, &filter, specs).expect("build where");
+            build_where_conditions_specs(&mut qb, &filter, specs, &[]).expect("build where");
             build_order_by_specs(&mut qb, &Sort::desc("meta.fps"), specs).expect("order by");
             qb.sql().to_string()
         };

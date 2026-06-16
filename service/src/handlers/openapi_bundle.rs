@@ -1235,7 +1235,7 @@ mod tests {
                 trigger_node(
                     "cat_1",
                     TriggerSource::Catalog(crate::models::template::CatalogTrigger {
-                        filters: Default::default(),
+                        query: String::new(),
                         backfill: false,
                     }),
                     true,

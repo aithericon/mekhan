@@ -75,6 +75,36 @@ describe('listDataEntries query building', () => {
 		expect(qs.get('filter[size_bytes][lt]')).toBe('1048576');
 		expect(qs.get('file_metadata')).toBe('{"format":"csv"}');
 	});
+
+	it('submits the raw DSL as ?q= (server-side compiler) and skips structured filters', async () => {
+		await listDataEntries({
+			q: 'category:model meta.format:fasta created_at>-7d',
+			// these must NOT be emitted when q is present — server treats q as canonical
+			category: 'dataset',
+			search: 'genome',
+			filters: [{ field: 'size_bytes', op: 'lt', value: '10' }],
+			file_metadata: '{"format":"csv"}',
+			sort: '-created_at',
+			page: 1
+		});
+		const path = rawJson.mock.calls[0][0];
+		const qs = new URLSearchParams(path.split('?')[1]);
+		expect(qs.get('q')).toBe('category:model meta.format:fasta created_at>-7d');
+		expect(qs.has('filter[category][eq]')).toBe(false);
+		expect(qs.has('search')).toBe(false);
+		expect(qs.has('filter[size_bytes][lt]')).toBe(false);
+		expect(qs.has('file_metadata')).toBe(false);
+		// pagination + sort still ride through
+		expect(qs.get('sort')).toBe('-created_at');
+		expect(qs.get('page')).toBe('1');
+	});
+
+	it('falls back to structured params when q is blank', async () => {
+		await listDataEntries({ q: '   ', category: 'dataset' });
+		const qs = new URLSearchParams(rawJson.mock.calls[0][0].split('?')[1]);
+		expect(qs.has('q')).toBe(false);
+		expect(qs.get('filter[category][eq]')).toBe('dataset');
+	});
 });
 
 describe('getCatalogueFacets query building', () => {
@@ -105,6 +135,22 @@ describe('getCatalogueFacets query building', () => {
 		expect(qs.get('group_by')).toBe('category');
 		expect(qs.has('limit')).toBe(false);
 		expect(qs.has('search')).toBe(false);
+		expect(qs.has('file_metadata')).toBe(false);
+	});
+
+	it('submits the raw DSL as ?q= (canonical scope) and skips structured filters', async () => {
+		await getCatalogueFacets({
+			group_by: 'format',
+			q: 'category:model',
+			search: 'genome',
+			filters: [{ field: 'source_net', op: 'eq', value: 'net-1' }],
+			file_metadata: '{"x":1}'
+		});
+		const qs = new URLSearchParams(rawJson.mock.calls[0][0].split('?')[1]);
+		expect(qs.get('group_by')).toBe('format');
+		expect(qs.get('q')).toBe('category:model');
+		expect(qs.has('search')).toBe(false);
+		expect(qs.has('filter[source_net][eq]')).toBe(false);
 		expect(qs.has('file_metadata')).toBe(false);
 	});
 });
