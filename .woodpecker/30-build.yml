@@ -13,11 +13,11 @@
 # =============================================================================
 
 # 20-test.yml is disabled — re-add `depends_on: [20-test]` when it's back.
+# Build on BOTH dev and main pushes: dev push → image for the dev deploy,
+# main push → image for the prod deploy.
 when:
-
-  - branch: main
+  - branch: [dev, main]
     event: push
-
   - event: manual
 
 labels:
