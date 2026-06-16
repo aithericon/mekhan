@@ -44,9 +44,10 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::nats::subjects::{net_events_filter, net_signals_filter, Subjects};
 use crate::AppState;
 
-/// Caller-implicit workspace — mirrors `roster::caller_workspace`.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// Caller-implicit workspace — mirrors `roster::caller_workspace`. 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback).
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// A net id is interpolated into NATS subject filters (`petri.events.{id}.>`)
@@ -239,7 +240,7 @@ pub async fn list_admin_nets(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<AdminNetRow>>, ApiError> {
-    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+    require_role(&state.db, &user, caller_workspace(&user)?, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
 
@@ -318,7 +319,7 @@ pub async fn kill_admin_net(
     user: AuthUser,
     Path(net_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+    require_role(&state.db, &user, caller_workspace(&user)?, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
     validate_net_id(&net_id)?;
@@ -357,7 +358,7 @@ pub async fn purge_admin_net_events(
     user: AuthUser,
     Path(net_id): Path<String>,
 ) -> Result<Json<PurgeEventsResponse>, ApiError> {
-    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+    require_role(&state.db, &user, caller_workspace(&user)?, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
     validate_net_id(&net_id)?;
@@ -465,7 +466,7 @@ pub async fn bulk_kill_nets(
     user: AuthUser,
     Json(req): Json<BulkKillRequest>,
 ) -> Result<Json<BulkKillResponse>, ApiError> {
-    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+    require_role(&state.db, &user, caller_workspace(&user)?, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
 
@@ -531,7 +532,7 @@ pub async fn purge_terminal_nets(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<PurgeTerminalResponse>, ApiError> {
-    require_role(&state.db, &user, caller_workspace(&user), Role::Admin)
+    require_role(&state.db, &user, caller_workspace(&user)?, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
 

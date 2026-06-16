@@ -120,7 +120,7 @@ pub async fn list_fleet_engines(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<FleetEnginesResponse>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     let inventory = serving_runner_inventory(&state.db, &state.runner_presence, workspace_id).await;
     // Provisioned-to-disk superset per node (the "ready to load" set). Resident

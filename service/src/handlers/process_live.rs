@@ -36,7 +36,7 @@ use crate::AppState;
 /// workspace-scoped (a tenant cannot tail another tenant's metrics/logs by id).
 /// See `crate::process::queries::process_in_workspace` for the scoping rule.
 async fn gate_process(state: &AppState, process_id: &str, user: &AuthUser) -> Result<(), ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let ws = user.require_workspace()?;
     let visible = crate::process::queries::process_in_workspace(&state.db, process_id, ws)
         .await
         .map_err(|e| {
@@ -658,7 +658,7 @@ pub async fn artifacts_list(
     Query(qp): Query<ArtifactsListQuery>,
 ) -> Result<Json<ArtifactsListResponse>, ApiError> {
     gate_process(&state, &process_id, &user).await?;
-    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let ws = user.require_workspace()?;
     let categories = parse_csv(qp.categories.as_deref());
     let hints = parse_csv(qp.render_hints.as_deref());
     let entries = crate::catalogue::queries::lineage_filtered(

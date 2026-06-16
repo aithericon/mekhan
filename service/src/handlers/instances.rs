@@ -332,7 +332,7 @@ pub async fn list_instances(
     // is stamped into net_id `mekhan-{ws}-{inst}` at launch == the template's
     // workspace). A run must never inherit its template's public visibility, or
     // every workspace would see every other workspace's runs of the shared demos.
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
     // historical view). `any`/`all` returns everything. Anything else is an

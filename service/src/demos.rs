@@ -597,19 +597,21 @@ pub enum SeedOutcome {
 /// distinctly from the nil UUID some test fixtures use.
 const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
-/// Workspace that seeded demos belong to: the **default** workspace
-/// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
+/// Workspace that seeded demos belong to: the **system-owned `demos`**
+/// workspace (slug `demos`, `is_system = TRUE`, seeded in migration 20240123,
+/// uuid ending `…00de`), NOT the nil/`default` workspace.
 ///
-/// Demos are meant to be first-class, *editable* starting points — the
-/// dev-noop user owns `default` (migration 20240123) and the BFF resolver
-/// auto-provisions every authenticated user as an `editor` of it
-/// (`ensure_default_workspace_membership`). So seeding here means a user can
-/// open a demo and publish edits without hitting `gate_template_write`'s
-/// membership check — which is exactly what a separate system-owned demos
-/// workspace prevented. Rows are still `visibility = 'public'` so users whose
-/// active workspace is some *other* tenant still discover them via the
-/// cross-workspace public-read branch in `list_templates`.
-const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
+/// Demos re-home here as part of the platform-tier split: the nil workspace
+/// becomes a `is_system` internals/legacy tenant, and new users get a personal
+/// workspace instead of being auto-provisioned into `default`. Seeded demos
+/// must therefore live in a stable system workspace of their own rather than
+/// riding on the (now-demoted) nil tenant. Rows are still `visibility =
+/// 'public'` so users whose active workspace is some *other* tenant still
+/// discover them via the cross-workspace public-read branch in
+/// `list_templates`. Write access to seeded demos is gated on membership of
+/// this demos workspace (`gate_demo_write`, `ensure_seeder_workspace_membership`).
+pub(crate) const DEMO_WORKSPACE_ID: uuid::Uuid =
+    uuid::uuid!("00000000-0000-0000-0000-0000000000de");
 
 /// Slug of the root folder every seeded demo lives under. Folders are a
 /// non-ACL grouping inside a workspace (see migration 20240149), so this is

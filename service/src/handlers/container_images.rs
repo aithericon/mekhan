@@ -33,10 +33,10 @@ pub struct MaterializeRequest {
     pub datacenter_resource_ids: Vec<Uuid>,
 }
 
-/// Caller-implicit workspace: the user's session workspace, then `Uuid::nil()`
-/// for code paths without a populated `workspace_id` (legacy `dev_noop`).
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// Caller-implicit workspace: the user's session workspace, or 403 when the
+/// caller has no active workspace (no silent nil-tenant fallback).
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// `POST /api/v1/container-images/{id}/materialize` — pull a container-image
@@ -71,7 +71,7 @@ pub async fn materialize_container_image(
     Path(id): Path<Uuid>,
     Json(req): Json<MaterializeRequest>,
 ) -> Result<(StatusCode, Json<Vec<ImageMaterialization>>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
 
     if req.datacenter_resource_ids.is_empty() {
         return Err(ApiError::bad_request(

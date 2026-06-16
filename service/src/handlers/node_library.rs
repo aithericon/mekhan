@@ -129,7 +129,7 @@ pub async fn list_node_library(
     user: AuthUser,
     Query(params): Query<LibraryNodeListParams>,
 ) -> Result<Json<Vec<LibraryNodeDescriptor>>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Latest-version library nodes the caller can see. The lifecycle filter
     // keeps the COUNT/SELECT predicate honest: retired always out, deprecated

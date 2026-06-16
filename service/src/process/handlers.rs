@@ -73,17 +73,18 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
     JsonValue::Object(obj)
 }
 
-/// The caller's active workspace, defaulting to the nil sentinel (dev_noop and
-/// legacy unlinked data live under nil — see `queries::NIL_WS`).
-fn caller_ws(user: &AuthUser) -> uuid::Uuid {
-    user.workspace_id.unwrap_or_else(uuid::Uuid::nil)
+/// The caller's active workspace, or 403 when the caller has no active
+/// workspace. Tenant-scoped reads must refuse rather than silently fall back
+/// to the nil sentinel (which now belongs to internal/legacy data only).
+fn caller_ws(user: &AuthUser) -> Result<uuid::Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// 404 unless `process_id` is visible to the caller's workspace. We return
 /// NOT_FOUND rather than FORBIDDEN so a tenant cannot even confirm the existence
 /// of another tenant's process (the list/stats endpoints already hide it).
 async fn gate_process(state: &AppState, process_id: &str, user: &AuthUser) -> Result<(), ApiError> {
-    let visible = queries::process_in_workspace(&state.db, process_id, caller_ws(user))
+    let visible = queries::process_in_workspace(&state.db, process_id, caller_ws(user)?)
         .await
         .map_err(|e| {
             tracing::error!("process ws gate: {e}");
@@ -99,8 +100,21 @@ async fn gate_process(state: &AppState, process_id: &str, user: &AuthUser) -> Re
 /// Whether a task row belongs to the caller's workspace. Tasks carry their own
 /// `workspace_id` (NULL legacy rows resolve to nil); there is no public-template
 /// escape — human work is strictly workspace-scoped.
-fn task_in_ws(task: &HpiTask, user: &AuthUser) -> bool {
-    task.workspace_id.unwrap_or_else(uuid::Uuid::nil) == caller_ws(user)
+fn task_in_ws(task: &HpiTask, user: &AuthUser) -> Result<bool, ApiError> {
+    // Task-stored workspace (NULL legacy rows resolve to nil) compared against
+    // the caller's active workspace, which must be present.
+    Ok(task.workspace_id.unwrap_or_else(uuid::Uuid::nil) == caller_ws(user)?)
+}
+
+/// Gate a looked-up task to the caller's workspace: 403 when the caller has no
+/// active workspace, 404 when the task is missing or belongs to another tenant
+/// (we never confirm cross-tenant existence). Replaces the
+/// `.filter(|t| task_in_ws(..))` shape, which can't propagate the 403.
+fn gate_task_ws(task: Option<HpiTask>, user: &AuthUser) -> Result<HpiTask, ApiError> {
+    match task {
+        Some(t) if task_in_ws(&t, user)? => Ok(t),
+        _ => Err(ApiError::status_only(StatusCode::NOT_FOUND)),
+    }
 }
 
 /// GET /api/v1/processes — list processes with filter/sort/pagination.
@@ -122,7 +136,7 @@ pub async fn list_processes(
     user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let response = queries::list_processes(&state.db, &params, caller_ws(&user))
+    let response = queries::list_processes(&state.db, &params, caller_ws(&user)?)
         .await
         .map_err(|e| {
             tracing::warn!("process list: {e}");
@@ -145,7 +159,7 @@ pub async fn process_stats(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<ProcessStats>, ApiError> {
-    let stats = queries::process_stats(&state.db, caller_ws(&user))
+    let stats = queries::process_stats(&state.db, caller_ws(&user)?)
         .await
         .map_err(|e| {
             tracing::error!("process stats: {e}");
@@ -376,7 +390,7 @@ pub async fn list_tasks(
     user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<TaskListResponse>, ApiError> {
-    let response = queries::list_tasks(&state.db, &params, caller_ws(&user))
+    let response = queries::list_tasks(&state.db, &params, caller_ws(&user)?)
         .await
         .map_err(|e| {
             tracing::warn!("task list: {e}");
@@ -418,7 +432,7 @@ pub async fn inbox(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<JsonValue>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let member = user.subject_as_uuid();
     let rows = queries::inbox_tasks(&state.db, workspace_id, member)
         .await
@@ -457,9 +471,8 @@ pub async fn get_task(
         .map_err(|e| {
             tracing::error!("task get: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-        })?
-        .filter(|t| task_in_ws(t, &user))
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+        })?;
+    let task = gate_task_ws(task, &user)?;
     Ok(Json(to_human_task_json(&task)))
 }
 
@@ -597,9 +610,8 @@ pub async fn complete_task(
         .map_err(|e| {
             tracing::error!("task complete lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-        })?
-        .filter(|t| task_in_ws(t, &user))
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+        })?;
+    let task = gate_task_ws(task, &user)?;
 
     // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
     // once a member has bound a slot (docs/34). Both are completable/cancelable;
@@ -696,9 +708,8 @@ pub async fn cancel_task(
         .map_err(|e| {
             tracing::error!("task cancel lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-        })?
-        .filter(|t| task_in_ws(t, &user))
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+        })?;
+    let task = gate_task_ws(task, &user)?;
 
     // An unpooled task is `pending`; a capacity-bound (offer) task is `claimed`
     // once a member has bound a slot (docs/34). Both are completable/cancelable;
@@ -803,9 +814,8 @@ pub async fn claim_task(
         .map_err(|e| {
             tracing::error!("task claim lookup: {e}");
             ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-        })?
-        .filter(|t| task_in_ws(t, &user))
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+        })?;
+    let task = gate_task_ws(task, &user)?;
 
     // An UNPOOLED task (`pending`, no `capacity_id`) has no offer pool to route a
     // claim through — claiming it is a soft, control-plane assign (docs/33 surface

@@ -69,12 +69,12 @@ static IDENT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]*$").expect("IDENT_REGEX must compile"));
 
 /// Caller-implicit workspace: falls back to the user's session workspace
-/// (set by the resolver from claims), then to `Uuid::nil()` for code paths
-/// without an `AuthUser` (legacy `dev_noop` shape + the seeded default
-/// workspace). The list/create endpoints accept an explicit `workspace_id`
-/// query/body field that overrides this.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// (set by the resolver from claims). Rejects with 403 when the caller has no
+/// active workspace rather than silently acting in the nil tenant. The
+/// list/create endpoints accept an explicit `workspace_id` query/body field
+/// that overrides this.
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Resolve the resource type or fail 400.
@@ -685,9 +685,10 @@ pub async fn list_resources(
         return list_resources_scoped(&state, &user, &params, scope_raw).await;
     }
 
-    let workspace_id = params
-        .workspace_id
-        .unwrap_or_else(|| caller_workspace(&user));
+    let workspace_id = match params.workspace_id {
+        Some(ws) => ws,
+        None => caller_workspace(&user)?,
+    };
 
     // UNION the caller's workspace rows with the globally-visible platform tier.
     // Shadowing + pagination happen in Rust (a tenant row of the same path wins
@@ -781,9 +782,10 @@ async fn list_resources_scoped(
         if raw.is_empty() || raw == "workspace" {
             (
                 ScopeKind::Workspace,
-                params
-                    .workspace_id
-                    .unwrap_or_else(|| caller_workspace(user)),
+                match params.workspace_id {
+                    Some(ws) => ws,
+                    None => caller_workspace(user)?,
+                },
             )
         } else {
             let (k, ids) = raw.split_once(':').ok_or_else(|| {
@@ -907,7 +909,7 @@ async fn list_resources_scoped(
         .map(|r| r.id)
         .collect();
     let items =
-        annotate_with_platform(state, user, caller_workspace(user), page_rows, &platform_ids)
+        annotate_with_platform(state, user, caller_workspace(user)?, page_rows, &platform_ids)
             .await?;
     Ok(Json(PaginatedResponse {
         items,
@@ -987,7 +989,10 @@ pub async fn create_resource(
         }
         PLATFORM_SCOPE_ID
     } else {
-        req.workspace_id.unwrap_or_else(|| caller_workspace(&user))
+        match req.workspace_id {
+            Some(ws) => ws,
+            None => caller_workspace(&user)?,
+        }
     };
 
     // Placement gate: you must be Editor on the scope you create into — the
@@ -1919,7 +1924,7 @@ pub async fn move_resource(
         &state.db,
         &user,
         ObjectKind::Resource,
-        caller_workspace(&user),
+        caller_workspace(&user)?,
         &[id],
     )
     .await

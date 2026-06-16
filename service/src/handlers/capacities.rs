@@ -130,7 +130,7 @@ pub async fn list_capacities(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<CapacitySummary>>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // The pool resources: `capacity` (parses its axes) + `datacenter` (locked
     // lease axes). Join the latest version's public_config in one round-trip.

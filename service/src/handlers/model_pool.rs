@@ -38,9 +38,10 @@ use crate::models::runner::RunnerInterfaceCatalog;
 use crate::runner_commands::{publish_model_command, LoadTarget, ModelCommand};
 use crate::AppState;
 
-/// Caller-implicit workspace (session workspace, nil fallback for legacy dev).
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// Caller-implicit workspace (session workspace; 403 when the caller has no
+/// active workspace, no silent nil-tenant fallback).
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Resolve the workspace a model MUTATION targets, and gate it.
@@ -61,7 +62,7 @@ async fn resolve_mutation_workspace(
     user: &AuthUser,
     model_id: &str,
 ) -> Result<Uuid, ApiError> {
-    let caller = caller_workspace(user);
+    let caller = caller_workspace(user)?;
 
     // Own-workspace row wins, no admin needed.
     let owns: Option<(i64,)> = sqlx::query_as(
@@ -455,7 +456,7 @@ pub async fn list_loaded_models(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<ModelSetView>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
 
     // Caller workspace UNION the platform tier: the shared internal LLM pool's
     // model_states rows live under PLATFORM_SCOPE_ID and must surface for every
@@ -521,7 +522,7 @@ pub async fn get_model(
     user: AuthUser,
     Path(model_id): Path<String>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
 
     // Caller workspace UNION the platform tier, preferring the caller's own row
     // when both exist (a tenant model shadows a same-id platform model). The
@@ -669,7 +670,7 @@ pub async fn create_model(
     // same-id model that shadows a platform one — distinct PK). Curating
     // directly INTO the shared platform pool (caller workspace == sentinel) is
     // admin-only; in practice the platform pool is seeder-populated.
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     if workspace_id == PLATFORM_SCOPE_ID && !user.is_platform_admin {
         return Err(ApiError::forbidden(
             "curating a model into the shared platform pool requires platform admin",

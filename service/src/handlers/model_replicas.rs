@@ -27,8 +27,8 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::model_replicas::{status, ModelReplicaRow, ModelReplicaScaleRequest};
 use crate::AppState;
 
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// `GET /api/v1/models/replicas` — list every replica row in the workspace.
@@ -44,7 +44,7 @@ pub async fn list_model_replicas(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<ModelReplicaRow>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let rows: Vec<ModelReplicaRow> =
         sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1 ORDER BY model_id")
             .bind(workspace_id)
@@ -70,7 +70,7 @@ pub async fn get_model_replica(
     user: AuthUser,
     Path(model_id): Path<String>,
 ) -> Result<Json<ModelReplicaRow>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row: Option<ModelReplicaRow> =
         sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1 AND model_id = $2")
             .bind(workspace_id)
@@ -109,7 +109,7 @@ pub async fn scale_model_replica(
     Path(model_id): Path<String>,
     Json(req): Json<ModelReplicaScaleRequest>,
 ) -> Result<Json<ModelReplicaRow>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
 
     // Source the policy from the model's `model_states` row (the policy is folded
     // onto the model SET, no longer its own resource). 404 if the model isn't

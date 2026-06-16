@@ -41,10 +41,18 @@ pub async fn task_stream(
     // `mekhan-{ws}-{inst}`, which embeds the producing workspace. We only relay
     // events whose net workspace matches the caller's — otherwise this firehose
     // leaks every tenant's task lifecycle (payloads included) to any session.
-    let caller_ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let caller_ws_opt = user.workspace_id;
 
     let stream = async_stream::stream! {
         yield Ok(Event::default().event("connected").data("ok"));
+
+        // No active workspace → no tenant scope. Falling back to the nil/system
+        // workspace here would subscribe this session to the legacy/internal
+        // `human.*` firehose; emit an error and close instead of leaking it.
+        let Some(caller_ws) = caller_ws_opt else {
+            yield Ok(Event::default().event("error").data("no active workspace"));
+            return;
+        };
 
         if let Err(e) = client.publish(presence_subject.clone(), Vec::new().into()).await {
             tracing::warn!("Failed to publish human presence heartbeat: {e}");

@@ -33,11 +33,11 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{FieldKind, PaginatedResponse};
 use crate::AppState;
 
-/// Caller-implicit workspace: the principal's session workspace, falling back
-/// to `Uuid::nil()` for the legacy no-workspace dev shape. Mirrors
+/// Caller-implicit workspace: the principal's session workspace, or 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback). Mirrors
 /// `resources::caller_workspace` / `runners::caller_workspace`.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 // ── Query params ───────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ pub async fn list_capability_types(
     user: AuthUser,
     Query(params): Query<ListCapabilityTypesQuery>,
 ) -> Result<Json<PaginatedResponse<CapabilityTypeSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, CapabilityTypeRow>(
@@ -118,7 +118,7 @@ pub async fn get_capability_type(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CapabilityTypeDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, CapabilityTypeRow>(
         "SELECT * FROM capability_types \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
@@ -150,7 +150,7 @@ pub async fn create_capability_type(
     CookieAuthUser(user): CookieAuthUser,
     Json(req): Json<CreateCapabilityTypeRequest>,
 ) -> Result<(StatusCode, Json<CapabilityTypeSummary>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let created_by = user.subject_as_uuid();
 
     let name = req.name.trim().to_string();
@@ -238,7 +238,7 @@ pub async fn delete_capability_type(
     CookieAuthUser(user): CookieAuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let updated = sqlx::query(
         "UPDATE capability_types SET revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",

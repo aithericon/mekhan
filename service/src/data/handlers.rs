@@ -44,7 +44,7 @@ pub async fn entries(
     user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<DataEntriesResponse>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let resp = queries::list_entries(&state.db, ws, &params)
         .await
         .map_err(|e| {
@@ -101,7 +101,10 @@ pub async fn entry_content(
     Query(q): Query<ContentQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = match user.require_workspace() {
+        Ok(ws) => ws,
+        Err(e) => return e.into_response(),
+    };
 
     // 1. Resolve copies → endpoints (priority-ordered).
     let candidates =

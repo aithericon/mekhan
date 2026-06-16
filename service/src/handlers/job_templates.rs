@@ -44,10 +44,10 @@ use crate::AppState;
 static SLUG_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]*$").expect("SLUG_REGEX must compile"));
 
-/// Caller-implicit workspace: the user's session workspace, then `Uuid::nil()`
-/// for code paths without a populated `workspace_id` (legacy `dev_noop`).
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// Caller-implicit workspace: the user's session workspace, or 403 when the
+/// caller has no active workspace (no silent nil-tenant fallback).
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Validate a `flavor` value against the DB CHECK set.
@@ -177,9 +177,10 @@ pub async fn list_job_templates(
     user: AuthUser,
     Query(params): Query<ListJobTemplatesQuery>,
 ) -> Result<Json<PaginatedResponse<JobTemplateSummary>>, ApiError> {
-    let workspace_id = params
-        .workspace_id
-        .unwrap_or_else(|| caller_workspace(&user));
+    let workspace_id = match params.workspace_id {
+        Some(ws) => ws,
+        None => caller_workspace(&user)?,
+    };
     let offset = (params.page - 1) * params.per_page;
 
     let (rows, total) = if let Some(ref flavor) = params.flavor {
@@ -271,7 +272,10 @@ pub async fn create_job_template(
         return Err(ApiError::bad_request("display_name cannot be empty"));
     }
 
-    let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
+    let workspace_id = match req.workspace_id {
+        Some(ws) => ws,
+        None => caller_workspace(&user)?,
+    };
     let created_by = user.subject.clone();
     let created_by_uuid = user.subject_as_uuid();
     let parameters = req.parameters.clone().unwrap_or_default();
@@ -357,7 +361,7 @@ pub async fn get_job_template(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<JobTemplateDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = require_visible_template(&state.db, id, workspace_id).await?;
 
     let version_rows = sqlx::query_as::<_, JobTemplateVersionRow>(
@@ -424,7 +428,7 @@ pub async fn update_job_template(
 ) -> Result<Json<JobTemplateSummary>, ApiError> {
     // Updates are workspace-owned only — a public-but-foreign template is
     // readable, not writable.
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, JobTemplateRow>(
         "SELECT * FROM job_templates \
          WHERE id = $1 AND deleted_at IS NULL AND workspace_id = $2",
@@ -570,7 +574,7 @@ pub async fn delete_job_template(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, JobTemplateRow>(
         "SELECT * FROM job_templates \
          WHERE id = $1 AND deleted_at IS NULL AND workspace_id = $2",
@@ -609,7 +613,7 @@ pub async fn list_job_template_stagings(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<TemplateStaging>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     // 404 if the template isn't visible — don't leak staging rows for templates
     // the caller can't see.
     let row = require_visible_template(&state.db, id, workspace_id).await?;
@@ -663,7 +667,7 @@ pub async fn stage_job_template(
     Path(id): Path<Uuid>,
     Json(req): Json<StageJobTemplateRequest>,
 ) -> Result<(StatusCode, Json<Vec<TemplateStaging>>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let template = require_visible_template(&state.db, id, workspace_id).await?;
     let version = req.version.unwrap_or(template.latest_version);
 

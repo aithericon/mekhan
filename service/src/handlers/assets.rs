@@ -77,10 +77,11 @@ const ALLOWED_FILE_TYPES: &[&str] = &[
 
 // ── Scope helpers ───────────────────────────────────────────────────────────
 
-/// Caller-implicit workspace: falls back to the session workspace, then
-/// `Uuid::nil()` (the seeded default workspace), matching resources.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+/// Caller-implicit workspace: the principal's session workspace, or 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback).
+/// Mirrors resources.
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Parse a `?scope=` query value into a concrete binding context for
@@ -89,11 +90,11 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
 /// to the caller's workspace.
 fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid), ApiError> {
     let Some(raw) = scope else {
-        return Ok((ScopeKind::Workspace, caller_workspace(user)));
+        return Ok((ScopeKind::Workspace, caller_workspace(user)?));
     };
     let raw = raw.trim();
     if raw.is_empty() || raw == "workspace" {
-        return Ok((ScopeKind::Workspace, caller_workspace(user)));
+        return Ok((ScopeKind::Workspace, caller_workspace(user)?));
     }
     let (kind_str, id_str) = raw.split_once(':').ok_or_else(|| {
         ApiError::bad_request(format!(
@@ -103,7 +104,7 @@ fn parse_scope(user: &AuthUser, scope: Option<&str>) -> Result<(ScopeKind, Uuid)
     let kind = ScopeKind::from_db(kind_str)
         .ok_or_else(|| ApiError::bad_request(format!("unknown scope kind '{kind_str}'")))?;
     if kind == ScopeKind::Workspace && id_str.is_empty() {
-        return Ok((ScopeKind::Workspace, caller_workspace(user)));
+        return Ok((ScopeKind::Workspace, caller_workspace(user)?));
     }
     let id = Uuid::parse_str(id_str)
         .map_err(|_| ApiError::bad_request(format!("scope id '{id_str}' is not a uuid")))?;
@@ -120,7 +121,7 @@ fn create_scope(
 ) -> Result<(ScopeKind, Uuid), ApiError> {
     let kind = scope_kind.unwrap_or(ScopeKind::Workspace);
     let id = match (kind, scope_id) {
-        (ScopeKind::Workspace, None) => caller_workspace(user),
+        (ScopeKind::Workspace, None) => caller_workspace(user)?,
         (_, Some(id)) => id,
         (k, None) => {
             return Err(ApiError::bad_request(format!(
@@ -170,7 +171,7 @@ fn resolve_create_scope(
         ))),
         (Some(b), _) => Ok(b),
         (None, Some(q)) => Ok(q),
-        (None, None) => Ok((ScopeKind::Workspace, caller_workspace(user))),
+        (None, None) => Ok((ScopeKind::Workspace, caller_workspace(user)?)),
     }
 }
 
@@ -735,7 +736,7 @@ pub async fn list_assets(
             .map(AssetSummary::from)
             .filter(|s| folder_matches(s.display_path.as_deref(), params.folder.as_deref()))
             .collect();
-        (summaries, caller_workspace(&user))
+        (summaries, caller_workspace(&user)?)
     } else {
         let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
         let rows = fetch_visible_asset_rows(&state.db, &visible, params.type_id).await?;
@@ -1340,7 +1341,7 @@ pub async fn move_asset(
         &state.db,
         &user,
         ObjectKind::Asset,
-        caller_workspace(&user),
+        caller_workspace(&user)?,
         &[id],
     )
     .await
@@ -1745,7 +1746,7 @@ async fn require_editor(
     // caller's acting workspace (the membership edge that authenticated them).
     let governing_ws = match scope_kind {
         ScopeKind::Workspace => scope_id,
-        _ => caller_workspace(user),
+        _ => caller_workspace(user)?,
     };
 
     match require_role(&state.db, user, governing_ws, Role::Editor).await {

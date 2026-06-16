@@ -73,6 +73,20 @@ impl AuthUser {
     pub fn subject_as_uuid(&self) -> Uuid {
         Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, self.subject.as_bytes())
     }
+
+    /// The caller's active tenant workspace, or a 403 if none is resolved.
+    ///
+    /// Tenant-facing handlers MUST gate on this instead of falling back to
+    /// `Uuid::nil()` — acting in the nil/default tenant on behalf of a
+    /// principal with no active workspace silently leaks data across the
+    /// isolation boundary. A principal reaches a handler with no
+    /// `workspace_id` only when the resolver could not provision/pick one
+    /// (e.g. a session predating personal-workspace lazy provisioning); the
+    /// safe answer is to refuse the tenant-scoped action.
+    pub fn require_workspace(&self) -> Result<Uuid, crate::models::error::ApiError> {
+        self.workspace_id
+            .ok_or_else(|| crate::models::error::ApiError::forbidden("no active workspace"))
+    }
 }
 
 /// Hand-written so `user_id` (the derived `subject_as_uuid()`) is always

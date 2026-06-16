@@ -143,11 +143,11 @@ pub async fn worker_coverage(
 // NOT `runner_group`) differ.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Caller-implicit workspace: the principal's session workspace, falling back to
-/// `Uuid::nil()` for the legacy no-workspace dev shape. Mirrors
+/// Caller-implicit workspace: the principal's session workspace, or 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback). Mirrors
 /// `runners::caller_workspace`.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// A `group` alias is interpolated verbatim into a NATS subject (the group's pull
@@ -579,7 +579,7 @@ pub async fn list_workers(
     user: AuthUser,
     Query(params): Query<ListWorkersQuery>,
 ) -> Result<Json<PaginatedResponse<WorkerSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, WorkerRow>(
@@ -623,7 +623,7 @@ pub async fn get_worker(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkerDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, WorkerRow>(
         "SELECT * FROM workers WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
     )
@@ -653,7 +653,7 @@ pub async fn revoke_worker(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let updated = sqlx::query(
         "UPDATE workers SET status = 'revoked', revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
@@ -698,7 +698,7 @@ pub async fn create_worker_registration_token(
         }
         PLATFORM_SCOPE_ID
     } else {
-        caller_workspace(&user)
+        caller_workspace(&user)?
     };
     let created_by = user.subject_as_uuid();
     let reusable = req.reusable.unwrap_or(true);
@@ -783,7 +783,7 @@ pub async fn list_worker_registration_tokens(
     user: AuthUser,
     Query(params): Query<ListWorkerRegTokensQuery>,
 ) -> Result<Json<PaginatedResponse<WorkerRegistrationTokenSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, WorkerRegistrationTokenRow>(
@@ -832,7 +832,7 @@ pub async fn revoke_worker_registration_token(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let updated = sqlx::query(
         "UPDATE worker_registration_tokens SET revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",

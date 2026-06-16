@@ -35,22 +35,30 @@ pub const SESSION_COOKIE: &str = "mekhan_session";
 /// `/api/v1/dev/identities/active` endpoint.
 pub const DEV_USER_COOKIE: &str = "mekhan_dev_user";
 
+/// `dev-user`'s personal workspace, seeded by migration 20240189 and owned by
+/// `dev-user`. Hard-coded here so the noop roster lands the default dev identity
+/// in its own personal tenant. Replaces the historical `Uuid::nil()` (the
+/// `default` workspace), which migration 20240189 demoted to a system workspace
+/// (internals/legacy only) — the dev user no longer "lives" in nil.
+pub const DEV_USER_WORKSPACE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000001");
+
 /// Second dev workspace ("Acme Labs"), seeded by migration 20240184 and owned
 /// by `dev-user-2`. Hard-coded here so the noop roster lands that identity in
 /// its own tenant by default — the parallel of `dev-user` landing in
-/// `Uuid::nil()` (the `default` workspace).
+/// [`DEV_USER_WORKSPACE_ID`] (its personal workspace).
 pub const DEV_ORG2_WORKSPACE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000002");
 
 /// The dev identities the [`NoopAuthenticator`] can impersonate. Index 0 is the
 /// default — returned when no `mekhan_dev_user` cookie is present. Each entry is
-/// backed by a `workspace_members` seed row (migrations 20240123 + 20240184) so
+/// backed by a `workspace_members` seed row (migrations 20240189 + 20240184) so
 /// the active-workspace override and every membership gate behave exactly like a
 /// real login. Single source of truth: both the authenticator and the
 /// `/api/v1/dev/identities` endpoint read this list.
 pub fn dev_user_roster() -> Vec<AuthUser> {
     vec![
-        // dev-user — owner of `default` (Uuid::nil()), also a member of
-        // acme-labs (so it can switch orgs). The historical fixed dev user.
+        // dev-user — owner of its personal workspace ([`DEV_USER_WORKSPACE_ID`]
+        // = `…0001`), seeded by migration 20240189. The historical fixed dev
+        // user; also the platform admin in dev_noop.
         AuthUser {
             subject: "dev-user".to_string(),
             email: Some("dev@local".to_string()),
@@ -59,7 +67,7 @@ pub fn dev_user_roster() -> Vec<AuthUser> {
             org_id: None,
             // The historical fixed dev user is the platform admin in dev_noop.
             is_platform_admin: true,
-            workspace_id: Some(uuid::Uuid::nil()),
+            workspace_id: Some(DEV_USER_WORKSPACE_ID),
             workspace_role: Some("owner".to_string()),
             avatar_url: None,
         },

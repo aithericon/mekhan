@@ -315,9 +315,9 @@ pub async fn fork_library_node(
     user: AuthUser,
     Json(req): Json<ForkLibraryRequest>,
 ) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
-    // Anchor the fork in the caller's active workspace (Uuid::nil fallback keeps
-    // the no-DB test resolver writing into a valid workspace, as elsewhere).
-    let target_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    // Anchor the fork in the caller's active workspace; reject (403) rather than
+    // forking into the nil tenant when the caller has no active workspace.
+    let target_ws = user.require_workspace()?;
 
     // Must be able to create in the target workspace.
     require_role(&state.db, &user, target_ws, Role::Editor)
@@ -638,7 +638,7 @@ pub async fn library_upgrade_preview(
     user: AuthUser,
     Query(q): Query<UpgradePreviewQuery>,
 ) -> Result<Json<UpgradePreview>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Latest visible library version for the coordinate (own ws or public).
     let latest = sqlx::query_as::<_, WorkflowTemplate>(

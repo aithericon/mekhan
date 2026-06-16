@@ -236,7 +236,7 @@ pub async fn list_clusters(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<ClustersResponse>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let clusters = assemble_cluster_summaries(&state, workspace_id).await?;
     Ok(Json(ClustersResponse { clusters }))
 }
@@ -457,7 +457,7 @@ pub async fn list_cluster_leases(
             format!("resource_id is not a valid datacenter UUID: {resource_id}"),
         )
     })?;
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Workspace-scoped via the datacenter resource (the access boundary): only
     // surface leases for a cluster the caller's workspace owns. A foreign or
@@ -669,7 +669,7 @@ pub async fn fleet_metrics(
     user: AuthUser,
     Query(q): Query<ClusterMetricsQuery>,
 ) -> Result<Json<FleetMetrics>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let window = parse_duration(&q.window)?;
     let window_end = Utc::now();
     let window_start = window_end - window;
@@ -740,7 +740,7 @@ pub async fn cluster_metrics(
     Path(resource_id): Path<String>,
     Query(q): Query<ClusterMetricsQuery>,
 ) -> Result<Json<ClusterMetrics>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let cluster_id = Uuid::parse_str(&resource_id).map_err(|_| {
         ApiError::new(
             axum::http::StatusCode::BAD_REQUEST,

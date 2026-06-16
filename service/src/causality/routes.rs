@@ -42,7 +42,7 @@ async fn net_in_workspace(
 
 /// 404 unless the net is visible to the caller (see [`net_in_workspace`]).
 async fn gate_net(state: &AppState, net_id: &str, user: &AuthUser) -> Result<(), ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let ws = user.require_workspace()?;
     let visible = net_in_workspace(&state.db, net_id, ws).await.map_err(|e| {
         tracing::error!(net_id = %net_id, "provenance ws gate: {e}");
         ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
@@ -178,7 +178,7 @@ pub async fn cross_link(
     // The caller must own (or the template be public for) the egress OR ingress
     // net — otherwise 404, so a foreign tenant cannot resolve another tenant's
     // bridge topology by guessing signal keys.
-    let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
+    let ws = user.require_workspace()?;
     let mut visible = false;
     for net in [link.egress_net.as_deref(), link.ingress_net.as_deref()]
         .into_iter()

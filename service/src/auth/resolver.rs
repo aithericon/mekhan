@@ -4,32 +4,43 @@
 //!
 //! `DbPrincipalResolver` wraps the static one with a database lookup that
 //! resolves `workspace_id` from the upstream `org_id` claim (matching
-//! `workspaces.zitadel_org_id`) or falls back to the seeded default
-//! workspace when the user is a member there. Membership is auto-provisioned
-//! on the matching-org path so first login from a known Zitadel org grants
-//! workspace access without an explicit admin step.
+//! `workspaces.zitadel_org_id`). When no org workspace resolves, the principal
+//! is lazily given a **personal** workspace (owner) on first login — see
+//! [`DbPrincipalResolver::ensure_personal_workspace`]. Membership is auto-
+//! provisioned on the matching-org path so first login from a known Zitadel org
+//! grants workspace access without an explicit admin step.
+//!
+//! ## No more shared-`default` enrolment
+//!
+//! Earlier revisions auto-joined every principal into the seeded `default`
+//! (nil) workspace and into every system workspace (`demos`). Both are gone:
+//! migration `20240189` demoted `default` to `is_system = TRUE` (internals /
+//! legacy only), and demos stay discoverable through `visibility = 'public'`
+//! rather than an auto-membership row. A fresh principal therefore lands in a
+//! private personal workspace, not a shared catch-all tenant.
 //!
 //! ## Multi-org tenancy (flag-gated, `auth.multi_org`)
 //!
 //! With `multi_org = false` (the default — dev_noop and single-org Zitadel
-//! deployments) the resolver auto-joins the seeded `default` workspace as
-//! `editor` and, if the principal carries one resolvable org, returns that
-//! org-workspace directly (the legacy single-org path).
+//! deployments) the resolver, if the principal carries one resolvable org,
+//! returns that org-workspace directly (the legacy single-org path).
 //!
 //! With `multi_org = true` the resolver instead:
 //!   - maps **every** Zitadel org claim to its bound workspace and auto-
 //!     provisions membership in each (a principal can belong to several
 //!     org-workspaces at once);
-//!   - **drops** the auto-join-`default`-as-editor fallback entirely — org-
-//!     bound users live in their org-workspace(s); users with no org binding
-//!     are NOT silently granted the shared `default` tenant;
 //!   - picks the active workspace from the principal's full membership set
 //!     (the `active_workspace` cookie override, applied downstream, can swap
 //!     to any other membership).
 //!
-//! The flag never touches `dev_noop`: the dev-user's seeded `default`-as-owner
-//! `workspace_members` row pre-dates resolution, so it is honoured in either
-//! mode (the flag governs auto-JOIN, not pre-existing membership).
+//! In both modes, a principal with **no** resolvable org workspace and no
+//! existing non-system membership is provisioned a personal workspace before
+//! the active-workspace pick, so demoting `default` never strands a user.
+//!
+//! The flag never touches `dev_noop`: the dev-user's seeded personal-workspace
+//! (`…0001`) owner `workspace_members` row pre-dates resolution, so it is
+//! honoured in either mode (the flag governs auto-JOIN, not pre-existing
+//! membership).
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -162,6 +173,155 @@ impl DbPrincipalResolver {
             platform_admins,
         }
     }
+
+    /// Lazily mint a personal workspace (owner) for a principal that holds NO
+    /// non-system membership and resolved no org workspace. Runs on the login
+    /// hot path, before any handler — so demoting `default` to a system
+    /// workspace never leaves a real principal homeless.
+    ///
+    /// Idempotent via the leading guard: a single `EXISTS` over the principal's
+    /// non-system memberships. Once they own (or are a member of) any real
+    /// tenant — the personal one minted here, an org workspace, or a self-serve
+    /// one — this is a no-op, so repeated logins don't spawn duplicate tenants.
+    ///
+    /// Slug derivation (token-safe via the shared [`slugify`]):
+    ///   1. the email local-part (`alice@corp` → `alice`),
+    ///   2. else the display name,
+    ///   3. else `u-{first 8 hex of subject_as_uuid}`.
+    ///
+    /// On a `slug` UNIQUE collision it retries `-{n}` (bounded) before falling
+    /// back to the always-unique subject-hex slug.
+    async fn ensure_personal_workspace(
+        &self,
+        user_id: Uuid,
+        email: Option<&str>,
+        display_name: Option<&str>,
+        subject: &str,
+    ) -> Result<(), AuthError> {
+        use crate::handlers::workspaces::slugify;
+
+        // Guard: already homed in a real (non-system) tenant ⇒ nothing to do.
+        let already: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 \
+               FROM workspace_members m \
+               JOIN workspaces w ON w.id = m.workspace_id \
+              WHERE m.user_id = $1 AND w.is_system = FALSE AND w.archived_at IS NULL \
+              LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AuthError::Internal(format!("personal workspace guard: {e}")))?;
+        if already.is_some() {
+            return Ok(());
+        }
+
+        // Human-facing display name for the new tenant: name → email → subject.
+        let display = display_name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or(email)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(subject)
+            .to_string();
+
+        // Preferred slug: email local-part, else display name. Always-unique
+        // fallback uses the first 8 hex of the deterministic subject uuid.
+        let subject_hex = user_id.simple().to_string();
+        let hex_fallback = format!("u-{}", &subject_hex[..8]);
+        let preferred = email
+            .and_then(|e| e.split('@').next())
+            .map(slugify)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                display_name
+                    .map(slugify)
+                    .filter(|s: &String| !s.is_empty())
+            })
+            .unwrap_or_else(|| hex_fallback.clone());
+
+        // Try the preferred slug, then `-{n}` variants, then the subject-hex
+        // slug as a guaranteed-unique last resort. Mirrors the create_workspace
+        // tx logic: insert workspace + owner membership atomically.
+        const MAX_SLUG_ATTEMPTS: usize = 16;
+        for attempt in 0..MAX_SLUG_ATTEMPTS {
+            let slug = match attempt {
+                0 => preferred.clone(),
+                n if n < MAX_SLUG_ATTEMPTS - 1 => format!("{preferred}-{n}"),
+                // Final attempt: the subject-hex slug, unique per principal.
+                _ => hex_fallback.clone(),
+            };
+            match self.insert_personal_workspace(&slug, &display, user_id).await {
+                Ok(()) => return Ok(()),
+                Err(PersonalWsInsertError::SlugTaken) => continue,
+                Err(PersonalWsInsertError::Db(e)) => return Err(e),
+            }
+        }
+        Err(AuthError::Internal(
+            "personal workspace: exhausted slug attempts".into(),
+        ))
+    }
+
+    /// Insert one personal workspace + its owner membership in a single tx,
+    /// distinguishing a slug UNIQUE collision (retryable) from a real DB error.
+    async fn insert_personal_workspace(
+        &self,
+        slug: &str,
+        display_name: &str,
+        owner_id: Uuid,
+    ) -> Result<(), PersonalWsInsertError> {
+        let mut tx = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| PersonalWsInsertError::Db(AuthError::Internal(format!("begin: {e}"))))?;
+
+        let row: Result<(Uuid,), sqlx::Error> = sqlx::query_as(
+            "INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(slug)
+        .bind(display_name)
+        .fetch_one(&mut *tx)
+        .await;
+
+        let ws_id = match row {
+            Ok((id,)) => id,
+            Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+                return Err(PersonalWsInsertError::SlugTaken);
+            }
+            Err(e) => {
+                return Err(PersonalWsInsertError::Db(AuthError::Internal(format!(
+                    "personal workspace insert: {e}"
+                ))));
+            }
+        };
+
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) \
+             VALUES ($1, $2, 'owner')",
+        )
+        .bind(ws_id)
+        .bind(owner_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            PersonalWsInsertError::Db(AuthError::Internal(format!(
+                "personal workspace membership: {e}"
+            )))
+        })?;
+
+        tx.commit().await.map_err(|e| {
+            PersonalWsInsertError::Db(AuthError::Internal(format!("commit: {e}")))
+        })?;
+        Ok(())
+    }
+}
+
+/// Outcome of a single personal-workspace insert attempt: a slug collision is
+/// retryable (caller bumps `-{n}`), any other DB failure is terminal.
+enum PersonalWsInsertError {
+    SlugTaken,
+    Db(AuthError),
 }
 
 #[async_trait]
@@ -181,13 +341,10 @@ impl PrincipalResolver for DbPrincipalResolver {
             entry == &user.subject || user.email.as_deref() == Some(entry.as_str())
         });
 
-        // Auto-membership in every system workspace (currently just `demos`).
-        // The platform wants every authenticated principal to *be* a member
-        // of demos — not merely to see demo templates via `visibility='public'`
-        // — so the demos workspace appears in their workspace picker and
-        // project listings without an admin step. Viewer role: read-only.
-        // Orthogonal to multi-org: demos is a shared system namespace.
-        ensure_system_workspace_membership(&self.db, user_id).await?;
+        // NOTE: demos are NOT auto-enrolled. They stay discoverable through
+        // `visibility = 'public'` (no `workspace_members` row), so a fresh
+        // principal is not silently dropped into the shared `demos` system
+        // namespace.
 
         // Resolve every org claim to its bound workspace and auto-provision
         // membership. A multi-org principal lands in several workspaces here;
@@ -208,26 +365,6 @@ impl PrincipalResolver for DbPrincipalResolver {
             }
         }
 
-        // `default` workspace auto-editor membership.
-        //
-        // multi_org OFF (legacy single-org, the dev default): auto-join the
-        // `default` workspace as editor. Migration 20240124 backfilled every
-        // pre-existing (non-demo) template into `default`, but 20240123 seeded
-        // only the dev-noop user as a member there. Without this step real
-        // (Zitadel) principals land in `demos` alone (viewer) and get a 403
-        // editing any migrated template. Editor — not owner/admin — so write
-        // access is granted while tenancy actions stay gated.
-        //
-        // multi_org ON (real tenancy): do NOT auto-join `default`. Org-bound
-        // users live in their org-workspace(s); users with no org binding get
-        // only their explicit memberships — they are not silently granted the
-        // shared `default` tenant. (`dev_noop`'s dev-user keeps its seeded
-        // `default`-as-owner row regardless — this only governs auto-JOIN, not
-        // pre-existing membership, so dev_noop is unaffected.)
-        if !self.multi_org {
-            ensure_default_workspace_membership(&self.db, user_id).await?;
-        }
-
         // Single-org fast path (multi_org OFF): if exactly the legacy behaviour
         // applies — one resolvable org — return that workspace directly,
         // preserving the prior `Path 1` semantics and its role re-read.
@@ -242,52 +379,39 @@ impl PrincipalResolver for DbPrincipalResolver {
             }
         }
 
+        // Lazy personal-workspace provisioning. We only reach here when NO org
+        // workspace resolved (the multi_org path falls through, the single-org
+        // path's early return did not fire). A principal with zero non-system
+        // memberships gets a private personal workspace (owner) minted now —
+        // BEFORE any handler runs — so the demotion of `default` to a system
+        // workspace strands no one. Idempotent: it is a no-op once the principal
+        // holds any non-system membership.
+        self.ensure_personal_workspace(
+            user_id,
+            user.email.as_deref(),
+            user.display_name.as_deref(),
+            &user.subject,
+        )
+        .await?;
+
         // Active-workspace pick (covers BOTH modes' fall-through):
         //   - multi_org ON: choose among ALL memberships (org-workspaces +
-        //     any explicit grants); the per-session cookie override applied
-        //     downstream in `active_workspace::apply_override` can swap to any
-        //     other membership.
-        //   - multi_org OFF with no resolvable org: the legacy `Path 2` —
-        //     prefer `default`, then non-system, then by age.
-        // In every case `membership_workspace` returns `None` when the user
-        // holds no membership at all (the multi_org "no org binding, no grant"
-        // case), leaving `workspace_id = None` — handlers reject rather than
-        // grant ambient access.
+        //     any explicit grants + the personal workspace just provisioned);
+        //     the per-session cookie override applied downstream in
+        //     `active_workspace::apply_override` can swap to any other one.
+        //   - multi_org OFF with no resolvable org: the personal workspace
+        //     just provisioned (or a pre-existing non-system membership),
+        //     preferring real tenants over system workspaces, then by age.
+        // `membership_workspace` returns `None` only when the user holds no
+        // membership at all (which the personal-workspace provisioning above
+        // prevents for any real principal), leaving `workspace_id = None` so
+        // handlers reject rather than grant ambient access.
         user.workspace_id = membership_workspace(&self.db, user_id).await?;
         if let Some(ws_id) = user.workspace_id {
             user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
         }
         Ok(user)
     }
-}
-
-/// Idempotently upsert the caller as a viewer in every `is_system = TRUE`
-/// workspace. Today that's just `demos`, but the loop is correct for any
-/// future system workspace (e.g. a `samples` or `tutorial` namespace).
-async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
-    let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE is_system = TRUE")
-        .fetch_all(db)
-        .await
-        .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
-    for (ws_id,) in rows {
-        upsert_member(db, ws_id, user_id, "viewer").await?;
-    }
-    Ok(())
-}
-
-/// Idempotently upsert the caller as an editor of the `default` workspace.
-/// See the call site for the single-org rationale. No-ops if `default` is
-/// absent (it is seeded by migration 20240123, so that only happens in a
-/// half-migrated DB).
-async fn ensure_default_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
-    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
-        .fetch_optional(db)
-        .await
-        .map_err(|e| AuthError::Internal(format!("default workspace lookup: {e}")))?;
-    if let Some((ws_id,)) = row {
-        upsert_member(db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
-    }
-    Ok(())
 }
 
 async fn lookup_workspace_by_zitadel_org(
@@ -343,19 +467,22 @@ async fn lookup_role(
 }
 
 /// Returns the user's default "active" workspace. Preference order:
-///   1. `slug='default'` (the seeded tenant for dev-noop + unbound principals)
-///   2. any non-system workspace (real tenants outrank `demos`)
-///   3. the oldest system workspace (worst case: user is only in `demos`)
+///   1. any non-system workspace (a real tenant — the personal workspace, an
+///      org workspace, or a self-serve one), oldest first;
+///   2. the oldest system workspace (worst case: the principal is only in a
+///      system namespace such as the demoted `default`/nil tenant).
 ///
-/// The picker in Phase B exposes the full membership list and lets the
-/// user override this default per session via a cookie.
+/// The old `slug='default'` preference is gone: `default` is now a system
+/// workspace (migration `20240189`) and real tenants must outrank it. The
+/// workspace picker exposes the full membership list and lets the user override
+/// this default per session via the active-workspace cookie.
 async fn membership_workspace(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, AuthError> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "SELECT w.id \
            FROM workspaces w \
            JOIN workspace_members m ON m.workspace_id = w.id \
           WHERE m.user_id = $1 AND w.archived_at IS NULL \
-          ORDER BY (w.slug = 'default') DESC, w.is_system ASC, w.created_at ASC \
+          ORDER BY w.is_system ASC, w.created_at ASC \
           LIMIT 1",
     )
     .bind(user_id)

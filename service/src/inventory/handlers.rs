@@ -1,7 +1,6 @@
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::inventory::model::{
@@ -47,7 +46,7 @@ pub async fn register(
     user: AuthUser,
     Json(req): Json<InventoryRegisterRequest>,
 ) -> Result<Json<InventoryRegisterResponse>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let counts = repo(&state).register(ws, &req).await.map_err(|e| {
         tracing::warn!("inventory register: {e}");
         ApiError::bad_request(e.to_string())
@@ -77,7 +76,7 @@ pub async fn index(
     user: AuthUser,
     Json(req): Json<InventoryIndexRequest>,
 ) -> Result<Json<InventoryIndexResponse>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let counts = repo(&state).index(ws, &req).await.map_err(|e| {
         tracing::warn!("inventory index: {e}");
         ApiError::bad_request(e.to_string())
@@ -104,7 +103,7 @@ pub async fn list_entries(
     user: AuthUser,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let response = repo(&state).list_entries(ws, &params).await.map_err(|e| {
         tracing::warn!("inventory list: {e}");
         ApiError::bad_request(e.to_string())
@@ -129,7 +128,7 @@ pub async fn stats(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<InventoryStats>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let stats = repo(&state).stats(ws).await.map_err(|e| {
         tracing::warn!("inventory stats: {e}");
         ApiError::bad_request(e.to_string())
@@ -184,7 +183,7 @@ pub async fn reconcile_batch(
     user: AuthUser,
     Json(req): Json<ReconcileBatchRequest>,
 ) -> Result<Json<ReconcileCounts>, ApiError> {
-    let ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let ws = user.require_workspace()?;
     let ctx = reconcile::ObservationContext {
         endpoint_root: req.endpoint_root.clone(),
         serve_group: req.serve_group.clone(),

@@ -164,11 +164,10 @@ pub async fn create_template(
     let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
     let description = req.description.unwrap_or_default();
 
-    // Anchor the new template in the caller's workspace. Falls back to the
-    // seeded default workspace (Uuid::nil()) when the resolver didn't
-    // populate workspace_id — keeps test paths (which use the no-DB
-    // StaticPrincipalResolver) writing into a valid workspace.
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    // Anchor the new template in the caller's active workspace; reject (403)
+    // rather than creating in the nil tenant when the caller has no active
+    // workspace.
+    let workspace_id = user.require_workspace()?;
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
@@ -370,7 +369,7 @@ pub async fn list_templates(
         is_latest, published, published_at, published_by, author_id, updated_by, created_at, \
         updated_at, workspace_id, visibility, owner_template_id";
 
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // The version-chain listing (base_template_id != None) is a separate
     // mode: it shows every version of a template chain regardless of
@@ -1890,7 +1889,7 @@ pub async fn apply_air_template(
     // (`5ac9e72` + 9 commits). Pre-AIR apply is workspace-private by
     // construction; `public` visibility is admin-only via
     // `PATCH /api/v1/templates/{id}/visibility` (`38642db`).
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let visibility = "workspace";
 
     // Name-based chain lookup, scoped per workspace. The pre-AIR endpoint

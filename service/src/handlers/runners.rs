@@ -39,11 +39,11 @@ use crate::models::runner::{
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
 
-/// Caller-implicit workspace: the principal's session workspace, falling back
-/// to `Uuid::nil()` for the legacy no-workspace dev shape. Mirrors
+/// Caller-implicit workspace: the principal's session workspace, or 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback). Mirrors
 /// `resources::caller_workspace`.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// A `group` alias is interpolated verbatim into a NATS subject (`{group}.claim`)
@@ -494,7 +494,7 @@ pub async fn get_runner_interfaces(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RunnerInterfaces>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
 
     // Join through the workspace so a foreign-workspace runner's catalog is never
     // leaked; absence of either the runner-scope match or the catalog row → 404.
@@ -539,7 +539,7 @@ pub async fn list_runners(
     user: AuthUser,
     Query(params): Query<ListRunnersQuery>,
 ) -> Result<Json<PaginatedResponse<RunnerSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, RunnerRow>(
@@ -591,7 +591,7 @@ pub async fn runner_presence(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<RunnerPresenceSnapshot>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let own: std::collections::HashSet<Uuid> =
         sqlx::query_scalar::<_, Uuid>("SELECT id FROM runners WHERE workspace_id = $1")
             .bind(workspace_id)
@@ -626,7 +626,7 @@ pub async fn get_runner(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RunnerDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, RunnerRow>(
         "SELECT * FROM runners WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
     )
@@ -654,7 +654,7 @@ pub async fn revoke_runner(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let updated = sqlx::query(
         "UPDATE runners SET status = 'revoked', revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
@@ -699,7 +699,7 @@ pub async fn create_registration_token(
         }
         PLATFORM_SCOPE_ID
     } else {
-        caller_workspace(&user)
+        caller_workspace(&user)?
     };
     let created_by = user.subject_as_uuid();
     let reusable = req.reusable.unwrap_or(true);
@@ -786,7 +786,7 @@ pub async fn list_registration_tokens(
     user: AuthUser,
     Query(params): Query<ListRegTokensQuery>,
 ) -> Result<Json<PaginatedResponse<RegistrationTokenSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, RunnerRegistrationTokenRow>(
@@ -835,7 +835,7 @@ pub async fn revoke_registration_token(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let updated = sqlx::query(
         "UPDATE runner_registration_tokens SET revoked_at = NOW() \
          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",

@@ -4,13 +4,11 @@
 //! the startup seeder created — `author_id = DEMO_SEEDER_AUTHOR_ID`). They
 //! cancel running instances, purge engine nets, and delete the families whole.
 //!
-//! Gated on `editor` of the **default** workspace, which is where seeded demos
-//! live (see `demos::DEMO_WORKSPACE_ID`). Editor — not admin — because an
-//! editor can already delete and recreate each demo template individually via
-//! `gate_template_write` (also `Editor`): bulk reset/reseed grants no authority
-//! they lack. An `admin` gate would also be unsatisfiable in BFF single-org,
-//! where the resolver auto-provisions every real user as `editor` and the only
-//! owner of the default workspace is the synthetic dev-noop principal.
+//! Gated on `editor` of the system-owned **demos** workspace, which is where
+//! seeded demos live (see `demos::DEMO_WORKSPACE_ID`). Editor — not admin —
+//! because an editor can already delete and recreate each demo template
+//! individually via `gate_template_write` (also `Editor`): bulk reset/reseed
+//! grants no authority they lack.
 
 use std::path::PathBuf;
 
@@ -21,13 +19,20 @@ use crate::demos::DemoResetReport;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
-/// Require at least `editor` of the default workspace — the home of seeded
-/// demos. See the module doc for why editor (not admin).
+/// Require at least `editor` of the system-owned demos workspace — the home of
+/// seeded demos. See the module doc for why editor (not admin).
 async fn gate_demo_write(state: &AppState, user: &AuthUser) -> Result<(), ApiError> {
-    match require_role(&state.db, user, uuid::Uuid::nil(), Role::Editor).await {
+    match require_role(
+        &state.db,
+        user,
+        crate::demos::DEMO_WORKSPACE_ID,
+        Role::Editor,
+    )
+    .await
+    {
         Ok(_) => Ok(()),
         Err(MembershipError::NotMember(_)) | Err(MembershipError::InsufficientRole { .. }) => Err(
-            ApiError::forbidden("demo reset requires editor of the default workspace"),
+            ApiError::forbidden("demo reset requires editor of the demos workspace"),
         ),
         Err(MembershipError::TemplateNotFound(_)) => {
             Err(ApiError::forbidden("demo reset requires editor"))
@@ -45,7 +50,7 @@ async fn gate_demo_write(state: &AppState, user: &AuthUser) -> Result<(), ApiErr
     path = "/api/v1/admin/demos/reset",
     responses(
         (status = 200, description = "Seeded demos removed", body = DemoResetReport),
-        (status = 403, description = "Editor of the default workspace required", body = ErrorResponse),
+        (status = 403, description = "Editor of the demos workspace required", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "admin",
@@ -71,7 +76,7 @@ pub async fn reset_demos(
     path = "/api/v1/admin/demos/reseed",
     responses(
         (status = 200, description = "Seeded demos purged and re-seeded", body = DemoResetReport),
-        (status = 403, description = "Editor of the default workspace required", body = ErrorResponse),
+        (status = 403, description = "Editor of the demos workspace required", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "admin",

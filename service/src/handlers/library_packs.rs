@@ -250,7 +250,7 @@ pub async fn list_packs(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<LibraryPackSummary>>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Own-workspace OR system-origin packs, each with its live node count.
     let rows = sqlx::query_as::<_, PackWithCount>(
@@ -372,7 +372,7 @@ pub async fn get_pack(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<LibraryPackDetail>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
     let pack = load_visible_pack(&state, workspace_id, id).await?;
 
     // The pack's library nodes — latest version of each family, descriptor shape.
@@ -802,7 +802,7 @@ pub async fn export_pack(
     user: AuthUser,
     Query(params): Query<ExportParams>,
 ) -> Result<Json<PackBundle>, ApiError> {
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let workspace_id = user.require_workspace()?;
 
     // Resolve the manifest + the node rows. `packId` is exact; `vendor` collects
     // visible (own-workspace or public) library nodes by their branding vendor.

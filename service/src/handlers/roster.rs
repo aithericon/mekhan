@@ -37,11 +37,11 @@ use crate::models::roster::{
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
 
-/// Caller-implicit workspace: the principal's session workspace, falling back to
-/// `Uuid::nil()` for the legacy no-workspace dev shape. Mirrors
+/// Caller-implicit workspace: the principal's session workspace, or 403 when
+/// the caller has no active workspace (no silent nil-tenant fallback). Mirrors
 /// `runners::caller_workspace`.
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Concurrency `C` is the presence controller's slot count — clamp to `>= 1` on
@@ -94,7 +94,7 @@ pub async fn enroll_member(
     user: AuthUser,
     Json(req): Json<EnrollMemberRequest>,
 ) -> Result<(StatusCode, Json<RosterMemberDetail>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -163,7 +163,7 @@ pub async fn list_roster(
     user: AuthUser,
     Query(params): Query<ListRosterQuery>,
 ) -> Result<Json<PaginatedResponse<RosterMemberSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let offset = (params.page - 1) * params.per_page;
 
     // `capacity_id` is an optional filter: a NULL bind makes the
@@ -221,7 +221,7 @@ pub async fn my_enrollments(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<RosterMemberDetail>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let member = user.subject_as_uuid();
 
     let rows = sqlx::query_as::<_, RosterMemberRow>(
@@ -263,7 +263,7 @@ pub async fn human_presence(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<crate::presence::HumanPresenceSnapshot>>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     // Human capacities are `resources` rows; scope the snapshot to those in the
     // caller's workspace.
     let own: std::collections::HashSet<Uuid> =
@@ -301,7 +301,7 @@ pub async fn get_roster_member(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RosterMemberDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let row = sqlx::query_as::<_, RosterMemberRow>(
         "SELECT * FROM roster_members WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
     )
@@ -338,7 +338,7 @@ pub async fn update_roster_member(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateRosterMemberRequest>,
 ) -> Result<Json<RosterMemberDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -399,7 +399,7 @@ pub async fn revoke_roster_member(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -446,7 +446,7 @@ pub async fn set_availability(
     user: AuthUser,
     Json(req): Json<AvailabilityRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    let workspace_id = caller_workspace(&user)?;
     let member = user.subject_as_uuid();
 
     // Flip the durable intent on the caller's own enrollment. `available_since`

@@ -24,15 +24,18 @@ use crate::models::workspace::{
 use crate::AppState;
 
 /// Maximum slug length. Comfortably under any DB/identifier limit and keeps
-/// derived net subjects (`petri.{ws}.…`) and S3 prefixes sane.
-const MAX_SLUG_LEN: usize = 63;
+/// derived net subjects (`petri.{ws}.…`) and S3 prefixes sane. `pub(crate)` so
+/// the auth resolver's personal-workspace provisioning derives slugs through
+/// the same bound as self-serve creation.
+pub(crate) const MAX_SLUG_LEN: usize = 63;
 
 /// Lower-case, hyphenate, and strip a free-text string down to a
 /// URL/NATS-token-safe slug (`[a-z0-9-]`, no leading/trailing/repeated
 /// hyphens). Returns an empty string if nothing slug-worthy survives (e.g. an
 /// all-emoji name) — the caller treats that as "derive from display_name" or
-/// 400.
-fn slugify(input: &str) -> String {
+/// 400. `pub(crate)` so `DbPrincipalResolver::ensure_personal_workspace`
+/// derives personal-workspace slugs identically to self-serve creation.
+pub(crate) fn slugify(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut prev_dash = false;
     for c in input.chars() {

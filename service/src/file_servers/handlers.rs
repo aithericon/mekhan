@@ -23,8 +23,8 @@ use crate::file_servers::reconcile;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
-fn caller_workspace(user: &AuthUser) -> Uuid {
-    user.workspace_id.unwrap_or_else(Uuid::nil)
+fn caller_workspace(user: &AuthUser) -> Result<Uuid, ApiError> {
+    user.require_workspace()
 }
 
 /// Fire a non-blocking auto-probe for one endpoint (see
@@ -74,7 +74,7 @@ pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<FileServersResponse>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let resp = queries::list(&state.db, ws).await.map_err(|e| {
         tracing::warn!("file-servers list: {e}");
         ApiError::bad_request(e.to_string())
@@ -98,7 +98,7 @@ pub async fn get(
     user: AuthUser,
     Path(key): Path<String>,
 ) -> Result<Json<FileServerView>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let view = queries::get(&state.db, ws, &key)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?
@@ -124,7 +124,10 @@ pub async fn create(
     user: AuthUser,
     Json(req): Json<CreateFileServerRequest>,
 ) -> Result<Json<FileServer>, ApiError> {
-    let ws = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
+    let ws = match req.workspace_id {
+        Some(ws) => ws,
+        None => caller_workspace(&user)?,
+    };
     insert_server(&state, ws, &req).await
 }
 
@@ -148,7 +151,10 @@ pub async fn adopt(
     user: AuthUser,
     Json(mut req): Json<CreateFileServerRequest>,
 ) -> Result<Json<FileServer>, ApiError> {
-    let ws = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
+    let ws = match req.workspace_id {
+        Some(ws) => ws,
+        None => caller_workspace(&user)?,
+    };
     let in_inv = queries::key_in_inventory(&state.db, &req.key)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -244,7 +250,7 @@ pub async fn update(
     Path(key): Path<String>,
     Json(req): Json<UpdateFileServerRequest>,
 ) -> Result<Json<FileServer>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server = queries::update(&state.db, ws, &key, &req)
         .await
         .map_err(|e| {
@@ -272,7 +278,7 @@ pub async fn delete(
     user: AuthUser,
     Path(key): Path<String>,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let removed = queries::delete(&state.db, ws, &key)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -313,7 +319,7 @@ pub async fn list_endpoints(
     user: AuthUser,
     Path(key): Path<String>,
 ) -> Result<Json<Vec<FileServerEndpoint>>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server_id = resolve_server_id(&state, ws, &key).await?;
     let endpoints = queries::list_endpoints(&state.db, server_id)
         .await
@@ -341,7 +347,7 @@ pub async fn create_endpoint(
     Path(key): Path<String>,
     Json(req): Json<CreateEndpointRequest>,
 ) -> Result<Json<FileServerEndpoint>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server_id = resolve_server_id(&state, ws, &key).await?;
     let ep = queries::create_endpoint(&state.db, server_id, &req)
         .await
@@ -376,7 +382,7 @@ pub async fn update_endpoint(
     Path((key, endpoint_id)): Path<(String, Uuid)>,
     Json(req): Json<UpdateEndpointRequest>,
 ) -> Result<Json<FileServerEndpoint>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server_id = resolve_server_id(&state, ws, &key).await?;
     let ep = queries::update_endpoint(&state.db, server_id, endpoint_id, &req)
         .await
@@ -413,7 +419,7 @@ pub async fn delete_endpoint(
     user: AuthUser,
     Path((key, endpoint_id)): Path<(String, Uuid)>,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server_id = resolve_server_id(&state, ws, &key).await?;
     let removed = queries::delete_endpoint(&state.db, server_id, endpoint_id)
         .await
@@ -454,7 +460,7 @@ pub async fn verify_endpoint(
     user: AuthUser,
     Path((key, endpoint_id)): Path<(String, Uuid)>,
 ) -> Result<Json<reconcile::VerifyResult>, ApiError> {
-    let ws = caller_workspace(&user);
+    let ws = caller_workspace(&user)?;
     let server_id = resolve_server_id(&state, ws, &key).await?;
     let endpoint = queries::get_endpoint(&state.db, server_id, endpoint_id)
         .await
