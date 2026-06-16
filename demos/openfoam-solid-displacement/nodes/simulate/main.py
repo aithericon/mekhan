@@ -47,6 +47,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 
 # --- Firing curve (Start fields; optionals fall back to calibrated defaults) --
 ramp_rate = float(input.ramp_rate)               # K/min  (required)
@@ -340,7 +341,11 @@ def _run_docker():
         DOCKER_IMAGE,
         "bash", "-lc",
         "cd /case && blockMesh > log.blockMesh 2>&1 && "
-        "solidDisplacementFoam > log.solidDisplacementFoam 2>&1",
+        "solidDisplacementFoam > log.solidDisplacementFoam 2>&1 && "
+        # Export the field series so a downstream post-processing node can
+        # render a cut-through. Non-fatal: a foamToVTK hiccup must not fail an
+        # otherwise-good solve (`|| true`).
+        "{ foamToVTK > log.foamToVTK 2>&1 || true; }",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if proc.returncode != 0:
@@ -601,8 +606,52 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
+# --- 5b. Field series → portable artifact (openfoam path only) ------------------
+# foamToVTK wrote case/VTK/* on the docker path. Tar it and persist it as a run
+# artifact so a SEPARATE post-processing node can pull it back (by the
+# deterministic artifact key) and render a field cut-through — keeping the heavy
+# visualization OUT of this physics kernel. The surrogate has no spatial field,
+# so `field_key` stays empty there and any downstream render simply skips.
+# Deterministic key layout `artifacts/{exec}/{name}/{name}` matches the
+# artifact store (executor-storage) and how demo 59's report builds its keys.
+field_key = ""
+vtk_dir = os.path.join(case_dir, "VTK")
+if source == "openfoam" and os.path.isdir(vtk_dir):
+    try:
+        tar_path = os.path.join(_run_dir, "fields.tar.gz")
+        with tarfile.open(tar_path, "w:gz") as tf:
+            tf.add(vtk_dir, arcname="VTK")
+        log_artifact(
+            tar_path,
+            name="fields.tar.gz",
+            category="other",
+            mime_type="application/gzip",
+            blocking=True,
+            metadata={"kind": "openfoam_field_series", "fields": "T,sigmaEq"},
+        )
+        _exec_id = os.environ.get("AITHERICON_EXECUTION_ID", "")
+        if _exec_id:
+            field_key = f"artifacts/{_exec_id}/fields.tar.gz/fields.tar.gz"
+        log_info(f"simulate: persisted field series ({field_key or 'no exec id'})")
+    except Exception as exc:  # noqa: BLE001 — viz transport is best-effort
+        log_warn(f"simulate: field-series persist failed (non-fatal): {exc!r}")
+
 # --- 6. Typed outputs (swept from globals matching the output port) -------------
 sigma_max_mpa = round(sigma_max_mpa, 3)
 soak_min_k = round(soak_min_k, 2)
 cycle_h = round(cycle_h, 4)
 z = round(z, 4)
+
+# Single gatherable bundle. A Map body gathers exactly ONE named field, so the
+# constrained-BO loop (demo 59) pins `resultVar: "evaluation"` to fold the whole
+# evaluation per candidate. The typed scalars above stay for direct
+# field-by-field consumers (a DOE sweep, a one-shot check on a canvas).
+evaluation = {
+    "sigma_max_mpa": sigma_max_mpa,
+    "soak_min_k": soak_min_k,
+    "cycle_h": cycle_h,
+    "z": z,
+    "verdict": verdict,
+    "source": source,
+    "field_key": field_key,
+}

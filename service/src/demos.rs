@@ -3118,6 +3118,99 @@ mod tests {
         }
     }
 
+    /// The 59-firing-curve-bo BO campaign now calls the
+    /// `openfoam/solid-displacement` LIBRARY NODE as its Map body (a SubWorkflow
+    /// child, templateId f001) instead of an inline `simulate` step — so bare
+    /// `compile_to_air` can't resolve it (it joined the documented-skip list in
+    /// `air_snapshots`). Feed the REAL child contract (derived from the library
+    /// node graph, so its `evaluation`/`field_key` outputs are present) via
+    /// `SubWorkflowAir` and prove the parent lowers end-to-end: the
+    /// Map-body-SubWorkflow path, the `cand.*` input-mapping qualification, the
+    /// new `gather` → `propose.candidates` read-arc (recovering the BO u-coords
+    /// the library node deliberately doesn't echo), the `best_field_key`
+    /// accumulator, and the post-loop `cutthrough` node's `campaign.best_field_key`
+    /// read-arc. A successful compile is the proof: an unresolved
+    /// `propose.candidates` borrow or a bad `resultVar` would error here.
+    #[test]
+    fn firing_curve_bo_demo_compiles_with_library_node_child() {
+        use crate::compiler::{
+            compile_to_air_with_options, derive_child_io, node_files_inline, CompileOptions,
+            ResolvedChild, SubWorkflowAir,
+        };
+
+        let root = repo_root().join("demos");
+
+        // The child contract is the source of truth for the Map's `resultVar`
+        // (`evaluation`) + the join projection — derive it from the REAL library
+        // node graph so this test breaks if the node stops exporting it.
+        let child = load_demo(&root.join("openfoam-solid-displacement"))
+            .expect("openfoam-solid-displacement must load");
+        let (input_contract, output_contract) = derive_child_io(&child.graph);
+        assert!(
+            output_contract
+                .fields
+                .iter()
+                .any(|f| f.name == "evaluation"),
+            "library node must export `evaluation` — the Map gathers it as resultVar"
+        );
+
+        let demo =
+            load_demo(&root.join("59-firing-curve-bo")).expect("59-firing-curve-bo must load");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000590"
+        );
+
+        // Resolve the Map-body `simulate` SubWorkflow to the library node. A stub
+        // AIR blob suffices (the parent embeds it opaquely); the CONTRACT is what
+        // drives the parent's join + output-port reconciliation.
+        let mut sub_air = SubWorkflowAir::new();
+        sub_air.insert(
+            "simulate".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub", "places": [], "transitions": [],
+                    "groups": [], "mock_adapters": [], "definitions": {}, "requirements": []
+                }),
+                resolved_version: 1,
+                template_id: "00000000-0000-0000-0000-00000000f001".to_string(),
+                input_contract,
+                output_contract,
+                coordinate: Some("openfoam/solid-displacement".to_string()),
+                presentation: None,
+            },
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                sub_air: &sub_air,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| {
+            panic!("59-firing-curve-bo must compile with the library-node child: {e:?}")
+        })
+        .air;
+
+        let air_str = air.to_string();
+        for marker in [
+            "outputs.evaluation", // Map collect lifts body.detail.outputs.evaluation
+            "new_best_field_key", // gather output → best_field_key accumulator
+            "cutthrough",         // post-loop render node lowered
+        ] {
+            assert!(
+                air_str.contains(marker),
+                "59 AIR must contain `{marker}` — refactor lowering changed?"
+            );
+        }
+    }
+
     /// The email-welcome demo (Start → HumanTask intake → SMTP send → End)
     /// must parse + compile cleanly through the same AIR pipeline
     /// `/api/v1/templates/{id}/publish` uses. This is the canonical SMTP-backend

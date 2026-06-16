@@ -87,6 +87,11 @@
             "mergeExpr": "gather.new_best_hold"
           },
           {
+            "var": "best_field_key",
+            "init": "\"\"",
+            "mergeExpr": "gather.new_best_field_key"
+          },
+          {
             "var": "budget",
             "init": "if type_of(start.max_iterations) == \"i64\" && start.max_iterations > 0 { start.max_iterations } else if type_of(start.max_iterations) == \"f64\" && start.max_iterations > 0.0 { start.max_iterations } else { 6 }",
             "mergeExpr": "campaign.budget"
@@ -168,29 +173,11 @@
         "description": "Scatters `propose.candidates` into one body token per firing curve and runs the OpenFOAM evaluation once per element (data-parallel across the executor pool). Gathers the per-candidate observations into the `evals` collection consumed by `gather`.",
         "itemsRef": "propose.candidates",
         "itemVar": "cand",
-        "resultVar": "obs",
+        "resultVar": "evaluation",
         "output": {
           "id": "out",
           "label": "Eval",
           "fields": [
-            {
-              "name": "ramp_rate",
-              "label": "Ramp rate [K/min]",
-              "kind": "number",
-              "required": true
-            },
-            {
-              "name": "cool_rate",
-              "label": "Cool rate [K/min]",
-              "kind": "number",
-              "required": true
-            },
-            {
-              "name": "hold_time_s",
-              "label": "Hold time [s]",
-              "kind": "number",
-              "required": true
-            },
             {
               "name": "sigma_max_mpa",
               "label": "Peak von-Mises stress [MPa]",
@@ -214,6 +201,24 @@
               "label": "Cost",
               "kind": "number",
               "required": true
+            },
+            {
+              "name": "verdict",
+              "label": "Verdict",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "source",
+              "label": "Evaluation source",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "field_key",
+              "label": "Field-series artifact key",
+              "kind": "text",
+              "required": false
             }
           ]
         }
@@ -221,35 +226,73 @@
     },
     {
       "id": "simulate",
-      "type": "automated_step",
+      "type": "sub_workflow",
       "slug": "simulate",
       "parentId": "mp",
       "position": { "x": 16, "y": 32 },
       "data": {
-        "type": "automated_step",
-        "label": "OpenFOAM firing simulation",
-        "description": "Map body. Reads the per-candidate firing curve (token-resident `cand.*` — no read-arc), generates the complete solidDisplacementFoam case (zirconia puck, quarter symmetry, kiln-curve table BC), runs it in the opencfd/openfoam-default:2506 Docker image, and extracts peak von-Mises stress, soak completeness, and cycle time into the observation. Emits a firing-curve/stress PNG via log_artifact (media card). `solver_mode=surrogate` (or Docker unavailable in `auto`) evaluates a closed-form surrogate calibrated against three cluster-validated runs instead, flagged `source: surrogate`.",
-        "executionSpec": {
-          "backendType": "python",
-          "entrypoint": "main.py",
-          "config": {
-            "python": "python3",
-            "requirements": [
-              "matplotlib"
-            ],
-            "virtualenv": false,
-            "sdk": true,
-            "inherit_env": true,
-            "env": {}
-          }
-        },
+        "type": "sub_workflow",
+        "label": "OpenFOAM firing eval (library node)",
+        "description": "Map body. Evaluates ONE candidate firing curve by calling the vendored OpenFOAM library node `openfoam/solid-displacement` (the solidDisplacementFoam kernel) as a sub-workflow — the single home of the physics. The per-candidate curve is threaded in from the token-resident `cand.*` itemVar; the child returns the `evaluation` bundle (sigma_max / soak_min / cycle / cost / verdict / source) plus a `field_key` pointing at its persisted VTK field series, which the post-loop `cutthrough` node renders for the winning curve. `solver_mode=surrogate` (or Docker unavailable in `auto`) evaluates the calibrated closed-form surrogate instead, flagged `source: surrogate` with an empty `field_key`.",
+        "templateId": "00000000-0000-0000-0000-00000000f001",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "ramp_rate", "expression": "cand.ramp_rate" },
+          { "targetField": "cool_rate", "expression": "cand.cool_rate" },
+          { "targetField": "hold_time_s", "expression": "cand.hold_time_s" },
+          { "targetField": "hold_temp", "expression": "cand.hold_temp" },
+          { "targetField": "sigma_limit", "expression": "cand.sigma_limit" },
+          { "targetField": "solver_mode", "expression": "cand.solver_mode" }
+        ],
         "output": {
           "id": "out",
-          "label": "Observation",
+          "label": "Evaluation",
           "fields": [
             {
-              "name": "obs",
-              "label": "Observation",
+              "name": "sigma_max_mpa",
+              "label": "Peak von-Mises stress [MPa]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "soak_min_k",
+              "label": "Min core T during hold [K]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "cycle_h",
+              "label": "Cycle time [h]",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "z",
+              "label": "Cost",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "verdict",
+              "label": "Verdict",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "source",
+              "label": "Evaluation source",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "field_key",
+              "label": "Field-series artifact key",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "evaluation",
+              "label": "Evaluation bundle",
               "kind": "json",
               "required": true
             }
@@ -266,7 +309,7 @@
       "data": {
         "type": "automated_step",
         "label": "Fold evals + update incumbent",
-        "description": "Reads the gathered Map collection (`evals.output`) plus the prior incumbent (`campaign.f_best`, `campaign.best_ramp`, `campaign.best_cool`, `campaign.best_hold`), folds the new observations into the set, and updates the incumbent firing curve. Its outputs drive the loop accumulator mergeExprs.",
+        "description": "Reads the gathered Map collection (`evals.output` — the per-candidate physics bundles) and zips it BY INDEX with `propose.candidates` (the gather barrier sorts by map index, so the orders match) to recover the BO-internal unit-cube coords (`u_ramp`/`u_cool`/`u_hold`) the library node deliberately doesn't carry. Folds the combined observations into the set, updates the incumbent firing curve, and tracks the incumbent's `field_key` (the persisted VTK series for the post-loop cut-through render). Reads the prior incumbent (`campaign.f_best`, `campaign.best_ramp`, `campaign.best_cool`, `campaign.best_hold`, `campaign.best_field_key`). Its outputs drive the loop accumulator mergeExprs.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -312,6 +355,53 @@
               "label": "Updated best hold [s]",
               "kind": "number",
               "required": true
+            },
+            {
+              "name": "new_best_field_key",
+              "label": "Updated best field-series key",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cutthrough",
+      "type": "automated_step",
+      "slug": "cutthrough",
+      "position": { "x": 1284, "y": 30 },
+      "data": {
+        "type": "automated_step",
+        "label": "Cut-through field animation (best curve)",
+        "description": "Post-processing analysis. Reads the winning curve's persisted OpenFOAM field series (`campaign.best_field_key`), pulls the tarball back via the SDK (`aithericon.file(key).retrieve()`), and renders a radial (r,z) cross-section animation of temperature and von-Mises stress (`cutthrough.mp4`, video/mp4) with the headless aithericon-pvrender image — surfacing it as a renderable media card. Best-effort: a surrogate winner (empty key), a missing render image, or any retrieve/render hiccup is WARN-skipped, so the campaign never fails on visualization.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Render",
+          "fields": [
+            {
+              "name": "rendered",
+              "label": "Cut-through rendered",
+              "kind": "bool",
+              "required": true
+            },
+            {
+              "name": "note",
+              "label": "Render note",
+              "kind": "text",
+              "required": true
             }
           ]
         }
@@ -321,7 +411,7 @@
       "id": "report",
       "type": "automated_step",
       "slug": "report",
-      "position": { "x": 1284, "y": 30 },
+      "position": { "x": 1560, "y": 30 },
       "data": {
         "type": "automated_step",
         "label": "Animate GP surrogate",
@@ -404,7 +494,7 @@
       "id": "review",
       "type": "human_task",
       "slug": "review",
-      "position": { "x": 1560, "y": 30 },
+      "position": { "x": 1840, "y": 30 },
       "data": {
         "type": "human_task",
         "label": "Review campaign",
@@ -416,7 +506,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1840, "y": 41 },
+      "position": { "x": 2120, "y": 41 },
       "data": {
         "type": "end",
         "label": "Report best firing curve",
@@ -514,8 +604,15 @@
       "type": "loop_back"
     },
     {
-      "id": "e_lp_report",
+      "id": "e_lp_cutthrough",
       "source": "lp",
+      "target": "cutthrough",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_cutthrough_report",
+      "source": "cutthrough",
       "target": "report",
       "targetHandle": "in",
       "type": "sequence"

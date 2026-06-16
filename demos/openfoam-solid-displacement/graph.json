@@ -51,7 +51,9 @@
             { "name": "cycle_h", "label": "Cycle time [h]", "kind": "number", "required": true },
             { "name": "z", "label": "Cost (cycle + penalties)", "kind": "number", "required": true },
             { "name": "verdict", "label": "Verdict", "kind": "text", "required": true },
-            { "name": "source", "label": "Evaluation source", "kind": "text", "required": true }
+            { "name": "source", "label": "Evaluation source", "kind": "text", "required": true },
+            { "name": "field_key", "label": "Field-series artifact key", "kind": "text", "required": false },
+            { "name": "evaluation", "label": "Evaluation bundle", "kind": "json", "required": true }
           ]
         }
       }
@@ -69,7 +71,9 @@
           { "targetField": "cycle_h", "expression": "simulate.cycle_h" },
           { "targetField": "z", "expression": "simulate.z" },
           { "targetField": "verdict", "expression": "simulate.verdict" },
-          { "targetField": "source", "expression": "simulate.source" }
+          { "targetField": "source", "expression": "simulate.source" },
+          { "targetField": "field_key", "expression": "simulate.field_key" },
+          { "targetField": "evaluation", "expression": "simulate.evaluation" }
         ]
       }
     }

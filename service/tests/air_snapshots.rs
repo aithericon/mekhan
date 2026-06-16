@@ -131,14 +131,9 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // the sink-mode crawl step compiling with NO channels. RUNNING it is
     // live-only (publishes to INVENTORY_FOLD, folded by mekhan's consumer).
     "55-crawl-campaign",
-    // 59-firing-curve-bo: the OpenFOAM firing-curve BO campaign (demo 12's
-    // Loop+Map+gather topology over a real-physics objective). Pins the
-    // 3-param accumulator set with defensive Rhai inits (untouched-Run-form
-    // coercion) and the `campaign.*` read-arc synthesis into propose/gather.
-    // Self-contained (no resources/assets/children); RUNNING the docker path
-    // is live-only (needs the opencfd/openfoam-default image), and
-    // `solver_mode=surrogate` exercises the full topology without it.
-    "59-firing-curve-bo",
+    // 59-firing-curve-bo: SKIPPED — see the documented_skip list. Its Map body
+    // now calls the openfoam/solid-displacement library node as a sub_workflow
+    // child, which bare `compile_to_air` can't resolve.
     // openfoam-solid-displacement: a LIBRARY NODE (template_kind=library_node,
     // coordinate openfoam/solid-displacement) — the single-evaluation OpenFOAM
     // kernel of demo 59 lifted into a standalone, brandable sub-workflow
@@ -423,11 +418,6 @@ fn snapshot_55_crawl_campaign() {
 }
 
 #[test]
-fn snapshot_59_firing_curve_bo() {
-    run("59-firing-curve-bo");
-}
-
-#[test]
 fn snapshot_openfoam_solid_displacement() {
     run("openfoam-solid-displacement");
 }
@@ -622,11 +612,20 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // and the 28..40 ROS demos. Capture/record/mirror are live-only
         // (Isaac Sim + ROS bridge). Pre-dated this list; added retroactively.
         "56-isaac-experiment-capture",
+        // 59-firing-curve-bo — the BO campaign's Map body now calls the
+        // `openfoam/solid-displacement` LIBRARY NODE as a sub_workflow child
+        // (templateId f001), so bare `compile_to_air` can't resolve it (same
+        // class as 06-subworkflow / 60). The OpenFOAM kernel's AIR is pinned by
+        // the `openfoam-solid-displacement` snapshot; the loop/map/gather
+        // topology mirrors 12-bo-loop's (snapshotted). Proven live by the
+        // publish path + `solver_mode=surrogate` runs.
+        "59-firing-curve-bo",
         // 60-closed-loop-firing — flow-in-flow capstone embedding 59 (the BO
         // campaign) and 40 (robot sample handling) as sub_workflow children
         // by templateId; needs publish-time child resolution, same class as
-        // 06-subworkflow. The campaign's own AIR is pinned by 59's snapshot;
-        // the composition is proven by the publish path + live runs.
+        // 06-subworkflow. The campaign's OpenFOAM kernel AIR is pinned by the
+        // `openfoam-solid-displacement` snapshot; the composition is proven by
+        // the publish path + live runs.
         "60-closed-loop-firing",
     ]
     .into_iter()
