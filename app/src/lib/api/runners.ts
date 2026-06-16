@@ -62,25 +62,32 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
 export interface ListRunnersParams {
 	page?: number;
 	perPage?: number;
+	/** List the shared platform-tier runner pool instead of the caller's workspace. */
+	platform?: boolean;
 }
 
-/** GET /api/v1/runners — paginated, workspace-scoped list of live runners. */
+/** GET /api/v1/runners — paginated list of live runners (caller's workspace, or
+ * the shared platform pool when `platform` is set). */
 export async function listRunners(params?: ListRunnersParams): Promise<PaginatedRunners> {
 	return unwrap(
 		await client.GET('/api/v1/runners', {
 			params: {
 				query: {
 					page: params?.page ?? 1,
-					per_page: params?.perPage ?? 20
+					per_page: params?.perPage ?? 20,
+					platform: params?.platform ?? false
 				}
 			}
 		})
 	);
 }
 
-/** GET /api/v1/runners/{id} — admin detail view of a single runner. */
-export async function getRunner(id: string): Promise<RunnerDetail> {
-	return unwrap(await client.GET('/api/v1/runners/{id}', { params: { path: { id } } }));
+/** GET /api/v1/runners/{id} — admin detail view of a single runner (caller's
+ * workspace, or the shared platform scope when `platform` is set). */
+export async function getRunner(id: string, platform = false): Promise<RunnerDetail> {
+	return unwrap(
+		await client.GET('/api/v1/runners/{id}', { params: { path: { id }, query: { platform } } })
+	);
 }
 
 /** DELETE /api/v1/runners/{id} — revoke (soft delete, status → 'revoked'). */
@@ -143,8 +150,8 @@ export async function revokeRegistrationToken(id: string): Promise<void> {
  * Reflects the presence-controller's PresenceMap (the actual pool-capacity
  * signal), NOT `runners.last_seen_at` (a best-effort UI bump).
  */
-export async function getRunnerPresence(): Promise<RunnerPresenceSnapshot[]> {
-	return unwrap(await client.GET('/api/v1/runners/presence', {}));
+export async function getRunnerPresence(platform = false): Promise<RunnerPresenceSnapshot[]> {
+	return unwrap(await client.GET('/api/v1/runners/presence', { params: { query: { platform } } }));
 }
 
 // ── Interface-catalog endpoint ─────────────────────────────────────────────

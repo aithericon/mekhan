@@ -305,6 +305,14 @@ pub struct ListWorkersQuery {
     pub page: i64,
     #[serde(default = "default_per_page")]
     pub per_page: i64,
+    /// List the shared PLATFORM-tier worker pool (`scope_kind = 'platform'`,
+    /// `workspace_id = PLATFORM_SCOPE_ID`) instead of the caller's workspace.
+    /// Platform infra is globally read-visible, so any authed user may list it;
+    /// the Fleet platform-pool detail view sets this to surface the pool's member
+    /// workers per-row (the workspace-scoped default can't, since
+    /// `PLATFORM_SCOPE_ID` is not a joinable workspace). Defaults to `false`.
+    #[serde(default)]
+    pub platform: bool,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -663,7 +671,13 @@ pub async fn list_workers(
     user: AuthUser,
     Query(params): Query<ListWorkersQuery>,
 ) -> Result<Json<PaginatedResponse<WorkerSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user)?;
+    // Platform pool reads target the shared platform scope (globally read-visible);
+    // everything else is the caller's workspace.
+    let workspace_id = if params.platform {
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)?
+    };
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, WorkerRow>(

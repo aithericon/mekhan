@@ -11093,6 +11093,15 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "description": "List the shared PLATFORM-tier runner pool (`workspace_id =\nPLATFORM_SCOPE_ID`, e.g. the `model_serving` group) instead of the\ncaller's workspace. Platform infra is globally read-visible; the Fleet\nplatform-pool detail view sets this to surface the pool's member runners\nper-row. Defaults to `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -11203,6 +11212,16 @@
         "summary": "`GET /api/v1/runners/presence` — live in-memory presence snapshot (Phase 5).",
         "description": "Returns the presence-controller's in-memory `PresenceMap` — the actual\npool-capacity signal (which runners hold an admitted unit right now), NOT the\n`runners.last_seen_at` column on the list view. Read-only; behind the auth\ngate like the other management reads.\n\nThe in-memory map is keyed by `runner_id` only and carries no workspace, so\nit is filtered here against the caller's workspace — a presence row is\nreturned only for a runner that lives in the caller's workspace. Without this\nthe snapshot would leak every workspace's runner ids + liveness timing\n(tenant-isolation break), since every other runner read is workspace-scoped.",
         "operationId": "runner_presence",
+        "parameters": [
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Live runner presence snapshot",
@@ -11341,7 +11360,7 @@
         "tags": [
           "runners"
         ],
-        "summary": "`GET /api/v1/runners/{id}` — admin view (workspace-scoped).",
+        "summary": "`GET /api/v1/runners/{id}` — admin view (workspace-scoped, or the shared\nplatform scope with `?platform=true` for a platform-pool member).",
         "operationId": "get_runner",
         "parameters": [
           {
@@ -11352,6 +11371,14 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -14963,6 +14990,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "description": "List the shared PLATFORM-tier worker pool (`scope_kind = 'platform'`,\n`workspace_id = PLATFORM_SCOPE_ID`) instead of the caller's workspace.\nPlatform infra is globally read-visible, so any authed user may list it;\nthe Fleet platform-pool detail view sets this to surface the pool's member\nworkers per-row (the workspace-scoped default can't, since\n`PLATFORM_SCOPE_ID` is not a joinable workspace). Defaults to `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
