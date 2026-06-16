@@ -75,6 +75,38 @@ describe('parseQuery — filter ops', () => {
 		expect(terms('ext!:a,b,c')[0]).toMatchObject({ op: 'not_in', value: 'a,b,c' });
 	});
 
+	it('parses ~ / ^ / $ as contains / starts_with / ends_with', () => {
+		expect(terms('filename~report')).toEqual([
+			{ kind: 'filter', field: 'filename', op: 'contains', value: 'report', raw: 'filename~report' }
+		]);
+		expect(terms('name^run-')[0]).toMatchObject({ op: 'starts_with', value: 'run-' });
+		expect(terms('filename$.csv')[0]).toMatchObject({ op: 'ends_with', value: '.csv' });
+	});
+
+	it('substring ops carry quoted values verbatim and round-trip', () => {
+		expect(terms('filename~"q3 report"')[0]).toMatchObject({
+			op: 'contains',
+			value: 'q3 report'
+		});
+		// ~ / ^ / $ have no special null/*/comma forms — value is literal.
+		expect(terms('filename~a,b')[0]).toMatchObject({ op: 'contains', value: 'a,b' });
+		for (const q of ['filename~report', 'name^run-', 'filename$.csv', 'filename~"q3 report"']) {
+			expect(formatQuery(terms(q))).toBe(q);
+		}
+	});
+
+	it('compiles substring ops to their server operators', () => {
+		expect(compile('filename~report').filters).toEqual([
+			{ field: 'filename', op: 'contains', value: 'report' }
+		]);
+		expect(compile('name^run-').filters).toEqual([
+			{ field: 'name', op: 'starts_with', value: 'run-' }
+		]);
+		expect(compile('filename$.csv').filters).toEqual([
+			{ field: 'filename', op: 'ends_with', value: '.csv' }
+		]);
+	});
+
 	it('parses field:null / field:* as null checks', () => {
 		expect(terms('owner:null')).toEqual([
 			{ kind: 'filter', field: 'owner', op: 'is_null', value: '', raw: 'owner:null' }
