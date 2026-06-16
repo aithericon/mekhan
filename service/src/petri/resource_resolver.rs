@@ -50,6 +50,7 @@ use uuid::Uuid;
 use aithericon_resources::{registry::lookup, ResourcePin};
 
 use crate::compiler::resource_refs::KnownResources;
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::resource::{ResourceRow, ResourceVersionRow};
 
 /// Sentinel key in `public_config` recording which of the type's declared
@@ -241,18 +242,21 @@ impl ResourceResolver {
         principal_id: Uuid,
         pin: &ResourcePin,
     ) -> Result<JsonMap<String, JsonValue>, ResolverError> {
-        // (1) Load the resource row. Workspace + soft-delete filter inline so
-        // a wrong-workspace or deleted resource is indistinguishable from
+        // (1) Load the resource row. Either the caller's workspace OR the
+        // globally-visible platform tier; soft-delete filter inline so a
+        // wrong-workspace or deleted resource is indistinguishable from
         // "doesn't exist" at the API surface.
         let resource: Option<ResourceRow> = sqlx::query_as::<_, ResourceRow>(
             "SELECT id, workspace_id, path, resource_type, display_name, \
                     latest_version, deleted_at, created_by, created_at, updated_at, \
                     updated_by, scope_kind, scope_id, display_path \
              FROM resources \
-             WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL",
+             WHERE id = $1 AND (workspace_id = $2 OR workspace_id = $3) \
+               AND deleted_at IS NULL",
         )
         .bind(pin.resource_id)
         .bind(workspace_id)
+        .bind(PLATFORM_SCOPE_ID)
         .fetch_optional(&self.db)
         .await?;
 
@@ -273,18 +277,24 @@ impl ResourceResolver {
         // a member of that workspace. `resource_acl` remains populated on
         // create — v2 promotes it from auto-grant to "additional grants
         // on top of workspace membership" via a `UNION`-style query here.
-        let is_member: bool = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM workspace_members \
-                            WHERE workspace_id = $1 AND user_id = $2)",
-        )
-        .bind(workspace_id)
-        .bind(principal_id)
-        .fetch_one(&self.db)
-        .await?;
-        if !is_member {
-            return Err(ResolverError::ResourceNotFound {
-                resource_id: pin.resource_id,
-            });
+        //
+        // Platform-tier rows are globally runnable — they're owned by no
+        // tenant, so they SKIP the membership gate (any authenticated caller
+        // may resolve them); tenant rows keep the member check.
+        if resource.scope_kind != "platform" {
+            let is_member: bool = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM workspace_members \
+                                WHERE workspace_id = $1 AND user_id = $2)",
+            )
+            .bind(workspace_id)
+            .bind(principal_id)
+            .fetch_one(&self.db)
+            .await?;
+            if !is_member {
+                return Err(ResolverError::ResourceNotFound {
+                    resource_id: pin.resource_id,
+                });
+            }
         }
 
         // (4) Load the pinned version row.

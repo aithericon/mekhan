@@ -57,6 +57,8 @@ pub fn dev_user_roster() -> Vec<AuthUser> {
             display_name: Some("Dev User".to_string()),
             roles: Vec::new(),
             org_id: None,
+            // The historical fixed dev user is the platform admin in dev_noop.
+            is_platform_admin: true,
             workspace_id: Some(uuid::Uuid::nil()),
             workspace_role: Some("owner".to_string()),
             avatar_url: None,
@@ -69,6 +71,8 @@ pub fn dev_user_roster() -> Vec<AuthUser> {
             display_name: Some("Dev User Two".to_string()),
             roles: Vec::new(),
             org_id: None,
+            // dev-user-2 is a plain tenant owner, NOT a platform admin.
+            is_platform_admin: false,
             workspace_id: Some(DEV_ORG2_WORKSPACE_ID),
             workspace_role: Some("owner".to_string()),
             avatar_url: None,

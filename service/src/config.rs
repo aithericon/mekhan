@@ -324,6 +324,12 @@ pub struct AuthConfig {
     /// dev-user keeps its `default`-as-owner membership regardless.
     #[serde(default)]
     pub multi_org: bool,
+    /// Platform-administrator allow-list. Each entry matches a principal's
+    /// OIDC `subject` OR `email`; a match sets `AuthUser.is_platform_admin`,
+    /// gating platform-global governance (the platform scope). Empty (the
+    /// default) ⇒ no platform admins via config (dev-noop seeds its own).
+    #[serde(default)]
+    pub platform_admins: Vec<String>,
 }
 
 impl Default for AuthConfig {
@@ -344,6 +350,7 @@ impl Default for AuthConfig {
             introspection_client_secret: None,
             broker_pat: None,
             multi_org: false,
+            platform_admins: Vec::new(),
         }
     }
 }

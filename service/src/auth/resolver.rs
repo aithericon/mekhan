@@ -100,6 +100,9 @@ impl PrincipalResolver for StaticPrincipalResolver {
             display_name,
             roles,
             org_id,
+            // The DB resolver wrapping this one stamps platform-admin from the
+            // config allow-list; the bare static resolver never grants it.
+            is_platform_admin: false,
             workspace_id: None,
             workspace_role: None,
             avatar_url,
@@ -128,23 +131,35 @@ pub struct DbPrincipalResolver {
     /// single-org behaviour: auto-join `default` as `editor`. `true` enables
     /// real multi-org tenancy — see the gated branches in [`Self::resolve`].
     multi_org: bool,
+    /// Mirrors `AuthConfig.platform_admins`: subjects or emails that resolve
+    /// to `is_platform_admin = true`. Empty ⇒ no platform admins via config.
+    platform_admins: Vec<String>,
 }
 
 impl DbPrincipalResolver {
-    /// Construct with the legacy single-org behaviour (multi-org OFF).
-    /// Kept as the zero-config constructor so existing call sites / tests
-    /// that don't care about tenancy are unaffected.
+    /// Construct with the legacy single-org behaviour (multi-org OFF) and no
+    /// platform admins. Kept as the zero-config constructor so existing call
+    /// sites / tests that don't care about tenancy are unaffected.
     pub fn new(db: PgPool) -> Self {
-        Self::with_multi_org(db, false)
+        Self::with_options(db, false, Vec::new())
     }
 
     /// Construct with the multi-org flag wired from `AuthConfig.multi_org`.
-    /// The composition root (`main.rs`) uses this; pass `config.auth.multi_org`.
+    /// Delegates to [`Self::with_options`] with an empty platform-admin list,
+    /// so existing callers/tests stay green.
     pub fn with_multi_org(db: PgPool, multi_org: bool) -> Self {
+        Self::with_options(db, multi_org, Vec::new())
+    }
+
+    /// Full constructor: multi-org flag + platform-admin allow-list. The
+    /// composition root (`main.rs`) uses this; pass `config.auth.multi_org`
+    /// and `config.auth.platform_admins`.
+    pub fn with_options(db: PgPool, multi_org: bool, platform_admins: Vec<String>) -> Self {
         Self {
             inner: StaticPrincipalResolver,
             db,
             multi_org,
+            platform_admins,
         }
     }
 }
@@ -158,6 +173,13 @@ impl PrincipalResolver for DbPrincipalResolver {
 
         let mut user = self.inner.resolve(claims).await?;
         let user_id = user.subject_as_uuid();
+
+        // Platform-admin: match the principal's subject OR email against the
+        // config allow-list. Stamped once here so every downstream gate reads
+        // it off the resolved `AuthUser`.
+        user.is_platform_admin = self.platform_admins.iter().any(|entry| {
+            entry == &user.subject || user.email.as_deref() == Some(entry.as_str())
+        });
 
         // Auto-membership in every system workspace (currently just `demos`).
         // The platform wants every authenticated principal to *be* a member

@@ -955,12 +955,16 @@ async fn datacenter_flavor(
     workspace_id: Uuid,
     alias: &str,
 ) -> Result<Option<String>, ApiError> {
+    // Bind the caller's workspace OR the globally-visible platform tier; a
+    // tenant row of the same path wins (`ORDER BY (scope_kind='platform') ASC`).
     let public_config: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT rv.public_config \
          FROM resources r \
          JOIN resource_versions rv \
            ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 AND r.path = $2 AND r.deleted_at IS NULL",
+         WHERE (r.workspace_id = $1 OR r.scope_kind = 'platform') \
+           AND r.path = $2 AND r.deleted_at IS NULL \
+         ORDER BY (r.scope_kind = 'platform') ASC LIMIT 1",
     )
     .bind(workspace_id)
     .bind(alias)
@@ -983,10 +987,12 @@ async fn datacenter_resource_id(
     workspace_id: Uuid,
     alias: &str,
 ) -> Result<Option<Uuid>, ApiError> {
+    // Caller's workspace OR the platform tier; tenant row wins on a path clash.
     sqlx::query_scalar(
         "SELECT id FROM resources \
-         WHERE workspace_id = $1 AND path = $2 \
-           AND resource_type = 'datacenter' AND deleted_at IS NULL",
+         WHERE (workspace_id = $1 OR scope_kind = 'platform') AND path = $2 \
+           AND resource_type = 'datacenter' AND deleted_at IS NULL \
+         ORDER BY (scope_kind = 'platform') ASC LIMIT 1",
     )
     .bind(workspace_id)
     .bind(alias)

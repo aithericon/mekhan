@@ -22,6 +22,7 @@
 //! `workspace_id` and resolves a missing one to `Uuid::nil()` — the
 //! placeholder until the workspaces table lands.
 
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use axum::{
@@ -40,6 +41,7 @@ use crate::auth::{
     apply_grant, effective_object_roles, filter_and_annotate_visible, map_to_api_error,
     require_object_role, require_role, AuthUser, ObjectKind, ObjectRef, Role,
 };
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::resource::{
     CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, ResourceAuditEntry,
@@ -621,6 +623,46 @@ async fn annotate_resource_roles(
     Ok(items)
 }
 
+/// Build annotated summaries from an ALREADY-shadow-resolved set of mixed
+/// tenant + platform rows. The tenant subset goes through the ACL annotate path
+/// (drops restricted rows the caller can't reach). Platform winners bypass the
+/// workspace-local ACL entirely — they're globally visible — and are stamped
+/// directly: `owner` for a platform admin, else `viewer`, never restricted.
+///
+/// `platform_ids` is the set of row ids that loaded as `scope_kind='platform'`.
+async fn annotate_with_platform(
+    state: &AppState,
+    user: &AuthUser,
+    workspace_id: Uuid,
+    rows: Vec<ResourceRow>,
+    platform_ids: &HashSet<Uuid>,
+) -> Result<Vec<ResourceSummary>, ApiError> {
+    // Split tenant vs platform winners.
+    let (platform_rows, tenant_rows): (Vec<ResourceRow>, Vec<ResourceRow>) = rows
+        .into_iter()
+        .partition(|r| platform_ids.contains(&r.id));
+
+    let dyn_keys = fetch_dynamic_keys(&state.db, &tenant_rows).await?;
+    let capacity_public = fetch_capacity_public_config(&state.db, &tenant_rows).await?;
+    let tenant_summaries = rows_to_summaries(tenant_rows, &dyn_keys, &capacity_public);
+    let mut out = annotate_resource_roles(state, user, workspace_id, tenant_summaries).await?;
+
+    // Platform winners: stamp directly, bypass the ACL filter.
+    let dyn_keys = fetch_dynamic_keys(&state.db, &platform_rows).await?;
+    let capacity_public = fetch_capacity_public_config(&state.db, &platform_rows).await?;
+    let plat_role = if user.is_platform_admin {
+        Role::Owner
+    } else {
+        Role::Viewer
+    };
+    for mut s in rows_to_summaries(platform_rows, &dyn_keys, &capacity_public) {
+        s.my_effective_role = Some(plat_role.as_label().to_string());
+        s.restricted = false;
+        out.push(s);
+    }
+    Ok(out)
+}
+
 /// `GET /api/v1/resources` — paginated list, optionally filtered by type.
 #[utoipa::path(
     get,
@@ -646,54 +688,72 @@ pub async fn list_resources(
     let workspace_id = params
         .workspace_id
         .unwrap_or_else(|| caller_workspace(&user));
-    let offset = (params.page - 1) * params.per_page;
 
-    let (rows, total) = if let Some(ref ty) = params.resource_type {
-        let rows = sqlx::query_as::<_, ResourceRow>(
+    // UNION the caller's workspace rows with the globally-visible platform tier.
+    // Shadowing + pagination happen in Rust (a tenant row of the same path wins
+    // over a platform one), so SQL fetches the full candidate set unpaginated.
+    let rows = if let Some(ref ty) = params.resource_type {
+        sqlx::query_as::<_, ResourceRow>(
             "SELECT * FROM resources \
-             WHERE workspace_id = $1 AND resource_type = $2 AND deleted_at IS NULL \
-             ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+             WHERE (workspace_id = $1 OR scope_kind = 'platform') \
+               AND resource_type = $2 AND deleted_at IS NULL \
+             ORDER BY created_at DESC",
         )
         .bind(workspace_id)
         .bind(ty)
-        .bind(params.per_page)
-        .bind(offset)
         .fetch_all(&state.db)
-        .await?;
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM resources \
-             WHERE workspace_id = $1 AND resource_type = $2 AND deleted_at IS NULL",
-        )
-        .bind(workspace_id)
-        .bind(ty)
-        .fetch_one(&state.db)
-        .await?;
-        (rows, total)
+        .await?
     } else {
-        let rows = sqlx::query_as::<_, ResourceRow>(
+        sqlx::query_as::<_, ResourceRow>(
             "SELECT * FROM resources \
-             WHERE workspace_id = $1 AND deleted_at IS NULL \
-             ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+             WHERE (workspace_id = $1 OR scope_kind = 'platform') AND deleted_at IS NULL \
+             ORDER BY created_at DESC",
         )
         .bind(workspace_id)
-        .bind(params.per_page)
-        .bind(offset)
         .fetch_all(&state.db)
-        .await?;
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM resources \
-             WHERE workspace_id = $1 AND deleted_at IS NULL",
-        )
-        .bind(workspace_id)
-        .fetch_one(&state.db)
-        .await?;
-        (rows, total)
+        .await?
     };
 
-    let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await?;
-    let capacity_public = fetch_capacity_public_config(&state.db, &rows).await?;
-    let items = rows_to_summaries(rows, &dyn_keys, &capacity_public);
-    let items = annotate_resource_roles(&state, &user, workspace_id, items).await?;
+    // Shadow platform rows with a same-path workspace row (most-specific-wins).
+    // A workspace binding context: workspace + platform visible.
+    use crate::scope::{self, Scope, ScopedItem, VisibleScopes};
+    let visible = VisibleScopes {
+        platform: true,
+        workspace: Some(workspace_id),
+        folders: Vec::new(),
+        template: None,
+    };
+    let scoped: Vec<ScopedItem<ResourceRow>> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let kind = crate::models::asset::ScopeKind::from_db(&r.scope_kind)?;
+            let sid = r.scope_id?;
+            Some(ScopedItem {
+                scope: Scope { kind, id: sid },
+                ref_key: r.path.clone(),
+                item: r,
+            })
+        })
+        .collect();
+    let winning: Vec<ResourceRow> = scope::resolve_visible(&visible, scoped)
+        .map_err(|c| ApiError::conflict(c.to_string()))?
+        .into_values()
+        .map(|si| si.item)
+        .collect();
+
+    let platform_ids: HashSet<Uuid> = winning
+        .iter()
+        .filter(|r| r.scope_kind == "platform")
+        .map(|r| r.id)
+        .collect();
+
+    let mut items =
+        annotate_with_platform(&state, &user, workspace_id, winning, &platform_ids).await?;
+    items.sort_by_key(|s| std::cmp::Reverse(s.created_at));
+    let total = items.len() as i64;
+    let offset = ((params.page - 1).max(0) * params.per_page).max(0) as usize;
+    let per = params.per_page.max(0) as usize;
+    let items: Vec<ResourceSummary> = items.into_iter().skip(offset).take(per).collect();
     Ok(Json(PaginatedResponse {
         items,
         total,
@@ -750,6 +810,12 @@ async fn list_resources_scoped(
     } else {
         let mut kinds: Vec<String> = Vec::new();
         let mut ids: Vec<Uuid> = Vec::new();
+        // Platform tier: the least-specific global fallback, shadowed by any
+        // workspace/folder/template row of the same path in `resolve_visible`.
+        if visible.platform {
+            kinds.push("platform".to_string());
+            ids.push(PLATFORM_SCOPE_ID);
+        }
         if let Some(ws) = visible.workspace {
             kinds.push("workspace".to_string());
             ids.push(ws);
@@ -833,10 +899,16 @@ async fn list_resources_scoped(
     let per = params.per_page.max(0) as usize;
     let page_rows: Vec<ResourceRow> = winning.into_iter().skip(offset).take(per).collect();
 
-    let dyn_keys = fetch_dynamic_keys(&state.db, &page_rows).await?;
-    let capacity_public = fetch_capacity_public_config(&state.db, &page_rows).await?;
-    let items = rows_to_summaries(page_rows, &dyn_keys, &capacity_public);
-    let items = annotate_resource_roles(state, user, caller_workspace(user), items).await?;
+    // Platform winners bypass the workspace-local ACL (globally visible);
+    // stamp them directly. Tenant winners go through the ACL annotate path.
+    let platform_ids: HashSet<Uuid> = page_rows
+        .iter()
+        .filter(|r| r.scope_kind == "platform")
+        .map(|r| r.id)
+        .collect();
+    let items =
+        annotate_with_platform(state, user, caller_workspace(user), page_rows, &platform_ids)
+            .await?;
     Ok(Json(PaginatedResponse {
         items,
         total,
@@ -896,17 +968,33 @@ pub async fn create_resource(
     Json(req): Json<CreateResourceRequest>,
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
     let principal_id = user.subject_as_uuid();
-    let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
-
-    // Placement gate: you must be Editor on the scope you create into — the
-    // workspace (workspace-scoped) or the owning folder/template.
     let scope_kind = req
         .scope_kind
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("workspace");
+
+    // Platform-scoped resources are curated by a platform admin and live under
+    // the synthetic PLATFORM_SCOPE_ID (workspace_id = scope_id = sentinel). The
+    // gate is purely the admin flag — workspace-local ACLs (require_role /
+    // object_grants) would 403 everyone, so they're bypassed entirely.
+    let workspace_id = if scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+        PLATFORM_SCOPE_ID
+    } else {
+        req.workspace_id.unwrap_or_else(|| caller_workspace(&user))
+    };
+
+    // Placement gate: you must be Editor on the scope you create into — the
+    // workspace (workspace-scoped) or the owning folder/template. The platform
+    // scope is gated above on the admin flag and skips the ACL path.
     match scope_kind {
+        "platform" => Role::Owner,
         "workspace" => require_role(&state.db, &user, workspace_id, Role::Editor)
             .await
             .map_err(map_to_api_error)?,
@@ -1013,6 +1101,10 @@ pub(crate) async fn create_resource_internal_with_id(
         .filter(|s| !s.is_empty())
         .unwrap_or("workspace");
     let scope_id = match scope_kind {
+        // Platform rows store workspace_id = scope_id = PLATFORM_SCOPE_ID (the
+        // caller already forced workspace_id to the sentinel + gated on the
+        // admin flag).
+        "platform" => PLATFORM_SCOPE_ID,
         "workspace" => workspace_id,
         "folder" | "template" => req.scope_id.ok_or_else(|| {
             ApiError::bad_request(format!(
@@ -1395,11 +1487,21 @@ pub async fn get_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    // Object-ACL read gate (folder cascade + override; ws floor unless
-    // restricted; ws Owner/Admin bypass). 403 for a member without access.
-    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Viewer)
-        .await
-        .map_err(map_to_api_error)?;
+    // Platform rows are globally visible — read bypasses the workspace-local
+    // ACL; the caller's role is `owner` (platform admin) else `viewer`. Tenant
+    // rows keep the object-ACL read gate (folder cascade + override; ws floor
+    // unless restricted; ws Owner/Admin bypass). 403 for a member without access.
+    let role = if row.scope_kind == "platform" {
+        if user.is_platform_admin {
+            Role::Owner
+        } else {
+            Role::Viewer
+        }
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Viewer)
+            .await
+            .map_err(map_to_api_error)?
+    };
 
     let version = sqlx::query_as::<_, ResourceVersionRow>(
         "SELECT * FROM resource_versions WHERE resource_id = $1 AND version = $2",
@@ -1465,9 +1567,20 @@ pub async fn update_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Platform rows: gate on the admin flag, bypass the workspace-local object
+    // ACL entirely (it would 403 everyone). Tenant rows keep the Editor gate.
+    let role = if row.scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+        Role::Owner
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?
+    };
 
     if req.display_name.is_none() && req.config.is_none() {
         return Err(ApiError::bad_request(
@@ -1615,9 +1728,18 @@ pub async fn delete_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Platform rows: admin-flag gated, ACL bypassed. Tenant rows keep Editor.
+    if row.scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?;
+    }
 
     sqlx::query(
         "UPDATE resources SET deleted_at = NOW(), updated_at = NOW(), updated_by = $1 \
@@ -1684,14 +1806,37 @@ pub async fn move_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    // Source gate: Editor on the resource (object ACL) to move it out.
-    require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    let target_kind = req.scope_kind;
+
+    // v1 rejects any move that CROSSES the platform<->tenant boundary in either
+    // direction — platform resources are created directly as platform-scoped.
+    // Same-boundary moves (tenant->tenant, or platform-internal) keep existing
+    // behavior.
+    let src_platform = row.scope_kind == "platform";
+    let dst_platform = target_kind == ScopeKind::Platform;
+    if src_platform != dst_platform {
+        return Err(ApiError::bad_request(
+            "cannot move resources across the platform boundary",
+        ));
+    }
+
+    // Source gate. Platform source: admin-flag gated, ACL bypassed. Tenant
+    // source: Editor on the resource (object ACL) to move it out.
+    if src_platform {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?;
+    }
 
     // Resolve + authorize the target scope (create_resource placement rule).
-    let target_kind = req.scope_kind;
     let target_id = match target_kind {
+        ScopeKind::Platform => PLATFORM_SCOPE_ID,
         ScopeKind::Workspace => req.scope_id.unwrap_or(row.workspace_id),
         _ => req.scope_id.ok_or_else(|| {
             ApiError::bad_request(format!(
@@ -1701,6 +1846,17 @@ pub async fn move_resource(
         })?,
     };
     match target_kind {
+        // Platform target reachable only on a platform-internal move (the
+        // cross-boundary guard above already rejected tenant->platform); gate on
+        // the admin flag, bypass the workspace-local ACL.
+        ScopeKind::Platform => {
+            if !user.is_platform_admin {
+                return Err(ApiError::forbidden(
+                    "platform-scoped resource writes require platform admin",
+                ));
+            }
+            Role::Owner
+        }
         ScopeKind::Workspace => require_role(&state.db, &user, target_id, Role::Editor)
             .await
             .map_err(map_to_api_error)?,
@@ -1801,9 +1957,19 @@ pub async fn rotate_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    let role = require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Platform rows: admin-flag gated, ACL bypassed. Tenant rows keep Editor.
+    let role = if row.scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+        Role::Owner
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?
+    };
 
     let descriptor = descriptor_or_400(&row.resource_type)?;
     let mut config = req.config;

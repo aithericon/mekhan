@@ -34,6 +34,12 @@ pub struct AuthUser {
     /// Metadata only — the authoritative tenant is `workspace_id`, looked up
     /// from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
     pub org_id: Option<String>,
+    /// Whether this principal is a platform administrator — granted by the
+    /// `auth.platform_admins` allow-list (subject or email) or the dev-noop
+    /// seed. Gates platform-global governance affordances (the platform scope).
+    /// `#[serde(default)]` keeps old session JSON deserializing to `false`.
+    #[serde(default)]
+    pub is_platform_admin: bool,
     /// Mekhan workspace the principal is currently acting in. Populated by
     /// `DbPrincipalResolver` from the user's `workspace_members` row (auto-
     /// provisioned from `org_id` when a matching `workspaces.zitadel_org_id`
@@ -75,9 +81,10 @@ impl AuthUser {
 /// and adds `user_id` unconditionally. Keep in sync with the field list above.
 impl Serialize for AuthUser {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Base 6 always-present fields + the derived user_id; +1 each for the
-        // two optionals when present (advisory len for non-self-describing formats).
-        let mut len = 7;
+        // Base 7 always-present fields (incl. is_platform_admin) + the derived
+        // user_id; +1 each for the two optionals when present (advisory len for
+        // non-self-describing formats).
+        let mut len = 8;
         if self.workspace_role.is_some() {
             len += 1;
         }
@@ -93,6 +100,7 @@ impl Serialize for AuthUser {
         s.serialize_field("workspace_id", &self.workspace_id)?;
         // Always present — the whole reason this impl is hand-written.
         s.serialize_field("user_id", &self.subject_as_uuid())?;
+        s.serialize_field("is_platform_admin", &self.is_platform_admin)?;
         match &self.workspace_role {
             Some(role) => s.serialize_field("workspace_role", role)?,
             None => s.skip_field("workspace_role")?,
@@ -131,6 +139,7 @@ mod tests {
             display_name: None,
             roles: Vec::new(),
             org_id: None,
+            is_platform_admin: false,
             workspace_id: None,
             workspace_role: None,
             avatar_url: None,

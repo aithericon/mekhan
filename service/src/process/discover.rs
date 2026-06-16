@@ -412,21 +412,29 @@ async fn discover_resource_globals(
     }
 
     let head_vec: Vec<String> = all_heads.into_iter().collect();
-    let rows: Vec<(Uuid, String, String, i32, Option<serde_json::Value>)> = sqlx::query_as(
-        "SELECT r.id, r.path, r.resource_type, r.latest_version, rv.public_config \
-         FROM resources r \
-         LEFT JOIN resource_versions rv \
-           ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 AND r.path = ANY($2) AND r.deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&head_vec)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
+    // Bind the caller's workspace OR the globally-visible platform tier. The
+    // `ORDER BY (scope_kind='platform') ASC` lists tenant rows FIRST, so the
+    // `out.entry(path).or_insert_with(..)` below keeps the tenant row when a
+    // tenant and a platform resource share a path (tenant shadows platform).
+    let rows: Vec<(Uuid, String, String, i32, Option<serde_json::Value>, String)> =
+        sqlx::query_as(
+            "SELECT r.id, r.path, r.resource_type, r.latest_version, rv.public_config, \
+                    r.scope_kind \
+             FROM resources r \
+             LEFT JOIN resource_versions rv \
+               ON rv.resource_id = r.id AND rv.version = r.latest_version \
+             WHERE (r.workspace_id = $1 OR r.scope_kind = 'platform') \
+               AND r.path = ANY($2) AND r.deleted_at IS NULL \
+             ORDER BY (r.scope_kind = 'platform') ASC, r.path",
+        )
+        .bind(workspace_id)
+        .bind(&head_vec)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
 
     let mut resolved_paths: BTreeSet<String> = BTreeSet::new();
-    for (id, path, resource_type, latest_version, public_config) in rows {
+    for (id, path, resource_type, latest_version, public_config, _scope_kind) in rows {
         resolved_paths.insert(path.clone());
         let fields = resource_public_fields(&resource_type, public_config.as_ref());
         let used = envelope_heads.contains(&path);

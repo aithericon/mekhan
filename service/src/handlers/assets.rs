@@ -41,7 +41,7 @@ use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow, AssetTypeSummary,
     AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest, CreateAssetTypeRequest,
     CreateScopeQuery, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
-    MoveScopeRequest, ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
+    MoveScopeRequest, ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest, PLATFORM_SCOPE_ID,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{PaginatedResponse, Port, PortField};
@@ -807,6 +807,12 @@ pub async fn create_asset(
     // the membership gate; folder/template scopes use the object ACL (so a
     // restricted folder's grants govern who can add assets to it).
     match scope_kind {
+        // Part B lands platform-admin-gated placement; reject for now.
+        ScopeKind::Platform => {
+            return Err(ApiError::bad_request(
+                "platform-scoped asset placement is not yet supported",
+            ));
+        }
         ScopeKind::Workspace => require_editor(&state, &user, scope_kind, scope_id).await?,
         ScopeKind::Folder => {
             require_object_role(&state.db, &user, ObjectRef::folder(scope_id), Role::Editor)
@@ -901,6 +907,9 @@ pub(crate) async fn create_asset_internal(
     // (no ws floor → without this the creator couldn't read back what they made).
     // workspace_id for the grant row is resolved from the scope.
     let grant_ws: Uuid = match scope_kind {
+        // No workspace floor for the platform scope — stamp the synthetic
+        // platform owner id on the grant row (Part B refines the grant model).
+        ScopeKind::Platform => PLATFORM_SCOPE_ID,
         ScopeKind::Workspace => scope_id,
         ScopeKind::Folder => {
             sqlx::query_scalar("SELECT workspace_id FROM folders WHERE id = $1")
@@ -1759,6 +1768,10 @@ async fn require_asset_placement(
     scope_id: Uuid,
 ) -> Result<(), ApiError> {
     match scope_kind {
+        // Part B lands platform-admin-gated placement; reject for now.
+        ScopeKind::Platform => Err(ApiError::bad_request(
+            "platform-scoped asset placement is not yet supported",
+        )),
         ScopeKind::Workspace => require_editor(state, user, scope_kind, scope_id).await,
         ScopeKind::Folder => {
             require_object_role(&state.db, user, ObjectRef::folder(scope_id), Role::Editor)
@@ -2089,6 +2102,7 @@ mod tests {
             display_name: None,
             roles: vec![],
             org_id: None,
+            is_platform_admin: false,
             workspace_id: Some(ws),
             workspace_role: None,
             avatar_url: None,

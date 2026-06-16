@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::asset::ScopeKind;
+use crate::models::asset::{ScopeKind, PLATFORM_SCOPE_ID};
 
 /// A concrete owner scope: a `(kind, id)` pair. For `Workspace` the id is the
 /// workspace id; for `Folder`, the folder id; for `Template`, the template's
@@ -46,6 +46,14 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// The single platform-global scope: visible to every workspace, shadowed
+    /// by any more-specific owner (workspace/folder/template).
+    pub fn platform() -> Self {
+        Self {
+            kind: ScopeKind::Platform,
+            id: PLATFORM_SCOPE_ID,
+        }
+    }
     pub fn workspace(id: Uuid) -> Self {
         Self {
             kind: ScopeKind::Workspace,
@@ -75,8 +83,18 @@ impl Scope {
 /// most-specific winner always exists.
 fn specificity(scope: &Scope, visible: &VisibleScopes) -> u32 {
     match scope.kind {
-        ScopeKind::Workspace => 0,
-        ScopeKind::Folder => visible.folder_rank(scope.id).map(|r| r as u32).unwrap_or(0),
+        // Platform is the LEAST specific — below the workspace floor, so any
+        // workspace/folder/template definition for a ref-key shadows it.
+        ScopeKind::Platform => 0,
+        ScopeKind::Workspace => 1,
+        // A folder sits strictly above the workspace: its depth rank + 1 (so a
+        // rank-1 ancestor is 2, above workspace's 1). An out-of-chain folder
+        // falls back to 1 (== Workspace) — the historical incomparable-clash
+        // behaviour the guard test depends on.
+        ScopeKind::Folder => visible
+            .folder_rank(scope.id)
+            .map(|r| r as u32 + 1)
+            .unwrap_or(1),
         ScopeKind::Template => u32::MAX,
     }
 }
@@ -86,6 +104,10 @@ fn specificity(scope: &Scope, visible: &VisibleScopes) -> u32 {
 /// the home-folder ancestor chain, 0..1 template).
 #[derive(Debug, Clone, Default)]
 pub struct VisibleScopes {
+    /// Whether the platform-global scope is visible. `true` for every real
+    /// binding context (platform definitions are visible everywhere); the
+    /// least-specific owner, shadowed by any workspace/folder/template.
+    pub platform: bool,
     /// The workspace owner (always present for a real binding context).
     pub workspace: Option<Uuid>,
     /// The context's home folder PLUS its full ancestor chain, ordered
@@ -104,6 +126,7 @@ impl VisibleScopes {
     /// resolution.
     pub fn contains(&self, scope: &Scope) -> bool {
         match scope.kind {
+            ScopeKind::Platform => self.platform,
             ScopeKind::Workspace => self.workspace == Some(scope.id),
             ScopeKind::Folder => self.folders.contains(&scope.id),
             ScopeKind::Template => self.template == Some(scope.id),
@@ -291,7 +314,15 @@ pub async fn visible_scopes_for(
          ORDER BY length(f.path) DESC";
 
     match kind {
+        // A platform binding context sees only the platform scope itself.
+        ScopeKind::Platform => Ok(VisibleScopes {
+            platform: true,
+            workspace: None,
+            folders: Vec::new(),
+            template: None,
+        }),
         ScopeKind::Workspace => Ok(VisibleScopes {
+            platform: true,
             workspace: Some(scope_id),
             folders: Vec::new(),
             template: None,
@@ -311,6 +342,7 @@ pub async fn visible_scopes_for(
                 .fetch_all(db)
                 .await?;
             Ok(VisibleScopes {
+                platform: true,
                 workspace: ws.map(|(w,)| w),
                 folders: chain.into_iter().map(|(f,)| f).collect(),
                 template: None,
@@ -357,6 +389,7 @@ pub async fn visible_scopes_for(
                         None => (Vec::new(), None),
                     };
                     return Ok(VisibleScopes {
+                        platform: true,
                         workspace,
                         folders,
                         template: Some(scope_id),
@@ -386,6 +419,7 @@ pub async fn visible_scopes_for(
             };
 
             Ok(VisibleScopes {
+                platform: true,
                 workspace: Some(workspace_id),
                 folders,
                 template: Some(base_id),
@@ -415,6 +449,7 @@ mod tests {
     /// folder id first) + optional template id.
     fn ctx(workspace: u128, chain: &[u128], template: Option<u128>) -> VisibleScopes {
         VisibleScopes {
+            platform: false,
             workspace: Some(Uuid::from_u128(workspace)),
             folders: chain.iter().map(|id| Uuid::from_u128(*id)).collect(),
             template: template.map(Uuid::from_u128),
@@ -518,6 +553,24 @@ mod tests {
         let items = vec![item(ScopeKind::Workspace, 1, "prod_db", "ws_def")];
         let got = resolve_one_visible(&visible, "nope", items).expect("no clash");
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn workspace_shadows_platform() {
+        // A (Platform, key) + (Workspace, key) pair on one ref-key: the
+        // workspace item (specificity 1) shadows the platform item
+        // (specificity 0).
+        let mut visible = ctx(1, &[], None);
+        visible.platform = true;
+        let platform_item = ScopedItem {
+            scope: Scope::platform(),
+            ref_key: "prod_db".to_string(),
+            item: "platform_def",
+        };
+        let ws_item = item(ScopeKind::Workspace, 1, "prod_db", "ws_def");
+        let resolved = resolve_visible(&visible, vec![platform_item, ws_item]).expect("no clash");
+        assert_eq!(resolved["prod_db"].item, "ws_def");
+        assert_eq!(resolved["prod_db"].scope.kind, ScopeKind::Workspace);
     }
 
     #[test]

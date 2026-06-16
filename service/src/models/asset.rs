@@ -30,14 +30,25 @@ use crate::models::template::PortField;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeKind {
+    /// Platform-global scope: definitions visible to EVERY workspace. The
+    /// least-specific scope (lowest derived `Ord`), shadowed by workspace,
+    /// folder, and template. Owned by the synthetic [`PLATFORM_SCOPE_ID`].
+    Platform,
     Workspace,
     Folder,
     Template,
 }
 
+/// Synthetic owner id for the single platform-global scope. A fixed,
+/// non-nil UUID (distinct from `Uuid::nil()`, which is the seeded `default`
+/// workspace) so platform-owned rows have a stable `(scope_kind, scope_id)`
+/// coordinate. The trailing bytes spell `Platr` (`506c6174`).
+pub const PLATFORM_SCOPE_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-0000506c6174");
+
 impl ScopeKind {
     pub fn as_db(&self) -> &'static str {
         match self {
+            Self::Platform => "platform",
             Self::Workspace => "workspace",
             Self::Folder => "folder",
             Self::Template => "template",
@@ -46,6 +57,7 @@ impl ScopeKind {
 
     pub fn from_db(s: &str) -> Option<Self> {
         match s {
+            "platform" => Some(Self::Platform),
             "workspace" => Some(Self::Workspace),
             "folder" => Some(Self::Folder),
             "template" => Some(Self::Template),
