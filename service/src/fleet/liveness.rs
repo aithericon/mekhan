@@ -244,9 +244,21 @@ impl FleetLiveness {
     }
 }
 
-/// Handle one `worker.*.presence` message: parse the advisory payload and upsert
-/// the worker's advertised backends + last_seen under the `Worker` key.
-async fn handle_presence(liveness: &LivenessMap, payload: &[u8]) {
+/// Handle one `worker.*.presence` message: parse the advisory payload, upsert
+/// the worker's advertised backends + last_seen under the `Worker` key, and —
+/// when the presence id is an enrolled worker's UUID — reflect the heartbeat
+/// into that worker's DB row (`last_seen_at`).
+///
+/// The DB bridge is the durable, restart-surviving facet of the same signal: an
+/// enrolled worker publishes `worker.{wkr_uuid}.presence`, so when `worker_id`
+/// parses as a UUID we bump `workers.last_seen_at = NOW()` for the matching live
+/// (non-revoked) row. This is the ONLY thing that populates the column for a
+/// daemon (the executor never calls the HTTP heartbeat — it only emits this NATS
+/// presence), so the worker list/detail can show a real "last seen" and an
+/// `online` flag instead of "never seen". Best-effort: the in-memory upsert is
+/// the authoritative live signal, so a DB hiccup is logged at `warn` and never
+/// drops the presence. Anonymous (non-UUID) ids touch only the in-memory map.
+async fn handle_presence(liveness: &LivenessMap, db: Option<&sqlx::PgPool>, payload: &[u8]) {
     let parsed: WorkerPresencePayload = match serde_json::from_slice(payload) {
         Ok(p) => p,
         Err(e) => {
@@ -254,6 +266,25 @@ async fn handle_presence(liveness: &LivenessMap, payload: &[u8]) {
             return;
         }
     };
+
+    // Reflect an enrolled worker's heartbeat into its DB row before taking the
+    // map lock (no need to hold the mutex across the await). A presence id that
+    // doesn't parse as a UUID is an anonymous worker with no DB row — skip.
+    if let (Some(db), Ok(worker_uuid)) = (db, uuid::Uuid::parse_str(&parsed.worker_id)) {
+        if let Err(e) =
+            sqlx::query("UPDATE workers SET last_seen_at = NOW() WHERE id = $1 AND revoked_at IS NULL")
+                .bind(worker_uuid)
+                .execute(db)
+                .await
+        {
+            tracing::warn!(
+                worker_id = %worker_uuid,
+                error = %e,
+                "failed to bump worker last_seen_at from presence; in-memory liveness still tracked"
+            );
+        }
+    }
+
     let mut map = liveness.lock().await;
     map.insert(
         (CapacityKind::Worker, parsed.worker_id),
@@ -274,7 +305,7 @@ async fn handle_presence(liveness: &LivenessMap, payload: &[u8]) {
 /// uses a plain core subscription rather than a JetStream durable — a missed
 /// ping is harmless (the next one re-registers; the sweep handles a true
 /// absence).
-async fn start_worker_subscriber(nats: MekhanNats, liveness: LivenessMap) {
+async fn start_worker_subscriber(nats: MekhanNats, liveness: LivenessMap, db: sqlx::PgPool) {
     let mut sub = match nats.client().subscribe("worker.*.presence").await {
         Ok(s) => s,
         Err(e) => {
@@ -285,7 +316,7 @@ async fn start_worker_subscriber(nats: MekhanNats, liveness: LivenessMap) {
     tracing::info!("fleet liveness: worker subscriber started on worker.*.presence");
 
     while let Some(msg) = sub.next().await {
-        handle_presence(&liveness, &msg.payload).await;
+        handle_presence(&liveness, Some(&db), &msg.payload).await;
     }
 
     tracing::warn!("fleet liveness: worker subscriber stream ended");
@@ -330,8 +361,8 @@ async fn start_worker_sweep(liveness: LivenessMap) {
 /// and the runner controller's mirror writes — observe the very map these tasks
 /// mutate. The RUNNER facet is fed separately by
 /// [`crate::presence::spawn_presence_controller`].
-pub fn spawn_worker_liveness(liveness: FleetLiveness, nats: MekhanNats) {
-    tokio::spawn(start_worker_subscriber(nats, liveness.map().clone()));
+pub fn spawn_worker_liveness(liveness: FleetLiveness, nats: MekhanNats, db: sqlx::PgPool) {
+    tokio::spawn(start_worker_subscriber(nats, liveness.map().clone(), db));
     tokio::spawn(start_worker_sweep(liveness.map().clone()));
 }
 
@@ -343,7 +374,7 @@ mod tests {
     async fn covered_after_presence_then_dropped_on_sweep() {
         let liveness = FleetLiveness::new();
         let payload = br#"{"worker_id":"w1","backends":["python","loki"]}"#;
-        handle_presence(liveness.map(), payload).await;
+        handle_presence(liveness.map(), None, payload).await;
 
         assert!(liveness.serves_backend("python").await);
         assert!(liveness.serves_backend("loki").await);
@@ -377,19 +408,18 @@ mod tests {
     #[tokio::test]
     async fn malformed_payload_is_ignored() {
         let liveness = FleetLiveness::new();
-        handle_presence(liveness.map(), b"not json").await;
+        handle_presence(liveness.map(), None, b"not json").await;
         assert!(liveness.covered_backends().await.is_empty());
     }
 
     #[tokio::test]
     async fn latest_presence_replaces_advertised_backends() {
         let liveness = FleetLiveness::new();
-        handle_presence(
-            liveness.map(),
+        handle_presence(liveness.map(), None,
             br#"{"worker_id":"w1","backends":["python"]}"#,
         )
         .await;
-        handle_presence(liveness.map(), br#"{"worker_id":"w1","backends":["loki"]}"#).await;
+        handle_presence(liveness.map(), None, br#"{"worker_id":"w1","backends":["loki"]}"#).await;
         assert!(!liveness.serves_backend("python").await);
         assert!(liveness.serves_backend("loki").await);
     }
@@ -399,8 +429,7 @@ mod tests {
         // The unified query: a backend served by EITHER kind counts as covered,
         // and the worker-only sweep never touches a runner mirror.
         let liveness = FleetLiveness::new();
-        handle_presence(
-            liveness.map(),
+        handle_presence(liveness.map(), None,
             br#"{"worker_id":"w1","backends":["python"]}"#,
         )
         .await;

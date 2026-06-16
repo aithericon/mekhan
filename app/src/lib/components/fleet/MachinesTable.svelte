@@ -11,8 +11,9 @@
 	//        its "Enroll here").
 	//
 	// Runner liveness comes from the presence snapshot (the actual pool-capacity
-	// signal); worker liveness is `status === 'online'` + a last_seen freshness
-	// line (workers have no presence map). Polls every 5s.
+	// signal); worker liveness is the server-computed `online` flag (derived from
+	// mekhan's FleetLiveness presence snapshot — the executor's `worker.{id}.presence`
+	// NATS heartbeat) plus a last_seen freshness line. Polls every 5s.
 	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -66,11 +67,16 @@
 		 *  group): pool chips + kind filter hidden, no toolbar — the page band
 		 *  owns actions and `onenroll` forwards its "Enroll here". */
 		group?: string | null;
+		/** Read the shared PLATFORM-tier pool instead of the caller's workspace.
+		 *  Set by the platform pool detail view: a platform pool's workers/runners
+		 *  enroll under PLATFORM_SCOPE_ID, which is not a joinable workspace, so the
+		 *  default workspace-scoped fetch can't see them. */
+		platform?: boolean;
 		/** Scoped-mode enroll handler — when provided (with `group` set), a small
 		 *  "Enroll here" button forwards to the page's single enroll affordance. */
 		onenroll?: () => void;
 	};
-	let { role = 'all', group = null, onenroll }: Props = $props();
+	let { role = 'all', group = null, platform = false, onenroll }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -168,7 +174,10 @@
 			id: w.id,
 			name: w.name,
 			group: w.group ?? null,
-			online: w.status === 'online',
+			// Liveness is the server-computed `online` flag (derived from the live
+			// FleetLiveness presence snapshot), NOT `status` — `status` is the
+			// lifecycle marker (enrolled/revoked) and is never 'online'.
+			online: w.online,
 			lastSeen: workerLastSeen(w),
 			backends: workerBackends(w),
 			enrolledAt: w.enrolled_at,
@@ -207,9 +216,9 @@
 		error = null;
 		try {
 			const [rPage, wPage, pSnaps, caps, engResult] = await Promise.all([
-				listRunners({ perPage: 200 }),
-				listWorkers({ perPage: 200 }),
-				getRunnerPresence(),
+				listRunners({ perPage: 200, platform }),
+				listWorkers({ perPage: 200, platform }),
+				getRunnerPresence(platform),
 				listCapacities(),
 				// Fail-soft: the engines join only adds model chips — never let it
 				// wipe the inventory, so swallow its error into an empty inventory.
@@ -272,7 +281,7 @@
 		// A non-null sentinel keeps the sheet open while the fetch is in flight.
 		detail = { id } as RunnerDetail;
 		try {
-			detail = await getRunner(id);
+			detail = await getRunner(id, platform);
 		} catch (e) {
 			detailError = e instanceof Error ? e.message : String(e);
 		} finally {

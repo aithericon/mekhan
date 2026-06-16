@@ -14,6 +14,8 @@
  *  1. bare word / "quoted string"        → free-text search term
  *  2. field OP value                     → filter term
  *       ops: `:` (eq), `!=` / `!:` (ne), `>`, `>=`, `<`, `<=`
+ *       `~` (contains), `^` (starts_with), `$` (ends_with) → substring match
+ *       on a string field (e.g. `filename~report`, `name^run-`, `filename$.csv`)
  *       `field:a,b,c` (unquoted list)    → in;   `field!:a,b,c` → not_in
  *       `field:null` → is_null;          `field:*` → is_not_null
  *  3. containment sugar (one merged file_metadata object):
@@ -34,6 +36,9 @@ export type QueryOp =
 	| 'gte'
 	| 'lt'
 	| 'lte'
+	| 'contains'
+	| 'starts_with'
+	| 'ends_with'
 	| 'in'
 	| 'not_in'
 	| 'is_null'
@@ -73,7 +78,7 @@ type ContainName = 'format' | 'col' | 'dim' | 'pii' | 'attr';
 
 const CONTAIN_TERMS: readonly ContainName[] = ['format', 'col', 'dim', 'pii', 'attr'];
 
-const FILTER_RE = /^([A-Za-z_][A-Za-z0-9_.]*)(>=|<=|!=|!:|>|<|:)(.*)$/;
+const FILTER_RE = /^([A-Za-z_][A-Za-z0-9_.]*)(>=|<=|!=|!:|>|<|~|\^|\$|:)(.*)$/;
 const NUM_RE = /^-?\d+(\.\d+)?$/;
 const BYTE_RE = /^(\d+(\.\d+)?)([kmgt])(i?b)?$/i;
 const REL_DATE_RE = /^-(\d+(\.\d+)?)([mhdwy])$/;
@@ -197,13 +202,19 @@ function classifyFilter(field: string, opText: string, rest: string, raw: string
 			? 'eq'
 			: opText === '!=' || opText === '!:'
 				? 'ne'
-				: opText === '>'
-					? 'gt'
-					: opText === '>='
-						? 'gte'
-						: opText === '<'
-							? 'lt'
-							: 'lte';
+				: opText === '~'
+					? 'contains'
+					: opText === '^'
+						? 'starts_with'
+						: opText === '$'
+							? 'ends_with'
+							: opText === '>'
+								? 'gt'
+								: opText === '>='
+									? 'gte'
+									: opText === '<'
+										? 'lt'
+										: 'lte';
 	let op: QueryOp = baseOp;
 	const value = u.value;
 	if (!u.quoted) {
@@ -241,12 +252,13 @@ function isComparableValue(field: string, value: string): boolean {
 // ---------------------------------------------------------------------------
 
 function containFragment(
-	term: Extract<QueryTerm, { kind: 'contain' }>,
-	lowercaseFormat: boolean
+	term: Extract<QueryTerm, { kind: 'contain' }>
 ): Record<string, unknown> {
 	switch (term.term) {
 		case 'format':
-			return { format: lowercaseFormat ? term.value.toLowerCase() : term.value };
+			// Only reached by the parse-time accumulator (duplicate detection);
+			// compile routes `format:` to a `meta.format` filter, not containment.
+			return { format: term.value };
 		case 'col':
 			return { column_names: [term.value] };
 		case 'dim':
@@ -302,7 +314,7 @@ export function parseQuery(input: string): { terms: QueryTerm[]; errors: ParseEr
 		}
 		const term = c.term;
 		if (term.kind === 'contain') {
-			const merged = tryMerge(containAcc ?? {}, containFragment(term, false));
+			const merged = tryMerge(containAcc ?? {}, containFragment(term));
 			if (!merged.ok) {
 				errors.push({ raw: tok.raw, index: tok.index, message: `duplicate ${term.term} term` });
 				continue;
@@ -371,6 +383,12 @@ function formatTerm(t: QueryTerm): string {
 			return `${t.field}:${formatFilterValue(t.value, 'eq')}`;
 		case 'ne':
 			return `${t.field}!=${formatFilterValue(t.value, 'ne')}`;
+		case 'contains':
+			return `${t.field}~${quoteIfNeeded(t.value)}`;
+		case 'starts_with':
+			return `${t.field}^${quoteIfNeeded(t.value)}`;
+		case 'ends_with':
+			return `${t.field}$${quoteIfNeeded(t.value)}`;
 		case 'gt':
 			return `${t.field}>${formatFilterValue(t.value, 'gt')}`;
 		case 'gte':
@@ -441,10 +459,18 @@ export function compileQuery(
 				value = coerceValue(t.field, t.value, now);
 			}
 			filters.push({ field: t.field, op: t.op, value });
+		} else if (t.term === 'format') {
+			// `format` is a top-level scalar, not an array/nested containment like
+			// col/dim/pii — compile it to a `meta.format` equality instead of a
+			// JSONB `@>` fragment. The server unwraps `FileFormat::Unknown`'s
+			// `{"unknown":…}` envelope behind that expr, so `format:fasta` matches
+			// probe-unknown formats too — which containment never could.
+			// Lowercased to match the snake_case `FileFormat` wire strings.
+			filters.push({ field: 'meta.format', op: 'eq', value: t.value.toLowerCase() });
 		} else {
 			// Conflicting fragments were already flagged at parse time; here we
 			// keep the first writer and silently skip the conflicting term.
-			const merged = tryMerge(meta ?? {}, containFragment(t, true));
+			const merged = tryMerge(meta ?? {}, containFragment(t));
 			if (merged.ok) meta = merged.value;
 		}
 	}
@@ -457,8 +483,9 @@ export function compileQuery(
 
 /**
  * Formats asserted by the terms, for scoping format-specific UI: `format:`
- * containment (lowercased, matching compile) plus `meta.format` eq / in
- * filters. Negative / null ops assert nothing. Deduped, order-preserving.
+ * sugar (lowercased, matching compile) plus `meta.format` eq / in filters —
+ * both compile to the same meta.format equality. Negative / null ops assert
+ * nothing. Deduped, order-preserving.
  */
 export function activeFormats(terms: QueryTerm[]): string[] {
 	const out: string[] = [];

@@ -22,7 +22,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -213,6 +213,90 @@ async fn worker_group_exists(
     Ok(found.is_some())
 }
 
+/// Build the live-presence overlay from the in-memory [`crate::fleet`] snapshot:
+/// a map from each currently-live WORKER's id (the `wkr_` UUID it presence-reports
+/// on `worker.{id}.presence`) to its last-heartbeat timestamp (derived from the
+/// snapshot's relative age). A worker present in this map is `online`; its mapped
+/// timestamp is fresher than (or equal to) the persisted `last_seen_at`.
+///
+/// This is the seam that makes the worker reads reflect the signal the executor
+/// actually emits (NATS presence), rather than the never-called HTTP heartbeat.
+/// Runner entries are filtered out — the worker reads are the worker-pool view.
+async fn live_worker_overlay(state: &AppState) -> std::collections::HashMap<Uuid, DateTime<Utc>> {
+    let now = Utc::now();
+    state
+        .fleet
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|e| matches!(e.kind, crate::fleet::CapacityKind::Worker))
+        .filter_map(|e| {
+            // Only enrolled workers (UUID ids) correlate to a DB row; an anonymous
+            // worker's process-name id has no row to overlay.
+            let id = Uuid::parse_str(&e.id).ok()?;
+            let last_seen = now - chrono::Duration::milliseconds(e.last_seen_ms_ago as i64);
+            Some((id, last_seen))
+        })
+        .collect()
+}
+
+/// Overlay one DB-projected [`WorkerSummary`] with live presence: set `online` and
+/// (when live) bump `last_seen_at` to the heartbeat-derived timestamp.
+fn apply_overlay(
+    mut w: WorkerSummary,
+    overlay: &std::collections::HashMap<Uuid, DateTime<Utc>>,
+) -> WorkerSummary {
+    if let Some(live_seen) = overlay.get(&w.id) {
+        w.online = true;
+        w.last_seen_at = Some(*live_seen);
+    }
+    w
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(id: Uuid, last_seen: Option<DateTime<Utc>>) -> WorkerSummary {
+        WorkerSummary {
+            id,
+            name: "w".to_string(),
+            group: None,
+            routing_partition: Uuid::nil(),
+            status: "enrolled".to_string(),
+            backends: serde_json::json!([]),
+            online: false,
+            last_seen_at: last_seen,
+            enrolled_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn overlay_marks_live_worker_online_and_freshens_last_seen() {
+        let id = Uuid::new_v4();
+        let live = Utc::now();
+        let overlay = std::collections::HashMap::from([(id, live)]);
+
+        // A worker with a STALE persisted last_seen that is currently live: the
+        // overlay flips `online` and replaces last_seen with the live timestamp.
+        let stale = Utc::now() - chrono::Duration::hours(2);
+        let out = apply_overlay(summary(id, Some(stale)), &overlay);
+        assert!(out.online, "present in snapshot ⇒ online");
+        assert_eq!(out.last_seen_at, Some(live), "last_seen overlaid from snapshot");
+    }
+
+    #[test]
+    fn overlay_leaves_absent_worker_offline_with_persisted_last_seen() {
+        // A worker NOT in the snapshot stays offline; its persisted last_seen
+        // (bridged from earlier presence) is preserved so the UI can still show
+        // "last seen 5m ago" for a worker that has since gone away.
+        let persisted = Utc::now() - chrono::Duration::minutes(5);
+        let out = apply_overlay(summary(Uuid::new_v4(), Some(persisted)), &std::collections::HashMap::new());
+        assert!(!out.online, "absent from snapshot ⇒ offline");
+        assert_eq!(out.last_seen_at, Some(persisted), "persisted last_seen kept");
+    }
+}
+
 // ── Query params ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -221,6 +305,14 @@ pub struct ListWorkersQuery {
     pub page: i64,
     #[serde(default = "default_per_page")]
     pub per_page: i64,
+    /// List the shared PLATFORM-tier worker pool (`scope_kind = 'platform'`,
+    /// `workspace_id = PLATFORM_SCOPE_ID`) instead of the caller's workspace.
+    /// Platform infra is globally read-visible, so any authed user may list it;
+    /// the Fleet platform-pool detail view sets this to surface the pool's member
+    /// workers per-row (the workspace-scoped default can't, since
+    /// `PLATFORM_SCOPE_ID` is not a joinable workspace). Defaults to `false`.
+    #[serde(default)]
+    pub platform: bool,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -579,7 +671,13 @@ pub async fn list_workers(
     user: AuthUser,
     Query(params): Query<ListWorkersQuery>,
 ) -> Result<Json<PaginatedResponse<WorkerSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user)?;
+    // Platform pool reads target the shared platform scope (globally read-visible);
+    // everything else is the caller's workspace.
+    let workspace_id = if params.platform {
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)?
+    };
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, WorkerRow>(
@@ -599,8 +697,13 @@ pub async fn list_workers(
     .fetch_one(&state.db)
     .await?;
 
+    let overlay = live_worker_overlay(&state).await;
+
     Ok(Json(PaginatedResponse {
-        items: rows.into_iter().map(WorkerSummary::from).collect(),
+        items: rows
+            .into_iter()
+            .map(|r| apply_overlay(WorkerSummary::from(r), &overlay))
+            .collect(),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -632,7 +735,16 @@ pub async fn get_worker(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::not_found("worker not found"))?;
-    Ok(Json(WorkerDetail::from(row)))
+
+    // Overlay live presence from the in-memory fleet snapshot (same seam as the
+    // list view): set `online` and, when live, the heartbeat-derived `last_seen_at`.
+    let mut detail = WorkerDetail::from(row);
+    let overlay = live_worker_overlay(&state).await;
+    if let Some(live_seen) = overlay.get(&detail.id) {
+        detail.online = true;
+        detail.last_seen_at = Some(*live_seen);
+    }
+    Ok(Json(detail))
 }
 
 /// `DELETE /api/v1/workers/{id}` — revoke (soft delete + status='revoked'). D2

@@ -290,7 +290,7 @@
 				<!-- MACHINE / WORKER — the flat machines inventory scoped to this pool
 					 (runners.group / workers.group === path). The band owns the enroll
 					 action; onenroll forwards "Enroll here" back to it. -->
-				<MachinesTable group={path} onenroll={openEnroll} />
+				<MachinesTable group={path} platform={isPlatform} onenroll={openEnroll} />
 			{:else if kind.id === 'human'}
 				<!-- HUMAN — roster members + live presence; owns its enroll sheet. -->
 				<PoolMembersHumans

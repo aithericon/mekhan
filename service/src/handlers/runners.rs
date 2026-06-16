@@ -112,6 +112,22 @@ pub struct ListRunnersQuery {
     pub page: i64,
     #[serde(default = "default_per_page")]
     pub per_page: i64,
+    /// List the shared PLATFORM-tier runner pool (`workspace_id =
+    /// PLATFORM_SCOPE_ID`, e.g. the `model_serving` group) instead of the
+    /// caller's workspace. Platform infra is globally read-visible; the Fleet
+    /// platform-pool detail view sets this to surface the pool's member runners
+    /// per-row. Defaults to `false`.
+    #[serde(default)]
+    pub platform: bool,
+}
+
+/// Shared `?platform=true` selector for the single-item / presence runner reads
+/// ([`get_runner`], [`runner_presence`]) — flips the read from the caller's
+/// workspace to the globally-read-visible platform scope.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub struct PlatformQuery {
+    #[serde(default)]
+    pub platform: bool,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -539,7 +555,13 @@ pub async fn list_runners(
     user: AuthUser,
     Query(params): Query<ListRunnersQuery>,
 ) -> Result<Json<PaginatedResponse<RunnerSummary>>, ApiError> {
-    let workspace_id = caller_workspace(&user)?;
+    // Platform pool reads target the shared platform scope (globally read-visible);
+    // everything else is the caller's workspace.
+    let workspace_id = if params.platform {
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)?
+    };
     let offset = (params.page - 1) * params.per_page;
 
     let rows = sqlx::query_as::<_, RunnerRow>(
@@ -582,6 +604,7 @@ pub async fn list_runners(
 #[utoipa::path(
     get,
     path = "/api/v1/runners/presence",
+    params(PlatformQuery),
     responses(
         (status = 200, description = "Live runner presence snapshot", body = [RunnerPresenceSnapshot]),
     ),
@@ -590,8 +613,16 @@ pub async fn list_runners(
 pub async fn runner_presence(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(q): Query<PlatformQuery>,
 ) -> Result<Json<Vec<RunnerPresenceSnapshot>>, ApiError> {
-    let workspace_id = caller_workspace(&user)?;
+    // `?platform=true` returns presence for the globally-read-visible platform
+    // runner pool; otherwise the caller's workspace (the snapshot carries no
+    // workspace, so it's filtered against the chosen scope's runner ids).
+    let workspace_id = if q.platform {
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)?
+    };
     let own: std::collections::HashSet<Uuid> =
         sqlx::query_scalar::<_, Uuid>("SELECT id FROM runners WHERE workspace_id = $1")
             .bind(workspace_id)
@@ -610,11 +641,12 @@ pub async fn runner_presence(
     Ok(Json(snapshot))
 }
 
-/// `GET /api/v1/runners/{id}` — admin view (workspace-scoped).
+/// `GET /api/v1/runners/{id}` — admin view (workspace-scoped, or the shared
+/// platform scope with `?platform=true` for a platform-pool member).
 #[utoipa::path(
     get,
     path = "/api/v1/runners/{id}",
-    params(("id" = Uuid, Path, description = "Runner id")),
+    params(("id" = Uuid, Path, description = "Runner id"), PlatformQuery),
     responses(
         (status = 200, description = "Runner detail", body = RunnerDetail),
         (status = 404, description = "Runner not found", body = ErrorResponse),
@@ -625,8 +657,13 @@ pub async fn get_runner(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
+    Query(q): Query<PlatformQuery>,
 ) -> Result<Json<RunnerDetail>, ApiError> {
-    let workspace_id = caller_workspace(&user)?;
+    let workspace_id = if q.platform {
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)?
+    };
     let row = sqlx::query_as::<_, RunnerRow>(
         "SELECT * FROM runners WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
     )

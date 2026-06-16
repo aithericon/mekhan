@@ -777,14 +777,22 @@ up-executor:
       wid=$(jq -r '.worker_id // empty' "$exec_base/worker/identity.json" 2>/dev/null || true)
       echo "▶ reusing enrolled worker ${wid:-?} (identity.json present — no re-enroll)"
     else
-      echo "▶ minting worker registration token (group=default)…"
+      echo "▶ minting worker registration token (platform default group)…"
+      # The `default` worker group lives in the PLATFORM scope (platform-tier
+      # rework) — not the caller's workspace — so mint a platform-scoped token
+      # (`platform:true`); the dev_noop user is a platform admin. A
+      # workspace-scoped `{"group":"default"}` mint 400s ("no worker group
+      # 'default' exists in this workspace"). Carry `group:"default"` explicitly
+      # so the worker's `worker_group` column is set — the platform-pool live
+      # count (`queue_live`) matches workers on `worker_group = 'default'`, so a
+      # null-group worker would enroll fine but show 0/0 in the Fleet pool view.
       reg_token=$(curl -fsS -X POST "{{service_url}}/api/v1/workers/registration-tokens" \
-          -H 'content-type: application/json' -d '{"group":"default"}' | jq -r '.token')
+          -H 'content-type: application/json' -d '{"group":"default","platform":true}' | jq -r '.token')
       if [ -z "$reg_token" ] || [ "$reg_token" = "null" ]; then
         echo "  ⚠ failed to mint worker registration token — skipping executor" >&2
         exit 0
       fi
-      echo "  ✓ token minted; worker will self-enroll into group=default on boot"
+      echo "  ✓ token minted; worker will self-enroll into the platform default group on boot"
     fi
 
     echo "▶ starting executor…"
@@ -1137,9 +1145,13 @@ up-model-runner n="1":
 
     if [ -z "$reuse" ]; then
       rm -rf "$runner_base/runner"
-      echo "▶ minting registration token (group=model_serving)…"
+      echo "▶ minting registration token (platform group=model_serving)…"
+      # The `model_serving` group lives in the PLATFORM scope (platform-tier
+      # rework), so mint a platform-scoped token (`platform:true`); the dev_noop
+      # user is a platform admin. A workspace-scoped mint 400s ("no runner group
+      # 'model_serving' exists in this workspace").
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{"group":"model_serving"}' | jq -r '.token')
+          -H 'content-type: application/json' -d '{"group":"model_serving","platform":true}' | jq -r '.token')
       if [ -z "$rt" ] || [ "$rt" = "null" ]; then
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1

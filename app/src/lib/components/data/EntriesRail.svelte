@@ -125,6 +125,7 @@
 		['word · "free text"', 'free-text search over name / hash'],
 		['field:value', 'equals · field!=value for not-equals'],
 		['field:a,b,c', 'any of (unquoted comma list)'],
+		['filename~rep · ^run- · $.csv', 'substring · starts-with · ends-with'],
 		['field:null · field:*', 'missing · present'],
 		['size_bytes>10m', 'comparisons > >= < <= · byte suffixes k/m/g/t'],
 		['created_at>-7d', 'relative dates m/h/d/w/y · or ISO dates'],

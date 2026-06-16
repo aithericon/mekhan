@@ -3800,7 +3800,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** `GET /api/v1/runners/{id}` — admin view (workspace-scoped). */
+        /**
+         * `GET /api/v1/runners/{id}` — admin view (workspace-scoped, or the shared
+         *     platform scope with `?platform=true` for a platform-pool member).
+         */
         get: operations["get_runner"];
         put?: never;
         post?: never;
@@ -10736,6 +10739,17 @@ export interface components {
                 last_seen_at?: string | null;
                 name: string;
                 /**
+                 * @description Whether this worker is currently LIVE — i.e. an entry for its id is present
+                 *     in mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by
+                 *     the `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the
+                 *     authoritative "is it up right now?" signal: it derives from the same
+                 *     presence stream the executor actually emits, and — unlike a persisted flag
+                 *     — can't go stale across a mekhan restart (an empty snapshot simply
+                 *     repopulates within one presence interval). `status` remains the lifecycle
+                 *     marker (`enrolled`/`revoked`), NOT liveness.
+                 */
+                online: boolean;
+                /**
                  * Format: uuid
                  * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
                  *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
@@ -13840,6 +13854,13 @@ export interface components {
             last_seen_at?: string | null;
             name: string;
             nats_public_key?: string | null;
+            /**
+             * @description Live presence (see [`WorkerSummary::online`]): `true` when an entry for this
+             *     worker is in the in-memory [`crate::fleet::FleetLiveness`] snapshot. The
+             *     `get_worker` handler overlays the snapshot; `From<WorkerRow>` defaults it to
+             *     `false`.
+             */
+            online: boolean;
             /** Format: date-time */
             revoked_at?: string | null;
             /**
@@ -13906,6 +13927,17 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             name: string;
+            /**
+             * @description Whether this worker is currently LIVE — i.e. an entry for its id is present
+             *     in mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by
+             *     the `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the
+             *     authoritative "is it up right now?" signal: it derives from the same
+             *     presence stream the executor actually emits, and — unlike a persisted flag
+             *     — can't go stale across a mekhan restart (an empty snapshot simply
+             *     repopulates within one presence interval). `status` remains the lifecycle
+             *     marker (`enrolled`/`revoked`), NOT liveness.
+             */
+            online: boolean;
             /**
              * Format: uuid
              * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
@@ -22886,6 +22918,14 @@ export interface operations {
             query?: {
                 page?: number;
                 per_page?: number;
+                /**
+                 * @description List the shared PLATFORM-tier runner pool (`workspace_id =
+                 *     PLATFORM_SCOPE_ID`, e.g. the `model_serving` group) instead of the
+                 *     caller's workspace. Platform infra is globally read-visible; the Fleet
+                 *     platform-pool detail view sets this to surface the pool's member runners
+                 *     per-row. Defaults to `false`.
+                 */
+                platform?: boolean;
             };
             header?: never;
             path?: never;
@@ -22977,7 +23017,9 @@ export interface operations {
     };
     runner_presence: {
         parameters: {
-            query?: never;
+            query?: {
+                platform?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -23083,7 +23125,9 @@ export interface operations {
     };
     get_runner: {
         parameters: {
-            query?: never;
+            query?: {
+                platform?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Runner id */
@@ -25810,6 +25854,15 @@ export interface operations {
             query?: {
                 page?: number;
                 per_page?: number;
+                /**
+                 * @description List the shared PLATFORM-tier worker pool (`scope_kind = 'platform'`,
+                 *     `workspace_id = PLATFORM_SCOPE_ID`) instead of the caller's workspace.
+                 *     Platform infra is globally read-visible, so any authed user may list it;
+                 *     the Fleet platform-pool detail view sets this to surface the pool's member
+                 *     workers per-row (the workspace-scoped default can't, since
+                 *     `PLATFORM_SCOPE_ID` is not a joinable workspace). Defaults to `false`.
+                 */
+                platform?: boolean;
             };
             header?: never;
             path?: never;

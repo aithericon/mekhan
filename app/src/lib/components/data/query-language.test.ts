@@ -75,6 +75,38 @@ describe('parseQuery — filter ops', () => {
 		expect(terms('ext!:a,b,c')[0]).toMatchObject({ op: 'not_in', value: 'a,b,c' });
 	});
 
+	it('parses ~ / ^ / $ as contains / starts_with / ends_with', () => {
+		expect(terms('filename~report')).toEqual([
+			{ kind: 'filter', field: 'filename', op: 'contains', value: 'report', raw: 'filename~report' }
+		]);
+		expect(terms('name^run-')[0]).toMatchObject({ op: 'starts_with', value: 'run-' });
+		expect(terms('filename$.csv')[0]).toMatchObject({ op: 'ends_with', value: '.csv' });
+	});
+
+	it('substring ops carry quoted values verbatim and round-trip', () => {
+		expect(terms('filename~"q3 report"')[0]).toMatchObject({
+			op: 'contains',
+			value: 'q3 report'
+		});
+		// ~ / ^ / $ have no special null/*/comma forms — value is literal.
+		expect(terms('filename~a,b')[0]).toMatchObject({ op: 'contains', value: 'a,b' });
+		for (const q of ['filename~report', 'name^run-', 'filename$.csv', 'filename~"q3 report"']) {
+			expect(formatQuery(terms(q))).toBe(q);
+		}
+	});
+
+	it('compiles substring ops to their server operators', () => {
+		expect(compile('filename~report').filters).toEqual([
+			{ field: 'filename', op: 'contains', value: 'report' }
+		]);
+		expect(compile('name^run-').filters).toEqual([
+			{ field: 'name', op: 'starts_with', value: 'run-' }
+		]);
+		expect(compile('filename$.csv').filters).toEqual([
+			{ field: 'filename', op: 'ends_with', value: '.csv' }
+		]);
+	});
+
 	it('parses field:null / field:* as null checks', () => {
 		expect(terms('owner:null')).toEqual([
 			{ kind: 'filter', field: 'owner', op: 'is_null', value: '', raw: 'owner:null' }
@@ -362,8 +394,7 @@ describe('compileQuery — relative-date coercion (fixed now)', () => {
 });
 
 describe('compileQuery — fileMetadata containment', () => {
-	it('compiles each sugar to its fragment (format lowercased)', () => {
-		expect(compile('format:CSV').fileMetadata).toEqual({ format: 'csv' });
+	it('compiles each containment sugar to its fragment', () => {
 		expect(compile('col:age').fileMetadata).toEqual({ column_names: ['age'] });
 		expect(compile('dim:time').fileMetadata).toEqual({ dimensions: [{ name: 'time' }] });
 		expect(compile('pii:EMAIL').fileMetadata).toEqual({
@@ -382,8 +413,7 @@ describe('compileQuery — fileMetadata containment', () => {
 				{ classifications: [{ category: 'SSN' }] }
 			]
 		});
-		expect(compile('format:CSV col:age dim:time attr:a=1 attr:b=2').fileMetadata).toEqual({
-			format: 'csv',
+		expect(compile('col:age dim:time attr:a=1 attr:b=2').fileMetadata).toEqual({
 			column_names: ['age'],
 			dimensions: [{ name: 'time' }],
 			attributes: {
@@ -395,10 +425,29 @@ describe('compileQuery — fileMetadata containment', () => {
 
 	it('on a scalar conflict fed directly to compile, the first writer wins', () => {
 		const t: QueryTerm[] = [
-			{ kind: 'contain', term: 'format', value: 'csv', raw: 'format:csv' },
-			{ kind: 'contain', term: 'format', value: 'parquet', raw: 'format:parquet' }
+			{ kind: 'contain', term: 'attr', key: 'k', value: 'a', raw: 'attr:k=a' },
+			{ kind: 'contain', term: 'attr', key: 'k', value: 'b', raw: 'attr:k=b' }
 		];
-		expect(compileQuery(t, NOW).fileMetadata).toEqual({ format: 'csv' });
+		expect(compileQuery(t, NOW).fileMetadata).toEqual({
+			attributes: { k: { type: 'String', value: 'a' } }
+		});
+	});
+});
+
+describe('compileQuery — format', () => {
+	it('compiles format: to a meta.format equality (lowercased), not containment', () => {
+		expect(compile('format:CSV').filters).toEqual([
+			{ field: 'meta.format', op: 'eq', value: 'csv' }
+		]);
+		expect(compile('format:CSV').fileMetadata).toBeUndefined();
+	});
+
+	it('matches probe-unknown formats the same as typed ones (server unwraps)', () => {
+		// `fasta` has no typed FileFormat variant — it rides the same meta.format
+		// eq path, so there is no first-class vs. unknown split in the query.
+		expect(compile('format:fasta').filters).toEqual([
+			{ field: 'meta.format', op: 'eq', value: 'fasta' }
+		]);
 	});
 });
 
@@ -444,9 +493,10 @@ describe('compileQuery — datatype resolution', () => {
 		const c = compileWith('name:alice datatype:two format:CSV');
 		expect(c.filters).toEqual([
 			{ field: 'name', op: 'eq', value: 'alice' },
-			{ field: 'meta.schema', op: 'in', value: 'abc123,def456' }
+			{ field: 'meta.schema', op: 'in', value: 'abc123,def456' },
+			{ field: 'meta.format', op: 'eq', value: 'csv' }
 		]);
-		expect(c.fileMetadata).toEqual({ format: 'csv' });
+		expect(c.fileMetadata).toBeUndefined();
 	});
 });
 

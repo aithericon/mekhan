@@ -72,16 +72,20 @@ export async function getWorkerCoverage(): Promise<WorkerCoverageResponse> {
 export interface ListWorkersParams {
 	page?: number;
 	perPage?: number;
+	/** List the shared platform-tier worker pool instead of the caller's workspace. */
+	platform?: boolean;
 }
 
-/** GET /api/v1/workers — paginated, workspace-scoped list of enrolled workers. */
+/** GET /api/v1/workers — paginated list of enrolled workers (caller's workspace,
+ * or the shared platform pool when `platform` is set). */
 export async function listWorkers(params?: ListWorkersParams): Promise<PaginatedWorkers> {
 	return unwrap(
 		await client.GET('/api/v1/workers', {
 			params: {
 				query: {
 					page: params?.page ?? 1,
-					per_page: params?.perPage ?? 200
+					per_page: params?.perPage ?? 200,
+					platform: params?.platform ?? false
 				}
 			}
 		})
