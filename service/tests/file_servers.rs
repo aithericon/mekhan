@@ -124,7 +124,10 @@ async fn create_rejects_bad_access_method() {
     let err = queries::create(&pool, ws, &create_req(&key, "ftp"))
         .await
         .expect_err("bad access_method must be rejected");
-    assert!(matches!(err, QueryError::InvalidValue { .. }), "got {err:?}");
+    assert!(
+        matches!(err, QueryError::InvalidValue { .. }),
+        "got {err:?}"
+    );
 
     cleanup(&pool, ws, &prefix, &[]).await;
 }
@@ -258,7 +261,11 @@ async fn builtin_object_store_seed_is_idempotent() {
         .await
         .expect("get")
         .expect("seeded row present");
-    assert_eq!(view.endpoints.len(), 1, "exactly one endpoint after re-seed");
+    assert_eq!(
+        view.endpoints.len(),
+        1,
+        "exactly one endpoint after re-seed"
+    );
     assert_eq!(view.endpoints[0].access_method, "object_store");
     assert!(
         view.endpoints[0].resource_ref.is_none(),

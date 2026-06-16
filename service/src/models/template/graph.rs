@@ -1523,7 +1523,10 @@ mod tests {
         assert!(!LIBRARY_CATEGORIES.is_empty());
         let mut seen = std::collections::HashSet::new();
         for c in LIBRARY_CATEGORIES {
-            assert!(seen.insert(*c), "duplicate category in LIBRARY_CATEGORIES: {c}");
+            assert!(
+                seen.insert(*c),
+                "duplicate category in LIBRARY_CATEGORIES: {c}"
+            );
         }
     }
 

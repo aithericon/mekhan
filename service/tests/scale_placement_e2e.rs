@@ -181,11 +181,7 @@ fn load_base_runners(captured: &[CapturedCommand], base: &str) -> Vec<Uuid> {
 
 /// Read the cold-load timing trio off the `model_replicas` row:
 /// `(load_started_at IS SOME, last_load_duration_ms)`.
-async fn read_load_timing(
-    db: &PgPool,
-    workspace_id: Uuid,
-    model_id: &str,
-) -> (bool, Option<i64>) {
+async fn read_load_timing(db: &PgPool, workspace_id: Uuid, model_id: &str) -> (bool, Option<i64>) {
     let row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<i64>)> = sqlx::query_as(
         "SELECT load_started_at, last_load_duration_ms \
          FROM model_replicas WHERE workspace_id = $1 AND model_id = $2",
@@ -234,11 +230,7 @@ async fn s1_cold_load_starts_measurement_then_finishes_on_residency() {
     .await;
 
     // keep_warm, desired 1, zoned — demand>0 makes it place this tick.
-    seed_model_policy(
-        &db,
-        SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 1),
-    )
-    .await;
+    seed_model_policy(&db, SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 1)).await;
 
     let demand = ConstDemand(1.0);
 
@@ -287,7 +279,10 @@ async fn s1_cold_load_starts_measurement_then_finishes_on_residency() {
     assert_eq!(status, "active");
     assert_eq!(observed, 1, "the now-resident runner is observed");
     let (started, dur) = read_load_timing(&db, ws, LLAMA).await;
-    assert!(!started, "load_started_at cleared once the base is resident");
+    assert!(
+        !started,
+        "load_started_at cleared once the base is resident"
+    );
     let dur = dur.expect("last_load_duration_ms recorded once resident");
     assert!(dur >= 0, "a completed cold-load duration is non-negative");
 }
@@ -322,11 +317,7 @@ async fn s2_warm_resident_is_idempotent_no_cold_measurement_no_storm() {
     )
     .await;
 
-    seed_model_policy(
-        &db,
-        SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 1),
-    )
-    .await;
+    seed_model_policy(&db, SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 1)).await;
     let demand = ConstDemand(1.0);
 
     // ── Tick 1 ────────────────────────────────────────────────────────────────
@@ -366,7 +357,10 @@ async fn s2_warm_resident_is_idempotent_no_cold_measurement_no_storm() {
     let after_t2 = spy.wait_for(1, Duration::from_millis(500)).await;
     if let Ok(captured) = &after_t2 {
         for rid in load_base_runners(captured, LLAMA) {
-            assert_eq!(rid, runner.runner_id, "tick 2 wake only the resident runner");
+            assert_eq!(
+                rid, runner.runner_id,
+                "tick 2 wake only the resident runner"
+            );
         }
     }
     let t2_count = spy.drain().await.len();
@@ -378,7 +372,10 @@ async fn s2_warm_resident_is_idempotent_no_cold_measurement_no_storm() {
     // Timing state is unchanged: never started, never measured.
     let (started, dur) = read_load_timing(&db, ws, LLAMA).await;
     assert!(!started, "load_started_at still None after two warm ticks");
-    assert_eq!(dur, None, "still no cold-load duration after two warm ticks");
+    assert_eq!(
+        dur, None,
+        "still no cold-load duration after two warm ticks"
+    );
 }
 
 // ── S3 SPREAD-TO-2 ───────────────────────────────────────────────────────────
@@ -409,11 +406,7 @@ async fn s3_spread_to_two_then_only_shortfall_gets_new_load() {
     let r2 = seed_model_runner(&db, &presence, pulled_spec(vec![])).await;
 
     // keep_warm, desired 2 — spread across both runners.
-    seed_model_policy(
-        &db,
-        SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 2),
-    )
-    .await;
+    seed_model_policy(&db, SeedPolicySpec::base(ws, LLAMA, "keep_warm", ZONE, 2)).await;
     let demand = ConstDemand(1.0);
 
     // ── Tick 1: spread to 2 distinct runners ─────────────────────────────────
@@ -440,7 +433,10 @@ async fn s3_spread_to_two_then_only_shortfall_gets_new_load() {
         .expect("model_replicas row");
     assert_eq!(status, "active");
     assert_eq!(desired, 2);
-    assert_eq!(observed, 0, "neither runner advertises the base resident yet");
+    assert_eq!(
+        observed, 0,
+        "neither runner advertises the base resident yet"
+    );
 
     spy.drain().await;
 

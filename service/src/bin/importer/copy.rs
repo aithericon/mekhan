@@ -45,7 +45,10 @@ pub async fn load_files(pool: &PgPool, src: LineSource) -> Result<LoadStats> {
         .await
         .context("begin COPY legacy_file_index")?;
 
-    let mut stats = LoadStats { rows: 0, skipped: 0 };
+    let mut stats = LoadStats {
+        rows: 0,
+        skipped: 0,
+    };
     let mut batch = Vec::with_capacity(FLUSH_THRESHOLD + 4096);
 
     for line in src.lines() {
@@ -121,7 +124,10 @@ pub async fn load_delete_queue(pool: &PgPool, src: LineSource) -> Result<LoadSta
         .await
         .context("begin COPY legacy_delete_queue")?;
 
-    let mut stats = LoadStats { rows: 0, skipped: 0 };
+    let mut stats = LoadStats {
+        rows: 0,
+        skipped: 0,
+    };
     let mut batch = Vec::with_capacity(FLUSH_THRESHOLD + 4096);
 
     for line in src.lines() {

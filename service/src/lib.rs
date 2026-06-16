@@ -163,8 +163,9 @@ pub struct AppState {
     /// launcher never touches this — instances run against already-spliced AIR,
     /// symmetric with `resource_resolver`.
     pub asset_resolver: Arc<crate::petri::asset_resolver::AssetResolver>,
-    /// Invite-email delivery (Phase 4). `LogEmailSender` by default (offline).
-    pub email: Arc<dyn crate::notify::email::EmailSender>,
+    /// Transactional-email delivery. The hexagonal `Mailer` port — SMTP / Brevo
+    /// / log adapter chosen from `EmailConfig` (log by default, offline).
+    pub email: Arc<dyn crate::notify::email::Mailer>,
     /// Invite-accept identity provisioner (Phase 4). `None` only when a real
     /// auth mode lacks broker credentials → accept 503s. Under `dev_noop` it's
     /// the deterministic Noop. Boot-checked against `auth.mode`.
@@ -847,8 +848,7 @@ pub fn build_router(state: AppState) -> Router {
     // The protected OpenApiRouter holds every authenticated handler; the
     // public one holds only `/healthz`. Both contribute to the same
     // `api_spec` so the published OpenAPI document stays a single document.
-    let ((protected_router, mut api_spec), (public_router, public_spec)) =
-        collect_openapi_parts();
+    let ((protected_router, mut api_spec), (public_router, public_spec)) = collect_openapi_parts();
     api_spec.merge(public_spec);
 
     // The auth middleware gates every JSON API route. The WS endpoint is

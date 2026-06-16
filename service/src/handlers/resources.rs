@@ -836,8 +836,7 @@ async fn list_resources_scoped(
     let dyn_keys = fetch_dynamic_keys(&state.db, &page_rows).await?;
     let capacity_public = fetch_capacity_public_config(&state.db, &page_rows).await?;
     let items = rows_to_summaries(page_rows, &dyn_keys, &capacity_public);
-    let items =
-        annotate_resource_roles(state, user, caller_workspace(user), items).await?;
+    let items = annotate_resource_roles(state, user, caller_workspace(user), items).await?;
     Ok(Json(PaginatedResponse {
         items,
         total,
@@ -1016,7 +1015,9 @@ pub(crate) async fn create_resource_internal_with_id(
     let scope_id = match scope_kind {
         "workspace" => workspace_id,
         "folder" | "template" => req.scope_id.ok_or_else(|| {
-            ApiError::bad_request(format!("scope_id is required for scope_kind '{scope_kind}'"))
+            ApiError::bad_request(format!(
+                "scope_id is required for scope_kind '{scope_kind}'"
+            ))
         })?,
         other => {
             return Err(ApiError::bad_request(format!(
@@ -1622,10 +1623,12 @@ pub async fn delete_resource(
 
     // Object grants are polymorphic with no FK — drop them in the delete path
     // (mirrors folders/templates/instances cleanup).
-    sqlx::query("DELETE FROM object_grants WHERE object_type = 'resource'::object_kind AND object_id = $1")
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "DELETE FROM object_grants WHERE object_type = 'resource'::object_kind AND object_id = $1",
+    )
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
 
     write_audit(
         &state.db,
@@ -1699,11 +1702,14 @@ pub async fn move_resource(
                 .await
                 .map_err(map_to_api_error)?
         }
-        ScopeKind::Template => {
-            require_object_role(&state.db, &user, ObjectRef::template(target_id), Role::Editor)
-                .await
-                .map_err(map_to_api_error)?
-        }
+        ScopeKind::Template => require_object_role(
+            &state.db,
+            &user,
+            ObjectRef::template(target_id),
+            Role::Editor,
+        )
+        .await
+        .map_err(map_to_api_error)?,
     };
 
     if (target_kind.as_db(), Some(target_id)) != (row.scope_kind.as_str(), row.scope_id) {

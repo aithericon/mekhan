@@ -1,0 +1,29 @@
+{% extends "base/layout.html" %}
+{% block title %}{% if role_changed %}Your role in {{ workspace_name }} changed{% else %}You were added to {{ workspace_name }}{% endif %}{% endblock %}
+{% block content %}
+{% if role_changed %}
+<h1>Your role changed</h1>
+<p>Hi{% if recipient_name %} {{ recipient_name }}{% endif %},</p>
+<p>
+  <strong>{{ actor_name }}</strong> changed your role in the
+  <strong>{{ workspace_name }}</strong> workspace.
+</p>
+{% else %}
+<h1>You're in</h1>
+<p>Hi{% if recipient_name %} {{ recipient_name }}{% endif %},</p>
+<p>
+  <strong>{{ actor_name }}</strong> added you to the
+  <strong>{{ workspace_name }}</strong> workspace on {{ product_name }}.
+</p>
+{% endif %}
+
+<div class="meta">
+  <p style="margin:0;">Your role: <strong>{{ role }}</strong></p>
+</div>
+
+<p>
+  <a href="{{ url | safe }}" class="button">Open workspace</a>
+</p>
+
+<p class="text-muted">If the button doesn't work, copy and paste this link into your browser:<br>{{ url | safe }}</p>
+{% endblock %}

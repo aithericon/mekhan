@@ -722,8 +722,7 @@ mod tests {
         let v = serde_json::to_value(&bare).unwrap();
         assert!(v.get("base_url").is_none());
         assert!(v.get("residency_zone").is_none());
-        let back2: RunnerInterfaceCatalog =
-            serde_json::from_value(serde_json::json!({})).unwrap();
+        let back2: RunnerInterfaceCatalog = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(back2.base_url.is_none());
         assert!(back2.residency_zone.is_none());
     }

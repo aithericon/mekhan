@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="{{ lang | default(value="en") }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ product_name }}{% endblock %}</title>
+  <style>
+    body { margin: 0; padding: 0; width: 100% !important; background-color: #f4f4f5; }
+    .email-wrap { width: 100%; background-color: #f4f4f5; padding: 24px 0; }
+    .email-container { max-width: 600px; margin: 0 auto; background-color: #ffffff;
+      border-radius: 8px; overflow: hidden; border: 1px solid #e4e4e7;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .email-header { background-color: #18181b; padding: 20px 32px; }
+    .email-header h2 { margin: 0; color: #ffffff; font-size: 18px; font-weight: 600; letter-spacing: .2px; }
+    .email-content { padding: 32px; color: #18181b; font-size: 15px; line-height: 1.6; }
+    .email-content h1 { font-size: 22px; margin: 0 0 16px; color: #18181b; }
+    .email-content p { margin: 0 0 16px; }
+    .button { display: inline-block; padding: 12px 28px; background-color: #2563eb;
+      color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 15px; }
+    .meta { background-color: #f4f4f5; border-radius: 6px; padding: 16px; margin: 24px 0; font-size: 14px; }
+    .meta strong { color: #18181b; }
+    .text-muted { color: #71717a; font-size: 13px; }
+    .email-footer { padding: 24px 32px; color: #71717a; font-size: 12px; line-height: 1.5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    a { color: #2563eb; }
+    @media only screen and (max-width: 600px) {
+      .email-content { padding: 24px 20px !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrap">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+      <tr><td align="center">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" class="email-container" width="600">
+          <tr><td class="email-header">{% include "base/header.html" %}</td></tr>
+          <tr><td class="email-content">{% block content %}{% endblock %}</td></tr>
+          <tr><td class="email-footer">{% include "base/footer.html" %}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </div>
+</body>
+</html>

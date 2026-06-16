@@ -1001,12 +1001,24 @@ mod tests {
         let safe = sanitize_for_ref(&tid.to_string());
         let req = &schemas[&format!("RunTemplate_{safe}_Request")];
         // template_id pinned to this template.
-        assert_eq!(req["properties"]["template_id"]["enum"], json!([tid.to_string()]));
+        assert_eq!(
+            req["properties"]["template_id"]["enum"],
+            json!([tid.to_string()])
+        );
         // Single Start → item schema (not oneOf); token carries the typed port.
         let item = &req["properties"]["start_tokens"]["items"];
-        assert_eq!(item["properties"]["start_block_id"]["enum"], json!(["start_main"]));
-        assert_eq!(item["properties"]["token"]["properties"]["subject"]["type"], json!("string"));
-        assert_eq!(item["properties"]["token"]["properties"]["count"]["type"], json!("number"));
+        assert_eq!(
+            item["properties"]["start_block_id"]["enum"],
+            json!(["start_main"])
+        );
+        assert_eq!(
+            item["properties"]["token"]["properties"]["subject"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            item["properties"]["token"]["properties"]["count"]["type"],
+            json!("number")
+        );
         // Non-empty Start port → start_tokens required, minItems 1.
         assert_eq!(req["properties"]["start_tokens"]["minItems"], json!(1));
         assert_eq!(req["required"], json!(["template_id", "start_tokens"]));

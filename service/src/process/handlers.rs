@@ -148,9 +148,9 @@ pub async fn process_stats(
     let stats = queries::process_stats(&state.db, caller_ws(&user))
         .await
         .map_err(|e| {
-        tracing::error!("process stats: {e}");
-        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-    })?;
+            tracing::error!("process stats: {e}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        })?;
     Ok(Json(stats))
 }
 
@@ -379,9 +379,9 @@ pub async fn list_tasks(
     let response = queries::list_tasks(&state.db, &params, caller_ws(&user))
         .await
         .map_err(|e| {
-        tracing::warn!("task list: {e}");
-        ApiError::bad_request(e.to_string())
-    })?;
+            tracing::warn!("task list: {e}");
+            ApiError::bad_request(e.to_string())
+        })?;
     let tasks: Vec<JsonValue> = response.items.iter().map(to_human_task_json).collect();
     Ok(Json(TaskListResponse {
         tasks,
@@ -647,7 +647,8 @@ pub async fn complete_task(
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
         let ws = task.workspace_id.unwrap_or_else(uuid::Uuid::nil);
-        let subject = petri_api_types::subjects::Subjects::human_completed(&ws.to_string(), net_id, place);
+        let subject =
+            petri_api_types::subjects::Subjects::human_completed(&ws.to_string(), net_id, place);
         let completion = serde_json::json!({
             "task_id": id,
             "data": coerced_data,
@@ -727,7 +728,8 @@ pub async fn cancel_task(
 
     if let (Some(net_id), Some(place)) = (net_id, place) {
         let ws = task.workspace_id.unwrap_or_else(uuid::Uuid::nil);
-        let subject = petri_api_types::subjects::Subjects::human_cancelled(&ws.to_string(), net_id, place);
+        let subject =
+            petri_api_types::subjects::Subjects::human_cancelled(&ws.to_string(), net_id, place);
         let cancellation = serde_json::json!({
             "task_id": id,
             "reason": body.get("reason").and_then(|v| v.as_str()),

@@ -153,8 +153,7 @@ pub async fn reconcile_batch(
     let mut metadatas: Vec<Option<serde_json::Value>> = Vec::with_capacity(n);
 
     for item in items {
-        let mut provenance =
-            serde_json::json!({ "observed_size": item.size, "mtime": item.mtime });
+        let mut provenance = serde_json::json!({ "observed_size": item.size, "mtime": item.mtime });
         // Where the observation came from (adopt autostamp chain).
         ctx.stamp(&mut provenance);
         // st_mode is provenance-only (no promoted column for it).
@@ -354,10 +353,9 @@ pub async fn orphan_db_list(
     pool: &PgPool,
     page: &PageQuery,
 ) -> Result<Paginated<OrphanDbRow>, sqlx::Error> {
-    let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_orphan_db")
-            .fetch_one(pool)
-            .await?;
+    let total: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_orphan_db")
+        .fetch_one(pool)
+        .await?;
 
     let rows = sqlx::query_as::<_, OrphanDbRow>(
         "SELECT legacy_key, file_server_id, path, hash, size, modified \
@@ -389,10 +387,9 @@ pub async fn duplicates_list(
     pool: &PgPool,
     page: &PageQuery,
 ) -> Result<Paginated<DuplicateGroup>, sqlx::Error> {
-    let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_duplicates")
-            .fetch_one(pool)
-            .await?;
+    let total: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_duplicates")
+        .fetch_one(pool)
+        .await?;
 
     let groups = sqlx::query_as::<_, DuplicateGroup>(
         "SELECT content_hash, copies, locations, has_canonical \
@@ -420,10 +417,9 @@ pub async fn reconcile_summary(pool: &PgPool) -> Result<ReconcileSummary, sqlx::
     .fetch_all(pool)
     .await?;
 
-    let orphan_db: (i64,) =
-        sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_orphan_db")
-            .fetch_one(pool)
-            .await?;
+    let orphan_db: (i64,) = sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_orphan_db")
+        .fetch_one(pool)
+        .await?;
 
     let duplicate_groups: (i64,) =
         sqlx::query_as("SELECT COUNT(*)::bigint FROM reconcile_duplicates")

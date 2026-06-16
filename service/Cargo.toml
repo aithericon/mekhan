@@ -133,6 +133,10 @@ aithericon-resources = { path = "../shared/resources", features = ["vault"] }
 # compile-time decl (validate/ref_scan/default_editor_config fn pointers)
 # layers on top in `mekhan_service::backends::BackendDecl`.
 aithericon-backends = { path = "../shared/backends" }
+# Hexagonal transactional-email subsystem — the `Mailer` port + typed messages
+# (invite/share/member/welcome) + SMTP/Brevo/log adapters, selected at runtime
+# from `EmailConfig`. See `crate::notify::email`.
+aithericon-email = { path = "../shared/aithericon-email" }
 # Shared inference DTOs — the SINGLE source of truth for the metering record
 # (`InferenceRequestLog`). The router publishes it; the inference-metering
 # projector deserializes the SAME struct off the INFERENCE_METERING stream

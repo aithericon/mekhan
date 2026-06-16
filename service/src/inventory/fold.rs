@@ -168,13 +168,8 @@ async fn process_batch(
                 .collect();
 
             let mut tx = db.begin().await?;
-            super::queries::fold_index_batch(
-                &mut tx,
-                workspace_id,
-                &batch.file_server_id,
-                &items,
-            )
-            .await?;
+            super::queries::fold_index_batch(&mut tx, workspace_id, &batch.file_server_id, &items)
+                .await?;
             tx.commit().await?;
             tracing::debug!(
                 server = %batch.file_server_id,

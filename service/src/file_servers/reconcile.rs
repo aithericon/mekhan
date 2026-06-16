@@ -469,7 +469,9 @@ pub fn spawn_auto_probe(
                 missing = r.missing,
                 "reconcile: auto-probe complete"
             ),
-            Err(e) => tracing::warn!(endpoint = %endpoint.id, error = e, "reconcile: auto-probe failed"),
+            Err(e) => {
+                tracing::warn!(endpoint = %endpoint.id, error = e, "reconcile: auto-probe failed")
+            }
         }
     });
 }
@@ -595,9 +597,14 @@ mod tests {
             ("a/x.txt", ReadOutcome::Present(b"hello".to_vec())),
             // b/z.txt deliberately absent from the fake → Missing.
         ]);
-        let r = probe_endpoint(&reader, &ep("local_mount"), &[present, gap], &HashMap::new())
-            .await
-            .unwrap();
+        let r = probe_endpoint(
+            &reader,
+            &ep("local_mount"),
+            &[present, gap],
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
         // A miss must NOT fail verification.
         assert_eq!(r.verification_status, "verified");
         assert_eq!(r.passed, 1);
@@ -624,10 +631,7 @@ mod tests {
         // endpoint established a DIFFERENT hash ("GOT_B") for the same path →
         // the copies genuinely diverge → conflict (stronger than mismatch).
         let s = sample("a/x.txt", b"reference"); // reference hash
-        let reader = FakeReader::new(vec![(
-            "a/x.txt",
-            ReadOutcome::Present(b"GOT_A".to_vec()),
-        )]);
+        let reader = FakeReader::new(vec![("a/x.txt", ReadOutcome::Present(b"GOT_A".to_vec()))]);
         let mut siblings = HashMap::new();
         siblings.insert("a/x.txt".to_string(), sha256_hex(b"GOT_B"));
         let r = probe_endpoint(&reader, &ep("s3"), &[s], &siblings)
@@ -686,7 +690,11 @@ mod tests {
             *per_prefix.entry(p).or_default() += 1;
         }
         // All 3 prefixes present; round-robin gives each exactly 10.
-        assert_eq!(per_prefix.len(), 3, "every prefix represented: {per_prefix:?}");
+        assert_eq!(
+            per_prefix.len(),
+            3,
+            "every prefix represented: {per_prefix:?}"
+        );
         for (_, c) in per_prefix {
             assert_eq!(c, 10, "round-robin even spread");
         }

@@ -18,6 +18,7 @@ resolver = "2"
 members = [
     "service",
     "router",
+    "shared/aithericon-email",
     "shared/backends",
     "shared/resources",
     "shared/resources-derive",

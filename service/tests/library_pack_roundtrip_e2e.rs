@@ -75,13 +75,7 @@ async fn header_driven_app() -> (axum::Router, PgPool) {
 }
 
 /// Insert a `library_packs` row directly. Returns its id.
-async fn seed_pack(
-    db: &PgPool,
-    workspace_id: Uuid,
-    vendor: &str,
-    slug: &str,
-    name: &str,
-) -> Uuid {
+async fn seed_pack(db: &PgPool, workspace_id: Uuid, vendor: &str, slug: &str, name: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO library_packs \
@@ -239,7 +233,10 @@ async fn pack_export_import_roundtrip_then_conflict() {
     assert_eq!(dst_ws, ws_dst, "pack landed in the destination workspace");
     assert_eq!(dst_vendor, vendor);
     assert_eq!(dst_slug, pack_slug);
-    assert_eq!(dst_origin, "workspace", "imports are always `workspace` origin");
+    assert_eq!(
+        dst_origin, "workspace",
+        "imports are always `workspace` origin"
+    );
 
     // --- Assert each node was recreated with identical coordinate/presentation
     //     and a recompiled air_json + interface_json ------------------------
@@ -277,7 +274,10 @@ async fn pack_export_import_roundtrip_then_conflict() {
         let air = air_json.unwrap_or_else(|| panic!("node `{coord}` has no air_json"));
         let iface =
             interface_json.unwrap_or_else(|| panic!("node `{coord}` has no interface_json"));
-        assert!(air.is_object() || air.is_array(), "air_json is structured JSON");
+        assert!(
+            air.is_object() || air.is_array(),
+            "air_json is structured JSON"
+        );
         assert!(iface.is_object(), "interface_json is structured JSON");
     }
 

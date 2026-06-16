@@ -125,7 +125,10 @@ async fn present_runner_outside_the_group_is_not_a_pool_replica() {
             status, "active",
             "a non-member runner must not yield an active placement"
         );
-        assert_eq!(observed, 0, "a non-member runner is not an observed replica");
+        assert_eq!(
+            observed, 0,
+            "a non-member runner is not an observed replica"
+        );
     }
 }
 

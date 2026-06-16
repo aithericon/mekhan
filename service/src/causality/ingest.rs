@@ -2292,22 +2292,28 @@ async fn register_catalogue_entry(
         )
     });
     // (content_hash, inventory file_server_id, inventory path)
-    let (content_hash, inv_file_server, inv_path): (String, String, String) =
-        match (content_hash, by_ref_loc) {
-            // by-reference: location is (file_server_id, reference_path), no S3 object
-            (Some(h), Some((Some(fs), Some(rp)))) => (h, fs, rp),
-            // uploaded: location is (object_store, storage_path)
-            (Some(h), None)
-                if cmd
-                    .storage_path
-                    .as_deref()
-                    .map(|p| !p.trim().is_empty())
-                    .unwrap_or(false) =>
-            {
-                (h, object_store_id.to_string(), cmd.storage_path.clone().unwrap())
-            }
-            (h, _) => {
-                record_silent_drop_with(
+    let (content_hash, inv_file_server, inv_path): (String, String, String) = match (
+        content_hash,
+        by_ref_loc,
+    ) {
+        // by-reference: location is (file_server_id, reference_path), no S3 object
+        (Some(h), Some((Some(fs), Some(rp)))) => (h, fs, rp),
+        // uploaded: location is (object_store, storage_path)
+        (Some(h), None)
+            if cmd
+                .storage_path
+                .as_deref()
+                .map(|p| !p.trim().is_empty())
+                .unwrap_or(false) =>
+        {
+            (
+                h,
+                object_store_id.to_string(),
+                cmd.storage_path.clone().unwrap(),
+            )
+        }
+        (h, _) => {
+            record_silent_drop_with(
                     "catalogue_register_uncoupled",
                     &format!(
                         "artifact {} cannot be coupled (by_reference={}) — refusing to write a half catalogue/inventory row",
@@ -2325,9 +2331,9 @@ async fn register_catalogue_entry(
                     }),
                     None,
                 );
-                return Ok(());
-            }
-        };
+            return Ok(());
+        }
+    };
 
     // Deterministic nats_msg_id (kept for tracing/forensics; dedup is now on
     // content_hash — see ON CONFLICT below).

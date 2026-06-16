@@ -35,11 +35,7 @@ use crate::AppState;
 /// live/backfill endpoint here so the SSE firehoses and DB backfills are
 /// workspace-scoped (a tenant cannot tail another tenant's metrics/logs by id).
 /// See `crate::process::queries::process_in_workspace` for the scoping rule.
-async fn gate_process(
-    state: &AppState,
-    process_id: &str,
-    user: &AuthUser,
-) -> Result<(), ApiError> {
+async fn gate_process(state: &AppState, process_id: &str, user: &AuthUser) -> Result<(), ApiError> {
     let ws = user.workspace_id.unwrap_or_else(uuid::Uuid::nil);
     let visible = crate::process::queries::process_in_workspace(&state.db, process_id, ws)
         .await

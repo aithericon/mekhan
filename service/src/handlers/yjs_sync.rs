@@ -25,7 +25,11 @@ use crate::AppState;
 /// effective role IS its host's. The published-template read-only gate does
 /// NOT apply here — page read-only is a pure ACL floor (`role < Editor`).
 fn page_object_ref(page: &Page) -> ObjectRef {
-    match (page.attached_kind.as_deref(), page.attached_id, page.folder_id) {
+    match (
+        page.attached_kind.as_deref(),
+        page.attached_id,
+        page.folder_id,
+    ) {
         (Some("template"), Some(id), _) => ObjectRef::template(id),
         (Some("instance"), Some(id), _) => ObjectRef::instance(id),
         (_, _, Some(fid)) => ObjectRef::folder(fid),

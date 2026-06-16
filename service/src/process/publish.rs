@@ -1515,7 +1515,10 @@ fn reconcile_subworkflow_outputs(graph: &WorkflowGraph, sub_air: &SubWorkflowAir
 /// so we re-derive from the frozen child here. A non-library child (or an
 /// unresolved node) clears any stale snapshot so the card never shows orphaned
 /// branding. Display-only — never feeds compilation.
-fn stamp_subworkflow_presentation(graph: &WorkflowGraph, sub_air: &SubWorkflowAir) -> WorkflowGraph {
+fn stamp_subworkflow_presentation(
+    graph: &WorkflowGraph,
+    sub_air: &SubWorkflowAir,
+) -> WorkflowGraph {
     let mut g = graph.clone();
     for node in &mut g.nodes {
         if let WorkflowNodeData::SubWorkflow {

@@ -30,8 +30,14 @@ async fn fake_upstream_starts_and_serves() {
     .await;
 
     let base = upstream.base_url();
-    assert!(base.starts_with("http://"), "base_url should be an http url: {base}");
-    assert!(!base.ends_with('/'), "base_url should have no trailing slash: {base}");
+    assert!(
+        base.starts_with("http://"),
+        "base_url should be an http url: {base}"
+    );
+    assert!(
+        !base.ends_with('/'),
+        "base_url should have no trailing slash: {base}"
+    );
     assert_eq!(upstream.hits(), 0, "no requests served yet");
 
     // Drive one chat completion and confirm the metered usage body + hit counter.

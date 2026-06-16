@@ -295,6 +295,23 @@ async fn put_grant_core(
     .await
     .map_err(|e| ApiError::internal(format!("read back grant: {e}")))?;
 
+    // Best-effort: tell the grantee something was shared with them. Non-fatal.
+    let sharer = user
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "a teammate".into());
+    crate::notify::dispatch::resource_shared(
+        state,
+        row.email.as_deref(),
+        row.display_name.as_deref(),
+        &sharer,
+        kind,
+        id,
+        ctx.workspace_id,
+        &row.role,
+    )
+    .await;
+
     Ok(Json(GrantView {
         id: Some(row.id),
         user_id: row.user_id,

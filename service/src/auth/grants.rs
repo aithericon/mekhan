@@ -85,7 +85,10 @@ impl ObjectKind {
     /// Resources and assets key a direct grant on their OWN id (like an
     /// instance), not on a chain-root base.
     fn keys_on_self(self) -> bool {
-        matches!(self, ObjectKind::Instance | ObjectKind::Resource | ObjectKind::Asset)
+        matches!(
+            self,
+            ObjectKind::Instance | ObjectKind::Resource | ObjectKind::Asset
+        )
     }
 }
 
@@ -824,11 +827,7 @@ mod tests {
 
     /// The full effective-role decision including the `restricted` opt-out and
     /// the ws Owner/Admin bypass — mirrors `effective_object_role`'s branches.
-    fn effective_full(
-        grant: Option<Role>,
-        ws_role: Role,
-        restricted: bool,
-    ) -> Option<Role> {
+    fn effective_full(grant: Option<Role>, ws_role: Role, restricted: bool) -> Option<Role> {
         if ws_role >= Role::Admin {
             return Some(ws_role); // bypass
         }
@@ -856,14 +855,8 @@ mod tests {
     #[test]
     fn restricted_still_honours_admin_bypass() {
         // ws Admin/Owner see restricted objects regardless of any grant.
-        assert_eq!(
-            effective_full(None, Role::Admin, true),
-            Some(Role::Admin)
-        );
-        assert_eq!(
-            effective_full(None, Role::Owner, true),
-            Some(Role::Owner)
-        );
+        assert_eq!(effective_full(None, Role::Admin, true), Some(Role::Admin));
+        assert_eq!(effective_full(None, Role::Owner, true), Some(Role::Owner));
     }
 
     #[test]

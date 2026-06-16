@@ -101,7 +101,7 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
         asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
             db.clone(),
         )),
-        email: Arc::new(mekhan_service::notify::email::LogEmailSender),
+        email: mekhan_service::notify::email::log_mailer(),
         user_provisioner: None,
     };
 

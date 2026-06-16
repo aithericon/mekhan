@@ -3,5 +3,8 @@
   "state": "loaded",
   "replicas": 1,
   "registry_resource": "internal_pool_registry",
-  "note": "Seeded loaded for the vision-LLM demos (document-pipeline-v1, classify-and-group-v1, di-extraction-canary) now bound to the internal pool. NOT pulled by the default `just dev` (~7.8 GB) — `ollama pull llama3.2-vision:11b` and load it resident on the runner to flip the live-runner AND-gate available=true; until then GET /api/v1/models reports approved-but-not-available and those demos no-op the inference. Served through internal_pool_router → the in-cluster inference router."
+  "autoscale_mode": "scale_to_zero",
+  "desired_replicas": 1,
+  "idle_evict": true,
+  "note": "Seeded loaded for the vision-LLM demos (document-pipeline-v1, classify-and-group-v1, di-extraction-canary) bound to the internal pool, with a scale_to_zero autoscale policy: the placement controller wakes it on demand and idle-evicts back to zero when idle. NOT pulled by the default `just dev` (~7.8 GB) — `ollama pull llama3.2-vision:11b` and serve it on the runner so the first starved-demand signal can place it; until then GET /api/v1/models reports approved-but-not-available and those demos no-op the inference. Served through internal_pool_router → the in-cluster inference router."
 }

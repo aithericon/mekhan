@@ -153,10 +153,7 @@ mod tests {
             normalize_hash("SHA256:9F86D081884C7D659A2FEAA0C55AD015"),
             Some("9f86d081884c7d659a2feaa0c55ad015".to_string())
         );
-        assert_eq!(
-            normalize_hash("sha256:abcdef"),
-            Some("abcdef".to_string())
-        );
+        assert_eq!(normalize_hash("sha256:abcdef"), Some("abcdef".to_string()));
         // Already-bare hex passes through (lowercased).
         assert_eq!(normalize_hash("ABCD"), Some("abcd".to_string()));
         assert_eq!(normalize_hash(""), None);

@@ -19,7 +19,9 @@ use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use mekhan_service::analytics::queries::{breakdown, clamp_depth, clamp_limit, timeseries, Dimension};
+use mekhan_service::analytics::queries::{
+    breakdown, clamp_depth, clamp_limit, timeseries, Dimension,
+};
 use mekhan_service::analytics::snapshot::write_snapshot;
 use mekhan_service::inventory::model::{InventoryIndexItem, InventoryIndexRequest};
 use mekhan_service::inventory::queries::index;
@@ -33,7 +35,9 @@ fn db_url() -> Option<String> {
 
 async fn connect() -> PgPool {
     let url = db_url().expect("db_url checked before connect");
-    PgPool::connect(&url).await.expect("connect to dev Postgres")
+    PgPool::connect(&url)
+        .await
+        .expect("connect to dev Postgres")
 }
 
 /// Filter-DSL scope pinning every query to this run's unique server.
@@ -149,7 +153,10 @@ async fn breakdown_per_dimension_and_directory_descent() {
     // 100, 500, 10, 20, 30 → "<1 KiB"; 2048 → "1 KiB-1 MiB"; 5 MiB → "1-16 MiB";
     // NULL → "unknown".
     assert_eq!(bucket(&by_size, "<1 KiB").expect("<1 KiB").count, 5);
-    assert_eq!(bucket(&by_size, "1 KiB-1 MiB").expect("1 KiB-1 MiB").count, 1);
+    assert_eq!(
+        bucket(&by_size, "1 KiB-1 MiB").expect("1 KiB-1 MiB").count,
+        1
+    );
     assert_eq!(bucket(&by_size, "1-16 MiB").expect("1-16 MiB").count, 1);
     assert_eq!(bucket(&by_size, "unknown").expect("unknown").count, 1);
 
@@ -187,12 +194,23 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert!(bucket(&root, "100%done").is_some());
 
     // --- directory descent: under=data ----------------------------------------
-    let under_data = breakdown(&pool, &params, Dimension::Directory, Some("data"), depth1, limit)
-        .await
-        .expect("directory under data");
+    let under_data = breakdown(
+        &pool,
+        &params,
+        Dimension::Directory,
+        Some("data"),
+        depth1,
+        limit,
+    )
+    .await
+    .expect("directory under data");
     let raw = bucket(&under_data, "raw").expect("data/raw");
     assert_eq!(raw.count, 3);
-    assert_eq!(raw.is_leaf, Some(false), "raw still holds files one level down");
+    assert_eq!(
+        raw.is_leaf,
+        Some(false),
+        "raw still holds files one level down"
+    );
     assert_eq!(bucket(&under_data, "proc").expect("data/proc").count, 1);
 
     // under=data/raw → the files themselves, all leaves.
@@ -237,7 +255,10 @@ async fn breakdown_per_dimension_and_directory_descent() {
     )
     .await
     .expect("directory under 100%done");
-    assert_eq!(under_pct.total_count, 1, "unescaped `%` would match everything");
+    assert_eq!(
+        under_pct.total_count, 1,
+        "unescaped `%` would match everything"
+    );
 
     cleanup(&pool, &[&server]).await;
 }
@@ -245,9 +266,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
 #[tokio::test]
 async fn snapshot_twice_dedupes_in_timeseries() {
     let Some(_url) = db_url() else {
-        eprintln!(
-            "SKIP snapshot_twice_dedupes_in_timeseries: set MEKHAN__DATABASE_URL to run"
-        );
+        eprintln!("SKIP snapshot_twice_dedupes_in_timeseries: set MEKHAN__DATABASE_URL to run");
         return;
     };
     let pool = connect().await;
@@ -273,7 +292,10 @@ async fn snapshot_twice_dedupes_in_timeseries() {
     let first = write_snapshot(&pool).await.expect("snapshot 1");
     assert!(first.rows_written > 0, "snapshot wrote rows");
     let second = write_snapshot(&pool).await.expect("snapshot 2");
-    assert!(second.snapped_at > first.snapped_at, "one Utc::now per capture");
+    assert!(
+        second.snapped_at > first.snapped_at,
+        "one Utc::now per capture"
+    );
 
     // dim=total, our server, day-wide buckets: exactly one deduped point.
     let points = timeseries(&pool, "total", None, Some(&server), 86_400, 86_400)
@@ -285,9 +307,16 @@ async fn snapshot_twice_dedupes_in_timeseries() {
     assert_eq!(points[0].total_bytes, 6000);
 
     // dim=extension with a key filter narrows to that key.
-    let csv = timeseries(&pool, "extension", Some("csv"), Some(&server), 86_400, 86_400)
-        .await
-        .expect("timeseries extension/csv");
+    let csv = timeseries(
+        &pool,
+        "extension",
+        Some("csv"),
+        Some(&server),
+        86_400,
+        86_400,
+    )
+    .await
+    .expect("timeseries extension/csv");
     assert_eq!(csv.len(), 1);
     assert_eq!(csv[0].key, "csv");
     assert_eq!(csv[0].file_count, 2);

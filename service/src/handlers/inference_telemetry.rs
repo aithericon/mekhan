@@ -229,13 +229,15 @@ fn parse_router_metrics(body: &str) -> RouterLiveMetrics {
             "inference_router_upstream_error_total" => global.upstream_error_total = u(s.value),
             "inference_router_replica_inflight" => {
                 if let Some(id) = s.labels.get("replica") {
-                    let r = replicas.entry(id.clone()).or_insert_with(|| RouterReplicaLive {
-                        replica: id.clone(),
-                        zone: None,
-                        live: false,
-                        in_flight: 0,
-                        capacity: 0,
-                    });
+                    let r = replicas
+                        .entry(id.clone())
+                        .or_insert_with(|| RouterReplicaLive {
+                            replica: id.clone(),
+                            zone: None,
+                            live: false,
+                            in_flight: 0,
+                            capacity: 0,
+                        });
                     r.in_flight = u(s.value);
                     r.zone = s.labels.get("zone").cloned().or(r.zone.take());
                     r.live = s.labels.get("live").map(|v| v == "true").unwrap_or(r.live);
@@ -243,13 +245,15 @@ fn parse_router_metrics(body: &str) -> RouterLiveMetrics {
             }
             "inference_router_replica_capacity" => {
                 if let Some(id) = s.labels.get("replica") {
-                    let r = replicas.entry(id.clone()).or_insert_with(|| RouterReplicaLive {
-                        replica: id.clone(),
-                        zone: None,
-                        live: false,
-                        in_flight: 0,
-                        capacity: 0,
-                    });
+                    let r = replicas
+                        .entry(id.clone())
+                        .or_insert_with(|| RouterReplicaLive {
+                            replica: id.clone(),
+                            zone: None,
+                            live: false,
+                            in_flight: 0,
+                            capacity: 0,
+                        });
                     r.capacity = u(s.value);
                     r.zone = s.labels.get("zone").cloned().or(r.zone.take());
                 }
@@ -469,13 +473,21 @@ inference_router_request_duration_seconds_count{model=\"warm\"} 40
     #[test]
     fn merges_replica_inflight_and_capacity() {
         let m = parse_router_metrics(SAMPLE);
-        let r0 = m.replicas.iter().find(|r| r.replica == "replica-0").unwrap();
+        let r0 = m
+            .replicas
+            .iter()
+            .find(|r| r.replica == "replica-0")
+            .unwrap();
         assert_eq!(r0.in_flight, 2);
         assert_eq!(r0.capacity, 4);
         assert_eq!(r0.zone.as_deref(), Some("eu-dev"));
         assert!(r0.live);
         // Empty zone label → None, live=false carried through.
-        let r1 = m.replicas.iter().find(|r| r.replica == "replica-1").unwrap();
+        let r1 = m
+            .replicas
+            .iter()
+            .find(|r| r.replica == "replica-1")
+            .unwrap();
         assert_eq!(r1.zone, None);
         assert!(!r1.live);
         assert_eq!(r1.capacity, 4);

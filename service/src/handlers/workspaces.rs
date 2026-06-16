@@ -230,12 +230,11 @@ pub async fn delete_workspace(
         .await
         .map_err(map_to_api_error)?;
 
-    let row: Option<(bool, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT is_system, slug, archived_at FROM workspaces WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(bool, String, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as("SELECT is_system, slug, archived_at FROM workspaces WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
     let (is_system, slug, archived_at) =
         row.ok_or_else(|| ApiError::not_found("workspace not found"))?;
 
@@ -358,7 +357,44 @@ pub async fn add_member(
     .bind(&req.role)
     .fetch_one(&state.db)
     .await?;
+
+    notify_member(&state, &user, id, target_user_id, &req.role, false).await;
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Best-effort member-added / role-changed email. Looks up the target's profile
+/// (email + display name may be absent if they've never logged in → skipped)
+/// and dispatches via the [`crate::notify`] seam. Non-fatal.
+async fn notify_member(
+    state: &AppState,
+    actor: &AuthUser,
+    workspace_id: Uuid,
+    target_user_id: Uuid,
+    role: &str,
+    role_changed: bool,
+) {
+    let profile: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT email, display_name FROM user_profiles WHERE user_id = $1")
+            .bind(target_user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    let (email, name) = profile.unwrap_or((None, None));
+    let actor_name = actor
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "an admin".into());
+    crate::notify::dispatch::member_added(
+        state,
+        email.as_deref(),
+        name.as_deref(),
+        &actor_name,
+        workspace_id,
+        role,
+        role_changed,
+    )
+    .await;
 }
 
 /// DELETE /api/v1/workspaces/{id}/members/{user_id}
@@ -498,6 +534,8 @@ pub async fn update_member_role(
     .bind(&req.role)
     .fetch_one(&state.db)
     .await?;
+
+    notify_member(&state, &user, id, target_user_id, &req.role, true).await;
     Ok(Json(row))
 }
 

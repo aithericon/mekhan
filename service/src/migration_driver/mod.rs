@@ -45,9 +45,7 @@ use crate::inventory::reconcile::{reconcile_batch, ObservedItem, ReconcileCounts
 pub mod migrate;
 pub mod synthetic;
 
-pub use migrate::{
-    migrate, retire, MigrateCounts, MigrateSelector, RetireCounts,
-};
+pub use migrate::{migrate, retire, MigrateCounts, MigrateSelector, RetireCounts};
 
 /// Errors surfaced by the driver pipeline.
 #[derive(Debug, thiserror::Error)]
@@ -133,7 +131,13 @@ impl ReconcileSink {
 
 #[async_trait]
 impl EventStream for ReconcileSink {
-    async fn log(&self, _level: aithericon_executor_domain::LogLevel, _msg: String, _f: std::collections::HashMap<String, String>) {}
+    async fn log(
+        &self,
+        _level: aithericon_executor_domain::LogLevel,
+        _msg: String,
+        _f: std::collections::HashMap<String, String>,
+    ) {
+    }
 
     async fn item(&self, _channel: String, _episode_uid: String, idx: u64, payload: Value) {
         // Short-circuit once a prior batch errored.
@@ -212,7 +216,10 @@ pub async fn index_reconcile(
     let sink = Arc::new(ReconcileSink::new(pool.clone(), file_server_id.to_string()));
     let cancel = CancellationToken::new();
 
-    info!(file_server_id, root, batch_size, "index-reconcile: crawl + fold");
+    info!(
+        file_server_id,
+        root, batch_size, "index-reconcile: crawl + fold"
+    );
 
     // The storage prefix ("") is what the file-ops dispatch passes to the op as
     // the path-resolution prefix; pass the same here. `endpoint_root` is the
@@ -345,14 +352,15 @@ pub async fn hash_pending(
     let mut counts = HashPendingCounts::default();
 
     for row in rows {
-        let (digest, size) = match probe_one(&operator, &storage.prefix, &row.path, run_dir.path()).await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(path = %row.path, error = %e, "probe failed; skipping row");
-                counts.probe_failed += 1;
-                continue;
-            }
-        };
+        let (digest, size) =
+            match probe_one(&operator, &storage.prefix, &row.path, run_dir.path()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(path = %row.path, error = %e, "probe failed; skipping row");
+                    counts.probe_failed += 1;
+                    continue;
+                }
+            };
 
         match row.status.as_str() {
             "orphan_disk" => {
@@ -399,9 +407,10 @@ async fn probe_one(
         checksum_algo: Some(ChecksumAlgorithm::Sha256),
     };
 
-    let outputs = aithericon_executor_file_ops::ops::probe::execute(&config, operator, prefix, run_dir)
-        .await
-        .map_err(|e| DriverError::Probe(e.to_string()))?;
+    let outputs =
+        aithericon_executor_file_ops::ops::probe::execute(&config, operator, prefix, run_dir)
+            .await
+            .map_err(|e| DriverError::Probe(e.to_string()))?;
 
     // `checksum_digest` is the bare lowercase-hex SHA-256 — the exact reconcile
     // join-key shape (matches `legacy_file_index.hash` with `"SHA256:"` stripped
