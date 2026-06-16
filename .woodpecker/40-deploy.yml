@@ -26,9 +26,7 @@
 # =============================================================================
 
 when:
-  # TEMP (testing the dev/prod split): auto-deploy DEV on push to the feature
-  # branch instead of main. REVERT to `branch: main` before merging.
-  - branch: feat/prod-env-isolation
+  - branch: main
     event: push
   - event: manual
 
