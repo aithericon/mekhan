@@ -20,9 +20,9 @@
 	}: {
 		capacities: CapacitySummary[];
 		/** Machine pool "Enroll" — open the runner EnrollSheet scoped to that path. */
-		onenroll?: (path: string) => void;
+		onenroll?: (path: string, isPlatform: boolean) => void;
 		/** Worker pool "Enroll" — open the worker-mode EnrollSheet scoped to that path. */
-		onenrollworker?: (path: string) => void;
+		onenrollworker?: (path: string, isPlatform: boolean) => void;
 		/** Row overflow → Edit (NewCapacityModal in edit mode). */
 		onedit?: (id: string) => void;
 		/** Row overflow → Delete (confirm + deleteResource). */

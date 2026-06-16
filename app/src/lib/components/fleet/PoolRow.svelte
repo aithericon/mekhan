@@ -41,10 +41,11 @@
 		ondrain
 	}: {
 		capacity: CapacitySummary;
-		/** Machine pool "Enroll" — open the runner EnrollSheet scoped to this path. */
-		onenroll?: (path: string) => void;
+		/** Machine pool "Enroll" — open the runner EnrollSheet scoped to this path.
+		 *  `isPlatform` lets the caller mint a platform-scoped token for shared pools. */
+		onenroll?: (path: string, isPlatform: boolean) => void;
 		/** Worker pool "Enroll" — open the worker-mode EnrollSheet scoped to this path. */
-		onenrollworker?: (path: string) => void;
+		onenrollworker?: (path: string, isPlatform: boolean) => void;
 		/** Overflow → Edit: opens NewCapacityModal in edit mode. */
 		onedit?: (id: string) => void;
 		/** Overflow → Delete: confirm + deleteResource (retires the backing net). */
@@ -131,25 +132,29 @@
 	<!-- Actions -->
 	<div class="flex shrink-0 items-center gap-1">
 		{#if kind.id === 'machine'}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-sm text-muted-foreground"
-				onclick={() => onenroll?.(capacity.path)}
-				data-testid="pool-enroll-{capacity.id}"
-			>
-				Enroll
-			</Button>
+			{#if !isPlatform || canMutate}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-sm text-muted-foreground"
+					onclick={() => onenroll?.(capacity.path, isPlatform)}
+					data-testid="pool-enroll-{capacity.id}"
+				>
+					Enroll
+				</Button>
+			{/if}
 		{:else if kind.id === 'worker'}
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-sm text-muted-foreground"
-				onclick={() => onenrollworker?.(capacity.path)}
-				data-testid="pool-enroll-{capacity.id}"
-			>
-				Enroll
-			</Button>
+			{#if !isPlatform || canMutate}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="text-sm text-muted-foreground"
+					onclick={() => onenrollworker?.(capacity.path, isPlatform)}
+					data-testid="pool-enroll-{capacity.id}"
+				>
+					Enroll
+				</Button>
+			{/if}
 		{:else if kind.id === 'human'}
 			<!-- The roster lives on the pool detail page — enrolling is done there. -->
 			<Button

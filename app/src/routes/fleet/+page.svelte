@@ -59,9 +59,11 @@
 	// A machine-pool row's "Enroll" → EnrollSheet scoped to that pool's path.
 	let enrollOpen = $state(false);
 	let enrollGroup = $state<string | null>(null);
+	let enrollGroupIsPlatform = $state(false);
 	// A worker-pool row's "Enroll" → EnrollSheet in worker mode, scoped likewise.
 	let enrollWorkerOpen = $state(false);
 	let enrollWorkerGroup = $state<string | null>(null);
+	let enrollWorkerGroupIsPlatform = $state(false);
 
 	// ── Polling ────────────────────────────────────────────────────────────────
 
@@ -90,14 +92,16 @@
 	}
 
 	/** A machine-pool row's "Enroll" — scope the runner sheet to that pool's path. */
-	function onEnrollMachine(path: string) {
+	function onEnrollMachine(path: string, isPlatform: boolean) {
 		enrollGroup = path;
+		enrollGroupIsPlatform = isPlatform;
 		enrollOpen = true;
 	}
 
 	/** A worker-pool row's "Enroll" — scope the worker sheet to that pool's path. */
-	function onEnrollWorker(path: string) {
+	function onEnrollWorker(path: string, isPlatform: boolean) {
 		enrollWorkerGroup = path;
+		enrollWorkerGroupIsPlatform = isPlatform;
 		enrollWorkerOpen = true;
 	}
 
@@ -211,12 +215,18 @@
 <NewCapacityModal bind:open={createOpen} {editing} onsaved={onSaved} />
 
 <!-- Machine-pool enroll flow, scoped to the row's pool path. -->
-<EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void pools.poll()} />
+<EnrollSheet
+	bind:open={enrollOpen}
+	group={enrollGroup}
+	groupIsPlatform={enrollGroupIsPlatform}
+	onenrolled={() => void pools.poll()}
+/>
 
 <!-- Worker-pool enroll flow, scoped to the row's pool path. -->
 <EnrollSheet
 	bind:open={enrollWorkerOpen}
 	mode="worker"
 	group={enrollWorkerGroup}
+	groupIsPlatform={enrollWorkerGroupIsPlatform}
 	onenrolled={() => void pools.poll()}
 />

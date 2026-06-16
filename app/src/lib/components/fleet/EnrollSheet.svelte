@@ -33,15 +33,21 @@
 		type CreatedRegistrationToken
 	} from '$lib/api/runners';
 	import { createWorkerRegistrationToken } from '$lib/api/workers';
-	import { listResources, type ResourceSummary } from '$lib/api/resources';
-	import { capacityTarget } from '$lib/editor/deployment-run-target';
-	import { auth } from '$lib/auth/store.svelte';
+	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
 
 	type Props = {
 		open: boolean;
 		/** When set, the token is scoped to THIS group (no picker is shown). When
 		 *  omitted, the sheet shows a picker over the presence `capacity` groups. */
 		group?: string | null;
+		/** Whether the fixed `group` is a platform-tier (shared) pool. Set by the
+		 *  per-pool caller from the pool's `scope_kind`. When true the minted token
+		 *  is platform-scoped (`platform: true`). Enrolling INTO a platform pool is
+		 *  platform-admin curation, so the caller MUST only expose this affordance
+		 *  to platform admins (the backend also 403s a non-admin platform mint).
+		 *  The global picker never offers platform pools, so this only applies to
+		 *  the fixed-group flow. */
+		groupIsPlatform?: boolean;
 		/** Which fleet this sheet enrolls into. `'runner'` (default) mints an `rt_`
 		 *  runner token over the presence `runner_group` capacities; `'worker'`
 		 *  mints a `wt_` worker token over the competing-consumer `workers`
@@ -51,12 +57,22 @@
 		onenrolled?: () => void;
 	};
 
-	let { open = $bindable(), group = null, mode = 'runner', onenrolled }: Props = $props();
+	let {
+		open = $bindable(),
+		group = null,
+		groupIsPlatform = false,
+		mode = 'runner',
+		onenrolled
+	}: Props = $props();
 
 	const fixedGroup = $derived(group ?? null);
 	const isWorker = $derived(mode === 'worker');
 	const unit = $derived(isWorker ? 'worker' : 'runner');
-	const isPlatformAdmin = $derived(auth.isPlatformAdmin);
+	// Platform-ness is DEFINED BY THE POOL, not chosen here: only a fixed-group
+	// enrol into a platform pool mints a platform token. The global picker filters
+	// platform pools out entirely (you enrol into a shared pool from its own page,
+	// which is admin-gated), so the picker flow is never platform.
+	const enrolIntoPlatform = $derived(!!fixedGroup && groupIsPlatform);
 
 	// ── Form state ───────────────────────────────────────────────────────────────
 	let name = $state('');
@@ -65,13 +81,12 @@
 	let reusable = $state(false);
 	let expiresAt = $state('');
 	let enrolling = $state(false);
-	// Platform-admin-only: mint the token against the shared platform pool
-	// (`workspace_id = PLATFORM_SCOPE_ID`) so the enrolled daemon lands in the
-	// global pool. Hidden + always-false for non-admins.
-	let asPlatform = $state(false);
 
-	// Group picker source (global flow only) — the presence `capacity` resources.
-	let groups = $state<ResourceSummary[]>([]);
+	// Group picker source (global flow only) — the workspace `capacity` groups of
+	// the matching backend. Platform pools are EXCLUDED (`scope_kind === 'platform'`):
+	// enrolling compute into a shared pool is platform-admin curation, done from the
+	// pool's own (admin-gated) page, not from this generic picker.
+	let groups = $state<CapacitySummary[]>([]);
 
 	// Reveal-once token.
 	let revealed = $state<(CreatedRegistrationToken & { name: string; group: string }) | null>(null);
@@ -84,13 +99,12 @@
 		maxUses = '';
 		reusable = false;
 		expiresAt = '';
-		asPlatform = false;
 		if (!fixedGroup) {
 			(async () => {
 				try {
-					const page = await listResources({ resource_type: 'capacity', perPage: 200 });
-					const want = isWorker ? 'workers' : 'runner_group';
-					groups = page.items.filter((r) => capacityTarget(r) === want);
+					const all = await listCapacities();
+					const wantBackend = isWorker ? 'queue' : 'presence';
+					groups = all.filter((c) => c.backend === wantBackend && c.scope_kind !== 'platform');
 				} catch {
 					groups = [];
 				}
@@ -114,10 +128,10 @@
 				reusable,
 				max_uses: maxUses ? parseInt(maxUses, 10) : undefined,
 				expires_at: expiresAt ? `${expiresAt}T23:59:59Z` : undefined,
-				// Platform-admin-only: mint against the shared platform pool. The
-				// backend 403s a non-admin `platform: true`, so it's gated to admins
-				// in the UI and defaults to the historical workspace-scoped token.
-				platform: asPlatform ? true : undefined
+				// Platform-ness comes from the target pool, not a per-enrol choice:
+				// only a fixed-group enrol into a platform pool mints a platform
+				// token. The backend 403s a non-admin platform mint as defence in depth.
+				platform: enrolIntoPlatform ? true : undefined
 			});
 			revealed = { ...created, name: name.trim(), group: resolvedGroup ?? '' };
 			open = false;
@@ -271,22 +285,20 @@
 					<label for="enroll-reusable" class="text-sm text-muted-foreground"> Reusable token </label>
 				</div>
 
-				{#if isPlatformAdmin}
-					<label
+				{#if enrolIntoPlatform}
+					<div
 						class="flex items-start gap-2.5 rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm"
-						data-testid="enroll-platform-toggle"
+						data-testid="enroll-platform-note"
 					>
-						<input type="checkbox" bind:checked={asPlatform} class="mt-0.5 size-4" />
+						<Globe class="mt-0.5 size-3.5 shrink-0 text-sky-600" />
 						<span>
-							<span class="flex items-center gap-1.5 font-medium text-foreground">
-								<Globe class="size-3.5" /> Enrol into the shared platform pool
-							</span>
+							<span class="font-medium text-foreground">Shared platform pool</span>
 							<span class="text-muted-foreground">
-								Mint at the global platform tier — the {unit} lands in the shared platform pool,
-								runnable by every workspace. Overrides the group above.
+								— this token enrols the {unit} into the global platform pool, runnable by every
+								workspace.
 							</span>
 						</span>
-					</label>
+					</div>
 				{/if}
 
 				<div class="flex gap-2 pt-1">

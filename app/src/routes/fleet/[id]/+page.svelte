@@ -211,7 +211,10 @@
 				{/if}
 			{/snippet}
 			{#snippet actions()}
-				{#if kind?.id === 'machine'}
+				<!-- Enrolling compute INTO a platform pool is platform-admin curation
+				     (distinct from RUNNING workloads on it, which any workspace may do),
+				     so the affordance is hidden for non-admins on platform pools. -->
+				{#if kind?.id === 'machine' && (!isPlatform || canCurate)}
 					<Button
 						variant="default"
 						size="sm"
@@ -222,7 +225,7 @@
 						<UserPlus class="size-4" />
 						Enroll runner
 					</Button>
-				{:else if kind?.id === 'worker'}
+				{:else if kind?.id === 'worker' && (!isPlatform || canCurate)}
 					<Button
 						variant="default"
 						size="sm"
@@ -493,6 +496,7 @@
 	bind:open={enrollOpen}
 	mode={kind?.id === 'worker' ? 'worker' : 'runner'}
 	group={path}
+	groupIsPlatform={isPlatform}
 	onenrolled={() => void load()}
 />
 
