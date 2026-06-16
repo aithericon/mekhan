@@ -1,0 +1,102 @@
+# =============================================================================
+# Deploy pool — Terraform/Nomad rollout of mekhan-service (PROD)
+# =============================================================================
+# Sibling of 40-deploy.yml (dev). Same shared HetznerCluster (10.20.x), but a
+# FULLY ISOLATED deployment: distinct Nomad job (mekhan-service-prod), Postgres
+# DB (mekhan_prod), NATS account (mekhan-prod), S3 bucket (mekhan-artifacts),
+# Vault role, and Zitadel org. All divergence flows from `environment="prod"`
+# in deploy/prod/prod.auto.tfvars via deploy/prod/locals.tf.
+#
+# MANUAL ONLY — prod never auto-deploys on push. Trigger it deliberately from
+# the Woodpecker UI (and pass the image SHA you want via CI_COMMIT_SHA / a
+# manual run on the target commit).
+#
+# ONE-TIME PROD BOOTSTRAP (before the first successful run) — see
+# deploy/README.md:
+#   1. Seed Vault at  secret/services/mekhan/prod  with: hetzner_s3_access_key,
+#      hetzner_s3_secret_key, state_encryption_passphrase, smtp_username,
+#      smtp_password.
+#   2. Run  deploy/prod/scripts/generate-nats-user.sh prod  (mints the
+#      mekhan-prod NATS account + creds at secret/nats/apps/mekhan/prod/worker).
+#   3. Ensure the `mekhan-artifacts` S3 bucket + the mekhan.aithericon.eu DNS
+#      record exist.
+#
+# SECRETS MODEL (mirrors 40-deploy.yml): single Woodpecker secret `vault_token`;
+# VAULT_ADDR hardcoded; everything else pulled inline from Vault.
+#
+# NETWORK NOTE: 10.20.0.* is reachable only over NetBird. The runner picking up
+# `role: deploy` MUST be on the mesh.
+# =============================================================================
+
+when:
+  - event: manual
+
+# 30-build is disabled while iterating; this pipeline deploys whatever image SHA
+# is already in the registry. Restore `depends_on: [30-build]` when build is back.
+depends_on: []
+
+labels:
+  role: deploy
+  host: worker-stateful-arm
+
+steps:
+  - name: deploy-prod
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      NOMAD_SKIP_VERIFY: "true"
+    commands:
+      # prod.auto.tfvars is gitignored — CI uses the committed .example.
+      - cp deploy/prod/prod.auto.tfvars.example deploy/prod/prod.auto.tfvars
+      - export NOMAD_TOKEN=$(vault kv get -field=token secret/nomad/bootstrap)
+      - export TF_VAR_nomad_token=$NOMAD_TOKEN
+      - export TF_VAR_postgres_admin_password=$(vault kv get -field=superuser_password secret/postgres/patroni)
+      - export TF_VAR_registry_user=$(vault kv get -field=username secret/docker/registry)
+      - export TF_VAR_registry_password=$(vault kv get -field=token secret/docker/registry)
+
+      # prod-scoped secrets live under secret/services/mekhan/prod (distinct
+      # from dev). Seed them once before the first run (see header).
+      - export AWS_ACCESS_KEY_ID=$(vault kv get -field=hetzner_s3_access_key secret/services/mekhan/prod)
+      - export AWS_SECRET_ACCESS_KEY=$(vault kv get -field=hetzner_s3_secret_key secret/services/mekhan/prod)
+      - export TF_VAR_s3_access_key=$AWS_ACCESS_KEY_ID
+      - export TF_VAR_s3_secret_key=$AWS_SECRET_ACCESS_KEY
+      - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/prod)
+
+      - export TF_VAR_email_smtp_username=$(vault kv get -field=smtp_username secret/services/mekhan/prod)
+      - export TF_VAR_email_smtp_password=$(vault kv get -field=smtp_password secret/services/mekhan/prod)
+
+      - vault kv get -field=key secret/zitadel/iac-jwt > /tmp/zitadel-iac-jwt.json
+      - export TF_VAR_zitadel_jwt_file=/tmp/zitadel-iac-jwt.json
+
+      - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
+      - 'echo "  ✓ Secrets loaded from Vault"'
+
+      # TEMP: 30-build is disabled, so $CI_COMMIT_SHA has no image in the
+      # registry. Pin the same known-built SHA dev deploys (service/engine/
+      # executor images all tagged with it). Restore "$CI_COMMIT_SHA" when
+      # 30-build is back.
+      - just ci::deploy-prod "01a7aa1f3c975d66adbfccaec35b015e71174cc0"
+    depends_on: []
+
+  - name: verify-prod
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      NOMAD_SKIP_VERIFY: "true"
+    commands:
+      - cp deploy/prod/prod.auto.tfvars.example deploy/prod/prod.auto.tfvars
+      - export NOMAD_TOKEN=$(vault kv get -field=token secret/nomad/bootstrap)
+      - export AWS_ACCESS_KEY_ID=$(vault kv get -field=hetzner_s3_access_key secret/services/mekhan/prod)
+      - export AWS_SECRET_ACCESS_KEY=$(vault kv get -field=hetzner_s3_secret_key secret/services/mekhan/prod)
+      - export TF_VAR_state_encryption_passphrase=$(vault kv get -field=state_encryption_passphrase secret/services/mekhan/prod)
+      - export NOMAD_ADDR=$(grep '^nomad_address' deploy/prod/prod.auto.tfvars | cut -d'"' -f2)
+      - 'echo "  ✓ Secrets loaded from Vault"'
+
+      - just ci::verify-deploy prod
+    depends_on: [deploy-prod]

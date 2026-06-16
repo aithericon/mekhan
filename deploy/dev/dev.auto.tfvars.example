@@ -1,11 +1,16 @@
 # Copy to dev.auto.tfvars (gitignored).
 #
-# NAMING NOTE: this is mekhan's *dev* environment, but it deploys to the
-# *prod* HetznerCluster (the only cluster that exists). Different scope:
-# we just run as a separate Nomad job (`mekhan-service`) with its own
-# hostname so it doesn't collide with a future mekhan-prod deploy.
+# This is the *dev* environment. It runs on the SAME HetznerCluster as prod
+# (deploy/prod) but is fully isolated: distinct Nomad job (mekhan-service-dev),
+# Consul services, Traefik router, Postgres DB (mekhan_dev), NATS account
+# (mekhan-dev), S3 bucket, Vault role, and Zitadel org. All of that divergence
+# flows from `environment` below via locals.tf — the *.tf files are identical
+# to deploy/prod's.
 
-# ── Nomad target — the prod cluster (10.20.x subnet) ────────────────────────
+# ── Environment ──────────────────────────────────────────────────────────────
+environment = "dev"
+
+# ── Nomad target — the shared cluster (10.20.x subnet) ──────────────────────
 nomad_address     = "https://10.20.0.10:4646"
 nomad_region      = "global"
 nomad_namespace   = "default"
@@ -16,18 +21,19 @@ node_class        = "stateless"
 image_repository = "forge.aithericon.eu/milanender/mekhan-service"
 
 # ── External exposure ───────────────────────────────────────────────────────
-# Single-cluster setup: there's no separate mekhan-prod, so dev claims the
-# canonical hostname. If a real prod environment ever splits out, move this
-# back to `mekhan.dev.aithericon.eu` (or wire it through prod's tfvars).
-hostname        = "mekhan.aithericon.eu"
+# dev lives on the subdomain; prod (deploy/prod) owns the canonical
+# mekhan.aithericon.eu. Distinct hostnames + Traefik routers = no collision.
+hostname        = "mekhan.dev.aithericon.eu"
 traefik_enabled = true
 
 # ── Runtime endpoints (resolved via Consul DNS on the cluster) ──────────────
 # These addresses are seen by Nomad allocations — not by your local machine.
 # (mekhan's Postgres host is set by postgres_runtime_host in variables.tf;
 # its default `postgres-primary.service.consul` is correct.)
-nats_url      = "nats://nats.service.consul:4222"
-petri_lab_url = "http://engine.service.consul:3030"
+# petri_lab_url is intentionally NOT set — it derives from the env-suffixed
+# engine Consul service (engine-dev.service.consul:<engine_service_port>) in
+# locals.tf. Set it only to point at an out-of-band engine.
+nats_url = "nats://nats.service.consul:4222"
 
 # Vault — VaultResourceStore (mekhan), {{secret:...}} wrap (engine), and
 # wrapping-token unwrap (executor) all reach this address. Default already
@@ -42,6 +48,10 @@ s3_bucket   = "mekhan-artifacts-dev"
 # ── Auth & logging ──────────────────────────────────────────────────────────
 auth_mode = "bff"
 rust_log  = "info,mekhan_service=debug"
+
+# Dedicated Zitadel org for this env (the isolation boundary for users/apps).
+# prod uses a different org name so a dev login can't reach prod.
+zitadel_org_name = "Mekhan Testers"
 
 # ── Invite email ──────────────────────────────────────────────────────────────
 # mode=smtp makes the in-app invite feature send the accept link by email.

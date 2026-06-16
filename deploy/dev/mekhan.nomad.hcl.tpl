@@ -1,7 +1,12 @@
 # =============================================================================
-# mekhan-service Nomad job spec — dev
+# mekhan-service Nomad job spec — env-parameterized (dev | prod)
 # =============================================================================
-# Templated by Terraform (deploy/dev/main.tf). $${var} interpolations happen
+# Identical in deploy/dev and deploy/prod. The job ID, Consul service names,
+# Traefik routers, Vault role/policies, and NATS creds path are all injected
+# from locals.tf via main.tf so the two envs never collide on the shared
+# cluster — see job "${job_id}" below.
+#
+# Templated by Terraform (main.tf). $${var} interpolations happen
 # at terraform plan time; literal $${NOMAD_*} env refs that survive into Nomad
 # are escaped with a leading backslash where needed (none here today).
 #
@@ -14,7 +19,7 @@
 #   - update.canary + auto_revert for safe rolling deploys
 # =============================================================================
 
-job "mekhan-service" {
+job "${job_id}" {
   namespace   = "${namespace}"
   datacenters = ${datacenters}
   type        = "service"
@@ -52,23 +57,23 @@ job "mekhan-service" {
     }
 
     service {
-      name     = "mekhan-service"
+      name     = "${service_name}"
       port     = "http"
       provider = "consul"
 
       tags = [
         "mekhan",
         "traefik.enable=${traefik_enabled}",
-        "traefik.http.routers.mekhan.rule=Host(`${hostname}`)",
-        "traefik.http.routers.mekhan.entrypoints=websecure",
-        "traefik.http.routers.mekhan.tls=true",
-        "traefik.http.routers.mekhan.tls.certresolver=letsencrypt",
-        "traefik.http.routers.mekhan.service=mekhan-service",
+        "traefik.http.routers.${router}.rule=Host(`${hostname}`)",
+        "traefik.http.routers.${router}.entrypoints=websecure",
+        "traefik.http.routers.${router}.tls=true",
+        "traefik.http.routers.${router}.tls.certresolver=letsencrypt",
+        "traefik.http.routers.${router}.service=${service_name}",
         # HTTP → HTTPS redirect
-        "traefik.http.routers.mekhan-http.rule=Host(`${hostname}`)",
-        "traefik.http.routers.mekhan-http.entrypoints=web",
-        "traefik.http.routers.mekhan-http.middlewares=https-redirect@file",
-        "traefik.http.routers.mekhan-http.service=mekhan-service",
+        "traefik.http.routers.${router_http}.rule=Host(`${hostname}`)",
+        "traefik.http.routers.${router_http}.entrypoints=web",
+        "traefik.http.routers.${router_http}.middlewares=https-redirect@file",
+        "traefik.http.routers.${router_http}.service=${service_name}",
       ]
 
       check {
@@ -81,7 +86,7 @@ job "mekhan-service" {
 
 
     service {
-      name     = "engine"
+      name     = "${engine_name}"
       port     = "engine"
       provider = "consul"
 
@@ -89,14 +94,14 @@ job "mekhan-service" {
         "engine",
         "mekhan",
         "traefik.enable=true",
-        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
-        "traefik.http.routers.engine.priority=200",
-        "traefik.http.routers.engine.entrypoints=websecure",
-        "traefik.http.routers.engine.tls=true",
-        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
-        "traefik.http.routers.engine.middlewares=engine-stripprefix",
-        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
-        "traefik.http.routers.engine.service=engine",
+        "traefik.http.routers.${engine_router}.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.${engine_router}.priority=200",
+        "traefik.http.routers.${engine_router}.entrypoints=websecure",
+        "traefik.http.routers.${engine_router}.tls=true",
+        "traefik.http.routers.${engine_router}.tls.certresolver=letsencrypt",
+        "traefik.http.routers.${engine_router}.middlewares=${engine_router}-stripprefix",
+        "traefik.http.middlewares.${engine_router}-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.${engine_router}.service=${engine_name}",
       ]
 
       # TCP check rather than HTTP — the engine doesn't expose /health
@@ -116,29 +121,28 @@ job "mekhan-service" {
       mode     = "delay"
     }
 
-    # Authenticate to Vault using Nomad workload identity. The `mekhan-service`
-    # JWT role + matching policies live in deploy/dev/vault.tf and are bound to
-    # nomad_job_id="mekhan-service" + namespace="${namespace}". The policies
+    # Authenticate to Vault using Nomad workload identity. The `${vault_role}`
+    # JWT role + matching policies live in vault.tf and are bound to
+    # nomad_job_id="${job_id}" + namespace="${namespace}". The policies
     # grant: (a) read on the NATS user creds path used below, (b) CRUD on
     # secret/data/aithericon/resources/* for VaultResourceStore (write side)
     # and the engine's secret-wrapping read side, (c) update on
     # sys/wrapping/wrap for cubbyhole response wrapping at job dispatch.
     vault {
-      policies = ["nomad-workloads", "mekhan-nats-read", "mekhan-resources-rw", "mekhan-wrap"]
-      role     = "mekhan-service"
+      policies = ${vault_policies}
+      role     = "${vault_role}"
     }
 
     task "service" {
       driver = "docker"
 
+      # No registry `auth {}` block — the Nomad clients are docker-logged-in to
+      # forge.aithericon.eu at the node level (HetznerCluster
+      # layers/06b_postgres_db/setup-docker-auth.sh), so the pull credentials
+      # never appear in the rendered jobspec. Same convention as web-platform.
       config {
         image = "${image}"
         ports = ["http"]
-
-        auth {
-          username = "${registry_user}"
-          password = "${registry_password}"
-        }
       }
 
 
@@ -147,44 +151,68 @@ job "mekhan-service" {
         change_mode = "restart"
         perms       = "0644"
         data        = <<-EOH
-{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{- with secret "secret/data/${nats_user_kv_path}" -}}
 {{ .Data.data.creds }}
 {{- end -}}
 EOH
       }
 
+      # Secret env vars rendered from Vault at alloc start (env = true), so the
+      # VALUES never land in the rendered Nomad job — only the paths above do.
+      # `runtime` = service-only secrets; `storage` = S3 keys (shared w/ executor).
+      template {
+        destination = "secrets/runtime.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${runtime_secret_path}" }}
+MEKHAN__DATABASE_URL={{ .Data.data.database_url }}
+MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET={{ .Data.data.introspection_client_secret }}
+MEKHAN__AUTH__BROKER_PAT={{ .Data.data.broker_pat }}
+MEKHAN__EMAIL__SMTP_USERNAME={{ .Data.data.smtp_username }}
+MEKHAN__EMAIL__SMTP_PASSWORD={{ .Data.data.smtp_password }}
+{{- end }}
+EOH
+      }
+
+      template {
+        destination = "secrets/storage.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${storage_secret_path}" }}
+MEKHAN__S3__ACCESS_KEY={{ .Data.data.s3_access_key }}
+MEKHAN__S3__SECRET_KEY={{ .Data.data.s3_secret_key }}
+{{- end }}
+EOH
+      }
+
       env {
-        MEKHAN__HOST           = "0.0.0.0"
-        MEKHAN__PORT           = "${service_port}"
-        MEKHAN__DATABASE_URL   = "${database_url}"
-        MEKHAN__NATS_URL       = "${nats_url}"
-        MEKHAN__NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
-        MEKHAN__PETRI_LAB_URL  = "${petri_lab_url}"
-        MEKHAN__S3__ENDPOINT   = "${s3_endpoint}"
-        MEKHAN__S3__BUCKET     = "${s3_bucket}"
-        MEKHAN__S3__ACCESS_KEY = "${s3_access_key}"
-        MEKHAN__S3__SECRET_KEY = "${s3_secret_key}"
-        MEKHAN__AUTH__MODE         = "${auth_mode}"
-        MEKHAN__AUTH__ISSUER_URL   = "${auth_issuer_url}"
-        MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
-        MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
-        MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
+        MEKHAN__HOST          = "0.0.0.0"
+        MEKHAN__PORT          = "${service_port}"
+        MEKHAN__NATS_URL      = "${nats_url}"
+        MEKHAN__NATS_CREDS    = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        MEKHAN__PETRI_LAB_URL = "${petri_lab_url}"
+        MEKHAN__S3__ENDPOINT  = "${s3_endpoint}"
+        MEKHAN__S3__BUCKET    = "${s3_bucket}"
+        MEKHAN__AUTH__MODE                = "${auth_mode}"
+        MEKHAN__AUTH__ISSUER_URL          = "${auth_issuer_url}"
+        MEKHAN__AUTH__CLIENT_ID           = "${auth_client_id}"
+        MEKHAN__AUTH__AUDIENCE            = "${auth_audience}"
+        MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
-        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
-        MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
-        MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
         # Invite-email delivery (Phase 4). mode=smtp makes the in-app invite
         # feature actually send the accept link via the relay; mode=log just
         # writes the link to the service log. PUBLIC_BASE_URL must be the
         # externally reachable origin so the accept link resolves for invitees.
+        # (SMTP username/password come from the runtime.env template above.)
         MEKHAN__EMAIL__MODE            = "${email_mode}"
         MEKHAN__EMAIL__FROM_ADDRESS    = "${email_from_address}"
         MEKHAN__EMAIL__PUBLIC_BASE_URL = "${email_public_base_url}"
         MEKHAN__EMAIL__SMTP_HOST       = "${email_smtp_host}"
         MEKHAN__EMAIL__SMTP_PORT       = "${email_smtp_port}"
-        MEKHAN__EMAIL__SMTP_USERNAME   = "${email_smtp_username}"
-        MEKHAN__EMAIL__SMTP_PASSWORD   = "${email_smtp_password}"
-        MEKHAN__DEMOS__SEED        = "true"
+        MEKHAN__DEMOS__SEED            = "true"
         # Vault — VaultResourceStore writes resource version secrets to
         # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
         # stanza above already injects VAULT_TOKEN into the task env (workload-
@@ -193,8 +221,8 @@ EOH
         # to task env automatically. Without VAULT_ADDR set, service/src/main.rs
         # falls back to InMemoryResourceStore and logs a WARN — see the
         # `resource_store:` log line at boot.
-        VAULT_ADDR                 = "${vault_addr}"
-        RUST_LOG                   = "${rust_log}"
+        VAULT_ADDR = "${vault_addr}"
+        RUST_LOG   = "${rust_log}"
       }
 
       resources {
@@ -206,14 +234,10 @@ EOH
     task "engine" {
       driver = "docker"
 
+      # No registry auth block — node-level docker auth (see the service task).
       config {
         image = "${engine_image}"
         ports = ["engine"]
-
-        auth {
-          username = "${registry_user}"
-          password = "${registry_password}"
-        }
       }
 
       template {
@@ -221,7 +245,7 @@ EOH
         change_mode = "restart"
         perms       = "0644"
         data        = <<-EOH
-{{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
+{{- with secret "secret/data/${nats_user_kv_path}" -}}
 {{ .Data.data.creds }}
 {{- end -}}
 EOH
@@ -256,7 +280,7 @@ EOH
 
   meta {
     project      = "mekhan"
-    environment  = "dev"
+    environment  = "${environment}"
     image_tag    = "${image_tag}"
     hostname     = "${hostname}"
   }

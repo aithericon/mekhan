@@ -9,9 +9,36 @@ Terraform/OpenTofu layers + Docker context that deploy mekhan-service to the [He
 | [`docker/Dockerfile.ci-build`](docker/Dockerfile.ci-build) | Fat CI builder image — everything the build pool needs. Pushed to `forge.aithericon.eu/milanender/mekhan-ci-builder:latest`. |
 | [`docker/Dockerfile.service.prebuilt`](docker/Dockerfile.service.prebuilt) | Tiny Alpine runtime image. Takes the prebuilt static `mekhan-service` binary + the SvelteKit `app/build/` bundle. |
 | [`docker/Dockerfile.executor`](docker/Dockerfile.executor) | Comprehensive Debian image for `aithericon-executor-service` (kreuzberg + tesseract + python). Built on demand; not deployed by these layers yet. |
-| [`dev/`](dev/) | TF layer that deploys mekhan-service to the **dev** cluster (10.30.x subnet). |
-| [`prod/`](prod/) | TF layer that deploys to the **prod** cluster (10.20.x subnet). Currently the only fully-populated environment. |
+| [`dev/`](dev/) | TF layer that deploys the **dev** environment (`mekhan-service-dev`, `mekhan.dev.aithericon.eu`) to the shared HetznerCluster (10.20.x). |
+| [`prod/`](prod/) | TF layer that deploys the **prod** environment (`mekhan-service-prod`, `mekhan.aithericon.eu`) to the **same** cluster, fully isolated. |
 | [`zitadel/`](zitadel/) | Local-only bootstrap for the docker-compose Zitadel; orthogonal to Nomad deploy. |
+
+## Two-environment model
+
+`dev` and `prod` run on the **same** HetznerCluster (there is only one). They are
+isolated by an `environment` knob: `deploy/dev` and `deploy/prod` share a
+**byte-identical** set of `*.tf` files + Nomad templates, and the only files
+that differ are `backend.tf` (state key) and `*.auto.tfvars` (values). Every
+cluster-shared identifier is suffixed from `var.environment` in
+[`locals.tf`](dev/locals.tf), so the two never collide:
+
+| Resource | dev | prod |
+|---|---|---|
+| Nomad jobs | `mekhan-service-dev`, `executor-dev` | `mekhan-service-prod`, `executor-prod` |
+| Consul services | `mekhan-service-dev`, `engine-dev` | `mekhan-service-prod`, `engine-prod` |
+| Hostname | `mekhan.dev.aithericon.eu` | `mekhan.aithericon.eu` |
+| Static ports | `3100` / `3030` | `3200` / `3130` |
+| Postgres DB/role | `mekhan_dev` | `mekhan_prod` |
+| NATS account | `mekhan-dev` | `mekhan-prod` |
+| S3 bucket | `mekhan-artifacts-dev` | `mekhan-artifacts` |
+| Vault roles / secrets | `mekhan-service-dev`, `secret/services/mekhan/dev` | `mekhan-service-prod`, `secret/services/mekhan/prod` |
+| Zitadel org | `Mekhan Testers` | `Mekhan` |
+| tfstate key | `mekhan/dev/…` | `mekhan/prod/…` |
+
+`diff deploy/dev deploy/prod` should show only `backend.tf`, the tfvars, and the
+lock/state dirs — if a `.tf` or `.tpl` differs, the two layers have drifted and
+should be re-synced. The jobs use **static** host ports, so each env's ports must
+not overlap and `count` stays 1 (running >1 replica needs dynamic ports first).
 
 ## Architecture
 
@@ -29,10 +56,10 @@ publish-backend-service┘                    mekhan-       │  nats.service.co
 deploy-dev ───►   │                                       │  *.aithericon.eu / *.dev.aithericon.eu
 deploy-prod ──►   ▼ tofu apply -var=image_tag=$SHA        │
               ┌─────────────────────────────────┐         │
-              │ nomad_job "mekhan-service"      │ ───────►│ mekhan-service (canary rolling update)
-              │  - constraint: node.class=...   │         │  count=2 prod / 1 dev
+              │ nomad_job "mekhan-service-<env>"│ ───────►│ mekhan-service-{dev,prod} (canary update)
+              │  + engine task + executor job   │         │  count=1 each, static ports
               │  - provider="consul" + Traefik  │         │  /healthz → HTTP check
-              │  - env vars from TF_VAR_*       │         │
+              │  - env vars from TF_VAR_*        │         │
               └─────────────────────────────────┘         └─ Zitadel (06d/e) for auth_mode=bff
                             ▲
                             │
@@ -94,9 +121,32 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    ./deploy/dev/scripts/generate-nats-user.sh
    ```
 
-   Re-run any time you want to rotate the user's creds — the helper deletes and recreates the user idempotently. The matching read policy (`mekhan-nats-read`) + two JWT-Nomad roles (`mekhan-service`, `mekhan-executor`) are created by `tofu apply` from `deploy/dev/vault.tf`; the script and the TF are split this way (same as web-platform) so credential rotation never requires touching state.
+   Re-run any time you want to rotate the user's creds — the helper deletes and recreates the user idempotently. The matching read policy (`mekhan-<env>-nats-read`) + two JWT-Nomad roles (`mekhan-service-<env>`, `executor-<env>`) are created by `tofu apply` from `vault.tf`; the script and the TF are split this way (same as web-platform) so credential rotation never requires touching state.
 
    Requires `nsc`, `vault`, and `jq` on PATH.
+
+   **For prod**, do the exact same three mekhan-owner steps against the prod
+   paths before the first `41-deploy-prod` run:
+
+   ```bash
+   export VAULT_ADDR=http://10.20.0.20:8200
+   export VAULT_TOKEN=hvs.…
+
+   # (a) prod-scoped secrets — note the /prod suffix + smtp creds for bff
+   vault kv put secret/services/mekhan/prod \
+     hetzner_s3_access_key="$TF_VAR_hetzner_s3_access_key" \
+     hetzner_s3_secret_key="$TF_VAR_hetzner_s3_secret_key" \
+     state_encryption_passphrase="$TF_VAR_state_encryption_passphrase" \
+     smtp_username="…" smtp_password="…"
+
+   # (b) prod NATS account/user (separate account from dev) → secret/nats/apps/mekhan/prod/worker
+   ./deploy/prod/scripts/generate-nats-user.sh prod
+   ```
+
+   Plus, cluster-operator side: create the `mekhan-artifacts` bucket (issue an
+   S3 key pair) and the `mekhan.aithericon.eu` DNS record at the ingress LB.
+   The `mekhan_prod` Postgres DB + the `Mekhan` Zitadel org are created by
+   `tofu apply` (no manual step).
 
 4. **Vault as Resource secret store** — no bootstrap step required. As of `service/src/main.rs:207`, mekhan-service auto-detects Vault via `VAULT_ADDR` + `VAULT_TOKEN` (both injected by Nomad — `VAULT_TOKEN` via the workload-identity exchange, `VAULT_ADDR` from `var.vault_addr` in the jobspec env). On every resource create or new-version, `VaultResourceStore::put_kv` writes the version payload to:
 
@@ -117,15 +167,13 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 5. **Local TF init files** — these are gitignored, copy them once per workstation:
 
    ```bash
-   # dev — backend config is inlined in backend.tf, only tfvars needed
+   # Both layers inline the backend in backend.tf (state key differs per env),
+   # so only the tfvars are needed locally.
    cp deploy/dev/dev.auto.tfvars.example      deploy/dev/dev.auto.tfvars
-
-   # prod still uses partial backend config (different bucket per env)
-   cp deploy/prod/backend.hcl.example         deploy/prod/backend.hcl
    cp deploy/prod/prod.auto.tfvars.example    deploy/prod/prod.auto.tfvars
    ```
 
-   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking.
+   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking. Also copy the `.envrc.example` in each layer to `.envrc` and `direnv allow`.
 
 6. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
 
@@ -138,18 +186,17 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 
    ```bash
    # On a machine that can reach Hetzner S3 (no VPN needed for this part).
-   # Env vars come from .envrc (direnv) — see deploy/dev/.envrc.example.
+   # Env vars come from .envrc (direnv) — see each layer's .envrc.example.
    cd deploy/dev && tofu init
-   cd ../prod   && tofu init -backend-config=backend.hcl
+   cd ../prod   && tofu init
    ```
 
 ## Deploy workflow
 
 | Trigger | What happens |
 |---|---|
-| Push to `dev` branch | `10-lint` → `30-build` (push image tagged `$CI_COMMIT_SHA`) → `40-deploy.deploy-dev` (tofu apply → Nomad canary rollout) → `verify-dev` (`nomad deployment status` until healthy or fail) |
-| Push to `main` | `10-lint` → `30-build`. **Stops there.** No automatic deploy. |
-| Click "Manual" on a `main` pipeline | Same as push to `main` plus `deploy-prod` + `verify-prod`. |
+| Push to `main` | `40-deploy.deploy-dev` (tofu apply → Nomad canary rollout of **dev**) → `verify-dev` (`nomad deployment status` until healthy or fail). (`10-lint`/`30-build` are currently disabled; restore `depends_on: [30-build]` to gate on a fresh image.) |
+| Click "Manual" → `41-deploy-prod` | Deploys the **prod** environment (`deploy-prod` + `verify-prod`). Prod **never** auto-deploys — always a deliberate manual run. |
 | Tag push | `50-deploy-workflows` runs — this is **workflow-template GitOps**, not service rollout. Orthogonal. |
 
 ## Local deploy (manual, for debugging)
@@ -159,19 +206,23 @@ The `just ci::deploy-*` recipes work locally too, so you can dry-run before lett
 ```bash
 cd /Users/sumitsah/all_project/aithericon/aithericon_clinic/mekhan
 
-# Make sure your VPN / NetBird tunnel to the cluster is up.
+# Make sure your VPN / NetBird tunnel to the cluster is up. The TF_VAR_* below
+# all come from deploy/<env>/.envrc (direnv) — listed here only for reference.
+# Note: there is NO TF_VAR_database_url — each layer provisions its own DB via
+# postgres.tf and computes the connection string internally.
 
-export AWS_ACCESS_KEY_ID=…
+export AWS_ACCESS_KEY_ID=…           # tfstate bucket
 export AWS_SECRET_ACCESS_KEY=…
 export TF_VAR_state_encryption_passphrase=…
 export TF_VAR_nomad_token=…
 export TF_VAR_registry_user=…
 export TF_VAR_registry_password=…
-export TF_VAR_database_url=…
-export TF_VAR_s3_access_key=…
+export TF_VAR_postgres_admin_password=…
+export TF_VAR_s3_access_key=…        # artifact bucket
 export TF_VAR_s3_secret_key=…
+export TF_VAR_zitadel_jwt_file=…
 
-just ci::deploy-prod "$(git rev-parse HEAD)"     # uses prod tfvars
+just ci::deploy-prod "$(git rev-parse HEAD)"     # uses deploy/prod tfvars
 just ci::verify-deploy prod
 ```
 
@@ -188,5 +239,5 @@ just ci::verify-deploy prod
 ## What's deliberately NOT in this scaffold
 
 - **Full Vault integration for runtime config**. Vault now backs two things: (a) the NATS creds bundle (`secret/data/nats/apps/mekhan/dev/worker`, bootstrap script-driven) and (b) the Resource secret store (`secret/data/aithericon/resources/*`, mekhan-service writes inline on resource CRUD). Policies + JWT roles live in `deploy/dev/vault.tf`. The runtime-config bits that *still* pass through TF variables sourced from Woodpecker secrets — `MEKHAN__DATABASE_URL`, `MEKHAN__S3__*`, registry creds, the introspection client secret — are next. To finish the migration: add a `secret/services/mekhan/runtime` KV + sibling policy in `vault.tf`, seed that path, add `template {}` stanzas to the jobspec, and drop the corresponding `env {}` lines. The CI builder image already has the `vault` CLI baked in.
-- **engine + executor Nomad jobs**. The `Dockerfile.executor` is built and ready, but no TF layer deploys it. When you're ready, mirror the `dev/` / `prod/` structure with new layers next to it.
+- **HA / multi-replica**. Both envs run `count = 1` with **static** host ports. Running >1 replica per env needs the jobspec switched to dynamic ports first (and the executor's `EXECUTOR_MEKHAN_URL` resolved via Consul SRV rather than a fixed port).
 - **Smoke tests post-deploy**. web-platform runs a `ci-smoke-test.yaml` after dev deploys; we don't have one yet.
