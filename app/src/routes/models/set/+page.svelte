@@ -34,12 +34,22 @@
 	import RunnerTargetPicker from '$lib/components/fleet/RunnerTargetPicker.svelte';
 	import { statusTone } from '$lib/components/fleet/model-pool';
 	import { createPolledState } from '$lib/stores/remote.svelte';
+	import { auth } from '$lib/auth/store.svelte';
 
 	const pool = createPolledState(listLoadedModels, 5000, {
 		onError: (err) => toast.error(apiErrorMessage(err))
 	});
 	const models = $derived(pool.data ?? []);
 	let busy = $state<string | null>(null);
+
+	// The internal model pool is platform-tier (`model_states` under PLATFORM_SCOPE_ID;
+	// `GET /api/v1/models` unions platform rows). The DTO carries no per-row scope, so we
+	// cannot distinguish a workspace model from the shared platform pool here — gate the
+	// whole curation surface's destructive actions behind platform-admin (mirrors
+	// ResourceEditModal) and surface a header note.
+	const canCurate = $derived(auth.isPlatformAdmin);
+	const curateGateTitle =
+		'Platform-admin only — these models include the shared platform pool';
 
 	type AutoscaleMode = 'manual' | 'scale_to_zero' | 'keep_warm';
 
@@ -218,11 +228,23 @@
 			size="sm"
 			class="ml-auto h-7 shrink-0 gap-1 px-2 text-sm"
 			data-testid="add-model"
+			disabled={!canCurate}
+			title={canCurate ? undefined : curateGateTitle}
 			onclick={() => (addOpen = true)}
 		>
 			<Plus class="size-3.5" />
 			Add model
 		</Button>
+	</div>
+
+	<div
+		class="rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-sm text-muted-foreground"
+		data-testid="platform-pool-note"
+	>
+		Models shown include the shared <b class="font-medium text-foreground/80">platform pool</b>.
+		{#if !canCurate}
+			Curation (load / unload / delete / autoscale) is platform-admin only.
+		{/if}
 	</div>
 
 	{#if models.length === 0}
@@ -300,7 +322,8 @@
 											variant="outline"
 											size="sm"
 											class="size-6 p-0"
-											disabled={busy !== null || cur <= 0}
+											disabled={busy !== null || cur <= 0 || !canCurate}
+											title={canCurate ? undefined : curateGateTitle}
 											data-testid="autoscale-dec"
 											onclick={() => doScale(m.model_id, cur - 1)}
 										>
@@ -310,7 +333,8 @@
 											variant="outline"
 											size="sm"
 											class="size-6 p-0"
-											disabled={busy !== null}
+											disabled={busy !== null || !canCurate}
+											title={canCurate ? undefined : curateGateTitle}
 											data-testid="autoscale-inc"
 											onclick={() => doScale(m.model_id, cur + 1)}
 										>
@@ -334,7 +358,8 @@
 									variant="outline"
 									size="sm"
 									class="h-6 px-2 text-sm"
-									disabled={busy !== null}
+									disabled={busy !== null || !canCurate}
+									title={canCurate ? undefined : curateGateTitle}
 									data-testid="autoscale-edit"
 									onclick={() => openPolicy(m)}
 								>
@@ -344,7 +369,8 @@
 									variant="ghost"
 									size="sm"
 									class="h-6 px-2 text-sm text-muted-foreground"
-									disabled={busy !== null}
+									disabled={busy !== null || !canCurate}
+									title={canCurate ? undefined : curateGateTitle}
 									data-testid="autoscale-disable"
 									onclick={() => disablePolicy(m.model_id)}
 								>
@@ -358,7 +384,8 @@
 								variant="ghost"
 								size="sm"
 								class="h-6 px-2 text-sm text-muted-foreground"
-								disabled={busy !== null}
+								disabled={busy !== null || !canCurate}
+								title={canCurate ? undefined : curateGateTitle}
 								data-testid="autoscale-enable"
 								onclick={() => openPolicy(m)}
 							>
@@ -372,7 +399,8 @@
 							variant="outline"
 							size="sm"
 							class="h-7 px-2 text-sm"
-							disabled={busy !== null}
+							disabled={busy !== null || !canCurate}
+							title={canCurate ? undefined : curateGateTitle}
 							onclick={() => openLoad(m.model_id)}
 						>
 							{busy === m.model_id && loadFor === null ? '…' : 'Load'}
@@ -381,7 +409,8 @@
 							variant="outline"
 							size="sm"
 							class="h-7 px-2 text-sm"
-							disabled={busy !== null}
+							disabled={busy !== null || !canCurate}
+							title={canCurate ? undefined : curateGateTitle}
 							onclick={() => {
 								unloadFor = m.model_id;
 								unloadRunner = null;
@@ -393,7 +422,8 @@
 							variant="outline"
 							size="sm"
 							class="ml-auto h-7 px-2 text-sm text-red-600 hover:text-red-600 dark:text-red-400"
-							disabled={busy !== null}
+							disabled={busy !== null || !canCurate}
+							title={canCurate ? undefined : curateGateTitle}
 							onclick={() => (deleteFor = m.model_id)}
 						>
 							Delete

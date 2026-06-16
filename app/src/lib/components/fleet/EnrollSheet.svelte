@@ -27,6 +27,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Terminal from '@lucide/svelte/icons/terminal';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+	import Globe from '@lucide/svelte/icons/globe';
 	import {
 		createRegistrationToken,
 		type CreatedRegistrationToken
@@ -34,6 +35,7 @@
 	import { createWorkerRegistrationToken } from '$lib/api/workers';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import { capacityTarget } from '$lib/editor/deployment-run-target';
+	import { auth } from '$lib/auth/store.svelte';
 
 	type Props = {
 		open: boolean;
@@ -54,6 +56,7 @@
 	const fixedGroup = $derived(group ?? null);
 	const isWorker = $derived(mode === 'worker');
 	const unit = $derived(isWorker ? 'worker' : 'runner');
+	const isPlatformAdmin = $derived(auth.isPlatformAdmin);
 
 	// ── Form state ───────────────────────────────────────────────────────────────
 	let name = $state('');
@@ -62,6 +65,10 @@
 	let reusable = $state(false);
 	let expiresAt = $state('');
 	let enrolling = $state(false);
+	// Platform-admin-only: mint the token against the shared platform pool
+	// (`workspace_id = PLATFORM_SCOPE_ID`) so the enrolled daemon lands in the
+	// global pool. Hidden + always-false for non-admins.
+	let asPlatform = $state(false);
 
 	// Group picker source (global flow only) — the presence `capacity` resources.
 	let groups = $state<ResourceSummary[]>([]);
@@ -77,6 +84,7 @@
 		maxUses = '';
 		reusable = false;
 		expiresAt = '';
+		asPlatform = false;
 		if (!fixedGroup) {
 			(async () => {
 				try {
@@ -105,7 +113,11 @@
 				// OMITTED `reusable` to `true`.
 				reusable,
 				max_uses: maxUses ? parseInt(maxUses, 10) : undefined,
-				expires_at: expiresAt ? `${expiresAt}T23:59:59Z` : undefined
+				expires_at: expiresAt ? `${expiresAt}T23:59:59Z` : undefined,
+				// Platform-admin-only: mint against the shared platform pool. The
+				// backend 403s a non-admin `platform: true`, so it's gated to admins
+				// in the UI and defaults to the historical workspace-scoped token.
+				platform: asPlatform ? true : undefined
 			});
 			revealed = { ...created, name: name.trim(), group: resolvedGroup ?? '' };
 			open = false;
@@ -258,6 +270,24 @@
 					/>
 					<label for="enroll-reusable" class="text-sm text-muted-foreground"> Reusable token </label>
 				</div>
+
+				{#if isPlatformAdmin}
+					<label
+						class="flex items-start gap-2.5 rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm"
+						data-testid="enroll-platform-toggle"
+					>
+						<input type="checkbox" bind:checked={asPlatform} class="mt-0.5 size-4" />
+						<span>
+							<span class="flex items-center gap-1.5 font-medium text-foreground">
+								<Globe class="size-3.5" /> Enrol into the shared platform pool
+							</span>
+							<span class="text-muted-foreground">
+								Mint at the global platform tier — the {unit} lands in the shared platform pool,
+								runnable by every workspace. Overrides the group above.
+							</span>
+						</span>
+					</label>
+				{/if}
 
 				<div class="flex gap-2 pt-1">
 					<Button type="submit" disabled={enrolling || !name.trim()} class="flex-1">

@@ -37,9 +37,11 @@ use serde_json::{Map, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::auth::membership::{member_role, Role};
 use crate::auth::AuthUser;
 use crate::compiler::well_known;
 use crate::handlers::clusters::assemble_cluster_summaries;
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::capacity::{axes_for_resource, CapacityAxes, CapacityBackend};
 use crate::models::error::ApiError;
 use crate::AppState;
@@ -113,7 +115,20 @@ pub struct CapacitySummary {
     pub axes: Option<CapacityAxes>,
     /// Live utilization, tagged by backend.
     pub live: CapacityLive,
+    /// Owning scope tier: `"workspace"` for a tenant capacity, `"platform"` for
+    /// a globally-shared platform pool. Lets the Fleet UI badge platform rows.
+    pub scope_kind: String,
+    /// The caller's effective role on this row (`owner|admin|editor|viewer`):
+    /// for platform rows `owner` iff the caller is a platform admin else
+    /// `viewer`; for tenant rows the caller's workspace role. Gates edit
+    /// affordances in the Fleet UI.
+    pub my_effective_role: Option<String>,
 }
+
+/// One capacity row as fetched from the DB: `(id, path, display_name,
+/// resource_type, public_config, scope_kind, scope_id)`. Aliased to keep the
+/// shadowing pipeline below readable (and clippy's type-complexity lint quiet).
+type CapacityRow = (Uuid, String, String, String, Value, String, Option<Uuid>);
 
 /// `GET /api/v1/capacities` — every `capacity` + `datacenter` resource in the
 /// workspace, classified by backend with live utilization. One read powers the
@@ -134,13 +149,19 @@ pub async fn list_capacities(
 
     // The pool resources: `capacity` (parses its axes) + `datacenter` (locked
     // lease axes). Join the latest version's public_config in one round-trip.
-    let rows = sqlx::query_as::<_, (Uuid, String, String, String, Value)>(
+    // UNION the caller's workspace rows with the globally-visible platform tier
+    // (the shared worker pool + model-serving pool live there); shadowing — a
+    // tenant capacity of the same path wins over a platform one — is applied in
+    // Rust below via `scope::resolve_visible`, the same pattern `list_resources`
+    // uses, so SQL fetches the full candidate set.
+    let rows = sqlx::query_as::<_, CapacityRow>(
         "SELECT r.id, r.path, r.display_name, r.resource_type, \
-                COALESCE(rv.public_config, '{}'::jsonb) AS public_config \
+                COALESCE(rv.public_config, '{}'::jsonb) AS public_config, \
+                r.scope_kind, r.scope_id \
          FROM resources r \
          JOIN resource_versions rv \
            ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 \
+         WHERE (r.workspace_id = $1 OR r.scope_kind = 'platform') \
            AND r.resource_type IN ('capacity', 'datacenter') \
            AND r.deleted_at IS NULL \
          ORDER BY r.path",
@@ -149,6 +170,47 @@ pub async fn list_capacities(
     .fetch_all(&state.db)
     .await
     .map_err(|e| ApiError::internal(format!("capacity resource lookup: {e}")))?;
+
+    // Most-specific-wins shadowing across the workspace + platform tiers, keyed
+    // by `path`. A workspace binding context: workspace + platform visible.
+    use crate::scope::{self, Scope, ScopedItem, VisibleScopes};
+    let visible = VisibleScopes {
+        platform: true,
+        workspace: Some(workspace_id),
+        folders: Vec::new(),
+        template: None,
+    };
+    let scoped: Vec<ScopedItem<CapacityRow>> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let kind = crate::models::asset::ScopeKind::from_db(&r.5)?;
+            let sid = r.6?;
+            let ref_key = r.1.clone();
+            Some(ScopedItem {
+                scope: Scope { kind, id: sid },
+                ref_key,
+                item: r,
+            })
+        })
+        .collect();
+    let rows: Vec<CapacityRow> = scope::resolve_visible(&visible, scoped)
+            .map_err(|c| ApiError::conflict(c.to_string()))?
+            .into_values()
+            .map(|si| si.item)
+            .collect();
+
+    // The caller's workspace role stamps tenant rows; platform rows are stamped
+    // owner/viewer by the platform-admin flag. Resolve the workspace role once
+    // (fail-soft to viewer — this is a read-only annotation, not a gate).
+    let workspace_role = member_role(&state.db, &user, workspace_id)
+        .await
+        .map(|r| r.as_label().to_string())
+        .unwrap_or_else(|_| Role::Viewer.as_label().to_string());
+    let platform_role = if user.is_platform_admin {
+        Role::Owner.as_label().to_string()
+    } else {
+        Role::Viewer.as_label().to_string()
+    };
 
     // Live cluster state for the scheduler (datacenter) backend, keyed by
     // resource_id string. Assembled by the SHARED cluster assembler so this
@@ -164,7 +226,7 @@ pub async fn list_capacities(
     let presence = state.runner_presence.snapshot().await;
 
     let mut out = Vec::with_capacity(rows.len());
-    for (id, path, display_name, resource_type, public_config) in rows {
+    for (id, path, display_name, resource_type, public_config, scope_kind, _scope_id) in rows {
         let public_map: Map<String, Value> = public_config.as_object().cloned().unwrap_or_default();
 
         let axes = axes_for_resource(&resource_type, &public_map);
@@ -172,15 +234,31 @@ pub async fn list_capacities(
         // unparseable axes are not dispatchable (fail-closed), never defaulted.
         let backend = axes.map(|a| a.backend());
 
+        // The live presence/queue helpers key on (path, workspace_id). A
+        // platform pool's runners/workers enroll under PLATFORM_SCOPE_ID, so
+        // pass that sentinel for platform rows; tenant rows use the caller's ws.
+        let is_platform = scope_kind == "platform";
+        let stat_ws = if is_platform {
+            PLATFORM_SCOPE_ID
+        } else {
+            workspace_id
+        };
+
         let live = match backend {
             Some(CapacityBackend::Tokens) => tokens_live(&state, id, axes).await,
             Some(CapacityBackend::Presence) => {
-                presence_live(&state, workspace_id, &path, &presence).await
+                presence_live(&state, stat_ws, &path, &presence).await
             }
-            Some(CapacityBackend::Queue) => queue_live(&state, workspace_id, &path).await,
+            Some(CapacityBackend::Queue) => queue_live(&state, stat_ws, &path).await,
             Some(CapacityBackend::Scheduler) => scheduler_live(clusters.get(&id.to_string())),
             None => CapacityLive::None,
         };
+
+        let my_effective_role = Some(if is_platform {
+            platform_role.clone()
+        } else {
+            workspace_role.clone()
+        });
 
         out.push(CapacitySummary {
             id,
@@ -189,6 +267,8 @@ pub async fn list_capacities(
             backend,
             axes,
             live,
+            scope_kind,
+            my_effective_role,
         });
     }
 

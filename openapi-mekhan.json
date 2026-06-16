@@ -18321,7 +18321,8 @@
           "id",
           "path",
           "display_name",
-          "live"
+          "live",
+          "scope_kind"
         ],
         "properties": {
           "axes": {
@@ -18359,9 +18360,20 @@
             "$ref": "#/components/schemas/CapacityLive",
             "description": "Live utilization, tagged by backend."
           },
+          "my_effective_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's effective role on this row (`owner|admin|editor|viewer`):\nfor platform rows `owner` iff the caller is a platform admin else\n`viewer`; for tenant rows the caller's workspace role. Gates edit\naffordances in the Fleet UI."
+          },
           "path": {
             "type": "string",
             "description": "Snake_case `path` (the alias steps + runners/workers bind to)."
+          },
+          "scope_kind": {
+            "type": "string",
+            "description": "Owning scope tier: `\"workspace\"` for a tenant capacity, `\"platform\"` for\na globally-shared platform pool. Lets the Fleet UI badge platform rows."
           }
         }
       },

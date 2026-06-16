@@ -24,6 +24,7 @@
 	import { toast } from 'svelte-sonner';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import KeyRound from '@lucide/svelte/icons/key-round';
+	import Globe from '@lucide/svelte/icons/globe';
 	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -35,6 +36,7 @@
 	import { poolKindOf, poolLiveLine, type PoolKind } from '$lib/components/fleet/pool-kinds';
 	import { fmtDate } from '$lib/components/fleet/format';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
+	import { isPlatformCapacity, canMutateCapacity } from '$lib/api/resource-tier';
 	import { deleteResource } from '$lib/api/resources';
 	import {
 		listRegistrationTokens,
@@ -68,6 +70,13 @@
 	const name = $derived(capacity?.display_name || capacity?.path || resourceId);
 	const liveLine = $derived(capacity ? poolLiveLine(capacity) : null);
 	const isAdmin = $derived(auth.isWorkspaceAdmin);
+
+	// Platform-scoped pool (the shared worker `default` + `model_serving` pools):
+	// badge + read-only note, and curation (edit / delete) requires platform admin.
+	// `canMutateCapacity` folds the platform/tenant tiers into the per-row
+	// `my_effective_role !== 'viewer'` signal the backend stamps.
+	const isPlatform = $derived(capacity ? isPlatformCapacity(capacity) : false);
+	const canCurate = $derived(capacity ? canMutateCapacity(capacity) : false);
 
 	/** Members-tab label per kind: Members / Workers / Holders. */
 	const membersLabel = $derived(
@@ -174,6 +183,11 @@
 						<Badge variant="secondary">{kind.chip}</Badge>
 						<span class="text-xs text-muted-foreground">{kind.plainAxes}</span>
 					{/if}
+					{#if isPlatform}
+						<Badge class="gap-1 bg-sky-100 text-sky-800" data-testid="pool-detail-platform-badge">
+							<Globe class="size-3" /> Platform (shared)
+						</Badge>
+					{/if}
 					{#if capacity}
 						<span class="font-mono text-xs text-muted-foreground">{capacity.path}</span>
 					{:else}
@@ -183,6 +197,18 @@
 						<span class="text-xs text-muted-foreground tabular-nums">{liveLine}</span>
 					{/if}
 				</div>
+				{#if isPlatform}
+					<p
+						class="mt-1.5 flex items-start gap-1.5 text-xs text-muted-foreground"
+						data-testid="pool-detail-platform-note"
+					>
+						<Globe class="mt-0.5 size-3.5 shrink-0 text-sky-600" />
+						<span>
+							Shared platform pool — managed by platform admins, runnable by every workspace.{#if !canCurate}
+								{' '}You have read-only access.{/if}
+						</span>
+					</p>
+				{/if}
 			{/snippet}
 			{#snippet actions()}
 				{#if kind?.id === 'machine'}
@@ -363,16 +389,18 @@
 									View pool net
 								</Button>
 							{/if}
-							<Button
-								variant="outline"
-								size="sm"
-								class="gap-1.5"
-								onclick={() => (editOpen = true)}
-								data-testid="pool-edit-button"
-							>
-								<Pencil class="size-3.5" />
-								Edit
-							</Button>
+							{#if canCurate}
+								<Button
+									variant="outline"
+									size="sm"
+									class="gap-1.5"
+									onclick={() => (editOpen = true)}
+									data-testid="pool-edit-button"
+								>
+									<Pencil class="size-3.5" />
+									Edit
+								</Button>
+							{/if}
 						</div>
 					</div>
 				</section>
@@ -427,30 +455,33 @@
 					</section>
 				{/if}
 
-				<!-- Danger zone -->
-				<section class="space-y-2">
-					<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-						Danger zone
-					</h4>
-					<div
-						class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3"
-					>
-						<p class="text-sm text-muted-foreground">
-							Delete this pool. Its backing net (if any) is retired.
-						</p>
-						<Button
-							variant="outline"
-							size="sm"
-							class="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-							onclick={handleDelete}
-							disabled={deleting}
-							data-testid="pool-delete-button"
+				<!-- Danger zone — curation only (platform admin for platform pools,
+					 workspace role for tenant pools). Read-only viewers don't see it. -->
+				{#if canCurate}
+					<section class="space-y-2">
+						<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+							Danger zone
+						</h4>
+						<div
+							class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3"
 						>
-							<Trash2 class="size-3.5" />
-							{deleting ? 'Deleting…' : 'Delete pool'}
-						</Button>
-					</div>
-				</section>
+							<p class="text-sm text-muted-foreground">
+								Delete this pool. Its backing net (if any) is retired.
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								class="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+								onclick={handleDelete}
+								disabled={deleting}
+								data-testid="pool-delete-button"
+							>
+								<Trash2 class="size-3.5" />
+								{deleting ? 'Deleting…' : 'Delete pool'}
+							</Button>
+						</div>
+					</section>
+				{/if}
 			</div>
 		{/if}
 	{/if}

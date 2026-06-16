@@ -6489,8 +6489,20 @@ export interface components {
             id: string;
             /** @description Live utilization, tagged by backend. */
             live: components["schemas"]["CapacityLive"];
+            /**
+             * @description The caller's effective role on this row (`owner|admin|editor|viewer`):
+             *     for platform rows `owner` iff the caller is a platform admin else
+             *     `viewer`; for tenant rows the caller's workspace role. Gates edit
+             *     affordances in the Fleet UI.
+             */
+            my_effective_role?: string | null;
             /** @description Snake_case `path` (the alias steps + runners/workers bind to). */
             path: string;
+            /**
+             * @description Owning scope tier: `"workspace"` for a tenant capacity, `"platform"` for
+             *     a globally-shared platform pool. Lets the Fleet UI badge platform rows.
+             */
+            scope_kind: string;
         };
         /**
          * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row

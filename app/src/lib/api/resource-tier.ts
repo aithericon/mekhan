@@ -46,3 +46,27 @@ export function isPlatformResource(r: ResourceTierShape): boolean {
 export function canMutateResource(r: ResourceTierShape): boolean {
 	return r.my_effective_role != null && r.my_effective_role !== 'viewer';
 }
+
+/**
+ * Capacity (Fleet pool) variant of {@link isPlatformResource}.
+ *
+ * Unlike `ResourceSummary`, the unified `CapacitySummary` ALWAYS carries an
+ * exact `scope_kind` (`'workspace'` for a tenant pool, `'platform'` for the
+ * shared platform pools — the worker `default` pool + the `model_serving`
+ * pool), so the Fleet UI keys off it directly rather than the role fallback.
+ */
+export function isPlatformCapacity(c: { scope_kind?: string | null }): boolean {
+	return c.scope_kind === 'platform';
+}
+
+/**
+ * Whether the caller may curate a Fleet pool (edit / delete / drain / mint a
+ * pool-scoped token). For a platform pool this requires `is_platform_admin`
+ * (the backend stamps `my_effective_role = owner` for an admin else `viewer`);
+ * for a tenant pool it follows the workspace role. Mirrors the read-only gate
+ * `canMutateResource` uses for resources — both fold platform + tenant tiers
+ * into the one `my_effective_role !== 'viewer'` signal.
+ */
+export function canMutateCapacity(c: { my_effective_role?: string | null }): boolean {
+	return c.my_effective_role != null && c.my_effective_role !== 'viewer';
+}

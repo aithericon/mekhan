@@ -28,6 +28,15 @@
 	import { hostSummary as hostLine } from '$lib/components/fleet/runner-identity';
 	import { listRunners, type RunnerSummary } from '$lib/api/runners';
 	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+	import { auth } from '$lib/auth/store.svelte';
+
+	// The internal model pool is platform-tier (`model_states` under PLATFORM_SCOPE_ID).
+	// The inventory DTO carries no per-row scope, so we cannot distinguish a workspace
+	// engine from the shared platform pool — gate the curation actions (load / unload via
+	// the unified endpoints, which also CURATE) behind platform-admin and surface a note.
+	const canCurate = $derived(auth.isPlatformAdmin);
+	const curateGateTitle =
+		'Platform-admin only — these engines include the shared platform pool';
 
 	let engines = $state<FleetEnginesResponse>({ headroom_from_router: false, nodes: [] });
 	// Per-poll presence cache, keyed by runner_id — carries the LIVE facets
@@ -172,6 +181,16 @@
 		</Button>
 	</div>
 
+	<div
+		class="rounded-md border border-border/50 bg-muted/30 px-2.5 py-1.5 text-sm text-muted-foreground"
+		data-testid="platform-pool-note"
+	>
+		Engines shown include the shared <b class="font-medium text-foreground/80">platform pool</b>.
+		{#if !canCurate}
+			Load / unload / pull is platform-admin only.
+		{/if}
+	</div>
+
 	{#if error}
 		<div
 			class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
@@ -266,7 +285,8 @@
 										variant="ghost"
 										size="sm"
 										class="h-6 shrink-0 px-2 text-sm"
-										disabled={busy !== null}
+										disabled={busy !== null || !canCurate}
+										title={canCurate ? undefined : curateGateTitle}
 										onclick={() => askUnload(node.runner_id, e.base)}
 									>
 										{busy === `${node.runner_id}:${e.base}:unload` ? '…' : 'Unload'}
@@ -292,7 +312,8 @@
 										variant="ghost"
 										size="sm"
 										class="h-6 shrink-0 px-2 text-sm"
-										disabled={busy !== null}
+										disabled={busy !== null || !canCurate}
+										title={canCurate ? undefined : curateGateTitle}
 										onclick={() => load(node.runner_id, p)}
 									>
 										{busy === `${node.runner_id}:${p}:load` ? '…' : 'Load'}
@@ -313,9 +334,9 @@
 							variant="ghost"
 							size="sm"
 							class="h-7 shrink-0 px-2 text-sm"
-							disabled={busy !== null || !loadInputs[node.runner_id]}
+							disabled={busy !== null || !loadInputs[node.runner_id] || !canCurate}
 							onclick={() => pull(node.runner_id, loadInputs[node.runner_id] ?? '')}
-							title="Provision (download) to disk without loading"
+							title={canCurate ? 'Provision (download) to disk without loading' : curateGateTitle}
 						>
 							Pull
 						</Button>
@@ -323,7 +344,8 @@
 							variant="outline"
 							size="sm"
 							class="h-7 shrink-0 px-2 text-sm"
-							disabled={busy !== null || !loadInputs[node.runner_id]}
+							disabled={busy !== null || !loadInputs[node.runner_id] || !canCurate}
+							title={canCurate ? undefined : curateGateTitle}
 							onclick={() => load(node.runner_id, loadInputs[node.runner_id] ?? '')}
 						>
 							Load

@@ -24,10 +24,12 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
+	import Globe from '@lucide/svelte/icons/globe';
 	import StatusDot from './StatusDot.svelte';
 	import BackendChips from './BackendChips.svelte';
 	import { poolKindOf, poolLiveLine } from './pool-kinds';
 	import type { CapacitySummary } from '$lib/api/capacities';
+	import { isPlatformCapacity, canMutateCapacity } from '$lib/api/resource-tier';
 
 	let {
 		capacity,
@@ -56,6 +58,13 @@
 	const kind = $derived(poolKindOf(capacity));
 	const live = $derived(capacity.live);
 	const liveLine = $derived(poolLiveLine(capacity));
+
+	// Platform-scoped pools (the shared worker `default` + `model_serving` pools)
+	// get a sky-toned "Platform (shared)" badge and are read-only for anyone but a
+	// platform admin — `canMutateCapacity` folds the platform/tenant tiers into the
+	// `my_effective_role !== 'viewer'` signal the backend stamps per row.
+	const isPlatform = $derived(isPlatformCapacity(capacity));
+	const canMutate = $derived(canMutateCapacity(capacity));
 
 	// Liveness tone: live when anything is online / in use / leased; warn when a
 	// cluster is draining or the axes failed to parse (broken); idle otherwise.
@@ -96,6 +105,14 @@
 		</a>
 		<span class="truncate font-mono text-sm text-muted-foreground">{capacity.path}</span>
 		<Badge variant="secondary" class="font-normal">{kind.chip}</Badge>
+		{#if isPlatform}
+			<Badge
+				class="gap-1 bg-sky-100 font-normal text-sky-800"
+				data-testid="pool-platform-badge-{capacity.id}"
+			>
+				<Globe class="size-3" /> Platform (shared)
+			</Badge>
+		{/if}
 	</div>
 
 	<!-- Live line + collapsed coverage chips (presence/queue only) -->
@@ -144,7 +161,7 @@
 			>
 				Enroll
 			</Button>
-		{:else if kind.id === 'cluster'}
+		{:else if kind.id === 'cluster' && canMutate}
 			<Button
 				variant="ghost"
 				size="sm"
@@ -165,31 +182,37 @@
 			</Button>
 		{/if}
 
-		<DropdownMenu>
-			<DropdownMenuTrigger
-				aria-label="Pool actions"
-				class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
-			>
-				<EllipsisVertical class="size-4" />
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end">
-				<DropdownMenuItem
-					data-testid="pool-edit-{capacity.id}"
-					onSelect={() => onedit?.(capacity.id)}
+		<!-- Curation overflow (Edit / Delete) is gated by `canMutate`: a platform
+			 pool is read-only for everyone but a platform admin, a tenant pool by
+			 workspace role. Enroll affordances above stay open (every workspace may
+			 run against a shared platform pool). -->
+		{#if canMutate}
+			<DropdownMenu>
+				<DropdownMenuTrigger
+					aria-label="Pool actions"
+					class="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
 				>
-					<Pencil class="size-4" />
-					Edit
-				</DropdownMenuItem>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					variant="destructive"
-					data-testid="pool-delete-{capacity.id}"
-					onSelect={() => ondelete?.(capacity.id)}
-				>
-					<Trash2 class="size-4" />
-					Delete
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
+					<EllipsisVertical class="size-4" />
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuItem
+						data-testid="pool-edit-{capacity.id}"
+						onSelect={() => onedit?.(capacity.id)}
+					>
+						<Pencil class="size-4" />
+						Edit
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						variant="destructive"
+						data-testid="pool-delete-{capacity.id}"
+						onSelect={() => ondelete?.(capacity.id)}
+					>
+						<Trash2 class="size-4" />
+						Delete
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+		{/if}
 	</div>
 </div>
