@@ -121,13 +121,7 @@ job "${job_id}" {
       mode     = "delay"
     }
 
-    # Authenticate to Vault using Nomad workload identity. The `${vault_role}`
-    # JWT role + matching policies live in vault.tf and are bound to
-    # nomad_job_id="${job_id}" + namespace="${namespace}". The policies
-    # grant: (a) read on the NATS user creds path used below, (b) CRUD on
-    # secret/data/aithericon/resources/* for VaultResourceStore (write side)
-    # and the engine's secret-wrapping read side, (c) update on
-    # sys/wrapping/wrap for cubbyhole response wrapping at job dispatch.
+  
     vault {
       policies = ${vault_policies}
       role     = "${vault_role}"
@@ -201,25 +195,14 @@ EOH
         MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
         MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
-        # Invite-email delivery (Phase 4). mode=smtp makes the in-app invite
-        # feature actually send the accept link via the relay; mode=log just
-        # writes the link to the service log. PUBLIC_BASE_URL must be the
-        # externally reachable origin so the accept link resolves for invitees.
-        # (SMTP username/password come from the runtime.env template above.)
+        
         MEKHAN__EMAIL__MODE            = "${email_mode}"
         MEKHAN__EMAIL__FROM_ADDRESS    = "${email_from_address}"
         MEKHAN__EMAIL__PUBLIC_BASE_URL = "${email_public_base_url}"
         MEKHAN__EMAIL__SMTP_HOST       = "${email_smtp_host}"
         MEKHAN__EMAIL__SMTP_PORT       = "${email_smtp_port}"
         MEKHAN__DEMOS__SEED            = "true"
-        # Vault — VaultResourceStore writes resource version secrets to
-        # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
-        # stanza above already injects VAULT_TOKEN into the task env (workload-
-        # identity exchange via the `mekhan-service` JWT role); VAULT_ADDR is
-        # rendered here because Nomad doesn't propagate the client's vault.addr
-        # to task env automatically. Without VAULT_ADDR set, service/src/main.rs
-        # falls back to InMemoryResourceStore and logs a WARN — see the
-        # `resource_store:` log line at boot.
+
         VAULT_ADDR = "${vault_addr}"
         RUST_LOG   = "${rust_log}"
       }
@@ -259,13 +242,7 @@ EOH
         EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
         EXECUTOR_ENABLED    = "true"
         EXECUTOR_NAMESPACE  = "executor"
-        # Vault — engine resolves `{{secret:...}}` refs against VaultSecretStore
-        # and wraps resolved values into a single-use token before publishing
-        # on NATS. Needs VAULT_TOKEN (Nomad-injected via the workload-identity
-        # exchange) + VAULT_ADDR (templated here). The `mekhan-wrap` policy on
-        # the mekhan-service role grants the `sys/wrapping/wrap` update cap;
-        # `mekhan-resources-rw` grants the read on secret/data/aithericon/
-        # resources/* that the engine needs to fetch values before wrapping.
+
         VAULT_ADDR          = "${vault_addr}"
         RUST_LOG            = "${rust_log}"
       }
