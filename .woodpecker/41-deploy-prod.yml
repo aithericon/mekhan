@@ -7,9 +7,9 @@
 # Vault role, and Zitadel org. All divergence flows from `environment="prod"`
 # in deploy/prod/prod.auto.tfvars via deploy/prod/locals.tf.
 #
-# Auto-deploys PROD on push to `main` (same trigger as 40-deploy/dev), plus a
-# manual trigger for replays. Both run after 30-build publishes the image for
-# the commit; dev and prod roll out in parallel off the same SHA.
+# Branch model (mirrors web-platform): push `dev` → deploy DEV (40-deploy);
+# push `main` → deploy PROD (this pipeline). Plus a manual trigger for replays.
+# Runs after 30-build publishes the image for the commit.
 #
 # ONE-TIME PROD BOOTSTRAP (before the first successful run) — see
 # deploy/README.md:
