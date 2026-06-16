@@ -71,7 +71,7 @@ variable "node_class" {
 # ── Container image ─────────────────────────────────────────────────────────
 
 variable "image_repository" {
-  description = "Container image repo (without tag). HetznerCluster default registry is forge.aithericon.eu."
+  description = "Container image repo (without tag). Pulls via the internal zot mirror (zot.service.consul:5000), which pull-through-caches from forge."
   type        = string
 }
 
@@ -326,7 +326,7 @@ variable "memory_mb" {
 variable "executor_image_repository" {
   description = "Registry path for the executor image, tagged with image_tag (= mekhan-service's SHA — both ship from the same monorepo commit)."
   type        = string
-  default     = "forge.aithericon.eu/milanender/aithericon-executor"
+  default     = "zot.service.consul:5000/milanender/aithericon-executor"
 }
 
 variable "executor_cpu_mhz" {
@@ -358,7 +358,7 @@ variable "executor_count" {
 variable "engine_image_repository" {
   description = "Registry path for the engine image, tagged with image_tag (same SHA as service + executor — all three ship from the same monorepo commit)."
   type        = string
-  default     = "forge.aithericon.eu/milanender/aithericon-engine"
+  default     = "zot.service.consul:5000/milanender/aithericon-engine"
 }
 
 variable "engine_service_port" {

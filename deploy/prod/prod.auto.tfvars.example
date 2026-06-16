@@ -18,7 +18,7 @@ nomad_datacenters = ["dc1"]
 node_class        = "stateless"
 
 # ── Image ───────────────────────────────────────────────────────────────────
-image_repository = "forge.aithericon.eu/milanender/mekhan-service"
+image_repository = "zot.service.consul:5000/milanender/mekhan-service"
 
 # ── External exposure ───────────────────────────────────────────────────────
 # prod owns the canonical hostname; dev lives on mekhan.dev.aithericon.eu.
