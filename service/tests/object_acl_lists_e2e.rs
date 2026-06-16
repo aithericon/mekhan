@@ -28,7 +28,7 @@ use uuid::Uuid;
 use common::mock_auth::MockAuthenticator;
 use common::test_app_with_authenticator;
 use common::workspace_fixtures::{
-    seed_member, seed_template_in_workspace, seed_workspace, subject_uuid,
+    seed_member, seed_system_workspace, seed_template_in_workspace, seed_workspace, subject_uuid,
 };
 
 async fn body_json(body: Body) -> Value {
@@ -313,21 +313,25 @@ async fn keep_all_surfaces_show_restricted_rows_with_null_role() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Cross-workspace public-folder overlay — a folder that holds a `public`
-//    template surfaces (read-only `viewer`) in OTHER workspaces' folder trees,
-//    so the seeded demo tree is browsable from every tenant. A folder whose
-//    only template is `workspace`-visibility must NOT leak across.
+// 4. No cross-workspace overlay — a tenant's `public` template does NOT leak
+//    into other tenants' folder trees (the old overlay is gone), and a
+//    non-member can't browse another tenant's folders at all. Browse-only
+//    discovery is reserved for `is_system` workspaces (e.g. `demos`), which
+//    any authenticated user may list read-only and fork content out of.
 // ---------------------------------------------------------------------------
 #[tokio::test]
-async fn public_template_folder_surfaces_in_other_workspaces() {
+async fn public_templates_do_not_leak_but_system_workspaces_are_browsable() {
     let (app, db) = header_driven_app().await;
 
-    // Workspace A is the home of the templates; workspace B is a different
-    // tenant whose tree must show A's PUBLIC folder but not its private one.
+    // Workspace A is a normal tenant; workspace B is a different tenant whose
+    // tree must NOT show A's public folder. ws_demos is a system workspace that
+    // anyone may browse.
     let ws_a = seed_workspace(&db, &format!("ws-pub-a-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws_a, "alice", "owner").await;
     let ws_b = seed_workspace(&db, &format!("ws-pub-b-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws_b, "bob", "owner").await;
+    let ws_demos = seed_system_workspace(&db, &format!("demos-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws_demos, "alice", "owner").await;
 
     // Helper: create a folder in A (as alice) and return its id.
     async fn mk_folder(app: &axum::Router, ws: Uuid, slug: &str) -> Uuid {
@@ -372,16 +376,18 @@ async fn public_template_folder_surfaces_in_other_workspaces() {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
-    // A public template filed in `/shared`, a workspace-only template in `/local`.
+    // A public template filed in A's `/shared`; a public template in the demos
+    // system workspace's `/gallery`.
     let shared_folder = mk_folder(&app, ws_a, "shared").await;
     let pub_tpl = seed_template_in_workspace(&db, ws_a, "public-demo", "public").await;
     file_in(&app, ws_a, pub_tpl, shared_folder).await;
 
-    let local_folder = mk_folder(&app, ws_a, "local").await;
-    let ws_tpl = seed_template_in_workspace(&db, ws_a, "tenant-only", "workspace").await;
-    file_in(&app, ws_a, ws_tpl, local_folder).await;
+    let gallery_folder = mk_folder(&app, ws_demos, "gallery").await;
+    let demo_tpl = seed_template_in_workspace(&db, ws_demos, "demo-card", "public").await;
+    file_in(&app, ws_demos, demo_tpl, gallery_folder).await;
 
-    // Bob, in workspace B, lists B's folder tree.
+    // Bob, in workspace B, lists B's folder tree: A's public folder must NOT
+    // appear — the cross-workspace overlay is gone, so B sees only B's content.
     let body = get_as(
         &app,
         "bob",
@@ -390,27 +396,49 @@ async fn public_template_folder_surfaces_in_other_workspaces() {
     )
     .await;
     let folders = body.as_array().unwrap();
-
-    // The public template's folder surfaces — read-only, still owned by A.
-    let shared = find_by_id(folders, shared_folder)
-        .expect("public-template folder must surface cross-workspace");
-    assert_eq!(
-        shared["my_effective_role"], "viewer",
-        "shared folder is browse-only for a non-member"
-    );
-    assert_eq!(
-        shared["workspace_id"],
-        ws_a.to_string(),
-        "shared folder keeps its home workspace id"
-    );
-
-    // The workspace-visibility template's folder must NOT leak into B.
     assert!(
-        find_by_id(folders, local_folder).is_none(),
-        "a non-public folder must not appear in another tenant's tree"
+        find_by_id(folders, shared_folder).is_none(),
+        "a public folder from another tenant must NOT surface in B's tree"
     );
 
-    // And in A itself, alice still sees her own folders with real roles, no dupes.
+    // Bob cannot browse A's folders directly either — A is a normal tenant, not
+    // a world-readable system workspace.
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("bob", ws_b)
+                .method("GET")
+                .uri(format!("/api/v1/workspaces/{ws_a}/folders"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "non-member can't browse a normal tenant's folders"
+    );
+
+    // But Bob CAN browse the demos SYSTEM workspace read-only, even as a
+    // non-member, and sees its public folder with a null role (fork-only).
+    let body = get_as(
+        &app,
+        "bob",
+        ws_b,
+        &format!("/api/v1/workspaces/{ws_demos}/folders"),
+    )
+    .await;
+    let demo_folders = body.as_array().unwrap();
+    let gallery = find_by_id(demo_folders, gallery_folder)
+        .expect("system-workspace folder is browsable by a non-member");
+    assert!(
+        gallery.get("my_effective_role").is_none()
+            || gallery["my_effective_role"].is_null(),
+        "browse-only system folder carries no edit role for a non-member"
+    );
+
+    // And in A itself, alice still sees her own folder with her real role.
     let body = get_as(
         &app,
         "alice",
@@ -422,13 +450,5 @@ async fn public_template_folder_surfaces_in_other_workspaces() {
     assert_eq!(
         find_by_id(a_folders, shared_folder).unwrap()["my_effective_role"],
         "owner"
-    );
-    assert_eq!(
-        a_folders
-            .iter()
-            .filter(|f| f["id"] == shared_folder.to_string())
-            .count(),
-        1,
-        "no duplicate rows"
     );
 }

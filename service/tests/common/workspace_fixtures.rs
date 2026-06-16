@@ -25,6 +25,24 @@ pub async fn seed_workspace(db: &PgPool, slug: &str) -> Uuid {
     id
 }
 
+/// Insert a `is_system = TRUE` workspace (e.g. a `demos`-style browse-only
+/// catalogue) and return its id. System workspaces are world-readable: any
+/// authenticated user may list their content without a membership row.
+pub async fn seed_system_workspace(db: &PgPool, slug: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspaces (id, slug, display_name, is_system) \
+              VALUES ($1, $2, $3, TRUE)",
+    )
+    .bind(id)
+    .bind(slug)
+    .bind(slug)
+    .execute(db)
+    .await
+    .expect("seed system workspace");
+    id
+}
+
 /// Add a member by subject string (the mock authenticator's user id is
 /// derived from this the same way the resolver derives it in production).
 pub async fn seed_member(db: &PgPool, workspace_id: Uuid, subject: &str, role: &str) {

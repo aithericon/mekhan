@@ -22886,6 +22886,7 @@
         "description": "Result of a folder fork — the new root folder plus how much it brought in.",
         "required": [
           "folder_id",
+          "workspace_id",
           "folders",
           "templates"
         ],
@@ -22893,7 +22894,7 @@
           "folder_id": {
             "type": "string",
             "format": "uuid",
-            "description": "Id of the new root folder created in the caller's workspace."
+            "description": "Id of the new root folder created in the target workspace."
           },
           "folders": {
             "type": "integer",
@@ -22906,6 +22907,11 @@
             "format": "int32",
             "description": "Templates deep-copied into the new subtree.",
             "minimum": 0
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Workspace the subtree was forked INTO (may differ from the active one\nwhen forking while browsing the read-only demos workspace)."
           }
         }
       },
@@ -22932,7 +22938,15 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Home the fork in this folder of the caller's active workspace. Must be a\nfolder the caller can write. Absent ⇒ workspace root."
+            "description": "Home the fork in this folder of the target workspace. Must be a folder in\nthat workspace. Absent ⇒ workspace root."
+          },
+          "target_workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace to fork INTO (must be one the caller can write). Absent ⇒ the\nactive workspace when writable, else the caller's first writable\nworkspace — so forking while *browsing* the read-only demos workspace\nstill lands the copy somewhere the caller owns."
           }
         }
       },
@@ -36002,6 +36016,13 @@
           },
           "is_system": {
             "type": "boolean"
+          },
+          "my_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's membership role here (`owner|admin|editor|viewer`), or `None`\nwhen they're not a member — which happens for a **browse-only** system\nworkspace (e.g. `demos`) surfaced in the switcher. `None` ⇒ read-only:\nthe SPA marks it accordingly and routes new content / forks elsewhere.\n`#[sqlx(default)]` so the explicit-column row maps still satisfy `FromRow`."
           },
           "slug": {
             "type": "string"

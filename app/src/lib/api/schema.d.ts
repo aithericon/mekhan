@@ -8454,7 +8454,7 @@ export interface components {
         ForkFolderResponse: {
             /**
              * Format: uuid
-             * @description Id of the new root folder created in the caller's workspace.
+             * @description Id of the new root folder created in the target workspace.
              */
             folder_id: string;
             /**
@@ -8467,6 +8467,12 @@ export interface components {
              * @description Templates deep-copied into the new subtree.
              */
             templates: number;
+            /**
+             * Format: uuid
+             * @description Workspace the subtree was forked INTO (may differ from the active one
+             *     when forking while browsing the read-only demos workspace).
+             */
+            workspace_id: string;
         };
         /** @description Body for `POST /api/v1/library/fork`. */
         ForkLibraryRequest: {
@@ -8480,10 +8486,18 @@ export interface components {
         ForkTemplateRequest: {
             /**
              * Format: uuid
-             * @description Home the fork in this folder of the caller's active workspace. Must be a
-             *     folder the caller can write. Absent ⇒ workspace root.
+             * @description Home the fork in this folder of the target workspace. Must be a folder in
+             *     that workspace. Absent ⇒ workspace root.
              */
             folder_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Workspace to fork INTO (must be one the caller can write). Absent ⇒ the
+             *     active workspace when writable, else the caller's first writable
+             *     workspace — so forking while *browsing* the read-only demos workspace
+             *     still lands the copy somewhere the caller owns.
+             */
+            target_workspace_id?: string | null;
         };
         /**
          * @description Normalized format-specific block: a discriminant plus the uniform
@@ -14869,6 +14883,14 @@ export interface components {
             /** Format: uuid */
             id: string;
             is_system: boolean;
+            /**
+             * @description The caller's membership role here (`owner|admin|editor|viewer`), or `None`
+             *     when they're not a member — which happens for a **browse-only** system
+             *     workspace (e.g. `demos`) surfaced in the switcher. `None` ⇒ read-only:
+             *     the SPA marks it accordingly and routes new content / forks elsewhere.
+             *     `#[sqlx(default)]` so the explicit-column row maps still satisfy `FromRow`.
+             */
+            my_role?: string | null;
             slug: string;
         };
     };

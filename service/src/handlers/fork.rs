@@ -25,7 +25,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::{
-    can_read_template, map_to_api_error, require_role, AuthUser, Role,
+    can_read_template, map_to_api_error, resolve_fork_target, AuthUser,
 };
 use crate::handlers::require_template;
 use crate::handlers::templates::graph_with_ydoc_fallback;
@@ -38,8 +38,14 @@ use crate::AppState;
 /// caller's workspace root.
 #[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
 pub struct ForkTemplateRequest {
-    /// Home the fork in this folder of the caller's active workspace. Must be a
-    /// folder the caller can write. Absent ⇒ workspace root.
+    /// Workspace to fork INTO (must be one the caller can write). Absent ⇒ the
+    /// active workspace when writable, else the caller's first writable
+    /// workspace — so forking while *browsing* the read-only demos workspace
+    /// still lands the copy somewhere the caller owns.
+    #[serde(default)]
+    pub target_workspace_id: Option<Uuid>,
+    /// Home the fork in this folder of the target workspace. Must be a folder in
+    /// that workspace. Absent ⇒ workspace root.
     #[serde(default)]
     pub folder_id: Option<Uuid>,
 }
@@ -70,12 +76,17 @@ pub async fn fork_template(
 ) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
     let req = body.map(|Json(r)| r).unwrap_or_default();
 
-    // Anchor the fork in the caller's active workspace; reject (403) rather than
-    // forking into the nil tenant when the caller has no active workspace.
-    let target_ws = user.require_workspace()?;
-    require_role(&state.db, &user, target_ws, Role::Editor)
-        .await
-        .map_err(map_to_api_error)?;
+    // Resolve a workspace the caller can write into (the active one may be the
+    // read-only demos workspace they're browsing). 400 when they have nowhere.
+    let target_ws = resolve_fork_target(
+        &state.db,
+        &user,
+        req.target_workspace_id,
+        user.workspace_id,
+    )
+    .await
+    .map_err(map_to_api_error)?
+    .ok_or_else(|| ApiError::bad_request("no writable workspace to fork into"))?;
 
     // Read gate: the source must be readable — the caller's own workspace OR a
     // public definition. `can_read_template` is the single source of truth for
@@ -136,10 +147,12 @@ pub async fn fork_folder(
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<ForkFolderResponse>), ApiError> {
     let principal = user.subject_as_uuid();
-    let target_ws = user.require_workspace()?;
-    require_role(&state.db, &user, target_ws, Role::Editor)
+    // Fork into a workspace the caller can write (the active one may be the
+    // read-only demos workspace they're browsing).
+    let target_ws = resolve_fork_target(&state.db, &user, None, user.workspace_id)
         .await
-        .map_err(map_to_api_error)?;
+        .map_err(map_to_api_error)?
+        .ok_or_else(|| ApiError::bad_request("no writable workspace to fork into"))?;
 
     // Load the source folder (no membership gate on its workspace — a public
     // demos folder lives in a workspace the caller isn't a member of). Read
@@ -290,6 +303,7 @@ pub async fn fork_folder(
         StatusCode::CREATED,
         Json(ForkFolderResponse {
             folder_id: new_root_id,
+            workspace_id: target_ws,
             folders: subtree.len() as u32,
             templates: forked_templates,
         }),
@@ -299,8 +313,11 @@ pub async fn fork_folder(
 /// Result of a folder fork — the new root folder plus how much it brought in.
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ForkFolderResponse {
-    /// Id of the new root folder created in the caller's workspace.
+    /// Id of the new root folder created in the target workspace.
     pub folder_id: Uuid,
+    /// Workspace the subtree was forked INTO (may differ from the active one
+    /// when forking while browsing the read-only demos workspace).
+    pub workspace_id: Uuid,
     /// Folders created (the source subtree size).
     pub folders: u32,
     /// Templates deep-copied into the new subtree.

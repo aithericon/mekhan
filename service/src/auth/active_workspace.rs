@@ -77,27 +77,32 @@ pub async fn apply_override(db: &PgPool, user: &mut AuthUser, headers: &HeaderMa
     let Some(requested) = cookie_workspace_id(headers) else {
         return;
     };
-    // Membership check — refuse to honour a cookie whose UUID the user no
-    // longer has access to. We never error: failed membership silently
-    // reverts to the resolver's pick.
-    // Join `workspaces` so an archived (soft-deleted) workspace is never
-    // honoured even if the caller still holds a stale cookie + membership row;
-    // resolution silently falls back to the resolver's live pick.
+    // Access check — refuse to honour a cookie whose UUID the user can't reach.
+    // We never error: a failed check silently reverts to the resolver's pick.
+    // Honoured targets: (a) a workspace the caller is a member of (their real
+    // role), OR (b) any `is_system` workspace (e.g. `demos`) — those are
+    // world-readable browse destinations, entered read-only (`viewer`) so a user
+    // can "visit" demos without a membership row. The `workspaces` join also
+    // rejects archived (soft-deleted) workspaces even with a stale cookie.
     let user_id = user.subject_as_uuid();
-    let row: Result<Option<(String,)>, _> = sqlx::query_as(
-        "SELECT m.role FROM workspace_members m \
-           JOIN workspaces w ON w.id = m.workspace_id \
-          WHERE m.workspace_id = $1 AND m.user_id = $2 AND w.archived_at IS NULL",
+    let row: Result<Option<(Option<String>, bool)>, _> = sqlx::query_as(
+        "SELECT m.role, w.is_system FROM workspaces w \
+           LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = $2 \
+          WHERE w.id = $1 AND w.archived_at IS NULL",
     )
     .bind(requested)
     .bind(user_id)
     .fetch_optional(db)
     .await;
-    if let Ok(Some((role,))) = row {
-        user.workspace_id = Some(requested);
-        // The override moves the caller into a different workspace — their
-        // role there differs from the resolver's default pick, so refresh it.
-        user.workspace_role = Some(role);
+    if let Ok(Some((role, is_system))) = row {
+        // Member role wins; otherwise a system workspace is enterable as viewer.
+        let effective = role.or_else(|| is_system.then(|| "viewer".to_string()));
+        if let Some(effective) = effective {
+            user.workspace_id = Some(requested);
+            // The override moves the caller into a different workspace — their
+            // role there differs from the resolver's default pick, so refresh it.
+            user.workspace_role = Some(effective);
+        }
     }
 }
 

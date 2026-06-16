@@ -256,9 +256,13 @@ fn append_template_where(
         qb.push_bind(tag.clone());
     }
 
-    qb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
+    // Strict workspace scope: a template list shows exactly the active
+    // workspace's templates. The old `OR visibility = 'public'` overlay (which
+    // surfaced every workspace's public templates — i.e. the demos — in every
+    // tenant's catalogue) is gone; public templates are discovered by switching
+    // INTO the workspace that owns them (e.g. demos) and forked from there.
+    qb.push(" WHERE t.is_latest = TRUE AND t.workspace_id = ");
     qb.push_bind(workspace_id);
-    qb.push(" OR t.visibility = 'public')");
 
     // Private sub-workflows are hidden unless explicitly enumerated by their
     // owning parent family.
@@ -379,8 +383,7 @@ pub async fn list_templates(
     if let Some(base_id) = extras.base_template_id {
         let mut items = sqlx::query_as::<_, WorkflowTemplateSummary>(&format!(
             "SELECT {SUMMARY_COLS}, {io} FROM workflow_templates \
-              WHERE base_template_id = $1 \
-                AND (workspace_id = $2 OR visibility = 'public') \
+              WHERE base_template_id = $1 AND workspace_id = $2 \
               ORDER BY version DESC LIMIT $3 OFFSET $4",
             io = io_summary_cols("graph")
         ))
@@ -394,8 +397,7 @@ pub async fn list_templates(
 
         let total: (i64,) = sqlx::query_as(
             "SELECT COUNT(*)::bigint FROM workflow_templates \
-              WHERE base_template_id = $1 \
-                AND (workspace_id = $2 OR visibility = 'public')",
+              WHERE base_template_id = $1 AND workspace_id = $2",
         )
         .bind(base_id)
         .bind(workspace_id)

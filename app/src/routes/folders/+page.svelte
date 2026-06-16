@@ -75,12 +75,10 @@
 	let shareOpen = $state(false);
 	const canEdit = $derived(roleAtLeast(selected?.my_effective_role, 'editor'));
 	const canShare = $derived(roleAtLeast(selected?.my_effective_role, 'admin'));
-	// Foreign = a shared/public folder from another workspace (e.g. the built-in
-	// demos), surfaced read-only via the cross-workspace overlay. The way to make
-	// its contents your own — runnable in your tenant — is to fork it in.
-	const isForeign = $derived(
-		!!selected && !!workspaces.active && selected.workspace_id !== workspaces.active.id
-	);
+	// Read-only here = you can't edit this folder (typically because you're
+	// browsing the demos workspace as a non-member). The way to make its contents
+	// your own — runnable in your tenant — is to fork the folder in.
+	const isReadOnly = $derived(!!selected && !canEdit);
 
 	let forking = $state(false);
 	async function handleFork() {
@@ -88,11 +86,17 @@
 		forking = true;
 		try {
 			const res = await forkFolder(selected.id);
-			toast.success(
-				`Forked into your workspace (${res.templates} template${res.templates === 1 ? '' : 's'})`
-			);
-			await folderList.refetch();
-			selectedId = res.folder_id;
+			const dest =
+				workspaces.workspaces.find((w) => w.id === res.workspace_id)?.display_name ??
+				'your workspace';
+			const n = res.templates;
+			toast.success(`Forked into ${dest} (${n} template${n === 1 ? '' : 's'})`);
+			// The copy lands in a workspace you own (which may differ from the
+			// demos workspace you're browsing), so don't move the demos selection.
+			if (res.workspace_id === workspaceId) {
+				await folderList.refetch();
+				selectedId = res.folder_id;
+			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to fork folder');
 		} finally {
@@ -425,7 +429,7 @@
 									/>
 								</div>
 								<div class="flex shrink-0 gap-1">
-									{#if isForeign}
+									{#if isReadOnly}
 										<Button
 											variant="outline"
 											size="sm"

@@ -299,7 +299,10 @@
 		forkingId = template.id;
 		try {
 			const forked = await forkTemplate(template.id);
-			toast.success(`Forked "${template.name}" into your workspace`);
+			const dest =
+				workspaces.workspaces.find((w) => w.id === forked.workspace_id)?.display_name ??
+				'your workspace';
+			toast.success(`Forked "${template.name}" into ${dest}`);
 			await goto(`/templates/${forked.id}`);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to fork template');
@@ -420,7 +423,7 @@
 				{#each templates as template (template.id)}
 					{@const canEdit = roleAtLeast(template.my_effective_role, 'editor')}
 					{@const canShareT = roleAtLeast(template.my_effective_role, 'admin')}
-					{@const isForeign = !!workspaces.active && template.workspace_id !== workspaces.active.id}
+					{@const readOnly = !canEdit}
 					<a
 						href="/templates/{template.id}"
 						class="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
@@ -451,7 +454,7 @@
 								</Badge>
 							</div>
 							<div class="flex shrink-0 items-center gap-1">
-								{#if template.published}
+								{#if template.published && canEdit}
 									<Button
 										size="sm"
 										data-testid="btn-run-template-{template.id}"
@@ -463,6 +466,23 @@
 									>
 										<Rocket class="size-4" />
 										Run
+									</Button>
+								{:else if readOnly}
+									<!-- Read-only here (e.g. browsing the demos workspace): you can't
+									     run it in place; fork it into a workspace you own, then run. -->
+									<Button
+										size="sm"
+										variant="outline"
+										data-testid="btn-fork-template-{template.id}"
+										disabled={forkingId === template.id}
+										onclick={(e: MouseEvent) => {
+											e.preventDefault();
+											e.stopPropagation();
+											handleFork(template);
+										}}
+									>
+										<GitFork class="size-4" />
+										{forkingId === template.id ? 'Forking…' : 'Fork to workspace'}
 									</Button>
 								{/if}
 								<DropdownMenu>
@@ -506,17 +526,6 @@
 												<Share2 class="size-4" />
 												Share
 											</DropdownMenuItem>
-										{/if}
-										{#if isForeign}
-											<DropdownMenuItem
-												data-testid="btn-fork-template-{template.id}"
-												disabled={forkingId === template.id}
-												onSelect={() => handleFork(template)}
-											>
-												<GitFork class="size-4" />
-												{forkingId === template.id ? 'Forking…' : 'Fork to workspace'}
-											</DropdownMenuItem>
-											<DropdownMenuSeparator />
 										{/if}
 										<DropdownMenuItem
 											data-testid="btn-settings-template-{template.id}"
