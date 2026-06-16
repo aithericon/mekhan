@@ -268,6 +268,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::governance::promote_template))
         .routes(routes!(handlers::governance::demote_template))
         .routes(routes!(handlers::governance::fork_library_node))
+        .routes(routes!(handlers::fork::fork_template))
         .routes(routes!(handlers::governance::set_lifecycle))
         .routes(routes!(handlers::governance::library_upgrade_preview))
         .routes(routes!(handlers::templates::discard_draft))
@@ -768,6 +769,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::folders::set_template_tags
         ))
         .routes(routes!(handlers::folders::set_template_visibility))
+        .routes(routes!(handlers::fork::fork_folder))
         // Per-folder OpenAPI bundle — synthesized trigger spec for SDK
         // generators + API doc viewers, gathered across the folder subtree.
         .routes(routes!(handlers::openapi_bundle::folder_openapi_bundle))

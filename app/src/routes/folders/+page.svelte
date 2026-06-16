@@ -20,8 +20,11 @@
 		createFolder,
 		updateFolder,
 		deleteFolder,
+		forkFolder,
 		type Folder
 	} from '$lib/api/client';
+	import { toast } from 'svelte-sonner';
+	import GitFork from '@lucide/svelte/icons/git-fork';
 	import FolderTreeRailSection from '$lib/components/folders/FolderTreeRailSection.svelte';
 	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
 	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
@@ -72,6 +75,30 @@
 	let shareOpen = $state(false);
 	const canEdit = $derived(roleAtLeast(selected?.my_effective_role, 'editor'));
 	const canShare = $derived(roleAtLeast(selected?.my_effective_role, 'admin'));
+	// Foreign = a shared/public folder from another workspace (e.g. the built-in
+	// demos), surfaced read-only via the cross-workspace overlay. The way to make
+	// its contents your own — runnable in your tenant — is to fork it in.
+	const isForeign = $derived(
+		!!selected && !!workspaces.active && selected.workspace_id !== workspaces.active.id
+	);
+
+	let forking = $state(false);
+	async function handleFork() {
+		if (!selected || forking) return;
+		forking = true;
+		try {
+			const res = await forkFolder(selected.id);
+			toast.success(
+				`Forked into your workspace (${res.templates} template${res.templates === 1 ? '' : 's'})`
+			);
+			await folderList.refetch();
+			selectedId = res.folder_id;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to fork folder');
+		} finally {
+			forking = false;
+		}
+	}
 
 	// Root uses a sentinel (bits-ui Select reserves the empty string).
 	const ROOT = '__root__';
@@ -398,6 +425,17 @@
 									/>
 								</div>
 								<div class="flex shrink-0 gap-1">
+									{#if isForeign}
+										<Button
+											variant="outline"
+											size="sm"
+											onclick={handleFork}
+											disabled={forking}
+											data-testid="btn-fork-folder"
+										>
+											<GitFork class="size-3.5" /> {forking ? 'Forking…' : 'Fork to workspace'}
+										</Button>
+									{/if}
 									{#if canShare}
 										<Button
 											variant="outline"

@@ -63,6 +63,9 @@ use utoipa::OpenApi;
             // Phase 4 governance — promote/demote/fork request bodies.
             crate::handlers::governance::PromoteTemplateRequest,
             crate::handlers::governance::ForkLibraryRequest,
+            // Fork-to-workspace (templates + folders) DTOs.
+            crate::handlers::fork::ForkTemplateRequest,
+            crate::handlers::fork::ForkFolderResponse,
             // Phase 5 governance — lifecycle + upgrade-preview DTOs.
             crate::handlers::governance::LifecycleRequest,
             crate::handlers::governance::UpgradePreview,

@@ -8,9 +8,12 @@
 		updateTemplate,
 		createNewVersion,
 		createInstance,
+		forkTemplate,
 		listInstances,
 		type TemplateSummary
 	} from '$lib/api/client';
+	import { toast } from 'svelte-sonner';
+	import { workspaces } from '$lib/workspaces/store.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -27,6 +30,7 @@
 	import Rocket from '@lucide/svelte/icons/rocket';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
+	import GitFork from '@lucide/svelte/icons/git-fork';
 	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
@@ -286,6 +290,23 @@
 		dialogOpen = true;
 	}
 
+	// Deep-copy a (typically public / cross-workspace) template — e.g. a built-in
+	// demo — into the active workspace, where it becomes runnable as the caller's
+	// own. Navigate to the new copy so the user can run/edit it immediately.
+	let forkingId = $state<string | null>(null);
+	async function handleFork(template: TemplateSummary) {
+		if (forkingId) return;
+		forkingId = template.id;
+		try {
+			const forked = await forkTemplate(template.id);
+			toast.success(`Forked "${template.name}" into your workspace`);
+			await goto(`/templates/${forked.id}`);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to fork template');
+			forkingId = null;
+		}
+	}
+
 	function onInstanceCreated(instanceId: string) {
 		dialogOpen = false;
 		dialogTemplateId = null;
@@ -399,6 +420,7 @@
 				{#each templates as template (template.id)}
 					{@const canEdit = roleAtLeast(template.my_effective_role, 'editor')}
 					{@const canShareT = roleAtLeast(template.my_effective_role, 'admin')}
+					{@const isForeign = !!workspaces.active && template.workspace_id !== workspaces.active.id}
 					<a
 						href="/templates/{template.id}"
 						class="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
@@ -484,6 +506,17 @@
 												<Share2 class="size-4" />
 												Share
 											</DropdownMenuItem>
+										{/if}
+										{#if isForeign}
+											<DropdownMenuItem
+												data-testid="btn-fork-template-{template.id}"
+												disabled={forkingId === template.id}
+												onSelect={() => handleFork(template)}
+											>
+												<GitFork class="size-4" />
+												{forkingId === template.id ? 'Forking…' : 'Fork to workspace'}
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
 										{/if}
 										<DropdownMenuItem
 											data-testid="btn-settings-template-{template.id}"
