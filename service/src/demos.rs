@@ -600,15 +600,15 @@ const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-0
 /// Workspace that seeded demos belong to: the **default** workspace
 /// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
 ///
-/// Demos are meant to be first-class, *editable* starting points — the
-/// dev-noop user owns `default` (migration 20240123) and the BFF resolver
-/// auto-provisions every authenticated user as an `editor` of it
-/// (`ensure_default_workspace_membership`). So seeding here means a user can
-/// open a demo and publish edits without hitting `gate_template_write`'s
-/// membership check — which is exactly what a separate system-owned demos
-/// workspace prevented. Rows are still `visibility = 'public'` so users whose
-/// active workspace is some *other* tenant still discover them via the
-/// cross-workspace public-read branch in `list_templates`.
+/// Demos are seeded here (not the system-owned `demos` workspace) so the
+/// dev-noop user — who owns `default` (migration 20240123) — can open a demo
+/// and publish edits without hitting `gate_template_write`'s membership check.
+/// Rows are `visibility = 'public'`, so users in *other* tenants discover and
+/// read them via the cross-workspace public-read branch in `list_templates`.
+/// NOTE: the BFF resolver no longer auto-joins arbitrary principals to
+/// `default` (that broke isolation), so a fresh Zitadel user reads demos via
+/// public visibility but is not an editor of `default` unless explicitly
+/// granted — by design.
 const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
 
 /// Slug of the root folder every seeded demo lives under. Folders are a
@@ -816,7 +816,9 @@ async fn ensure_demo_folder(
 /// consulted on the read path), so without this the seeder — publishing as
 /// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
 /// `ensure_default_workspace_membership` path that real users do — cannot
-/// resolve any workspace resource a demo references. Idempotent.
+/// resolve any workspace resource a demo references. The seeder principal
+/// ([`DEMO_SEEDER_AUTHOR_ID`]) never logs in through the BFF, so it gets this
+/// explicit owner row rather than any auto-provisioned membership. Idempotent.
 async fn ensure_seeder_workspace_membership(state: &crate::AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
