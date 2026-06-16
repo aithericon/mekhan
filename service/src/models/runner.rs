@@ -203,6 +203,14 @@ pub struct CreateRegistrationTokenRequest {
     pub max_uses: Option<i32>,
     #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
+    /// Mint the token against the **platform tier** (`workspace_id =
+    /// PLATFORM_SCOPE_ID`) instead of the caller's workspace, so a serving
+    /// runner enrolling with it lands its `runner_interfaces` row under the
+    /// shared platform pool. Requires `is_platform_admin`; only meaningful with
+    /// `group = "model_serving"` (the platform model-serving group). Defaults to
+    /// `false` (the historical workspace-scoped token).
+    #[serde(default)]
+    pub platform: bool,
 }
 
 /// Response for a freshly-minted registration token. `token` is the full

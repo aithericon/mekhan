@@ -1197,9 +1197,21 @@ struct ModelStateFixture {
     idle_evict: bool,
 }
 
+/// The `model_registry` resource alias that marks a model_states fixture as
+/// part of the **shared internal LLM pool** rather than a per-tenant demo
+/// model. The internal pool is a control-plane projection owned by the platform
+/// tier (Phase 2): its `model_states` rows are seeded under
+/// [`PLATFORM_SCOPE_ID`] so every tenant's picker surfaces them (the picker
+/// reads widen to `workspace_id IN ($caller, PLATFORM_SCOPE_ID)`), while a
+/// genuine tenant-demo model in the same fixture loop stays at the demo
+/// workspace.
+const INTERNAL_POOL_REGISTRY_ALIAS: &str = "internal_pool_registry";
+
 /// Seed the `model_states` projection rows that the model-pool demos rely on
-/// (model-pool P1, docs/29 §3), from `demos/model_states/*.json`, into the demo
-/// workspace. Mirrors [`seed_demo_resources`]: runs BEFORE the demo loop so a
+/// (model-pool P1, docs/29 §3), from `demos/model_states/*.json`. Internal-pool
+/// models (those backed by [`INTERNAL_POOL_REGISTRY_ALIAS`]) seed under the
+/// platform tier ([`PLATFORM_SCOPE_ID`]); any genuine tenant-demo model seeds
+/// into the demo workspace. Mirrors [`seed_demo_resources`]: runs BEFORE the demo loop so a
 /// model-pool demo's loaded model id is curated by the time its Agent step
 /// compiles. Idempotent via `ON CONFLICT (workspace_id, model_id) DO UPDATE` —
 /// re-asserts the fixture's state on every boot (the in-memory dev stack is
@@ -1235,6 +1247,17 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
                 tracing::warn!(fixture = %path.display(), error = %e, "model_states fixture: parse failed");
                 continue;
             }
+        };
+        // Shared internal-pool models are owned by the platform tier — their
+        // `model_states` row lands under PLATFORM_SCOPE_ID so every tenant's
+        // picker surfaces it. A genuine tenant-demo model stays at the demo
+        // workspace. The backing registry resource itself is still seeded into
+        // the demo workspace, so the registry lookup below stays workspace-local.
+        let is_internal_pool = fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
+        let target_workspace = if is_internal_pool {
+            crate::models::asset::PLATFORM_SCOPE_ID
+        } else {
+            DEMO_WORKSPACE_ID
         };
         // Resolve the optional backing registry resource → its row id (the
         // projection's `registry_resource_id`). Absent / unresolved → NULL.
@@ -1279,7 +1302,7 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
                  idle_evict = EXCLUDED.idle_evict, \
                  last_transition_at = NOW()",
         )
-        .bind(DEMO_WORKSPACE_ID)
+        .bind(target_workspace)
         .bind(registry_resource_id)
         .bind(&fx.model_id)
         .bind(&fx.state)

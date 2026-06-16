@@ -19,6 +19,7 @@
 
 use uuid::Uuid;
 
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::ApiError;
 use crate::AppState;
 
@@ -59,6 +60,32 @@ pub async fn resolve_model_serving_group_uuid(
     .fetch_optional(db)
     .await
     .map_err(|e| ApiError::internal(format!("model-serving-group lookup: {e}")))?;
+    Ok(found.map(|(id,)| id))
+}
+
+/// Resolve the **platform-tier** model-serving group at [`MODEL_SERVING_GROUP_PATH`]
+/// to its capacity-resource UUID. Same `instrument`-preset axes as
+/// [`resolve_model_serving_group_uuid`], but filtered to the platform scope
+/// (`scope_kind = 'platform'`, `workspace_id = scope_id = PLATFORM_SCOPE_ID`) —
+/// the single shared pool every tenant's serving runners enrol into. Returns
+/// `Ok(None)` when not yet seeded. DB read only.
+pub async fn resolve_platform_model_serving_group_uuid(
+    db: &sqlx::PgPool,
+) -> Result<Option<Uuid>, ApiError> {
+    let found: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT r.id FROM resources r \
+         JOIN resource_versions rv \
+           ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.scope_kind = 'platform' AND r.workspace_id = $1 AND r.path = $2 \
+           AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
+           AND rv.public_config ->> 'liveness' = 'presence' \
+           AND rv.public_config ->> 'acceptance' = 'auto'",
+    )
+    .bind(PLATFORM_SCOPE_ID)
+    .bind(MODEL_SERVING_GROUP_PATH)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("platform model-serving-group lookup: {e}")))?;
     Ok(found.map(|(id,)| id))
 }
 
@@ -123,34 +150,57 @@ pub async fn ensure_model_serving_group(
     }
 }
 
-/// Seed the model-serving group for EVERY existing workspace at startup, so a
-/// model runner can enrol into `model_serving` out of the box (and the group
-/// shows up in the split-by-group fleet) without any operator setup. Idempotent +
-/// best-effort per workspace: a single workspace's failure logs a warning and
-/// does not abort the others. Mirrors
-/// [`crate::worker_groups::ensure_default_worker_group_all_workspaces`].
-pub async fn ensure_model_serving_group_all_workspaces(state: &AppState) {
-    let workspaces: Vec<(Uuid,)> = match sqlx::query_as::<_, (Uuid,)>("SELECT id FROM workspaces")
-        .fetch_all(&state.db)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(error = %e, "model-serving-group seeder: could not list workspaces");
-            return;
-        }
+/// Idempotently seed the SINGLE **platform-tier** model-serving group: one
+/// `capacity` resource at [`MODEL_SERVING_GROUP_PATH`] with the `instrument`
+/// preset, owned by the platform tier (`scope_kind = 'platform'`,
+/// `workspace_id = scope_id = PLATFORM_SCOPE_ID`). This is the shared inference
+/// pool every tenant's self-hosted serving runners enrol into — the pool is a
+/// global data plane (inference routing is already cluster-wide), so its
+/// control-plane membership resource lives at the platform tier rather than in
+/// any tenant workspace.
+///
+/// Reuses [`crate::handlers::resources::create_resource_internal`] (the platform
+/// `scope_kind` arm forces `workspace_id = scope_id = PLATFORM_SCOPE_ID`), so the
+/// seeded row is byte-identical to a hand-created platform presence-pool
+/// capacity. A no-op when one already exists; a create race surfaces as a `409`
+/// from the unique `(scope_kind, scope_id, path)` constraint and is re-resolved.
+pub async fn ensure_platform_model_serving_group(state: &AppState) -> Result<Uuid, ApiError> {
+    // Fast path: already seeded.
+    if let Some(id) = resolve_platform_model_serving_group_uuid(&state.db).await? {
+        return Ok(id);
+    }
+
+    let req = crate::models::resource::CreateResourceRequest {
+        path: MODEL_SERVING_GROUP_PATH.to_string(),
+        resource_type: "capacity".to_string(),
+        display_name: Some("Model serving".to_string()),
+        // The `instrument` preset locks the presence/push axes; the create path
+        // expands it into the typed axis strings before persisting.
+        config: serde_json::json!({ "preset": "instrument" }),
+        // Platform tier: the create path forces workspace_id = scope_id =
+        // PLATFORM_SCOPE_ID for `scope_kind = "platform"`.
+        workspace_id: Some(PLATFORM_SCOPE_ID),
+        scope_kind: Some("platform".to_string()),
+        scope_id: Some(PLATFORM_SCOPE_ID),
+        restricted: None,
     };
 
-    let mut seeded = 0usize;
-    for (workspace_id,) in workspaces {
-        match ensure_model_serving_group(state, workspace_id).await {
-            Ok(_) => seeded += 1,
-            Err(e) => tracing::warn!(
-                workspace_id = %workspace_id,
-                error = ?e,
-                "model-serving-group seed failed for workspace"
-            ),
+    match crate::handlers::resources::create_resource_internal(
+        state,
+        &req,
+        PLATFORM_SCOPE_ID,
+        MODEL_SERVING_GROUP_SEEDER_AUTHOR_ID,
+    )
+    .await
+    {
+        Ok(summary) => Ok(summary.id),
+        Err(e) => {
+            // A concurrent seed (409 on the unique path constraint) is benign —
+            // re-resolve the row the other boot wrote. Any other error is real.
+            if let Some(id) = resolve_platform_model_serving_group_uuid(&state.db).await? {
+                return Ok(id);
+            }
+            Err(e)
         }
     }
-    tracing::info!(workspaces = seeded, "model-serving-group seeder finished");
 }

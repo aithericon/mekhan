@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::auth::extractor::CookieAuthUser;
 use crate::auth::runner_token::runner_subject;
 use crate::auth::AuthUser;
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::capability::{load_known_capabilities, validate_caps_against_types};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
@@ -686,7 +687,20 @@ pub async fn create_registration_token(
     CookieAuthUser(user): CookieAuthUser,
     Json(req): Json<CreateRegistrationTokenRequest>,
 ) -> Result<(StatusCode, Json<CreatedRegistrationToken>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // A platform token enrolls serving runners into the shared platform tier:
+    // its `workspace_id` is PLATFORM_SCOPE_ID, so the runner's
+    // `runner_interfaces` row lands under the sentinel and the widened
+    // model-pool scans pick it up. Admin-only.
+    let workspace_id = if req.platform {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "minting a platform-tier registration token requires platform admin",
+            ));
+        }
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)
+    };
     let created_by = user.subject_as_uuid();
     let reusable = req.reusable.unwrap_or(true);
 

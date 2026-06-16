@@ -489,19 +489,29 @@ async fn main() -> anyhow::Result<()> {
         user_provisioner,
     };
 
-    // Unified worker dispatch: every workspace must own its always-seeded
-    // "default" worker group (a `capacity` resource, `worker` preset) so a step
-    // / worker that names no group routes through it. Seed it for every existing
-    // workspace before the listener accepts requests. Idempotent + best-effort
-    // (a migration also backfills it, for installs that never reboot here).
-    mekhan_service::worker_groups::ensure_default_worker_group_all_workspaces(&state).await;
+    // Unified worker dispatch: the SINGLE platform-tier "default" worker group (a
+    // `capacity` resource, `worker` preset, owned by PLATFORM_SCOPE_ID) so a step
+    // / worker that names no group routes through the shared competing-consumer
+    // pool. The executor queue is already a global data plane (no lease/bridge
+    // net), so its control-plane routing partition lives at the platform tier,
+    // not per workspace. Seed it before the listener accepts requests. Idempotent
+    // + best-effort.
+    if let Err(e) =
+        mekhan_service::worker_groups::ensure_platform_default_worker_group(&state).await
+    {
+        tracing::warn!(error = ?e, "platform default worker-group seed failed");
+    }
 
-    // Model pool: every workspace owns a presence-backed `model_serving` runner
-    // group (a `capacity` resource, `instrument` preset) so self-hosted LLM
-    // serving nodes have a first-class pool to enrol into — group membership, not
-    // a `base_url` sniff, is what identifies a runner as part of the LLM pool.
-    // Idempotent + best-effort, same posture as the worker-group seeder.
-    mekhan_service::model_serving_group::ensure_model_serving_group_all_workspaces(&state).await;
+    // Model pool: the SINGLE platform-tier `model_serving` runner group (a
+    // `capacity` resource, `instrument` preset, owned by PLATFORM_SCOPE_ID) so
+    // self-hosted LLM serving nodes have a first-class shared pool to enrol into
+    // — group membership, not a `base_url` sniff, identifies a runner as part of
+    // the LLM pool. The inference data plane is already cluster-wide, so its
+    // control-plane membership lives at the platform tier, not per workspace.
+    // Idempotent + best-effort.
+    if let Err(e) = mekhan_service::model_serving_group::ensure_platform_model_serving_group(&state).await {
+        tracing::warn!(error = ?e, "platform model-serving-group seed failed");
+    }
 
     // Seed built-in demos before the listener accepts requests. Idempotent
     // by stable template id (see `mekhan_service::demos`); best-effort —

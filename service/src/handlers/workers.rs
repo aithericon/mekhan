@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::auth::extractor::CookieAuthUser;
 use crate::auth::worker_token::worker_subject;
 use crate::auth::AuthUser;
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::PaginatedResponse;
 use crate::models::worker::{
@@ -185,6 +186,17 @@ async fn worker_group_exists(
     workspace_id: Uuid,
     alias: &str,
 ) -> Result<bool, ApiError> {
+    // A token (or worker) carrying `workspace_id = PLATFORM_SCOPE_ID` addresses
+    // the shared platform-tier worker pool, whose backing `capacity` row is
+    // `scope_kind = 'platform'`. Resolve it against the platform scope so the
+    // enroll/mint gates recognise the platform `default` group.
+    if workspace_id == PLATFORM_SCOPE_ID {
+        return Ok(
+            crate::worker_groups::resolve_platform_default_worker_group_uuid(db)
+                .await?
+                .is_some(),
+        );
+    }
     let found: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
         "SELECT r.id FROM resources r \
          JOIN resource_versions rv \
@@ -342,12 +354,21 @@ pub async fn enroll_worker(
         .as_deref()
         .filter(|g| !g.is_empty())
         .unwrap_or(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH);
-    let routing_partition = crate::worker_groups::resolve_worker_group_uuid(
-        &state.db,
-        claimed.workspace_id,
-        group_alias,
-    )
-    .await?
+    // A platform-tier registration token (`workspace_id = PLATFORM_SCOPE_ID`,
+    // group `default`) enrols the worker into the shared platform pool — resolve
+    // its routing partition against the platform-scoped group. (Explicit
+    // non-default groups on a platform token are not minted; the mint gate only
+    // backs the platform `default`.)
+    let routing_partition = if claimed.workspace_id == PLATFORM_SCOPE_ID {
+        crate::worker_groups::resolve_platform_default_worker_group_uuid(&state.db).await?
+    } else {
+        crate::worker_groups::resolve_worker_group_uuid(
+            &state.db,
+            claimed.workspace_id,
+            group_alias,
+        )
+        .await?
+    }
     .ok_or_else(|| {
         // Should never fire: the default group is always seeded, and an explicit
         // group is gated at registration-token mint (`worker_group_exists`).
@@ -665,7 +686,20 @@ pub async fn create_worker_registration_token(
     CookieAuthUser(user): CookieAuthUser,
     Json(req): Json<CreateWorkerRegistrationTokenRequest>,
 ) -> Result<(StatusCode, Json<CreatedWorkerRegistrationToken>), ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // A platform-tier token enrols workers into the shared global pool — curation
+    // is a platform-admin capability, so gate the mint on `is_platform_admin` and
+    // force the token's `workspace_id` to the platform sentinel. A normal token
+    // is workspace-scoped to the caller's session workspace.
+    let workspace_id = if req.platform {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "minting a platform worker registration token requires platform admin",
+            ));
+        }
+        PLATFORM_SCOPE_ID
+    } else {
+        caller_workspace(&user)
+    };
     let created_by = user.subject_as_uuid();
     let reusable = req.reusable.unwrap_or(true);
 

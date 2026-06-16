@@ -28,6 +28,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
+use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::model_pool::{
     reconcile_observed_state, AutoscalePolicyInput, CreateModelRequest, LoadModelRequest,
@@ -40,6 +41,63 @@ use crate::AppState;
 /// Caller-implicit workspace (session workspace, nil fallback for legacy dev).
 fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
+}
+
+/// Resolve the workspace a model MUTATION targets, and gate it.
+///
+/// The shared internal LLM pool's `model_states` rows live under
+/// [`PLATFORM_SCOPE_ID`]. A tenant may freely mutate its OWN workspace rows; a
+/// platform row may only be mutated by a platform admin. Resolution prefers the
+/// caller's own workspace (a tenant model shadows a same-id platform model) and
+/// only falls through to the platform tier when the caller has no such row.
+///
+/// Returns the target workspace id (the value mutation queries bind), or a 403
+/// when the target is the platform tier and the caller is not a platform admin.
+/// When neither workspace has the model the caller's workspace is returned
+/// unchanged (a create lands there; a delete/transition/load/unload then 404s as
+/// before).
+async fn resolve_mutation_workspace(
+    db: &sqlx::PgPool,
+    user: &AuthUser,
+    model_id: &str,
+) -> Result<Uuid, ApiError> {
+    let caller = caller_workspace(user);
+
+    // Own-workspace row wins, no admin needed.
+    let owns: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM model_states WHERE workspace_id = $1 AND model_id = $2 LIMIT 1",
+    )
+    .bind(caller)
+    .bind(model_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states ownership lookup: {e}")))?;
+    if owns.is_some() {
+        return Ok(caller);
+    }
+
+    // Else, if the platform tier carries it, the mutation targets the platform
+    // row — admin only.
+    let platform: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM model_states WHERE workspace_id = $1 AND model_id = $2 LIMIT 1",
+    )
+    .bind(PLATFORM_SCOPE_ID)
+    .bind(model_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states platform lookup: {e}")))?;
+    if platform.is_some() {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "this model belongs to the shared platform pool — mutating it requires platform admin",
+            ));
+        }
+        return Ok(PLATFORM_SCOPE_ID);
+    }
+
+    // Neither has it — a create lands in the caller's workspace; the other
+    // mutations 404 downstream against the caller's workspace.
+    Ok(caller)
 }
 
 /// Present runners that are MEMBERS of the `model_serving` runner group — the
@@ -86,12 +144,20 @@ pub(crate) async fn serving_runner_counts(
     // into the pool is deliberately NOT a replica.
     let present: HashSet<Uuid> = model_serving_members(runner_presence).await;
 
-    let catalogs: Vec<(Uuid, serde_json::Value)> =
-        sqlx::query_as("SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id = $1")
-            .bind(workspace_id)
-            .fetch_all(db)
-            .await
-            .unwrap_or_default();
+    // Widen to the caller's workspace UNION the platform tier so a tenant's
+    // picker also sees serving runners enrolled under the shared internal pool
+    // (PLATFORM_SCOPE_ID). Kept in lockstep with the model_states reads
+    // (list_loaded_models / get_model / replica_map) — a platform model and the
+    // runners serving it must both surface, or the model shows with zero
+    // serving runners.
+    let catalogs: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT runner_id, catalog FROM runner_interfaces WHERE workspace_id IN ($1, $2)",
+    )
+    .bind(workspace_id)
+    .bind(PLATFORM_SCOPE_ID)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     fold_serving_counts(present_catalogs(&present, catalogs))
 }
@@ -356,13 +422,17 @@ async fn reconcile_row_state(
 /// the list + single-model reads so the two cannot drift.
 async fn project_with_reconcile(
     db: &sqlx::PgPool,
-    workspace_id: Uuid,
+    _workspace_id: Uuid,
     row: ModelStateRow,
     serving: u32,
     replica: Option<&crate::models::model_replicas::ModelReplicaRow>,
 ) -> ModelSetView {
     let observed = ModelState::parse(&row.state).unwrap_or(ModelState::Unloaded);
-    let reconciled = reconcile_row_state(db, workspace_id, &row.model_id, observed, serving).await;
+    // Reconcile against the ROW's own workspace, not the caller's: a platform
+    // model surfaced in a tenant's list lives under PLATFORM_SCOPE_ID, and the
+    // reconcile UPDATE must target that row (the list query unions both).
+    let reconciled =
+        reconcile_row_state(db, row.workspace_id, &row.model_id, observed, serving).await;
     let mut view = row.into_view(serving, replica);
     view.state = reconciled;
     view.available = reconciled == ModelState::Loaded && serving > 0;
@@ -387,12 +457,19 @@ pub async fn list_loaded_models(
 ) -> Result<Json<Vec<ModelSetView>>, ApiError> {
     let workspace_id = caller_workspace(&user);
 
-    let rows: Vec<ModelStateRow> =
-        sqlx::query_as("SELECT * FROM model_states WHERE workspace_id = $1 ORDER BY model_id")
-            .bind(workspace_id)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
+    // Caller workspace UNION the platform tier: the shared internal LLM pool's
+    // model_states rows live under PLATFORM_SCOPE_ID and must surface for every
+    // tenant's picker. A same-id tenant row and a platform row are distinct PKs
+    // (`(workspace_id, model_id)`), so both list; the projection key stays the
+    // model_id.
+    let rows: Vec<ModelStateRow> = sqlx::query_as(
+        "SELECT * FROM model_states WHERE workspace_id IN ($1, $2) ORDER BY model_id",
+    )
+    .bind(workspace_id)
+    .bind(PLATFORM_SCOPE_ID)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
     let counts = serving_runner_counts(&state.db, &state.runner_presence, workspace_id).await;
     let replicas = replica_map(&state.db, workspace_id).await;
@@ -413,9 +490,14 @@ async fn replica_map(
     db: &sqlx::PgPool,
     workspace_id: Uuid,
 ) -> HashMap<String, crate::models::model_replicas::ModelReplicaRow> {
+    // Caller workspace UNION the platform tier, in lockstep with the
+    // model_states list — a platform model's replica row lives under
+    // PLATFORM_SCOPE_ID. Keyed by model_id; platform models are disjoint from
+    // tenant model ids in practice (the shared internal pool).
     let rows: Vec<crate::models::model_replicas::ModelReplicaRow> =
-        sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id = $1")
+        sqlx::query_as("SELECT * FROM model_replicas WHERE workspace_id IN ($1, $2)")
             .bind(workspace_id)
+            .bind(PLATFORM_SCOPE_ID)
             .fetch_all(db)
             .await
             .unwrap_or_default();
@@ -441,13 +523,19 @@ pub async fn get_model(
 ) -> Result<Json<ModelSetView>, ApiError> {
     let workspace_id = caller_workspace(&user);
 
-    let row: Option<ModelStateRow> =
-        sqlx::query_as("SELECT * FROM model_states WHERE workspace_id = $1 AND model_id = $2")
-            .bind(workspace_id)
-            .bind(&model_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
+    // Caller workspace UNION the platform tier, preferring the caller's own row
+    // when both exist (a tenant model shadows a same-id platform model). The
+    // ORDER BY puts the caller's workspace ($1) first.
+    let row: Option<ModelStateRow> = sqlx::query_as(
+        "SELECT * FROM model_states WHERE workspace_id IN ($1, $2) AND model_id = $3 \
+         ORDER BY (workspace_id = $1) DESC LIMIT 1",
+    )
+    .bind(workspace_id)
+    .bind(PLATFORM_SCOPE_ID)
+    .bind(&model_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("model_states lookup: {e}")))?;
 
     let row = row.ok_or_else(|| ApiError::not_found("no such model in this workspace"))?;
 
@@ -457,7 +545,9 @@ pub async fn get_model(
         .get(&row.model_id)
         .copied()
         .unwrap_or(0);
-    let replica = fetch_replica(&state.db, workspace_id, &row.model_id).await;
+    // The replica row lives under the SELECTED row's workspace (platform models
+    // resolve to PLATFORM_SCOPE_ID), not necessarily the caller's.
+    let replica = fetch_replica(&state.db, row.workspace_id, &row.model_id).await;
 
     Ok(Json(
         project_with_reconcile(&state.db, workspace_id, row, serving, replica.as_ref()).await,
@@ -502,7 +592,9 @@ pub async fn transition_model(
     Path(model_id): Path<String>,
     Json(req): Json<TransitionRequest>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Platform-pool models may only be transitioned by a platform admin; a
+    // tenant mutates only its own rows.
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     // Read the current row (404 if absent). The state machine is validated in
     // Rust against the enum — there is no DB CHECK.
@@ -573,7 +665,16 @@ pub async fn create_model(
     user: AuthUser,
     Json(req): Json<CreateModelRequest>,
 ) -> Result<Json<ModelSetView>, ApiError> {
+    // A create always lands in the caller's OWN workspace (a tenant may curate a
+    // same-id model that shadows a platform one — distinct PK). Curating
+    // directly INTO the shared platform pool (caller workspace == sentinel) is
+    // admin-only; in practice the platform pool is seeder-populated.
     let workspace_id = caller_workspace(&user);
+    if workspace_id == PLATFORM_SCOPE_ID && !user.is_platform_admin {
+        return Err(ApiError::forbidden(
+            "curating a model into the shared platform pool requires platform admin",
+        ));
+    }
 
     if req.model_id.trim().is_empty() {
         return Err(ApiError::bad_request("model_id must not be empty"));
@@ -632,7 +733,8 @@ pub async fn delete_model(
     user: AuthUser,
     Path(model_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Platform-pool models may only be deleted by a platform admin.
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     let res = sqlx::query("DELETE FROM model_states WHERE workspace_id = $1 AND model_id = $2")
         .bind(workspace_id)
@@ -670,7 +772,10 @@ pub async fn load_model(
     Path(model_id): Path<String>,
     Json(req): Json<LoadModelRequest>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Loading a platform-pool model is admin-only; a tenant loads only its own
+    // (the resolver routes an existing platform row through the admin gate, and
+    // a brand-new load UPSERT lands in the caller's own workspace).
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     // UPSERT: insert `loading` if absent; on conflict bump to `loading` UNLESS the
     // row is already `loaded` (leave a live model loaded).
@@ -736,7 +841,8 @@ pub async fn unload_model(
     Path(model_id): Path<String>,
     Json(req): Json<LoadModelRequest>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Unloading a platform-pool model is admin-only; a tenant unloads only its own.
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     // Move loaded/loading → draining (guarded; no-op if absent or elsewhere).
     let updated: Option<ModelStateRow> = sqlx::query_as(
@@ -847,7 +953,8 @@ pub async fn set_model_policy(
     Path(model_id): Path<String>,
     Json(req): Json<AutoscalePolicyInput>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Setting the autoscale policy on a platform-pool model is admin-only.
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     if !valid_autoscale_mode(&req.mode) {
         return Err(ApiError::bad_request(format!(
@@ -902,7 +1009,8 @@ pub async fn clear_model_policy(
     user: AuthUser,
     Path(model_id): Path<String>,
 ) -> Result<Json<ModelSetView>, ApiError> {
-    let workspace_id = caller_workspace(&user);
+    // Clearing the autoscale policy on a platform-pool model is admin-only.
+    let workspace_id = resolve_mutation_workspace(&state.db, &user, &model_id).await?;
 
     let res = sqlx::query(
         "UPDATE model_states SET \

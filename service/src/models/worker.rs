@@ -227,6 +227,13 @@ pub struct WorkerNatsCreds {
 pub struct CreateWorkerRegistrationTokenRequest {
     #[serde(rename = "group", default)]
     pub group: Option<String>,
+    /// Mint against the shared **platform** worker pool rather than the caller's
+    /// workspace: the token's `workspace_id` is forced to `PLATFORM_SCOPE_ID` and
+    /// it enrols workers into the global competing-consumer `default` group.
+    /// Requires `is_platform_admin` (curation is a platform-admin capability).
+    /// Defaults to `false` (a normal workspace-scoped token).
+    #[serde(default)]
+    pub platform: bool,
     /// Defaults to `true` (reusable) when omitted.
     #[serde(default)]
     pub reusable: Option<bool>,
