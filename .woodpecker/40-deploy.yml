@@ -1,7 +1,7 @@
 # =============================================================================
 # Deploy pool — Terraform/Nomad rollout of mekhan-service
 # =============================================================================
-# Trigger: push to `main` branch → auto deploy (dev). Manual for replays.
+# Trigger: push to `dev` branch → auto deploy DEV. Manual for replays/feature branches.
 #
 # Shared-cluster, two-env setup: this pipeline deploys the DEV environment
 # (mekhan-service-dev, mekhan.dev.aithericon.eu) to the HetznerCluster (10.20.x).
@@ -26,7 +26,7 @@
 # =============================================================================
 
 when:
-  - branch: main
+  - branch: dev
     event: push
   - event: manual
 
