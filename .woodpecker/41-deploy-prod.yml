@@ -9,7 +9,13 @@
 #
 # Branch model (mirrors web-platform): push `dev` → deploy DEV (40-deploy);
 # push `main` → deploy PROD (this pipeline). Plus a manual trigger for replays.
-# Runs after 30-build publishes the image for the commit.
+#
+# NO rebuild on the prod path. 30-build runs on the `dev` push and publishes
+# the image keyed by that commit SHA. dev→main is FAST-FORWARDED, so main's
+# commit SHA == dev's SHA and the image already exists — prod just pulls it.
+# Hence no `depends_on: [30-build]` here. REQUIRES fast-forward-only merges:
+# a merge commit on main would have a SHA with no built image and this deploy
+# would fail with `manifest unknown` (re-trigger 30-build manually if so).
 #
 # ONE-TIME PROD BOOTSTRAP (before the first successful run) — see
 # deploy/README.md:
@@ -33,8 +39,8 @@ when:
     event: push
   - event: manual
 
-# Runs only after 30-build has pushed the images for this commit (same as dev).
-depends_on: [30-build]
+# No build dependency: the image was published by 30-build on the dev push and
+# is reused here via the fast-forward merge (same SHA). See header.
 
 labels:
   role: deploy
@@ -75,9 +81,9 @@ steps:
       - export TF_VAR_postgres_admin_host=postgres-primary.service.consul
       - 'echo "  ✓ Secrets loaded from Vault"'
 
-      # Deploy the image SHA this manual run targets. 30-build (on the push to
-      # main for this commit) has already published it. Override the literal for
-      # a replay of an older SHA.
+      # Deploy this commit's image SHA. 30-build published it on the dev push;
+      # the FF merge keeps the SHA, so it already exists. Override the literal
+      # for a replay of an older SHA.
       - just ci::deploy-prod "$CI_COMMIT_SHA"
     depends_on: []
 
