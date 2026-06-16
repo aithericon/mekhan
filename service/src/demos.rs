@@ -3211,6 +3211,82 @@ mod tests {
         }
     }
 
+    /// The OpenFOAM firing evaluator (`openfoam/solid-displacement`, f001) is a
+    /// COMPOSITE: casegen → `run` (sub_workflow → the GENERIC `openfoam/run-case`
+    /// solver, f002) → extract. Bare `compile_to_air` can't resolve the f002
+    /// child, so feed its REAL contract (derived from the run-case graph) via
+    /// `SubWorkflowAir` and prove the composite lowers: the casegen→run-sub_wf
+    /// `inputMapping` (`casegen.*`), the raw-results join, and `extract`'s reads
+    /// of `run.*` + `casegen.*`. A successful compile is the proof.
+    #[test]
+    fn firing_eval_composite_compiles_with_run_case_child() {
+        use crate::compiler::{
+            compile_to_air_with_options, derive_child_io, node_files_inline, CompileOptions,
+            ResolvedChild, SubWorkflowAir,
+        };
+
+        let root = repo_root().join("demos");
+
+        // The generic solver's contract drives the composite's join + extract.
+        let child =
+            load_demo(&root.join("openfoam-run-case")).expect("openfoam-run-case must load");
+        let (input_contract, output_contract) = derive_child_io(&child.graph);
+        assert!(
+            output_contract
+                .fields
+                .iter()
+                .any(|f| f.name == "solver_log"),
+            "run-case must export `solver_log` — extract parses it"
+        );
+
+        let demo = load_demo(&root.join("openfoam-solid-displacement"))
+            .expect("openfoam-solid-displacement must load");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-00000000f001"
+        );
+
+        let mut sub_air = SubWorkflowAir::new();
+        sub_air.insert(
+            "run".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub", "places": [], "transitions": [],
+                    "groups": [], "mock_adapters": [], "definitions": {}, "requirements": []
+                }),
+                resolved_version: 1,
+                template_id: "00000000-0000-0000-0000-00000000f002".to_string(),
+                input_contract,
+                output_contract,
+                coordinate: Some("openfoam/run-case".to_string()),
+                presentation: None,
+            },
+        );
+
+        let files = node_files_inline(&demo.files);
+        let air = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                sub_air: &sub_air,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("openfoam-solid-displacement composite must compile: {e:?}"))
+        .air;
+
+        let air_str = air.to_string();
+        for marker in ["casegen", "extract"] {
+            assert!(
+                air_str.contains(marker),
+                "composite AIR must reference the `{marker}` node"
+            );
+        }
+    }
+
     /// The email-welcome demo (Start → HumanTask intake → SMTP send → End)
     /// must parse + compile cleanly through the same AIR pipeline
     /// `/api/v1/templates/{id}/publish` uses. This is the canonical SMTP-backend

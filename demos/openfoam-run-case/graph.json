@@ -1,0 +1,80 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 0, "y": 17 },
+      "data": {
+        "type": "start",
+        "label": "Case + solver",
+        "processName": "OpenFOAM run case",
+        "initial": {
+          "id": "in",
+          "label": "Case + solver",
+          "fields": [
+            { "name": "case_files", "label": "Case files {relpath: content}", "kind": "json", "required": true },
+            { "name": "solver", "label": "Solver (e.g. solidDisplacementFoam)", "kind": "text", "required": true },
+            { "name": "run_blockmesh", "label": "Run blockMesh first", "kind": "bool", "required": false },
+            { "name": "export_vtk", "label": "Export field series (foamToVTK)", "kind": "bool", "required": false },
+            { "name": "dry_run", "label": "Skip the solve (return not_run)", "kind": "bool", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "run",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Run OpenFOAM case",
+        "description": "Write the inbound case (a {relpath: content} bundle) to the run directory, run blockMesh (if requested) + the named solver + foamToVTK (if requested) in the opencfd/openfoam-default:2506 Docker image, and return RAW results: success/returncode, the solver log, the field-series artifact key (foamToVTK VTK/ tarred + persisted), and the contents of every postProcessing/**/*.dat file. No physics interpretation. dry_run short-circuits (success=false, not_run=true). Docker absent / non-zero exit → success=false (never raises).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Raw results",
+          "fields": [
+            { "name": "success", "label": "Solve succeeded", "kind": "bool", "required": true },
+            { "name": "returncode", "label": "Solver return code", "kind": "number", "required": true },
+            { "name": "not_run", "label": "Skipped (dry_run)", "kind": "bool", "required": true },
+            { "name": "solver_log", "label": "Solver log", "kind": "textarea", "required": false },
+            { "name": "field_key", "label": "Field-series artifact key", "kind": "text", "required": false },
+            { "name": "postprocessing", "label": "postProcessing .dat contents", "kind": "json", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 660, "y": 17 },
+      "data": {
+        "type": "end",
+        "label": "Raw results",
+        "resultMapping": [
+          { "targetField": "success", "expression": "run.success" },
+          { "targetField": "returncode", "expression": "run.returncode" },
+          { "targetField": "not_run", "expression": "run.not_run" },
+          { "targetField": "solver_log", "expression": "run.solver_log" },
+          { "targetField": "field_key", "expression": "run.field_key" },
+          { "targetField": "postprocessing", "expression": "run.postprocessing" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_run", "source": "start", "target": "run", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_run_end", "source": "run", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

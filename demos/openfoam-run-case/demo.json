@@ -1,0 +1,23 @@
+{
+  "templateId": "00000000-0000-0000-0000-00000000f002",
+  "folder": "library",
+  "name": "OpenFOAM · run case (generic solver)",
+  "description": "A reusable, solver-agnostic OpenFOAM integration node. Take a complete OpenFOAM case (a `{relative-path: file-content}` bundle) and a solver name, run blockMesh (optional) → `<solver>` → foamToVTK (optional) in the opencfd/openfoam-default Docker image, and return RAW results: the solver log, the exported field series (as an artifact key a downstream node can retrieve), and the contents of every `postProcessing/**/*.dat` file. No physics interpretation — a downstream node extracts whatever metrics it needs, so the same node backs a structural solve, a CFD run, a DOE sweep, or a one-shot check. `dry_run` short-circuits the solve (returns `not_run`); a missing Docker image or a non-zero solver exit returns `success=false` rather than raising, so the caller decides whether a failed solve is fatal.",
+  "templateKind": "library_node",
+  "origin": "system",
+  "coordinate": "openfoam/run-case",
+  "presentation": {
+    "icon": "wind",
+    "color": "#0ea5e9",
+    "vendor": "OpenFOAM",
+    "category": "CFD",
+    "badge": "vendor"
+  },
+  "pack": {
+    "vendor": "openfoam",
+    "slug": "openfoam-core",
+    "version": "1",
+    "name": "OpenFOAM Core",
+    "description": "Core OpenFOAM integration nodes shipped with the platform."
+  }
+}

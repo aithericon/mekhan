@@ -131,19 +131,17 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // the sink-mode crawl step compiling with NO channels. RUNNING it is
     // live-only (publishes to INVENTORY_FOLD, folded by mekhan's consumer).
     "55-crawl-campaign",
-    // 59-firing-curve-bo: SKIPPED — see the documented_skip list. Its Map body
-    // now calls the openfoam/solid-displacement library node as a sub_workflow
-    // child, which bare `compile_to_air` can't resolve.
-    // openfoam-solid-displacement: a LIBRARY NODE (template_kind=library_node,
-    // coordinate openfoam/solid-displacement) — the single-evaluation OpenFOAM
-    // kernel of demo 59 lifted into a standalone, brandable sub-workflow
-    // building block (Start firing curve → solidDisplacementFoam step → End
-    // objectives). A library node compiles through the IDENTICAL path as any
-    // workflow (decision 12: no engine/compiler primitive); this pins that a
-    // linear Python-step node with token-resident Start reads (`input.*`) and a
-    // typed multi-field End mapping lowers cleanly. RUNNING the docker path is
-    // live-only; `solver_mode=surrogate` exercises it without the image.
-    "openfoam-solid-displacement",
+    // 59-firing-curve-bo + openfoam-solid-displacement: SKIPPED (see
+    // documented_skip) — both now embed a sub_workflow child bare
+    // `compile_to_air` can't resolve.
+    // openfoam-run-case: the GENERIC OpenFOAM solver LIBRARY NODE
+    // (template_kind=library_node, coordinate openfoam/run-case) — takes an
+    // arbitrary case (a {relpath: content} bundle) + solver name and returns RAW
+    // results (log, field-series key, postProcessing). A child-free linear
+    // Python-step sub-workflow (Start → run → End), so bare `compile_to_air`
+    // resolves it; this pins that a json-dict Start input + a multi-field End
+    // mapping lower cleanly. RUNNING the docker path is live-only.
+    "openfoam-run-case",
 ];
 
 fn repo_root() -> PathBuf {
@@ -418,8 +416,8 @@ fn snapshot_55_crawl_campaign() {
 }
 
 #[test]
-fn snapshot_openfoam_solid_displacement() {
-    run("openfoam-solid-displacement");
+fn snapshot_openfoam_run_case() {
+    run("openfoam-run-case");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
@@ -612,14 +610,20 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // and the 28..40 ROS demos. Capture/record/mirror are live-only
         // (Isaac Sim + ROS bridge). Pre-dated this list; added retroactively.
         "56-isaac-experiment-capture",
-        // 59-firing-curve-bo — the BO campaign's Map body now calls the
+        // 59-firing-curve-bo — the BO campaign's Map body calls the
         // `openfoam/solid-displacement` LIBRARY NODE as a sub_workflow child
         // (templateId f001), so bare `compile_to_air` can't resolve it (same
-        // class as 06-subworkflow / 60). The OpenFOAM kernel's AIR is pinned by
-        // the `openfoam-solid-displacement` snapshot; the loop/map/gather
-        // topology mirrors 12-bo-loop's (snapshotted). Proven live by the
-        // publish path + `solver_mode=surrogate` runs.
+        // class as 06-subworkflow / 60). The loop/map/gather topology mirrors
+        // 12-bo-loop's (snapshotted); the composite lowering is pinned by the
+        // demos.rs compile tests. Proven live by `solver_mode=surrogate` runs.
         "59-firing-curve-bo",
+        // openfoam-solid-displacement — the firing-curve evaluator is now a
+        // COMPOSITE (casegen → run sub_workflow(openfoam/run-case) → extract), so
+        // it embeds a sub_workflow child bare `compile_to_air` can't resolve
+        // (same class as 59/06/60). The generic solver's AIR is pinned by the
+        // `openfoam-run-case` snapshot; the composite lowering is pinned by the
+        // demos.rs `firing_eval_composite_compiles_with_run_case_child` test.
+        "openfoam-solid-displacement",
         // 60-closed-loop-firing — flow-in-flow capstone embedding 59 (the BO
         // campaign) and 40 (robot sample handling) as sub_workflow children
         // by templateId; needs publish-time child resolution, same class as

@@ -3,7 +3,7 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 0, "y": 17 },
+      "position": { "x": 0, "y": 40 },
       "data": {
         "type": "start",
         "label": "Firing curve",
@@ -23,24 +23,85 @@
       }
     },
     {
-      "id": "simulate",
+      "id": "casegen",
       "type": "automated_step",
-      "position": { "x": 320, "y": 0 },
+      "position": { "x": 300, "y": 20 },
       "data": {
         "type": "automated_step",
-        "label": "OpenFOAM solidDisplacementFoam",
-        "description": "Generate the complete solidDisplacementFoam case (zirconia puck, quarter symmetry, kiln-curve table BC) for the inbound firing curve, run blockMesh + solidDisplacementFoam in the opencfd/openfoam-default:2506 Docker image, and extract peak von-Mises stress, soak completeness (min core T during the hold window), and total cycle time. Emits a firing-curve/stress PNG via log_artifact (renderable media card). solver_mode=surrogate (or Docker unavailable in auto) evaluates a closed-form surrogate calibrated against three cluster-validated runs instead, flagged source=surrogate.",
+        "label": "Build firing case",
+        "description": "Firing-specific case generation: build the complete solidDisplacementFoam case (zirconia 3Y-TZP puck, quarter-symmetry mesh, kiln-curve table BC) for the inbound firing curve and emit it as a `case_files` bundle for the generic OpenFOAM solver, plus the solver flags and the timing scalars `extract` needs. `solver_mode=surrogate` sets `dry_run` so the solve is skipped.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
-          "config": {
-            "python": "python3",
-            "requirements": ["matplotlib"],
-            "virtualenv": false,
-            "sdk": true,
-            "inherit_env": true,
-            "env": {}
-          }
+          "config": { "python": "python3", "requirements": [], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
+        },
+        "output": {
+          "id": "out",
+          "label": "Case + flags",
+          "fields": [
+            { "name": "case_files", "label": "Case files {relpath: content}", "kind": "json", "required": true },
+            { "name": "solver", "label": "Solver", "kind": "text", "required": true },
+            { "name": "run_blockmesh", "label": "Run blockMesh", "kind": "bool", "required": true },
+            { "name": "export_vtk", "label": "Export field series", "kind": "bool", "required": true },
+            { "name": "dry_run", "label": "Skip solve (surrogate)", "kind": "bool", "required": true },
+            { "name": "ramp_rate", "label": "Ramp rate [K/min]", "kind": "number", "required": true },
+            { "name": "cool_rate", "label": "Cool rate [K/min]", "kind": "number", "required": true },
+            { "name": "hold_time_s", "label": "Hold time [s]", "kind": "number", "required": true },
+            { "name": "hold_temp", "label": "Hold temperature [K]", "kind": "number", "required": true },
+            { "name": "sigma_limit", "label": "Crack threshold [MPa]", "kind": "number", "required": true },
+            { "name": "solver_mode", "label": "Solver mode", "kind": "text", "required": true },
+            { "name": "cycle_h", "label": "Cycle time [h]", "kind": "number", "required": true },
+            { "name": "t_ramp_end", "label": "Ramp-end time [s]", "kind": "number", "required": true },
+            { "name": "t_hold_end", "label": "Hold-end time [s]", "kind": "number", "required": true },
+            { "name": "t_end", "label": "Cycle-end time [s]", "kind": "number", "required": true },
+            { "name": "T0", "label": "Ambient temperature [K]", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "run",
+      "type": "sub_workflow",
+      "position": { "x": 620, "y": 20 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "OpenFOAM solve (generic)",
+        "description": "Delegate the solve to the generic `openfoam/run-case` library node: write the case, run blockMesh + solidDisplacementFoam + foamToVTK in the Docker image, and return RAW results (solver log, field-series key, postProcessing). `dry_run` (surrogate mode) short-circuits it.",
+        "templateId": "00000000-0000-0000-0000-00000000f002",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "case_files", "expression": "casegen.case_files" },
+          { "targetField": "solver", "expression": "casegen.solver" },
+          { "targetField": "run_blockmesh", "expression": "casegen.run_blockmesh" },
+          { "targetField": "export_vtk", "expression": "casegen.export_vtk" },
+          { "targetField": "dry_run", "expression": "casegen.dry_run" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Raw results",
+          "fields": [
+            { "name": "success", "label": "Solve succeeded", "kind": "bool", "required": true },
+            { "name": "returncode", "label": "Solver return code", "kind": "number", "required": true },
+            { "name": "not_run", "label": "Skipped (dry_run)", "kind": "bool", "required": true },
+            { "name": "solver_log", "label": "Solver log", "kind": "textarea", "required": false },
+            { "name": "field_key", "label": "Field-series artifact key", "kind": "text", "required": false },
+            { "name": "postprocessing", "label": "postProcessing .dat contents", "kind": "json", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract",
+      "type": "automated_step",
+      "position": { "x": 940, "y": 20 },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract objectives",
+        "description": "Firing-specific reading of the raw solve: parse peak von-Mises stress + soak completeness from `run.solver_log`/`run.postprocessing` (or evaluate the calibrated surrogate when the solve was skipped/failed), compute the cost `z` + verdict, render the firing-curve PNG media card, and emit the `evaluation` bundle + the field-series `field_key`. `solver_mode=docker` is real-physics-or-bust.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": { "python": "python3", "requirements": ["matplotlib"], "virtualenv": false, "sdk": true, "inherit_env": true, "env": {} }
         },
         "output": {
           "id": "out",
@@ -61,25 +122,27 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 660, "y": 17 },
+      "position": { "x": 1260, "y": 40 },
       "data": {
         "type": "end",
         "label": "Evaluation",
         "resultMapping": [
-          { "targetField": "sigma_max_mpa", "expression": "simulate.sigma_max_mpa" },
-          { "targetField": "soak_min_k", "expression": "simulate.soak_min_k" },
-          { "targetField": "cycle_h", "expression": "simulate.cycle_h" },
-          { "targetField": "z", "expression": "simulate.z" },
-          { "targetField": "verdict", "expression": "simulate.verdict" },
-          { "targetField": "source", "expression": "simulate.source" },
-          { "targetField": "field_key", "expression": "simulate.field_key" },
-          { "targetField": "evaluation", "expression": "simulate.evaluation" }
+          { "targetField": "sigma_max_mpa", "expression": "extract.sigma_max_mpa" },
+          { "targetField": "soak_min_k", "expression": "extract.soak_min_k" },
+          { "targetField": "cycle_h", "expression": "extract.cycle_h" },
+          { "targetField": "z", "expression": "extract.z" },
+          { "targetField": "verdict", "expression": "extract.verdict" },
+          { "targetField": "source", "expression": "extract.source" },
+          { "targetField": "field_key", "expression": "extract.field_key" },
+          { "targetField": "evaluation", "expression": "extract.evaluation" }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e_start_simulate", "source": "start", "target": "simulate", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_simulate_end",   "source": "simulate", "target": "end",   "targetHandle": "in", "type": "sequence" }
+    { "id": "e_start_casegen", "source": "start", "target": "casegen", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_casegen_run", "source": "casegen", "target": "run", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_run_extract", "source": "run", "target": "extract", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_extract_end", "source": "extract", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

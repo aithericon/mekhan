@@ -1,7 +1,7 @@
 {
   "air_version": 1,
   "definitions": {
-    "Ctrl__simulate": {
+    "Ctrl__run": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -9,7 +9,7 @@
       "additionalProperties": true,
       "type": "object"
     },
-    "Data__simulate": {
+    "Data__run": {
       "additionalProperties": true,
       "properties": {
         "detail": {
@@ -24,46 +24,34 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "cycle_h": {
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "evaluation": {},
                 "field_key": {
                   "type": [
                     "string",
                     "null"
                   ]
                 },
-                "sigma_max_mpa": {
+                "not_run": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "postprocessing": {},
+                "returncode": {
                   "type": [
                     "number",
                     "null"
                   ]
                 },
-                "soak_min_k": {
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                },
-                "source": {
+                "solver_log": {
                   "type": [
                     "string",
                     "null"
                   ]
                 },
-                "verdict": {
+                "success": {
                   "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "z": {
-                  "type": [
-                    "number",
+                    "boolean",
                     "null"
                   ]
                 }
@@ -121,37 +109,26 @@
             "null"
           ]
         },
-        "cool_rate": {
+        "case_files": {},
+        "dry_run": {
           "type": [
-            "number",
+            "boolean",
             "null"
           ]
         },
-        "hold_temp": {
+        "export_vtk": {
           "type": [
-            "number",
+            "boolean",
             "null"
           ]
         },
-        "hold_time_s": {
+        "run_blockmesh": {
           "type": [
-            "number",
+            "boolean",
             "null"
           ]
         },
-        "ramp_rate": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "sigma_limit": {
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "solver_mode": {
+        "solver": {
           "type": [
             "string",
             "null"
@@ -1204,7 +1181,7 @@
   "groups": [
     {
       "id": "group_1",
-      "name": "OpenFOAM solidDisplacementFoam"
+      "name": "Run OpenFOAM case"
     },
     {
       "id": "group_2",
@@ -1237,301 +1214,301 @@
       "parent_id": "group_1"
     }
   ],
-  "name": "OpenFOAM · solidDisplacementFoam (firing evaluation)",
+  "name": "OpenFOAM · run case (generic solver)",
   "places": [
     {
       "id": "p_end_completed",
-      "name": "Evaluation - Completed",
+      "name": "Raw results - Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "id": "p_end_result",
-      "name": "Evaluation - Result",
+      "name": "Raw results - Result",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_simulate_ctrl",
-      "name": "OpenFOAM solidDisplacementFoam - Control Token",
-      "token_schema": "#/definitions/Ctrl__simulate",
+      "id": "p_run_ctrl",
+      "name": "Run OpenFOAM case - Control Token",
+      "token_schema": "#/definitions/Ctrl__run",
       "type": "state"
     },
     {
-      "id": "p_simulate_data",
-      "name": "OpenFOAM solidDisplacementFoam - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__simulate",
+      "id": "p_run_data",
+      "name": "Run OpenFOAM case - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__run",
       "type": "state"
     },
     {
-      "id": "p_simulate_output",
-      "name": "OpenFOAM solidDisplacementFoam - Output",
+      "id": "p_run_output",
+      "name": "Run OpenFOAM case - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_data",
-      "name": "Firing curve - Parked Data (write-once)",
+      "name": "Case + solver - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__start",
       "type": "state"
     },
     {
       "id": "p_start_main",
-      "name": "Firing curve - Output",
+      "name": "Case + solver - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_named",
-      "name": "Firing curve - Named",
+      "name": "Case + solver - Named",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_process",
-      "name": "Firing curve - Process",
+      "name": "Case + solver - Process",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_ready",
-      "name": "Firing curve",
+      "name": "Case + solver",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_ready_out",
-      "name": "Firing curve - Output",
+      "name": "Case + solver - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_3",
-      "id": "simulate/accepted",
+      "id": "run/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/artifact_log",
+      "id": "run/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_5",
-      "id": "simulate/cancel_request",
+      "id": "run/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
       "group_id": "group_5",
-      "id": "simulate/cancelled",
+      "id": "run/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_5",
-      "id": "simulate/cancelling",
+      "id": "run/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/completed",
+      "id": "run/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/dead_letter",
+      "id": "run/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/effect_errors",
+      "id": "run/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
       "group_id": "group_4",
-      "id": "simulate/failed",
+      "id": "run/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/failure",
+      "id": "run/failure",
       "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/failure_log",
+      "id": "run/failure_log",
       "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/failure_logged",
+      "id": "run/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/inbox",
+      "id": "run/inbox",
       "name": "Inbox",
       "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/message_log",
+      "id": "run/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/metric_log",
+      "id": "run/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/output_log",
+      "id": "run/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/phase_log",
+      "id": "run/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/progress_log",
+      "id": "run/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_3",
-      "id": "simulate/running",
+      "id": "run/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_accepted",
+      "id": "run/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_artifact",
+      "id": "run/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_cancelled",
+      "id": "run/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_completed",
+      "id": "run/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_failed",
+      "id": "run/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_log",
+      "id": "run/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_metric",
+      "id": "run/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_output",
+      "id": "run/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_phase",
+      "id": "run/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_progress",
+      "id": "run/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_running",
+      "id": "run/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "simulate/sig_timed_out",
+      "id": "run/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_2",
-      "id": "simulate/submitted",
+      "id": "run/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
       "group_id": "group_4",
-      "id": "simulate/timed_out",
+      "id": "run/timed_out",
       "name": "Timed Out",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
@@ -1571,14 +1548,14 @@
   "transitions": [
     {
       "caused_signals": [
-        "simulate/sig_cancelled"
+        "run/sig_cancelled"
       ],
       "group_id": "group_5",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/cancel",
+      "id": "run/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1604,12 +1581,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/running",
+          "place": "run/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/cancel_request",
+          "place": "run/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -1644,12 +1621,12 @@
       },
       "outputs": [
         {
-          "place": "simulate/cancelling",
+          "place": "run/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "simulate/effect_errors",
+          "place": "run/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -1661,7 +1638,7 @@
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "simulate/dlq_effect_err",
+      "id": "run/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1679,7 +1656,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/effect_errors",
+          "place": "run/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -1706,7 +1683,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/dead_letter",
+          "place": "run/dead_letter",
           "port": "dead",
           "weight": 1
         }
@@ -1718,7 +1695,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "simulate/exhausted_deadend",
+      "id": "run/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1736,20 +1713,20 @@
       },
       "inputs": [
         {
-          "place": "simulate/failure",
+          "place": "run/failure",
           "port": "f",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'OpenFOAM solidDisplacementFoam' failed and no error handler is wired\"",
+        "source": "throw \"automated step 'Run OpenFOAM case' failed and no error handler is wired\"",
         "type": "rhai"
       },
       "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_artifact",
+      "id": "run/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1767,7 +1744,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_artifact",
+          "place": "run/sig_artifact",
           "port": "artifacts",
           "weight": 1
         }
@@ -1794,7 +1771,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/artifact_log",
+          "place": "run/artifact_log",
           "port": "catalogued",
           "weight": 1
         }
@@ -1802,7 +1779,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "simulate/log_failure",
+      "id": "run/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1820,7 +1797,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/failure_log",
+          "place": "run/failure_log",
           "port": "message",
           "weight": 1
         }
@@ -1847,7 +1824,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/failure_logged",
+          "place": "run/failure_logged",
           "port": "logged",
           "weight": 1
         }
@@ -1855,7 +1832,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_message",
+      "id": "run/log_message",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1873,7 +1850,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_log",
+          "place": "run/sig_log",
           "port": "message",
           "weight": 1
         }
@@ -1900,7 +1877,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/message_log",
+          "place": "run/message_log",
           "port": "logged",
           "weight": 1
         }
@@ -1908,7 +1885,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_metric",
+      "id": "run/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1926,7 +1903,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_metric",
+          "place": "run/sig_metric",
           "port": "metric",
           "weight": 1
         }
@@ -1953,7 +1930,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/metric_log",
+          "place": "run/metric_log",
           "port": "logged",
           "weight": 1
         }
@@ -1961,7 +1938,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_output",
+      "id": "run/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1979,7 +1956,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_output",
+          "place": "run/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -2006,7 +1983,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/output_log",
+          "place": "run/output_log",
           "port": "log",
           "weight": 1
         }
@@ -2014,7 +1991,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_phase",
+      "id": "run/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2032,7 +2009,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_phase",
+          "place": "run/sig_phase",
           "port": "phase",
           "weight": 1
         }
@@ -2059,7 +2036,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/phase_log",
+          "place": "run/phase_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2067,7 +2044,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "simulate/log_progress",
+      "id": "run/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2085,7 +2062,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/sig_progress",
+          "place": "run/sig_progress",
           "port": "progress",
           "weight": 1
         }
@@ -2112,7 +2089,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/progress_log",
+          "place": "run/progress_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2120,7 +2097,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "simulate/on_failed",
+      "id": "run/on_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2138,7 +2115,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/failed",
+          "place": "run/failed",
           "port": "e",
           "weight": 1
         }
@@ -2170,12 +2147,12 @@
       },
       "outputs": [
         {
-          "place": "simulate/failure",
+          "place": "run/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "simulate/failure_log",
+          "place": "run/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2183,7 +2160,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "simulate/on_timeout",
+      "id": "run/on_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2201,7 +2178,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/timed_out",
+          "place": "run/timed_out",
           "port": "e",
           "weight": 1
         }
@@ -2233,12 +2210,12 @@
       },
       "outputs": [
         {
-          "place": "simulate/failure",
+          "place": "run/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "simulate/failure_log",
+          "place": "run/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2246,7 +2223,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "simulate/prepare",
+      "id": "run/prepare",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2270,10 +2247,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"simulate\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Evaluate ONE firing curve with a real OpenFOAM solidDisplacementFoam run.\\n\\nThe single-evaluation kernel of demo 59 (`59-firing-curve-bo`), lifted into a\\nstandalone, reusable library node. Where demo 59 reads the candidate off a Map\\nitemVar (`cand.*`), this node reads it straight off its own Start fields\\n(`input.*`) — so it drops onto any canvas as a sub-workflow building block: a\\nconstrained-BO loop, a DOE sweep, or a one-shot check. Otherwise the physics is\\nbyte-identical to demo 59's `simulate` body.\\n\\nIt:\\n  1. generates a complete solidDisplacementFoam case (zirconia 3Y-TZP puck,\\n     Ø60 x 12 mm, quarter symmetry, kiln-curve table BC) in the run directory;\\n  2. runs blockMesh + solidDisplacementFoam in the multi-arch\\n     `opencfd/openfoam-default:2506` Docker image (run dir bind-mounted in);\\n  3. extracts peak von-Mises stress over the cycle (solver log), soak\\n     completeness = min core temperature during the hold window (fieldMinMax\\n     function object), and total cycle time;\\n  4. renders a firing-curve + stress-trace PNG and registers it via\\n     `log_artifact(category=\\\"plot\\\", mime_type=\\\"image/png\\\")` (media card);\\n  5. emits the objectives as typed outputs (sigma_max_mpa, soak_min_k, cycle_h,\\n     z, verdict, source).\\n\\nSOLVER MODES (`input.solver_mode`, default `auto`):\\n  - \\\"docker\\\"    : require Docker; raise on failure (real-physics-or-bust).\\n  - \\\"surrogate\\\" : skip Docker entirely; closed-form surrogate (below).\\n  - \\\"auto\\\"      : try Docker, fall back to the surrogate on ANY failure so the\\n                  node never hard-fails on an unprovisioned machine.\\n\\nThe surrogate is calibrated against three cluster-validated OpenFOAM runs on\\nRPTU Elwetritsch (rates 10/20/60 K/min -> sigma_max 18.5/29.4/103 MPa, soak\\ndeficits ~2/7/25 K at 1 h hold). It exists so CI and docker-less machines can\\nexercise the node; observations it produces are flagged `source: surrogate`.\\n\\nThe cost `z` (the value a BO loop would minimize) is deliberate:\\n    z = cycle_hours\\n        + (0 if sigma <= limit else 25 + 50 * (sigma - limit) / limit)\\n        + (0 if soak ok    else 10 + 2 * soak_deficit_K)\\nA cracked puck or an under-sintered core is a scrapped part — both penalties\\njump discontinuously and then grow, so the optimum is the FASTEST cycle that\\nkeeps sigma_max under the crack threshold AND soaks the core to within 15 K of\\nthe hold temperature.\\n\\\"\\\"\\\"\\n\\nimport json\\nimport math\\nimport os\\nimport re\\nimport shutil\\nimport subprocess\\nimport tarfile\\n\\n# --- Firing curve (Start fields; optionals fall back to calibrated defaults) --\\nramp_rate = float(input.ramp_rate)               # K/min  (required)\\ncool_rate = float(input.cool_rate)               # K/min  (required)\\nhold_time_s = float(input.hold_time_s)           # s      (required)\\nhold_temp = float(input.hold_temp or 1850.0)     # K\\nsigma_limit = float(input.sigma_limit or 80.0)   # MPa\\nsolver_mode = str(input.solver_mode or \\\"auto\\\")\\n\\nT0 = 300.0\\nN_STEPS = 800\\n\\nt_ramp_end = (hold_temp - T0) / (ramp_rate / 60.0)\\nt_hold_end = t_ramp_end + hold_time_s\\nt_end = t_hold_end + (hold_temp - T0) / (cool_rate / 60.0)\\ncycle_h = t_end / 3600.0\\n\\nlog_info(\\n    f\\\"simulate: ramp={ramp_rate} K/min hold={hold_time_s:.0f}s@{hold_temp:.0f}K \\\"\\n    f\\\"cool={cool_rate} K/min -> cycle {cycle_h:.2f} h (mode={solver_mode})\\\"\\n)\\n\\nDOCKER_IMAGE = \\\"opencfd/openfoam-default:2506\\\"\\n\\n_run_dir = os.environ.get(\\\"AITHERICON_RUN_DIR\\\", os.getcwd())\\n_artifacts_dir = os.environ.get(\\\"AITHERICON_ARTIFACTS_DIR\\\", _run_dir)\\ncase_dir = os.path.join(_run_dir, \\\"case\\\")\\n\\n\\n# --- 1. Case generation -------------------------------------------------------\\n# The full validated case, embedded. Only `system/caseParams` carries the\\n# candidate's parameters — every other file is byte-stable across runs.\\n\\ndef _foam_header(cls, obj):\\n    return (\\n        \\\"FoamFile\\\\n{\\\\n\\\"\\n        \\\"    version     2.0;\\\\n\\\"\\n        \\\"    format      ascii;\\\\n\\\"\\n        f\\\"    class       {cls};\\\\n\\\"\\n        f\\\"    object      {obj};\\\\n\\\"\\n        \\\"}\\\\n\\\"\\n    )\\n\\n\\nCASE_FILES = {\\n    \\\"system/caseParams\\\": _foam_header(\\\"dictionary\\\", \\\"caseParams\\\")\\n    + f\\\"\\\"\\\"\\nrampRate        {ramp_rate};\\nholdTemp        {hold_temp};\\nholdTime        {hold_time_s};\\ncoolRate        {cool_rate};\\n\\nT0              {T0};\\nnSteps          {N_STEPS};\\nnWrites         20;\\n\\ntRampEnd        #eval{{ ($holdTemp - $T0) / ($rampRate / 60.0) }};\\ntHoldEnd        #eval{{ $tRampEnd + $holdTime }};\\ntEnd            #eval{{ $tHoldEnd + ($holdTemp - $T0) / ($coolRate / 60.0) }};\\ndt              #eval{{ $tEnd / $nSteps }};\\nwriteInt        #eval{{ $tEnd / $nWrites }};\\n\\\"\\\"\\\",\\n    \\\"system/blockMeshDict\\\": _foam_header(\\\"dictionary\\\", \\\"blockMeshDict\\\")\\n    + \\\"\\\"\\\"\\n// Quarter cylinder (puck): R=30mm, H=12mm (scale 1.5 on base R=20mm coords).\\nscale   1.5;\\n\\nvertices\\n(\\n    (0          0          0)\\n    (0.008      0          0)\\n    (0.02       0          0)\\n    (0.0141421  0.0141421  0)\\n    (0.008      0.008      0)\\n    (0          0.008      0)\\n    (0          0.02       0)\\n    (0          0          0.008)\\n    (0.008      0          0.008)\\n    (0.02       0          0.008)\\n    (0.0141421  0.0141421  0.008)\\n    (0.008      0.008      0.008)\\n    (0          0.008      0.008)\\n    (0          0.02       0.008)\\n);\\n\\nblocks\\n(\\n    hex (0 1 4 5  7 8 11 12)   (8 8 10) simpleGrading (1 1 1)\\n    hex (1 2 3 4  8 9 10 11)   (8 8 10) simpleGrading (1 1 1)\\n    hex (5 4 3 6  12 11 10 13) (8 8 10) simpleGrading (1 1 1)\\n);\\n\\nedges\\n(\\n    arc  2  3 (0.0184776 0.0076537 0)\\n    arc  9 10 (0.0184776 0.0076537 0.008)\\n    arc  3  6 (0.0076537 0.0184776 0)\\n    arc 10 13 (0.0076537 0.0184776 0.008)\\n);\\n\\nboundary\\n(\\n    symX\\n    {\\n        type symmetryPlane;\\n        faces ((0 1 8 7) (1 2 9 8));\\n    }\\n    symY\\n    {\\n        type symmetryPlane;\\n        faces ((0 7 12 5) (5 12 13 6));\\n    }\\n    outer\\n    {\\n        type patch;\\n        faces ((2 3 10 9) (3 6 13 10));\\n    }\\n    bottom\\n    {\\n        type patch;\\n        faces ((0 5 4 1) (1 4 3 2) (5 6 3 4));\\n    }\\n    top\\n    {\\n        type patch;\\n        faces ((7 8 11 12) (8 9 10 11) (12 11 10 13));\\n    }\\n);\\n\\\"\\\"\\\",\\n    \\\"system/controlDict\\\": _foam_header(\\\"dictionary\\\", \\\"controlDict\\\")\\n    + \\\"\\\"\\\"\\n#include \\\"caseParams\\\"\\n\\napplication     solidDisplacementFoam;\\nstartFrom       startTime;\\nstartTime       0;\\nstopAt          endTime;\\nendTime         $tEnd;\\ndeltaT          $dt;\\nwriteControl    runTime;\\nwriteInterval   $writeInt;\\npurgeWrite      0;\\nwriteFormat     ascii;\\nwritePrecision  6;\\nwriteCompression off;\\ntimeFormat      general;\\ntimePrecision   6;\\nrunTimeModifiable true;\\n\\nfunctions\\n{\\n    minMaxT\\n    {\\n        type            fieldMinMax;\\n        libs            (fieldFunctionObjects);\\n        fields          (T);\\n        writeControl    timeStep;\\n        writeInterval   1;\\n        log             false;\\n    }\\n}\\n\\\"\\\"\\\",\\n    \\\"system/fvSchemes\\\": _foam_header(\\\"dictionary\\\", \\\"fvSchemes\\\")\\n    + \\\"\\\"\\\"\\n// Quasi-static stress (steadyState d2dt2) + transient heat conduction.\\nd2dt2Schemes  { default steadyState; }\\nddtSchemes    { default Euler; }\\ngradSchemes\\n{\\n    default         leastSquares;\\n    grad(D)         leastSquares;\\n    grad(T)         leastSquares;\\n}\\ndivSchemes\\n{\\n    default         none;\\n    div(sigmaD)     Gauss linear;\\n}\\nlaplacianSchemes\\n{\\n    default         none;\\n    laplacian(DD,D) Gauss linear corrected;\\n    laplacian(DT,T) Gauss linear corrected;\\n}\\ninterpolationSchemes { default linear; }\\nsnGradSchemes        { default none; }\\n\\\"\\\"\\\",\\n    \\\"system/fvSolution\\\": _foam_header(\\\"dictionary\\\", \\\"fvSolution\\\")\\n    + \\\"\\\"\\\"\\nsolvers\\n{\\n    \\\"(D|T)\\\"\\n    {\\n        solver          GAMG;\\n        tolerance       1e-06;\\n        relTol          0.9;\\n        smoother        GaussSeidel;\\n        nCellsInCoarsestLevel 20;\\n    }\\n}\\n\\nstressAnalysis\\n{\\n    compactNormalStress yes;\\n    nCorrectors     1;\\n    D               1e-06;\\n}\\n\\\"\\\"\\\",\\n    \\\"constant/mechanicalProperties\\\": _foam_header(\\\"dictionary\\\", \\\"mechanicalProperties\\\")\\n    + \\\"\\\"\\\"\\n// Zirconia (3Y-TZP).\\nrho { type uniform; value 6050; }\\nnu  { type uniform; value 0.30; }\\nE   { type uniform; value 2.0e+11; }\\nplaneStress     no;\\n\\\"\\\"\\\",\\n    \\\"constant/thermalProperties\\\": _foam_header(\\\"dictionary\\\", \\\"thermalProperties\\\")\\n    + \\\"\\\"\\\"\\n// Zirconia (3Y-TZP); thermal stress coupling ON.\\nC     { type uniform; value 460; }\\nk     { type uniform; value 2.0; }\\nalpha { type uniform; value 1.0e-05; }\\nthermalStress   yes;\\n\\\"\\\"\\\",\\n    \\\"0/T\\\": _foam_header(\\\"volScalarField\\\", \\\"T\\\")\\n    + \\\"\\\"\\\"\\n#include \\\"../system/caseParams\\\"\\n\\ndimensions      [0 0 0 1 0 0 0];\\ninternalField   uniform $T0;\\n\\nboundaryField\\n{\\n    symX { type symmetryPlane; }\\n    symY { type symmetryPlane; }\\n    \\\"(outer|top|bottom)\\\"\\n    {\\n        type            uniformFixedValue;\\n        uniformValue    table\\n        (\\n            (0          $T0)\\n            ($tRampEnd  $holdTemp)\\n            ($tHoldEnd  $holdTemp)\\n            ($tEnd      $T0)\\n        );\\n    }\\n}\\n\\\"\\\"\\\",\\n    \\\"0/D\\\": _foam_header(\\\"volVectorField\\\", \\\"D\\\")\\n    + \\\"\\\"\\\"\\ndimensions      [0 1 0 0 0 0 0];\\ninternalField   uniform (0 0 0);\\n\\nboundaryField\\n{\\n    symX { type symmetryPlane; }\\n    symY { type symmetryPlane; }\\n    \\\"(outer|top|bottom)\\\"\\n    {\\n        type            tractionDisplacement;\\n        traction        uniform (0 0 0);\\n        pressure        uniform 0;\\n        value           uniform (0 0 0);\\n    }\\n}\\n\\\"\\\"\\\",\\n}\\n\\n\\ndef _write_case():\\n    if os.path.isdir(case_dir):\\n        shutil.rmtree(case_dir, ignore_errors=True)\\n    for rel, content in CASE_FILES.items():\\n        path = os.path.join(case_dir, rel)\\n        os.makedirs(os.path.dirname(path), exist_ok=True)\\n        with open(path, \\\"w\\\") as f:\\n            f.write(content)\\n\\n\\n# --- 2./3. Docker run + extraction --------------------------------------------\\n\\ndef _run_docker():\\n    \\\"\\\"\\\"Run the case in the OpenFOAM container; return parsed results.\\\"\\\"\\\"\\n    _write_case()\\n    # `bash -lc` is REQUIRED: the opencfd image sources the OpenFOAM\\n    # environment from the login profile. That profile also `cd`s to $HOME,\\n    # clobbering `docker -w` — so the explicit `cd /case` is load-bearing.\\n    cmd = [\\n        \\\"docker\\\", \\\"run\\\", \\\"--rm\\\",\\n        \\\"-v\\\", f\\\"{case_dir}:/case\\\",\\n        DOCKER_IMAGE,\\n        \\\"bash\\\", \\\"-lc\\\",\\n        \\\"cd /case && blockMesh > log.blockMesh 2>&1 && \\\"\\n        \\\"solidDisplacementFoam > log.solidDisplacementFoam 2>&1 && \\\"\\n        # Export the field series so a downstream post-processing node can\\n        # render a cut-through. Non-fatal: a foamToVTK hiccup must not fail an\\n        # otherwise-good solve (`|| true`).\\n        \\\"{ foamToVTK > log.foamToVTK 2>&1 || true; }\\\",\\n    ]\\n    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)\\n    if proc.returncode != 0:\\n        tail = \\\"\\\"\\n        log_path = os.path.join(case_dir, \\\"log.solidDisplacementFoam\\\")\\n        if os.path.exists(log_path):\\n            with open(log_path) as f:\\n                tail = \\\"\\\".join(f.readlines()[-25:])\\n        raise RuntimeError(\\n            f\\\"docker/OpenFOAM failed rc={proc.returncode}: \\\"\\n            f\\\"{proc.stderr[-500:]}\\\\n{tail}\\\"\\n        )\\n\\n    # Peak von Mises over the cycle + full trace, from the solver log.\\n    # v2506 solidDisplacementFoam prints `Iteration: <t>` (NOT `Time =`)\\n    # followed by `Max sigmaEq = <Pa>` per step.\\n    sigma_t, sigma_v = [], []\\n    t_cur = None\\n    with open(os.path.join(case_dir, \\\"log.solidDisplacementFoam\\\")) as f:\\n        for line in f:\\n            m = re.match(r\\\"^Iteration: (\\\\S+)\\\", line)\\n            if m:\\n                t_cur = float(m.group(1))\\n                continue\\n            m = re.search(r\\\"Max sigmaEq = (\\\\S+)\\\", line)\\n            if m and t_cur is not None:\\n                sigma_t.append(t_cur)\\n                sigma_v.append(float(m.group(1)))\\n    if not sigma_v:\\n        raise RuntimeError(\\\"no `Max sigmaEq` lines in solver log\\\")\\n\\n    # Core temperature trace (min T over the mesh) from the fieldMinMax FO.\\n    # Column layout (proven on the cluster): col 0 = time, col 2 = min.\\n    core_t, core_v = [], []\\n    import glob as _glob\\n\\n    for dat in sorted(\\n        _glob.glob(os.path.join(case_dir, \\\"postProcessing/minMaxT/*/fieldMinMax.dat\\\"))\\n    ):\\n        with open(dat) as f:\\n            for line in f:\\n                if line.startswith(\\\"#\\\"):\\n                    continue\\n                parts = line.split()\\n                try:\\n                    core_t.append(float(parts[0]))\\n                    core_v.append(float(parts[2]))\\n                except (ValueError, IndexError):\\n                    continue\\n\\n    sigma_max_pa = max(sigma_v)\\n    sigma_max_time = sigma_t[sigma_v.index(sigma_max_pa)]\\n    soak_vals = [v for t, v in zip(core_t, core_v) if t_ramp_end <= t <= t_hold_end]\\n    soak_min = min(soak_vals) if soak_vals else 0.0\\n\\n    return {\\n        \\\"source\\\": \\\"openfoam\\\",\\n        \\\"sigma_max_mpa\\\": sigma_max_pa / 1e6,\\n        \\\"sigma_max_time_s\\\": sigma_max_time,\\n        \\\"soak_min_k\\\": soak_min,\\n        \\\"trace\\\": {\\n            \\\"sigma_t\\\": sigma_t,\\n            \\\"sigma_mpa\\\": [v / 1e6 for v in sigma_v],\\n            \\\"core_t\\\": core_t,\\n            \\\"core_k\\\": core_v,\\n        },\\n    }\\n\\n\\n# --- Surrogate fallback ---------------------------------------------------------\\n\\ndef _run_surrogate():\\n    \\\"\\\"\\\"Closed-form stand-in calibrated against the cluster-validated runs.\\n\\n    Calibration anchors (Elwetritsch zr runs, hold @ 1850 K; ramp/hold/cool):\\n      5 / 3600 / 10  -> 18.49 MPa, soak_min 1848.47 K\\n      20 / 1800 / 30 -> 29.39 MPa, soak_min 1842.80 K\\n      60 /  600 /120 -> 103.2 MPa, soak_min 1825.25 K\\n    sigma is rate-driven (peak at end-of-cool): power-law on max(ramp, cool).\\n    soak_min is the core temperature at hold START (ramp-lag), so it depends\\n    on ramp only — exact 3-point fit: deficit = 0.256 * ramp^1.11.\\n    \\\"\\\"\\\"\\n    r_eff = max(ramp_rate, cool_rate)\\n    dT = hold_temp - T0\\n    sigma_max_mpa = 18.5 * (r_eff / 10.0) ** 0.69 * (dT / 1550.0)\\n    soak_deficit = 0.256 * ramp_rate**1.11\\n    soak_min = hold_temp - soak_deficit\\n\\n    n = 200\\n    ts = [t_end * i / (n - 1) for i in range(n)]\\n    sigma_trace = []\\n    for t in ts:\\n        if t <= t_ramp_end:\\n            s = sigma_max_mpa * 0.55 * (t / max(t_ramp_end, 1.0))\\n        elif t <= t_hold_end:\\n            frac = (t - t_ramp_end) / max(hold_time_s, 1.0)\\n            s = sigma_max_mpa * 0.55 * math.exp(-2.5 * frac)\\n        else:\\n            frac = (t - t_hold_end) / max(t_end - t_hold_end, 1.0)\\n            s = sigma_max_mpa * (0.15 + 0.85 * frac)\\n        sigma_trace.append(s)\\n    core_trace = [\\n        max(T0, min(_kiln_T(t) - soak_deficit * _lag_frac(t), hold_temp))\\n        for t in ts\\n    ]\\n\\n    return {\\n        \\\"source\\\": \\\"surrogate\\\",\\n        \\\"sigma_max_mpa\\\": sigma_max_mpa,\\n        \\\"sigma_max_time_s\\\": t_end,\\n        \\\"soak_min_k\\\": soak_min,\\n        \\\"trace\\\": {\\n            \\\"sigma_t\\\": ts,\\n            \\\"sigma_mpa\\\": sigma_trace,\\n            \\\"core_t\\\": ts,\\n            \\\"core_k\\\": core_trace,\\n        },\\n    }\\n\\n\\ndef _kiln_T(t):\\n    \\\"\\\"\\\"Prescribed kiln curve (the table BC).\\\"\\\"\\\"\\n    if t <= t_ramp_end:\\n        return T0 + (hold_temp - T0) * t / max(t_ramp_end, 1.0)\\n    if t <= t_hold_end:\\n        return hold_temp\\n    return hold_temp - (hold_temp - T0) * (t - t_hold_end) / max(t_end - t_hold_end, 1.0)\\n\\n\\ndef _lag_frac(t):\\n    \\\"\\\"\\\"Rough thermal-lag weight for the synthetic core trace.\\\"\\\"\\\"\\n    if t <= t_ramp_end:\\n        return 1.0\\n    if t <= t_hold_end:\\n        return math.exp(-2.0 * (t - t_ramp_end) / max(hold_time_s, 1.0))\\n    return 0.3\\n\\n\\n# --- Dispatch by solver mode ----------------------------------------------------\\nresult = None\\nif solver_mode == \\\"surrogate\\\":\\n    result = _run_surrogate()\\nelse:\\n    try:\\n        result = _run_docker()\\n    except Exception as exc:  # noqa: BLE001\\n        if solver_mode == \\\"docker\\\":\\n            raise  # real-physics-or-bust\\n        log_warn(f\\\"simulate: docker path failed ({exc!r}); surrogate fallback\\\")\\n        result = _run_surrogate()\\n\\nsigma_max_mpa = float(result[\\\"sigma_max_mpa\\\"])\\nsoak_min_k = float(result[\\\"soak_min_k\\\"])\\nsource = str(result[\\\"source\\\"])\\n\\n# --- 4. Cost --------------------------------------------------------------------\\nsoak_target = hold_temp - 15.0\\nsoak_deficit = max(0.0, soak_target - soak_min_k)\\n\\npen_sigma = 0.0\\nif sigma_max_mpa > sigma_limit:\\n    pen_sigma = 25.0 + 50.0 * (sigma_max_mpa - sigma_limit) / sigma_limit\\npen_soak = 0.0\\nif soak_deficit > 0.0:\\n    pen_soak = 10.0 + 2.0 * soak_deficit\\n\\nz = cycle_h + pen_sigma + pen_soak\\nok = pen_sigma == 0.0 and pen_soak == 0.0\\nverdict = \\\"OK\\\" if ok else (\\\"CRACK RISK\\\" if pen_sigma > 0.0 else \\\"UNDER-SOAKED\\\")\\n\\nlog_info(\\n    f\\\"simulate[{source}]: sigma_max={sigma_max_mpa:.1f} MPa \\\"\\n    f\\\"(limit {sigma_limit:.0f}) soak_min={soak_min_k:.1f} K \\\"\\n    f\\\"(target {soak_target:.0f}) cycle={cycle_h:.2f} h -> z={z:.3f} [{verdict}]\\\"\\n)\\n\\n# --- 5. Media-card PNG (best-effort — never fails the evaluation) ----------------\\ntry:\\n    import matplotlib\\n\\n    matplotlib.use(\\\"Agg\\\")\\n    import matplotlib.pyplot as plt\\n\\n    trace = result[\\\"trace\\\"]\\n    kiln_ts = [t_end * i / 399.0 for i in range(400)]\\n\\n    fig, (ax_t, ax_s) = plt.subplots(\\n        2, 1, figsize=(9.0, 6.4), sharex=True,\\n        gridspec_kw={\\\"height_ratios\\\": [1.1, 1.0]},\\n    )\\n\\n    ax_t.plot(\\n        [t / 3600.0 for t in kiln_ts], [_kiln_T(t) for t in kiln_ts],\\n        color=\\\"#d97706\\\", lw=2.0, label=\\\"kiln set-point\\\",\\n    )\\n    if trace[\\\"core_t\\\"]:\\n        ax_t.plot(\\n            [t / 3600.0 for t in trace[\\\"core_t\\\"]], trace[\\\"core_k\\\"],\\n            color=\\\"#2563eb\\\", lw=1.6, label=\\\"slowest point (min T)\\\",\\n        )\\n    ax_t.axhline(soak_target, color=\\\"#2563eb\\\", ls=\\\":\\\", lw=1.0, alpha=0.6)\\n    ax_t.axvspan(t_ramp_end / 3600.0, t_hold_end / 3600.0, color=\\\"#d97706\\\", alpha=0.08)\\n    ax_t.set_ylabel(\\\"T [K]\\\")\\n    ax_t.legend(loc=\\\"lower center\\\", fontsize=8, ncol=2)\\n\\n    ax_s.plot(\\n        [t / 3600.0 for t in trace[\\\"sigma_t\\\"]], trace[\\\"sigma_mpa\\\"],\\n        color=\\\"#dc2626\\\", lw=1.8, label=\\\"max von-Mises\\\",\\n    )\\n    ax_s.axhline(\\n        sigma_limit, color=\\\"#dc2626\\\", ls=\\\"--\\\", lw=1.2, alpha=0.8,\\n        label=f\\\"crack threshold {sigma_limit:.0f} MPa\\\",\\n    )\\n    ax_s.set_xlabel(\\\"time [h]\\\")\\n    ax_s.set_ylabel(\\\"sigma_eq [MPa]\\\")\\n    ax_s.legend(loc=\\\"upper left\\\", fontsize=8)\\n\\n    src_tag = \\\" (surrogate)\\\" if source == \\\"surrogate\\\" else \\\"\\\"\\n    fig.suptitle(\\n        f\\\"ramp {ramp_rate:.0f} K/min · hold {hold_time_s / 60.0:.0f} min @ \\\"\\n        f\\\"{hold_temp:.0f} K · cool {cool_rate:.0f} K/min{src_tag}\\\\n\\\"\\n        f\\\"sigma_max {sigma_max_mpa:.1f} MPa · soak min {soak_min_k:.0f} K · \\\"\\n        f\\\"cycle {cycle_h:.2f} h — {verdict} (cost {z:.2f})\\\",\\n        fontsize=10,\\n    )\\n    fig.tight_layout(rect=(0, 0, 1, 0.91))\\n\\n    png_name = f\\\"firing_r{ramp_rate:.0f}_h{hold_time_s:.0f}_c{cool_rate:.0f}.png\\\"\\n    png_path = os.path.join(_artifacts_dir, png_name)\\n    fig.savefig(png_path, dpi=110)\\n    plt.close(fig)\\n\\n    log_artifact(\\n        png_path,\\n        name=png_name,\\n        category=\\\"plot\\\",\\n        mime_type=\\\"image/png\\\",\\n        metadata={\\n            \\\"kind\\\": \\\"firing_curve_eval\\\",\\n            \\\"verdict\\\": verdict,\\n            \\\"sigma_max_mpa\\\": f\\\"{sigma_max_mpa:.2f}\\\",\\n            \\\"cost\\\": f\\\"{z:.3f}\\\",\\n            \\\"source\\\": source,\\n        },\\n    )\\nexcept Exception as exc:  # noqa: BLE001 — plotting is telemetry, not physics\\n    log_warn(f\\\"simulate: plot/artifact failed (non-fatal): {exc!r}\\\")\\n\\n# Persist the raw extraction next to the case for debugging.\\ntry:\\n    with open(os.path.join(_run_dir, \\\"results.json\\\"), \\\"w\\\") as f:\\n        json.dump(\\n            {k: v for k, v in result.items() if k != \\\"trace\\\"}\\n            | {\\\"z\\\": z, \\\"cycle_h\\\": cycle_h, \\\"verdict\\\": verdict},\\n            f,\\n            indent=2,\\n        )\\nexcept Exception:  # noqa: BLE001\\n    pass\\n\\n# --- 5b. Field series → portable artifact (openfoam path only) ------------------\\n# foamToVTK wrote case/VTK/* on the docker path. Tar it and persist it as a run\\n# artifact so a SEPARATE post-processing node can pull it back (by the\\n# deterministic artifact key) and render a field cut-through — keeping the heavy\\n# visualization OUT of this physics kernel. The surrogate has no spatial field,\\n# so `field_key` stays empty there and any downstream render simply skips.\\n# Deterministic key layout `artifacts/{exec}/{name}/{name}` matches the\\n# artifact store (executor-storage) and how demo 59's report builds its keys.\\nfield_key = \\\"\\\"\\nvtk_dir = os.path.join(case_dir, \\\"VTK\\\")\\nif source == \\\"openfoam\\\" and os.path.isdir(vtk_dir):\\n    try:\\n        tar_path = os.path.join(_run_dir, \\\"fields.tar.gz\\\")\\n        with tarfile.open(tar_path, \\\"w:gz\\\") as tf:\\n            tf.add(vtk_dir, arcname=\\\"VTK\\\")\\n        log_artifact(\\n            tar_path,\\n            name=\\\"fields.tar.gz\\\",\\n            category=\\\"other\\\",\\n            mime_type=\\\"application/gzip\\\",\\n            blocking=True,\\n            metadata={\\\"kind\\\": \\\"openfoam_field_series\\\", \\\"fields\\\": \\\"T,sigmaEq\\\"},\\n        )\\n        _exec_id = os.environ.get(\\\"AITHERICON_EXECUTION_ID\\\", \\\"\\\")\\n        if _exec_id:\\n            field_key = f\\\"artifacts/{_exec_id}/fields.tar.gz/fields.tar.gz\\\"\\n        log_info(f\\\"simulate: persisted field series ({field_key or 'no exec id'})\\\")\\n    except Exception as exc:  # noqa: BLE001 — viz transport is best-effort\\n        log_warn(f\\\"simulate: field-series persist failed (non-fatal): {exc!r}\\\")\\n\\n# --- 6. Typed outputs (swept from globals matching the output port) -------------\\nsigma_max_mpa = round(sigma_max_mpa, 3)\\nsoak_min_k = round(soak_min_k, 2)\\ncycle_h = round(cycle_h, 4)\\nz = round(z, 4)\\n\\n# Single gatherable bundle. A Map body gathers exactly ONE named field, so the\\n# constrained-BO loop (demo 59) pins `resultVar: \\\"evaluation\\\"` to fold the whole\\n# evaluation per candidate. The typed scalars above stay for direct\\n# field-by-field consumers (a DOE sweep, a one-shot check on a canvas).\\nevaluation = {\\n    \\\"sigma_max_mpa\\\": sigma_max_mpa,\\n    \\\"soak_min_k\\\": soak_min_k,\\n    \\\"cycle_h\\\": cycle_h,\\n    \\\"z\\\": z,\\n    \\\"verdict\\\": verdict,\\n    \\\"source\\\": source,\\n    \\\"field_key\\\": field_key,\\n}\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"sigma_max_mpa\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"soak_min_k\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"cycle_h\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"z\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"verdict\", \"required\": true, \"kind\": \"text\"}, #{\"name\": \"source\", \"required\": true, \"kind\": \"text\"}, #{\"name\": \"field_key\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"evaluation\", \"required\": true, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/simulate/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
+        "source": "let d = input; d.job_id = \"run\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"source\": #{\"type\": \"raw\", \"content\": \"\\\"\\\"\\\"Generic OpenFOAM solver node — run ONE case, return RAW results.\\n\\nA reusable, solver-agnostic building block with NO physics interpretation:\\nwrite the inbound case (a `{relpath: content}` dict) to the run directory, run\\nblockMesh (optional) + the named solver + foamToVTK (optional) in the\\nopencfd/openfoam-default Docker image, and return the raw solver log, the\\nexported field series (as an artifact key a downstream node can retrieve), and\\nthe contents of every `postProcessing/**/*.dat` file. Whatever consumes this —\\na firing-curve evaluator, a DOE sweep, a one-shot check — does its OWN\\nextraction from these raw outputs.\\n\\n`dry_run=true` short-circuits the solve (`success=false`, `not_run=true`) so a\\ncaller can conditionally skip it without a Decision branch. A missing Docker\\nimage or a non-zero solver exit returns `success=false` rather than raising — a\\ngeneric node REPORTS failure; the caller decides whether a failed solve is\\nfatal (e.g. the firing evaluator falls back to a surrogate, or re-raises in a\\ndocker-only mode).\\n\\nOutputs (swept from globals matching the output port): success, returncode,\\nnot_run, solver_log, field_key, postprocessing.\\n\\\"\\\"\\\"\\n\\nimport glob\\nimport os\\nimport shutil\\nimport subprocess\\nimport tarfile\\n\\nDOCKER_IMAGE = \\\"opencfd/openfoam-default:2506\\\"\\n\\n# --- Inputs (Start fields) ------------------------------------------------------\\ncase_files = input.case_files or {}\\nsolver = str(input.solver or \\\"\\\").strip()\\nrun_blockmesh = bool(input.run_blockmesh)\\nexport_vtk = bool(input.export_vtk)\\ndry_run = bool(input.dry_run)\\n\\n_run_dir = os.environ.get(\\\"AITHERICON_RUN_DIR\\\", os.getcwd())\\ncase_dir = os.path.join(_run_dir, \\\"case\\\")\\n\\n# --- Outputs (defaults; populated below) ----------------------------------------\\nsuccess = False\\nreturncode = -1\\nnot_run = False\\nsolver_log = \\\"\\\"\\nfield_key = \\\"\\\"\\npostprocessing = {}\\n\\n\\ndef _write_case():\\n    \\\"\\\"\\\"Materialize the {relpath: content} bundle under case_dir.\\\"\\\"\\\"\\n    if os.path.isdir(case_dir):\\n        shutil.rmtree(case_dir, ignore_errors=True)\\n    for rel, content in case_files.items():\\n        path = os.path.join(case_dir, rel)\\n        os.makedirs(os.path.dirname(path), exist_ok=True)\\n        with open(path, \\\"w\\\") as f:\\n            f.write(content)\\n\\n\\nif dry_run:\\n    not_run = True\\n    log_info(\\\"run-case: dry_run — skipping solve (success=false, not_run=true)\\\")\\nelif not solver:\\n    log_warn(\\\"run-case: no solver named — nothing to run\\\")\\nelif not case_files:\\n    log_warn(\\\"run-case: empty case_files — nothing to run\\\")\\nelse:\\n    try:\\n        _write_case()\\n        # `bash -lc` is REQUIRED: the opencfd image sources the OpenFOAM\\n        # environment from the login profile. That profile also `cd`s to $HOME,\\n        # clobbering `docker -w` — so the explicit `cd /case` is load-bearing.\\n        steps = []\\n        if run_blockmesh:\\n            steps.append(\\\"blockMesh > log.blockMesh 2>&1\\\")\\n        steps.append(f\\\"{solver} > log.{solver} 2>&1\\\")\\n        if export_vtk:\\n            # Non-fatal: a foamToVTK hiccup must not fail an otherwise-good solve.\\n            steps.append(\\\"{ foamToVTK > log.foamToVTK 2>&1 || true; }\\\")\\n        script = \\\"cd /case && \\\" + \\\" && \\\".join(steps)\\n        cmd = [\\n            \\\"docker\\\", \\\"run\\\", \\\"--rm\\\",\\n            \\\"-v\\\", f\\\"{case_dir}:/case\\\",\\n            DOCKER_IMAGE,\\n            \\\"bash\\\", \\\"-lc\\\", script,\\n        ]\\n        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)\\n        returncode = proc.returncode\\n        success = proc.returncode == 0\\n\\n        # Raw solver log (the named solver's; the blockMesh/foamToVTK logs stay\\n        # on disk in the case dir for debugging).\\n        log_path = os.path.join(case_dir, f\\\"log.{solver}\\\")\\n        if os.path.exists(log_path):\\n            with open(log_path) as f:\\n                solver_log = f.read()\\n        if not success:\\n            log_warn(f\\\"run-case: {solver} rc={proc.returncode}: {proc.stderr[-400:]}\\\")\\n\\n        # Field series → portable artifact (best-effort; only if exported).\\n        if export_vtk:\\n            vtk_dir = os.path.join(case_dir, \\\"VTK\\\")\\n            if os.path.isdir(vtk_dir):\\n                try:\\n                    tar_path = os.path.join(_run_dir, \\\"fields.tar.gz\\\")\\n                    with tarfile.open(tar_path, \\\"w:gz\\\") as tf:\\n                        tf.add(vtk_dir, arcname=\\\"VTK\\\")\\n                    log_artifact(\\n                        tar_path,\\n                        name=\\\"fields.tar.gz\\\",\\n                        category=\\\"other\\\",\\n                        mime_type=\\\"application/gzip\\\",\\n                        blocking=True,\\n                        metadata={\\\"kind\\\": \\\"openfoam_field_series\\\", \\\"solver\\\": solver},\\n                    )\\n                    _exec_id = os.environ.get(\\\"AITHERICON_EXECUTION_ID\\\", \\\"\\\")\\n                    if _exec_id:\\n                        field_key = f\\\"artifacts/{_exec_id}/fields.tar.gz/fields.tar.gz\\\"\\n                except Exception as exc:  # noqa: BLE001 — field transport is best-effort\\n                    log_warn(f\\\"run-case: field persist failed (non-fatal): {exc!r}\\\")\\n\\n        # ALL postProcessing .dat contents, keyed by case-relative path. Generic:\\n        # the node has no knowledge of any function-object name — a consumer\\n        # picks the file(s) it cares about (e.g. minMaxT/.../fieldMinMax.dat).\\n        for dat in sorted(\\n            glob.glob(os.path.join(case_dir, \\\"postProcessing\\\", \\\"**\\\", \\\"*.dat\\\"), recursive=True)\\n        ):\\n            try:\\n                with open(dat) as f:\\n                    postprocessing[os.path.relpath(dat, case_dir)] = f.read()\\n            except Exception:  # noqa: BLE001\\n                pass\\n\\n        log_info(\\n            f\\\"run-case: {solver} rc={returncode} success={success} \\\"\\n            f\\\"vtk={'yes' if field_key else 'no'} dats={len(postprocessing)}\\\"\\n        )\\n    except Exception as exc:  # noqa: BLE001 — generic node reports failure, never raises\\n        log_warn(f\\\"run-case: docker path failed (non-fatal): {exc!r}\\\")\\n        success = False\\n\"}, \"required\": true}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"name\": \"success\", \"required\": true, \"kind\": \"bool\"}, #{\"name\": \"returncode\", \"required\": true, \"kind\": \"number\"}, #{\"name\": \"not_run\", \"required\": true, \"kind\": \"bool\"}, #{\"name\": \"solver_log\", \"required\": false, \"kind\": \"textarea\"}, #{\"name\": \"field_key\", \"required\": false, \"kind\": \"text\"}, #{\"name\": \"postprocessing\", \"required\": false, \"kind\": \"json\"}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/run/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [] }; if input._executor_namespace != () { d.executor_namespace = input._executor_namespace; } else { d.executor_namespace = \"executor-python-grp/default\"; } #{ job: d }",
         "type": "rhai"
       },
-      "name": "OpenFOAM solidDisplacementFoam - Prepare",
+      "name": "Run OpenFOAM case - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -2291,7 +2268,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/inbox",
+          "place": "run/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2303,7 +2280,7 @@
         "source": "f.retries < f.max_retries",
         "type": "rhai"
       },
-      "id": "simulate/retry",
+      "id": "run/retry",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2321,7 +2298,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/failure",
+          "place": "run/failure",
           "port": "f",
           "weight": 1
         }
@@ -2348,7 +2325,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/inbox",
+          "place": "run/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2360,7 +2337,7 @@
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "simulate/retry_effect_err",
+      "id": "run/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2378,7 +2355,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/effect_errors",
+          "place": "run/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -2405,7 +2382,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/inbox",
+          "place": "run/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2413,32 +2390,32 @@
     },
     {
       "caused_signals": [
-        "simulate/sig_accepted",
-        "simulate/sig_running",
-        "simulate/sig_completed",
-        "simulate/sig_failed",
-        "simulate/sig_timed_out"
+        "run/sig_accepted",
+        "run/sig_running",
+        "run/sig_completed",
+        "run/sig_failed",
+        "run/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "simulate/sig_artifact",
-          "log": "simulate/sig_log",
-          "metric": "simulate/sig_metric",
-          "output": "simulate/sig_output",
-          "phase": "simulate/sig_phase",
-          "progress": "simulate/sig_progress"
+          "artifact": "run/sig_artifact",
+          "log": "run/sig_log",
+          "metric": "run/sig_metric",
+          "output": "run/sig_output",
+          "phase": "run/sig_phase",
+          "progress": "run/sig_progress"
         },
         "signal_routes": {
-          "accepted": "simulate/sig_accepted",
-          "cancelled": "simulate/sig_cancelled",
-          "completed": "simulate/sig_completed",
-          "failed": "simulate/sig_failed",
-          "running": "simulate/sig_running",
-          "timed_out": "simulate/sig_timed_out"
+          "accepted": "run/sig_accepted",
+          "cancelled": "run/sig_cancelled",
+          "completed": "run/sig_completed",
+          "failed": "run/sig_failed",
+          "running": "run/sig_running",
+          "timed_out": "run/sig_timed_out"
         }
       },
       "group_id": "group_2",
-      "id": "simulate/submit",
+      "id": "run/submit",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2456,7 +2433,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/inbox",
+          "place": "run/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2464,20 +2441,20 @@
       "logic": {
         "config": {
           "event_routes": {
-            "artifact": "simulate/sig_artifact",
-            "log": "simulate/sig_log",
-            "metric": "simulate/sig_metric",
-            "output": "simulate/sig_output",
-            "phase": "simulate/sig_phase",
-            "progress": "simulate/sig_progress"
+            "artifact": "run/sig_artifact",
+            "log": "run/sig_log",
+            "metric": "run/sig_metric",
+            "output": "run/sig_output",
+            "phase": "run/sig_phase",
+            "progress": "run/sig_progress"
           },
           "signal_routes": {
-            "accepted": "simulate/sig_accepted",
-            "cancelled": "simulate/sig_cancelled",
-            "completed": "simulate/sig_completed",
-            "failed": "simulate/sig_failed",
-            "running": "simulate/sig_running",
-            "timed_out": "simulate/sig_timed_out"
+            "accepted": "run/sig_accepted",
+            "cancelled": "run/sig_cancelled",
+            "completed": "run/sig_completed",
+            "failed": "run/sig_failed",
+            "running": "run/sig_running",
+            "timed_out": "run/sig_timed_out"
           }
         },
         "handler_id": "executor_submit",
@@ -2509,12 +2486,12 @@
       },
       "outputs": [
         {
-          "place": "simulate/submitted",
+          "place": "run/submitted",
           "port": "submitted",
           "weight": 1
         },
         {
-          "place": "simulate/effect_errors",
+          "place": "run/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -2526,7 +2503,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_accepted",
+      "id": "run/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2552,12 +2529,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/submitted",
+          "place": "run/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_accepted",
+          "place": "run/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -2584,7 +2561,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/accepted",
+          "place": "run/accepted",
           "port": "out",
           "weight": 1
         }
@@ -2596,7 +2573,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_cancelled",
+      "id": "run/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2622,12 +2599,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/cancelling",
+          "place": "run/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_cancelled",
+          "place": "run/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -2654,7 +2631,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/cancelled",
+          "place": "run/cancelled",
           "port": "out",
           "weight": 1
         }
@@ -2666,7 +2643,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_failed",
+      "id": "run/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2692,12 +2669,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/running",
+          "place": "run/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_failed",
+          "place": "run/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -2724,7 +2701,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/failed",
+          "place": "run/failed",
           "port": "err",
           "weight": 1
         }
@@ -2736,7 +2713,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_failed_pre_run",
+      "id": "run/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2762,12 +2739,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/accepted",
+          "place": "run/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_failed",
+          "place": "run/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -2794,7 +2771,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/failed",
+          "place": "run/failed",
           "port": "err",
           "weight": 1
         }
@@ -2806,7 +2783,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_running",
+      "id": "run/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2832,12 +2809,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/accepted",
+          "place": "run/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_running",
+          "place": "run/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -2864,7 +2841,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/running",
+          "place": "run/running",
           "port": "out",
           "weight": 1
         }
@@ -2876,7 +2853,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_success",
+      "id": "run/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2902,12 +2879,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/running",
+          "place": "run/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_completed",
+          "place": "run/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -2934,7 +2911,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/completed",
+          "place": "run/completed",
           "port": "done",
           "weight": 1
         }
@@ -2946,7 +2923,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_timeout",
+      "id": "run/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2972,12 +2949,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/running",
+          "place": "run/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_timed_out",
+          "place": "run/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3004,7 +2981,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/timed_out",
+          "place": "run/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -3016,7 +2993,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "simulate/t_timeout_pre_run",
+      "id": "run/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3042,12 +3019,12 @@
       },
       "inputs": [
         {
-          "place": "simulate/accepted",
+          "place": "run/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "simulate/sig_timed_out",
+          "place": "run/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3074,7 +3051,7 @@
       },
       "outputs": [
         {
-          "place": "simulate/timed_out",
+          "place": "run/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -3119,7 +3096,7 @@
         "handler_id": "process_complete",
         "type": "effect"
       },
-      "name": "Evaluation - Complete Process",
+      "name": "Raw results - Complete Process",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3153,8 +3130,8 @@
         },
         {
           "cardinality": "single",
-          "name": "d_simulate",
-          "schema_ref": "#/definitions/Data__simulate"
+          "name": "d_run",
+          "schema_ref": "#/definitions/Data__run"
         }
       ],
       "input_schema": {
@@ -3167,22 +3144,22 @@
       },
       "inputs": [
         {
-          "place": "p_simulate_ctrl",
+          "place": "p_run_ctrl",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_simulate_data",
-          "port": "d_simulate",
+          "place": "p_run_data",
+          "port": "d_run",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_simulate.detail.outputs.sigma_max_mpa); let __rv1 = (d_simulate.detail.outputs.soak_min_k); let __rv2 = (d_simulate.detail.outputs.cycle_h); let __rv3 = (d_simulate.detail.outputs.z); let __rv4 = (d_simulate.detail.outputs.verdict); let __rv5 = (d_simulate.detail.outputs.source); let __rv6 = (d_simulate.detail.outputs.field_key); let __rv7 = (d_simulate.detail.outputs.evaluation); let __rv = #{ \"sigma_max_mpa\": __rv0, \"soak_min_k\": __rv1, \"cycle_h\": __rv2, \"z\": __rv3, \"verdict\": __rv4, \"source\": __rv5, \"field_key\": __rv6, \"evaluation\": __rv7 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_run.detail.outputs.success); let __rv1 = (d_run.detail.outputs.returncode); let __rv2 = (d_run.detail.outputs.not_run); let __rv3 = (d_run.detail.outputs.solver_log); let __rv4 = (d_run.detail.outputs.field_key); let __rv5 = (d_run.detail.outputs.postprocessing); let __rv = #{ \"success\": __rv0, \"returncode\": __rv1, \"not_run\": __rv2, \"solver_log\": __rv3, \"field_key\": __rv4, \"postprocessing\": __rv5 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
-      "name": "Evaluation - Result",
+      "name": "Raw results - Result",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3207,7 +3184,7 @@
       ]
     },
     {
-      "id": "t_simulate_to_error_deadend",
+      "id": "t_run_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3225,19 +3202,19 @@
       },
       "inputs": [
         {
-          "place": "simulate/dead_letter",
+          "place": "run/dead_letter",
           "port": "dead",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "throw \"automated step 'OpenFOAM solidDisplacementFoam' dead-lettered (infra failure) and no error handler is wired\"",
+        "source": "throw \"automated step 'Run OpenFOAM case' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "OpenFOAM solidDisplacementFoam - Dead-letter (no handler — crash net)"
+      "name": "Run OpenFOAM case - Dead-letter (no handler — crash net)"
     },
     {
-      "id": "t_simulate_to_output",
+      "id": "t_run_to_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3255,7 +3232,7 @@
       },
       "inputs": [
         {
-          "place": "simulate/completed",
+          "place": "run/completed",
           "port": "done",
           "weight": 1
         }
@@ -3264,7 +3241,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "OpenFOAM solidDisplacementFoam - To Output",
+      "name": "Run OpenFOAM case - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3282,14 +3259,14 @@
       },
       "outputs": [
         {
-          "place": "p_simulate_output",
+          "place": "p_run_output",
           "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_simulate_yield",
+      "id": "t_run_yield",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3307,7 +3284,7 @@
       },
       "inputs": [
         {
-          "place": "p_simulate_output",
+          "place": "p_run_output",
           "port": "tok",
           "weight": 1
         }
@@ -3316,17 +3293,17 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "OpenFOAM solidDisplacementFoam - Yield (park data, forward control)",
+      "name": "Run OpenFOAM case - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
           "name": "data",
-          "schema_ref": "#/definitions/Data__simulate"
+          "schema_ref": "#/definitions/Data__run"
         },
         {
           "cardinality": "single",
           "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__simulate"
+          "schema_ref": "#/definitions/Ctrl__run"
         }
       ],
       "output_schema": {
@@ -3339,12 +3316,12 @@
       },
       "outputs": [
         {
-          "place": "p_simulate_data",
+          "place": "p_run_data",
           "port": "data",
           "weight": 1
         },
         {
-          "place": "p_simulate_ctrl",
+          "place": "p_run_ctrl",
           "port": "ctrl",
           "weight": 1
         }
@@ -3378,7 +3355,7 @@
         "source": "let d = tok; #{ data: d, main: d }",
         "type": "rhai"
       },
-      "name": "Firing curve - Park Inputs (fork: park data, forward token)",
+      "name": "Case + solver - Park Inputs (fork: park data, forward token)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3437,10 +3414,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d._process_name = \"OpenFOAM firing eval\"; #{ output: d }",
+        "source": "let d = input; d._process_name = \"OpenFOAM run case\"; #{ output: d }",
         "type": "rhai"
       },
-      "name": "Firing curve - Derive Process Name",
+      "name": "Case + solver - Derive Process Name",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3469,7 +3446,7 @@
         "forward_ports": [
           "main"
         ],
-        "name": "Firing curve",
+        "name": "Case + solver",
         "name_field": "_process_name"
       },
       "id": "t_start_proc_start",
@@ -3500,13 +3477,13 @@
           "forward_ports": [
             "main"
           ],
-          "name": "Firing curve",
+          "name": "Case + solver",
           "name_field": "_process_name"
         },
         "handler_id": "process_start",
         "type": "effect"
       },
-      "name": "Firing curve - Register Process",
+      "name": "Case + solver - Register Process",
       "output_ports": [
         {
           "cardinality": "single",
