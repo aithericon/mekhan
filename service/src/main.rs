@@ -346,13 +346,17 @@ async fn main() -> anyhow::Result<()> {
     // `StaticPrincipalResolver` (no DB) — that path yields `workspace_id =
     // None` which handlers tolerate by falling back to the default
     // workspace at the call site.
-    // `auth.multi_org` (default false) gates real per-org tenancy: each
-    // Zitadel org claim maps to its bound workspace, and the legacy
-    // auto-join-`default`-as-editor fallback is dropped. OFF keeps the
-    // single-org / dev_noop behaviour.
+    // `auth.multi_org` (default false) gates real per-org tenancy: each Zitadel
+    // org claim maps to its bound workspace, and the legacy auto-join-`default`-
+    // as-editor fallback is dropped. `auth.auto_join_system_workspaces` (default
+    // false) gates the legacy `demos`-as-viewer auto-join; `auth.platform_admins`
+    // sets `is_platform_admin`. The resolver never auto-joins the shared
+    // `default` tenant in either mode (a homeless principal gets a personal
+    // workspace instead).
     let principal_resolver: Arc<dyn PrincipalResolver> = Arc::new(DbPrincipalResolver::with_options(
         db.clone(),
         config.auth.multi_org,
+        config.auth.auto_join_system_workspaces,
         config.auth.platform_admins.clone(),
     ));
 

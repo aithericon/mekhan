@@ -134,20 +134,35 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // because that raw envelope had the executor's `outputs.<field>` at
     // depth-1; once publish.rs filters reply sources to End-derived terminals
     // only, the join MUST unwrap the `exit_code.value` envelope.
-    // A NON-terminal SubWorkflow inside a Map body must thread the Map
-    // correlation leaves (`__map_idx`/`__map_id`) from the child's reply onto its
-    // output, so they reach the body terminal (whose executor envelope the Map's
-    // gather reads) and the gather can correlate. They threaded INTO the child via
-    // the shape graft and ride back on the End's full-token reply. Without this,
-    // the join projects only declared fields → the terminal's result lands at the
-    // gather with `__map_id: ()` and the barrier never fires → the Map (and any
-    // enclosing lease) wedges. Guarded on presence, and only emitted in a Map body
-    // (the terminal SubWorkflow uses `join_logic_map`, which already grafts).
-    let map_corr_graft = if map_item_var.is_some() {
-        r#" if type_of(reply) == "map" { if "__map_idx" in reply { __o.__map_idx = reply.__map_idx; } if "__map_id" in reply { __o.__map_id = reply.__map_id; } }"#
-    } else {
-        ""
-    };
+    // Thread the Map correlation leaves (`__map_idx`/`__map_id`) from the child's
+    // reply back onto this node's output — UNCONDITIONALLY (runtime-guarded on
+    // presence), mirroring the unconditional graft-IN at `t_shape` below. This MUST
+    // be symmetric with the graft-in or correlation leaks across nesting depth:
+    //
+    //   - `t_shape` always grafts `__map_*` from `input` onto the spawn
+    //     `initial_token` whenever present (so they thread into the child).
+    //   - so the child's End reply always carries them back whenever they were
+    //     present on the inbound token,
+    //   - therefore the join must always graft them from `reply` back onto the
+    //     output whenever present, so they survive THIS node and ride onward.
+    //
+    // The earlier gate (`map_item_var.is_some()` — emit only when this SubWorkflow
+    // is DIRECTLY inside a Map body) was a TRANSITIVE-nesting bug. Consider a
+    // COMPOSITE library node: a Map body → sub_workflow f001, where f001 itself
+    // contains a sub_workflow call `run` → f002 (Start → casegen → run → extract →
+    // End). The Map dispatches into f001 with `__map_*` grafted onto f001's initial
+    // token; they survive casegen (executor `_`-leaf preservation) and reach `run`.
+    // `run`'s `t_shape` threads them into f002 (unconditional graft-in), f002
+    // replies with them — but `run` is NOT directly in a Map (`map_item_var` is
+    // None on f001's graph), so the OLD gate dropped them at `run`'s join. `extract`
+    // and f001's End then never saw them → f001's reply lacked `__map_*` → the outer
+    // Map's gather barrier found `__map_id: ()`, correlated 0 of K results, and
+    // wedged the Map (and any enclosing lease) forever. Making the graft
+    // unconditional (it is a runtime no-op for any reply without `__map_*`) lets
+    // correlation pass transparently through arbitrarily-nested sub-workflows.
+    // (The terminal SubWorkflow path uses `join_logic_map`, which already grafts
+    // unconditionally — this brings the non-terminal `join_logic` into symmetry.)
+    let map_corr_graft = r#" if type_of(reply) == "map" { if "__map_idx" in reply { __o.__map_idx = reply.__map_idx; } if "__map_id" in reply { __o.__map_id = reply.__map_id; } }"#;
     let join_logic = if output.fields.is_empty() {
         format!(
             r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = __v;{map_corr_graft} #{{ output: __o }}"#
@@ -284,26 +299,48 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // Join success: child terminal result → node output (declared mapping). A
     // Map body terminal re-shapes the output as a `detail.outputs` envelope and
     // reads the correlation leaves straight off the (threaded-back) reply.
+    //
+    // `t_join`/`t_fail` ALSO consume `p_spawned` — not for its data (the join
+    // logic ignores it) but to re-merge the firing's `reply_routing`. The token
+    // that entered THIS node (`p_input`) carried this net's OWN caller reply
+    // address (e.g. a sub_workflow used as a Map body replying back to the
+    // parent Map). That routing rode onto `p_spawned` through shape→spawn (every
+    // output token inherits the firing's merged reply_routing), but the child's
+    // `reply` token carries only the child's residual routing — so a join that
+    // consumes the reply ALONE drops the outer address across the inner
+    // spawn→reply cycle. The net's own End-reply then fails with "no matching
+    // reply address", i.e. a COMPOSITE sub_workflow (one that itself calls a
+    // sub_workflow) could never reply to its caller. The engine merges
+    // reply_routing across all consumed tokens (`binding.rs::merge_reply_routing`),
+    // so consuming `p_spawned` here restores the outer address. `p_spawned` is
+    // produced once at spawn and is always present before the reply/failure
+    // arrives, so this never deadlocks; for a non-nested caller it carries no
+    // routing and the merge is a harmless no-op.
     if is_map_body_terminal {
         ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
             .auto_input("reply", &p_reply)
+            .auto_input("_spawned", &p_spawned)
             .auto_output("output", &p_output)
             .logic(join_logic_map);
     } else {
         ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
             .auto_input("reply", &p_reply)
+            .auto_input("_spawned", &p_spawned)
             .auto_output("output", &p_output)
             .logic(join_logic);
     }
 
     // Failure: child failure → node error output when wired; crash the net
-    // (panic → NetFailed) when unwired.
+    // (panic → NetFailed) when unwired. Consumes `p_spawned` for the same
+    // reply_routing-preservation reason as `t_join` (and so the spawned-token is
+    // not left dangling on the failure path).
     if let Some(p_error) = &p_error {
         ctx.transition(
             format!("t_{id}_fail"),
             format!("{label} - On Child Failure"),
         )
         .auto_input("reply", &p_failure)
+        .auto_input("_spawned", &p_spawned)
         .auto_output("error", p_error)
         .logic(r#"#{ error: reply }"#);
     } else {
@@ -313,6 +350,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
             format!("{label} - Child Failure (no handler — crash net)"),
         )
         .auto_input("reply", &p_failure)
+        .auto_input("_spawned", &p_spawned)
         .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
         .done();
     }

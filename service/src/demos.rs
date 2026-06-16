@@ -818,7 +818,9 @@ async fn ensure_demo_folder(
 /// consulted on the read path), so without this the seeder — publishing as
 /// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
 /// `ensure_default_workspace_membership` path that real users do — cannot
-/// resolve any workspace resource a demo references. Idempotent.
+/// resolve any workspace resource a demo references. The seeder principal
+/// ([`DEMO_SEEDER_AUTHOR_ID`]) never logs in through the BFF, so it gets this
+/// explicit owner row rather than any auto-provisioned membership. Idempotent.
 async fn ensure_seeder_workspace_membership(state: &crate::AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
