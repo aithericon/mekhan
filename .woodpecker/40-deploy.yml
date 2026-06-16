@@ -30,10 +30,8 @@ when:
     event: push
   - event: manual
 
-# TEMP: 30-build disabled while iterating on deploy terraform — deploy runs
-# standalone against whatever image SHA is already in the registry. Restore
-# `depends_on: [30-build]` (and rename 30-build.yml.disabled back) when done.
-depends_on: []
+# Runs only after 30-build has pushed the images for this commit.
+depends_on: [30-build]
 
 labels:
   role: deploy
@@ -85,9 +83,7 @@ steps:
       # $CI_COMMIT_SHA; depends_on above guarantees they exist by the time
       # this step runs. For replays of an older SHA, trigger a manual run
       # and override the literal here.
-      # TEMP: hardcoded SHA while 30-build is disabled — deploy a known-built
-      # image instead of $CI_COMMIT_SHA. Restore "$CI_COMMIT_SHA" when build is back.
-      - just ci::deploy-dev "01a7aa1f3c975d66adbfccaec35b015e71174cc0"
+      - just ci::deploy-dev "$CI_COMMIT_SHA"
     depends_on: []
 
   - name: verify-dev
