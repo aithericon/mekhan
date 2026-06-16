@@ -43,7 +43,7 @@
             }
           },
           "403": {
-            "description": "Editor of the default workspace required",
+            "description": "Editor of the demos workspace required",
             "content": {
               "application/json": {
                 "schema": {
@@ -85,7 +85,7 @@
             }
           },
           "403": {
-            "description": "Editor of the default workspace required",
+            "description": "Editor of the demos workspace required",
             "content": {
               "application/json": {
                 "schema": {
@@ -17405,6 +17405,10 @@
               "null"
             ]
           },
+          "is_platform_admin": {
+            "type": "boolean",
+            "description": "Whether this principal is a platform administrator — granted by the\n`auth.platform_admins` allow-list (subject or email) or the dev-noop\nseed. Gates platform-global governance affordances (the platform scope).\n`#[serde(default)]` keeps old session JSON deserializing to `false`."
+          },
           "org_id": {
             "type": [
               "string",
@@ -20032,6 +20036,10 @@
             ],
             "format": "int32"
           },
+          "platform": {
+            "type": "boolean",
+            "description": "Mint the token against the **platform tier** (`workspace_id =\nPLATFORM_SCOPE_ID`) instead of the caller's workspace, so a serving\nrunner enrolling with it lands its `runner_interfaces` row under the\nshared platform pool. Requires `is_platform_admin`; only meaningful with\n`group = \"model_serving\"` (the platform model-serving group). Defaults to\n`false` (the historical workspace-scoped token)."
+          },
           "reusable": {
             "type": [
               "boolean",
@@ -20223,6 +20231,10 @@
               "null"
             ],
             "format": "int32"
+          },
+          "platform": {
+            "type": "boolean",
+            "description": "Mint against the shared **platform** worker pool rather than the caller's\nworkspace: the token's `workspace_id` is forced to `PLATFORM_SCOPE_ID` and\nit enrols workers into the global competing-consumer `default` group.\nRequires `is_platform_admin` (curation is a platform-admin capability).\nDefaults to `false` (a normal workspace-scoped token)."
           },
           "reusable": {
             "type": [
@@ -31021,6 +31033,7 @@
         "type": "string",
         "description": "Polymorphic owner discriminator. A resource/asset/asset-type is owned by\n**exactly one** scope; visibility flows downward (template ⊃ folder ⊃\nworkspace) with most-specific-wins. See [`crate::scope`].",
         "enum": [
+          "platform",
           "workspace",
           "folder",
           "template"

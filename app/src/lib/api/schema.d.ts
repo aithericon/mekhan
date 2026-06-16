@@ -5971,6 +5971,13 @@ export interface components {
             display_name?: string | null;
             email?: string | null;
             /**
+             * @description Whether this principal is a platform administrator — granted by the
+             *     `auth.platform_admins` allow-list (subject or email) or the dev-noop
+             *     seed. Gates platform-global governance affordances (the platform scope).
+             *     `#[serde(default)]` keeps old session JSON deserializing to `false`.
+             */
+            is_platform_admin?: boolean;
+            /**
              * @description Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).
              *     Metadata only — the authoritative tenant is `workspace_id`, looked up
              *     from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
@@ -7283,6 +7290,15 @@ export interface components {
             group?: string | null;
             /** Format: int32 */
             max_uses?: number | null;
+            /**
+             * @description Mint the token against the **platform tier** (`workspace_id =
+             *     PLATFORM_SCOPE_ID`) instead of the caller's workspace, so a serving
+             *     runner enrolling with it lands its `runner_interfaces` row under the
+             *     shared platform pool. Requires `is_platform_admin`; only meaningful with
+             *     `group = "model_serving"` (the platform model-serving group). Defaults to
+             *     `false` (the historical workspace-scoped token).
+             */
+            platform?: boolean;
             /** @description Defaults to `true` (reusable) when omitted. */
             reusable?: boolean | null;
         };
@@ -7369,6 +7385,14 @@ export interface components {
             group?: string | null;
             /** Format: int32 */
             max_uses?: number | null;
+            /**
+             * @description Mint against the shared **platform** worker pool rather than the caller's
+             *     workspace: the token's `workspace_id` is forced to `PLATFORM_SCOPE_ID` and
+             *     it enrols workers into the global competing-consumer `default` group.
+             *     Requires `is_platform_admin` (curation is a platform-admin capability).
+             *     Defaults to `false` (a normal workspace-scoped token).
+             */
+            platform?: boolean;
             /** @description Defaults to `true` (reusable) when omitted. */
             reusable?: boolean | null;
         };
@@ -12396,7 +12420,7 @@ export interface components {
          *     workspace) with most-specific-wins. See [`crate::scope`].
          * @enum {string}
          */
-        ScopeKind: "workspace" | "folder" | "template";
+        ScopeKind: "platform" | "workspace" | "folder" | "template";
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -14754,7 +14778,7 @@ export interface operations {
                     "application/json": components["schemas"]["DemoResetReport"];
                 };
             };
-            /** @description Editor of the default workspace required */
+            /** @description Editor of the demos workspace required */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14792,7 +14816,7 @@ export interface operations {
                     "application/json": components["schemas"]["DemoResetReport"];
                 };
             };
-            /** @description Editor of the default workspace required */
+            /** @description Editor of the demos workspace required */
             403: {
                 headers: {
                     [name: string]: unknown;
