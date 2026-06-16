@@ -13,12 +13,10 @@
 # =============================================================================
 
 # 20-test.yml is disabled — re-add `depends_on: [20-test]` when it's back.
-# Build ONLY on the `dev` push. The image is keyed by commit SHA; prod reuses
-# that exact image when `dev` is fast-forward-merged to `main` (the merge keeps
-# the SHA), so there is no rebuild on the prod path. FF-only merges are
-# therefore required — a merge commit on main has a SHA with no built image.
+# Build on BOTH dev and main pushes: dev push → image for the dev deploy,
+# main push → image for the prod deploy.
 when:
-  - branch: dev
+  - branch: [dev, main]
     event: push
   - event: manual
 
