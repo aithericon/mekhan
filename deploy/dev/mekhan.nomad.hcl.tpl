@@ -173,6 +173,17 @@ EOH
         MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
         MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
         MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
+        # Invite-email delivery (Phase 4). mode=smtp makes the in-app invite
+        # feature actually send the accept link via the relay; mode=log just
+        # writes the link to the service log. PUBLIC_BASE_URL must be the
+        # externally reachable origin so the accept link resolves for invitees.
+        MEKHAN__EMAIL__MODE            = "${email_mode}"
+        MEKHAN__EMAIL__FROM_ADDRESS    = "${email_from_address}"
+        MEKHAN__EMAIL__PUBLIC_BASE_URL = "${email_public_base_url}"
+        MEKHAN__EMAIL__SMTP_HOST       = "${email_smtp_host}"
+        MEKHAN__EMAIL__SMTP_PORT       = "${email_smtp_port}"
+        MEKHAN__EMAIL__SMTP_USERNAME   = "${email_smtp_username}"
+        MEKHAN__EMAIL__SMTP_PASSWORD   = "${email_smtp_password}"
         MEKHAN__DEMOS__SEED        = "true"
         # Vault — VaultResourceStore writes resource version secrets to
         # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`

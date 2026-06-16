@@ -172,15 +172,116 @@ variable "zitadel_issuer_url" {
 
 variable "zitadel_org_id" {
   description = <<-EOT
-    Numeric ID of the Zitadel organization
+    DEPRECATED / UNUSED. Mekhan now creates its own dedicated org
+    ("Mekhan Testers") in zitadel.tf and pins every resource to it via
+    zitadel_org.mekhan_testers.id. This variable is kept only so the CI export
+    (TF_VAR_zitadel_org_id from Vault) and any local tfvars line don't error.
+    Safe to remove once CI stops exporting it.
   EOT
   type        = string
+  default     = ""
+}
+
+variable "tester_users" {
+  description = <<-EOT
+    TF-managed accounts in the dedicated "Mekhan Testers" Zitadel org. In
+    practice this holds only the bootstrap admin — real testers are onboarded
+    in-app via Mekhan's invite feature, not here. Each entry becomes a
+    zitadel_human_user with a random initial password (published to Vault at
+    secret/services/mekhan/dev/testers/<key>) and a grant of `role` on the
+    Mekhan project.
+
+    Membership in this isolated org is what scopes the account to Mekhan only —
+    NOT a member of the cluster's default org, so no access to Vault / Nomad /
+    Grafana / Matrix.
+
+    Map key is a stable slug; the `role` must be one of the project roles
+    defined in zitadel.tf (mekhan_user | mekhan_admin).
+  EOT
+  type = map(object({
+    username   = string
+    first_name = string
+    last_name  = string
+    email      = string
+    role       = optional(string, "mekhan_user")
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for u in values(var.tester_users) : contains(["mekhan_user", "mekhan_admin"], u.role)])
+    error_message = "tester_users[*].role must be mekhan_user or mekhan_admin."
+  }
+}
+
+variable "workspace_owner_user_key" {
+  description = <<-EOT
+    Key in `tester_users` to seed as OWNER of the "Testers" Mekhan workspace
+    (one-time bootstrap). This is the account that logs in and sends in-app
+    invites. Empty string ⇒ no owner is computed and the bootstrap-SQL output
+    is null. Must reference an existing key in tester_users.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.workspace_owner_user_key == "" || contains(keys(var.tester_users), var.workspace_owner_user_key)
+    error_message = "workspace_owner_user_key must be \"\" or a key present in tester_users."
+  }
 }
 
 variable "rust_log" {
   description = "RUST_LOG filter passed to the service"
   type        = string
   default     = "info,mekhan_service=debug"
+}
+
+# ── Invite email (Phase 4) ────────────────────────────────────────────────────
+# Drives the in-app invite feature's accept-link delivery. With mode=smtp the
+# service sends the link via the relay; with mode=log it only writes it to the
+# service log (offline-friendly default). public_base_url is derived from
+# var.hostname in main.tf.
+
+variable "email_mode" {
+  description = "Invite-email delivery mode: 'smtp' (send via relay) or 'log' (write accept link to service log only)."
+  type        = string
+  default     = "log"
+
+  validation {
+    condition     = contains(["smtp", "log"], var.email_mode)
+    error_message = "email_mode must be 'smtp' or 'log'."
+  }
+}
+
+variable "email_from_address" {
+  description = "From address on invite emails (must be an address the SMTP relay is allowed to send as, e.g. id@aithericon.eu)."
+  type        = string
+  default     = "id@aithericon.eu"
+}
+
+variable "email_smtp_host" {
+  description = "SMTP relay host (only used when email_mode=smtp)."
+  type        = string
+  default     = ""
+}
+
+variable "email_smtp_port" {
+  description = "SMTP relay port (e.g. 587 for STARTTLS)."
+  type        = number
+  default     = 587
+}
+
+variable "email_smtp_username" {
+  description = "SMTP relay username. Secret — inject via TF_VAR_email_smtp_username from Vault in CI; do NOT commit."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "email_smtp_password" {
+  description = "SMTP relay password. Secret — inject via TF_VAR_email_smtp_password from Vault in CI; do NOT commit."
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 # ── Resources ───────────────────────────────────────────────────────────────

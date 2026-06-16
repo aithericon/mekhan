@@ -43,6 +43,36 @@ s3_bucket   = "mekhan-artifacts-dev"
 auth_mode = "bff"
 rust_log  = "info,mekhan_service=debug"
 
+# ── Invite email ──────────────────────────────────────────────────────────────
+# mode=smtp makes the in-app invite feature send the accept link by email.
+# Non-secret settings here; the SMTP username/password are secrets and must be
+# injected in CI via TF_VAR_email_smtp_username / TF_VAR_email_smtp_password
+# (sourced from Vault), NOT committed.
+email_mode         = "smtp"
+email_from_address = "id@aithericon.eu"
+email_smtp_host    = "mail.your-server.de"
+email_smtp_port    = 587
+
+# Terraform creates ONLY the bootstrap admin here. Every other tester is
+# onboarded from INSIDE Mekhan (the admin sends in-app invites) — no TF entry
+# needed. The admin exists in TF solely so it can be seeded as workspace owner.
+# On apply it gets a random initial password published to Vault; read it with:
+#   vault kv get -field=initial_password secret/services/mekhan/dev/testers/mekhan_admin
+tester_users = {
+  mekhan_admin = {
+    username   = "mekhan-admin"
+    first_name = "Mekhan"
+    last_name  = "Admin"
+    email = "mekhan-admin@aithericon.eu"
+    role  = "mekhan_admin"
+  }
+}
+
+# Seed mekhan_admin as OWNER of the Testers Mekhan workspace (one-time bootstrap).
+# After the first deploy, run `tofu output -raw testers_workspace_bootstrap_sql`
+# and execute it once against the mekhan_dev DB. Then all onboarding is in-app.
+workspace_owner_user_key = "mekhan_admin"
+
 # ── Resources ───────────────────────────────────────────────────────────────
 cpu_mhz   = 500
 memory_mb = 512
