@@ -672,6 +672,7 @@ pub fn build_token_pool_net(resource_id: Uuid, capacity: u32) -> ScenarioDefinit
 /// next create/version/publish that calls this.)
 pub async fn ensure_token_pool_net_deployed(
     petri: &crate::petri::client::PetriClient,
+    workspace_id: Uuid,
     resource_id: Uuid,
     capacity: u32,
 ) {
@@ -699,9 +700,16 @@ pub async fn ensure_token_pool_net_deployed(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
-        // Pool nets are cross-cutting infra, not tenant-owned — engine routes
-        // them on its reserved "default" workspace sentinel.
-        None,
+        // Stamp the pool net with the OWNING resource's workspace. Bridges are
+        // intra-workspace only (the engine compares the source net's workspace
+        // string to the target's): an instance in workspace W bridges to its
+        // lease/capacity pool, so the pool MUST live in W too. A token_pool
+        // resource is workspace-scoped, so its workspace is the resource's.
+        // Stamping the default workspace's nil uuid AS the uuid string matches
+        // how instances are stamped (see `handlers::instances` deploy), so the
+        // prior nil-uuid ≠ "default" sentinel mismatch — which broke every demo
+        // lease bridge — can't recur.
+        Some(workspace_id.to_string()),
     )
     .await
     {
@@ -1185,6 +1193,7 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
 /// carries no per-instance seed state.
 pub async fn ensure_datacenter_adapter_deployed(
     petri: &crate::petri::client::PetriClient,
+    workspace_id: Uuid,
     conn: &DatacenterConnection,
 ) {
     let resource_id = conn.resource_id;
@@ -1216,9 +1225,14 @@ pub async fn ensure_datacenter_adapter_deployed(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
-        // Pool nets are cross-cutting infra, not tenant-owned — engine routes
-        // them on its reserved "default" workspace sentinel.
-        None,
+        // Stamp the lease-adapter net with the OWNING resource's workspace.
+        // Bridges are intra-workspace only (the engine compares workspace
+        // strings): an instance in workspace W bridges to its datacenter
+        // lease pool, so the pool MUST live in W. Datacenter resources are
+        // workspace-scoped; stamping the default workspace's nil uuid as the
+        // uuid string matches how instances are stamped, avoiding the prior
+        // nil-uuid ≠ "default" sentinel mismatch.
+        Some(workspace_id.to_string()),
     )
     .await
     {

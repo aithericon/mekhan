@@ -1289,6 +1289,7 @@ async fn ensure_pool_net_for_resource(
             };
             crate::petri::pool_net::ensure_token_pool_net_deployed(
                 &state.petri,
+                workspace_id,
                 resource_id,
                 capacity,
             )
@@ -1306,6 +1307,7 @@ async fn ensure_pool_net_for_resource(
             // the direct-assign net.
             crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
                 &state.petri,
+                workspace_id,
                 resource_id,
                 axes.acceptance,
             )
@@ -1337,7 +1339,12 @@ async fn ensure_pool_net_for_resource(
                 return;
             };
 
-            crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
+            crate::petri::pool_net::ensure_datacenter_adapter_deployed(
+                &state.petri,
+                workspace_id,
+                &conn,
+            )
+            .await;
         }
         CapacityBackend::Queue => {
             // A competing_consumer (pull) capacity has NO admission net (it is a

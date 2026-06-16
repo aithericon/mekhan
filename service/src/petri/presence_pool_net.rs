@@ -121,6 +121,7 @@ pub fn build_presence_pool_net(resource_id: Uuid, acceptance: Acceptance) -> Sce
 /// Identical rationale to the token-pool path.
 pub async fn ensure_presence_pool_net_deployed(
     petri: &crate::petri::client::PetriClient,
+    workspace_id: Uuid,
     resource_id: Uuid,
     acceptance: Acceptance,
 ) {
@@ -151,9 +152,14 @@ pub async fn ensure_presence_pool_net_deployed(
         &air,
         petri_api_types::DispatchOptions::default(),
         None,
-        // Presence pool nets are cross-cutting infra, not tenant-owned —
-        // engine routes them on its reserved "default" workspace sentinel.
-        None,
+        // Stamp the presence-pool net with the OWNING resource's workspace.
+        // Bridges are intra-workspace only (the engine compares workspace
+        // strings): an instance in workspace W bridges to its presence pool,
+        // so the pool MUST live in W. Presence resources are workspace-scoped;
+        // stamping the default workspace's nil uuid as the uuid string matches
+        // how instances are stamped, avoiding the prior nil-uuid ≠ "default"
+        // sentinel mismatch.
+        Some(workspace_id.to_string()),
     )
     .await
     {
