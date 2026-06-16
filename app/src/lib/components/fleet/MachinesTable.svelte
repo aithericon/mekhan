@@ -11,8 +11,9 @@
 	//        its "Enroll here").
 	//
 	// Runner liveness comes from the presence snapshot (the actual pool-capacity
-	// signal); worker liveness is `status === 'online'` + a last_seen freshness
-	// line (workers have no presence map). Polls every 5s.
+	// signal); worker liveness is the server-computed `online` flag (derived from
+	// mekhan's FleetLiveness presence snapshot — the executor's `worker.{id}.presence`
+	// NATS heartbeat) plus a last_seen freshness line. Polls every 5s.
 	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -168,7 +169,10 @@
 			id: w.id,
 			name: w.name,
 			group: w.group ?? null,
-			online: w.status === 'online',
+			// Liveness is the server-computed `online` flag (derived from the live
+			// FleetLiveness presence snapshot), NOT `status` — `status` is the
+			// lifecycle marker (enrolled/revoked) and is never 'online'.
+			online: w.online,
 			lastSeen: workerLastSeen(w),
 			backends: workerBackends(w),
 			enrolledAt: w.enrolled_at,

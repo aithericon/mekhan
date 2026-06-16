@@ -104,12 +104,25 @@ pub struct WorkerSummary {
     /// served-backend summary inline without an extra per-worker round-trip. `[]`
     /// when none.
     pub backends: serde_json::Value,
+    /// Whether this worker is currently LIVE — i.e. an entry for its id is present
+    /// in mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by
+    /// the `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the
+    /// authoritative "is it up right now?" signal: it derives from the same
+    /// presence stream the executor actually emits, and — unlike a persisted flag
+    /// — can't go stale across a mekhan restart (an empty snapshot simply
+    /// repopulates within one presence interval). `status` remains the lifecycle
+    /// marker (`enrolled`/`revoked`), NOT liveness.
+    pub online: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<DateTime<Utc>>,
     pub enrolled_at: DateTime<Utc>,
 }
 
 impl From<WorkerRow> for WorkerSummary {
+    /// DB-only projection: `online` defaults to `false` and `last_seen_at` is the
+    /// persisted column. The read handlers overlay the live
+    /// [`crate::fleet::FleetLiveness`] snapshot to set `online` (and a fresher
+    /// `last_seen_at`) for currently-connected workers.
     fn from(w: WorkerRow) -> Self {
         Self {
             id: w.id,
@@ -118,6 +131,7 @@ impl From<WorkerRow> for WorkerSummary {
             routing_partition: w.routing_partition,
             status: w.status,
             backends: w.backends,
+            online: false,
             last_seen_at: w.last_seen_at,
             enrolled_at: w.enrolled_at,
         }
@@ -140,6 +154,11 @@ pub struct WorkerDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats_public_key: Option<String>,
     pub backends: serde_json::Value,
+    /// Live presence (see [`WorkerSummary::online`]): `true` when an entry for this
+    /// worker is in the in-memory [`crate::fleet::FleetLiveness`] snapshot. The
+    /// `get_worker` handler overlays the snapshot; `From<WorkerRow>` defaults it to
+    /// `false`.
+    pub online: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<DateTime<Utc>>,
     pub enrolled_at: DateTime<Utc>,
@@ -148,6 +167,8 @@ pub struct WorkerDetail {
 }
 
 impl From<WorkerRow> for WorkerDetail {
+    /// DB-only projection (`online = false`, persisted `last_seen_at`); the read
+    /// handler overlays the live [`crate::fleet::FleetLiveness`] snapshot.
     fn from(w: WorkerRow) -> Self {
         Self {
             id: w.id,
@@ -158,6 +179,7 @@ impl From<WorkerRow> for WorkerDetail {
             status: w.status,
             nats_public_key: w.nats_public_key,
             backends: w.backends,
+            online: false,
             last_seen_at: w.last_seen_at,
             enrolled_at: w.enrolled_at,
             revoked_at: w.revoked_at,

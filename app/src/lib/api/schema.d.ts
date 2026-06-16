@@ -10736,6 +10736,17 @@ export interface components {
                 last_seen_at?: string | null;
                 name: string;
                 /**
+                 * @description Whether this worker is currently LIVE — i.e. an entry for its id is present
+                 *     in mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by
+                 *     the `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the
+                 *     authoritative "is it up right now?" signal: it derives from the same
+                 *     presence stream the executor actually emits, and — unlike a persisted flag
+                 *     — can't go stale across a mekhan restart (an empty snapshot simply
+                 *     repopulates within one presence interval). `status` remains the lifecycle
+                 *     marker (`enrolled`/`revoked`), NOT liveness.
+                 */
+                online: boolean;
+                /**
                  * Format: uuid
                  * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
                  *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
@@ -13840,6 +13851,13 @@ export interface components {
             last_seen_at?: string | null;
             name: string;
             nats_public_key?: string | null;
+            /**
+             * @description Live presence (see [`WorkerSummary::online`]): `true` when an entry for this
+             *     worker is in the in-memory [`crate::fleet::FleetLiveness`] snapshot. The
+             *     `get_worker` handler overlays the snapshot; `From<WorkerRow>` defaults it to
+             *     `false`.
+             */
+            online: boolean;
             /** Format: date-time */
             revoked_at?: string | null;
             /**
@@ -13906,6 +13924,17 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             name: string;
+            /**
+             * @description Whether this worker is currently LIVE — i.e. an entry for its id is present
+             *     in mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by
+             *     the `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the
+             *     authoritative "is it up right now?" signal: it derives from the same
+             *     presence stream the executor actually emits, and — unlike a persisted flag
+             *     — can't go stale across a mekhan restart (an empty snapshot simply
+             *     repopulates within one presence interval). `status` remains the lifecycle
+             *     marker (`enrolled`/`revoked`), NOT liveness.
+             */
+            online: boolean;
             /**
              * Format: uuid
              * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`

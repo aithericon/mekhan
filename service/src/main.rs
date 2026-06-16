@@ -283,9 +283,11 @@ async fn main() -> anyhow::Result<()> {
     // Worker liveness tasks (worker-pool feature). Subscribe to
     // `worker.*.presence` and keep a TTL-swept set of which `ExecutorJob`
     // backends have ≥1 live worker, so publish can WARN (never fail) when a
-    // step's backend is served by zero capacities. Wire-only; share the `fleet`
-    // handle stored in AppState.
-    mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone());
+    // step's backend is served by zero capacities. The `db` handle lets the
+    // subscriber reflect each enrolled worker's heartbeat into `workers.last_seen_at`
+    // (the executor only emits NATS presence, never the HTTP heartbeat). Share the
+    // `fleet` handle stored in AppState.
+    mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone(), db.clone());
 
     // Model-pool placement autoscaler. A reconcile loop that decides WHICH models
     // are loaded and how they are spread across the already-registered LLM runners,

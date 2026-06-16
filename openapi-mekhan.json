@@ -27684,6 +27684,7 @@
                 "routing_partition",
                 "status",
                 "backends",
+                "online",
                 "enrolled_at"
               ],
               "properties": {
@@ -27713,6 +27714,10 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "online": {
+                  "type": "boolean",
+                  "description": "Whether this worker is currently LIVE — i.e. an entry for its id is present\nin mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by\nthe `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the\nauthoritative \"is it up right now?\" signal: it derives from the same\npresence stream the executor actually emits, and — unlike a persisted flag\n— can't go stale across a mekhan restart (an empty snapshot simply\nrepopulates within one presence interval). `status` remains the lifecycle\nmarker (`enrolled`/`revoked`), NOT liveness."
                 },
                 "routing_partition": {
                   "type": "string",
@@ -34020,6 +34025,7 @@
           "routing_partition",
           "status",
           "backends",
+          "online",
           "enrolled_at"
         ],
         "properties": {
@@ -34053,6 +34059,10 @@
               "string",
               "null"
             ]
+          },
+          "online": {
+            "type": "boolean",
+            "description": "Live presence (see [`WorkerSummary::online`]): `true` when an entry for this\nworker is in the in-memory [`crate::fleet::FleetLiveness`] snapshot. The\n`get_worker` handler overlays the snapshot; `From<WorkerRow>` defaults it to\n`false`."
           },
           "revoked_at": {
             "type": [
@@ -34149,6 +34159,7 @@
           "routing_partition",
           "status",
           "backends",
+          "online",
           "enrolled_at"
         ],
         "properties": {
@@ -34178,6 +34189,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "online": {
+            "type": "boolean",
+            "description": "Whether this worker is currently LIVE — i.e. an entry for its id is present\nin mekhan's in-memory [`crate::fleet::FleetLiveness`] snapshot (refreshed by\nthe `worker.{id}.presence` NATS heartbeat, TTL-swept). This is the\nauthoritative \"is it up right now?\" signal: it derives from the same\npresence stream the executor actually emits, and — unlike a persisted flag\n— can't go stale across a mekhan restart (an empty snapshot simply\nrepopulates within one presence interval). `status` remains the lifecycle\nmarker (`enrolled`/`revoked`), NOT liveness."
           },
           "routing_partition": {
             "type": "string",
