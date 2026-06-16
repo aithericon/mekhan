@@ -51,6 +51,9 @@
 	} from '$lib/api/resources';
 	import type { CapacitySummary } from '$lib/api/capacities';
 	import { resolveEditKind, type Kind } from './new-capacity-kind';
+	import { auth } from '$lib/auth/store.svelte';
+	import { isPlatformCapacity } from '$lib/api/resource-tier';
+	import Globe from '@lucide/svelte/icons/globe';
 
 	// ── Kind switcher ───────────────────────────────────────────────────────────
 
@@ -110,6 +113,16 @@
 	let kind = $state<Kind>('runner_group');
 	const activeKind = $derived(KINDS.find((k) => k.kind === kind)!);
 
+	// ── Platform tier ────────────────────────────────────────────────────────────
+	// A pool can be created at the shared platform tier (`scope_kind: 'platform'`)
+	// instead of the caller's workspace — visible read-only to every workspace,
+	// curated by platform admins. The toggle is offered on CREATE to platform
+	// admins only; the backend independently 403s a non-admin platform mint. On
+	// EDIT we don't move tiers — we just badge a platform pool as read-only-tier.
+	const isPlatformAdmin = $derived(auth.isPlatformAdmin);
+	let createAsPlatform = $state(false);
+	const editIsPlatform = $derived(isEdit && !!editing && isPlatformCapacity(editing));
+
 	// ── Shared form state ───────────────────────────────────────────────────────
 	let path = $state('');
 	let displayName = $state('');
@@ -163,6 +176,7 @@
 		displayName = target ? target.display_name : '';
 		// Limit count: the seeded N is already on the summary's live facet.
 		count = target && target.live.kind === 'tokens' ? String(target.live.seeded) : '1';
+		createAsPlatform = false;
 		fieldValues = {};
 		discriminator = null;
 		(async () => {
@@ -230,6 +244,9 @@
 		}
 		loading = true;
 		error = null;
+		// Create at the shared platform tier when the admin opted in (create only).
+		// The backend re-checks the admin flag and forces PLATFORM_SCOPE_ID.
+		const scopeKind = !isEdit && isPlatformAdmin && createAsPlatform ? 'platform' : undefined;
 		try {
 			if (kind === 'cluster') {
 				const config = buildClusterConfig();
@@ -243,7 +260,8 @@
 						path,
 						resource_type: 'datacenter',
 						display_name: displayName || null,
-						config
+						config,
+						scope_kind: scopeKind
 					});
 				}
 			} else if (kind === 'limit') {
@@ -263,7 +281,8 @@
 						path,
 						resource_type: 'capacity',
 						display_name: displayName || null,
-						config
+						config,
+						scope_kind: scopeKind
 					});
 				}
 			} else {
@@ -287,7 +306,8 @@
 						path,
 						resource_type: 'capacity',
 						display_name: displayName || null,
-						config: { preset: activeKind.preset }
+						config: { preset: activeKind.preset },
+						scope_kind: scopeKind
 					});
 				}
 			}
@@ -317,6 +337,15 @@
 						? 'Update this pool. Its kind and name are fixed; change the editable fields below.'
 						: 'Pick the kind of pool to add.'}
 				</SheetDescription>
+				{#if editIsPlatform}
+					<span
+						class="inline-flex w-fit items-center gap-1 rounded-md bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800"
+						title="Platform tier — shared across all workspaces, managed by platform admins"
+						data-testid="new-capacity-platform-badge"
+					>
+						<Globe class="size-3" /> Platform (shared)
+					</span>
+				{/if}
 			</div>
 
 			{#if error}
@@ -351,6 +380,32 @@
 					</button>
 				{/each}
 			</div>
+
+			<!-- Platform tier — a shared pool curated by platform admins, visible
+				 read-only to every workspace. Offered on create to admins only; the
+				 backend independently 403s a non-admin platform mint. -->
+			{#if !isEdit && isPlatformAdmin}
+				<label
+					class="flex items-start gap-2.5 rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm"
+					data-testid="new-capacity-platform-toggle"
+				>
+					<input
+						type="checkbox"
+						checked={createAsPlatform}
+						onchange={(e) => (createAsPlatform = (e.currentTarget as HTMLInputElement).checked)}
+						class="mt-0.5 size-4"
+					/>
+					<span>
+						<span class="flex items-center gap-1.5 font-medium text-foreground">
+							<Globe class="size-3.5" /> Platform (shared)
+						</span>
+						<span class="text-muted-foreground">
+							Create at the global platform tier — every workspace can run against it,
+							but only platform admins curate it. Otherwise it's scoped to your workspace.
+						</span>
+					</span>
+				</label>
+			{/if}
 
 			<!-- Shared name + display fields -->
 			<div class="space-y-4">
