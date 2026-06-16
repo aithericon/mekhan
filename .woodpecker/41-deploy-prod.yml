@@ -7,9 +7,9 @@
 # Vault role, and Zitadel org. All divergence flows from `environment="prod"`
 # in deploy/prod/prod.auto.tfvars via deploy/prod/locals.tf.
 #
-# MANUAL ONLY — prod never auto-deploys on push. Trigger it deliberately from
-# the Woodpecker UI (and pass the image SHA you want via CI_COMMIT_SHA / a
-# manual run on the target commit).
+# Auto-deploys PROD on push to `main` (same trigger as 40-deploy/dev), plus a
+# manual trigger for replays. Both run after 30-build publishes the image for
+# the commit; dev and prod roll out in parallel off the same SHA.
 #
 # ONE-TIME PROD BOOTSTRAP (before the first successful run) — see
 # deploy/README.md:
@@ -29,11 +29,12 @@
 # =============================================================================
 
 when:
+  - branch: main
+    event: push
   - event: manual
 
-# Manual-only: this pipeline deploys an image SHA already published to the
-# registry by 30-build, so it does not depend on a build of its own.
-depends_on: []
+# Runs only after 30-build has pushed the images for this commit (same as dev).
+depends_on: [30-build]
 
 labels:
   role: deploy
