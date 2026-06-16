@@ -38,6 +38,13 @@ export interface AuthUser {
 	 * edit / revoke). Absent when no membership backs the workspace.
 	 */
 	workspaceRole?: string;
+	/**
+	 * Whether the principal is a platform-level administrator — a global tier
+	 * above any single workspace. Gates platform-scoped affordances (e.g.
+	 * creating/curating `scope_kind: 'platform'` resources). The server is
+	 * authoritative; this only hides the affordance client-side.
+	 */
+	isPlatformAdmin?: boolean;
 }
 
 export interface AuthSession {

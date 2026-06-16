@@ -20,6 +20,8 @@
 		type ResourceTypeInfo
 	} from '$lib/api/resources';
 	import { roleAtLeast } from '$lib/api/iam';
+	import { isPlatformResource } from '$lib/api/resource-tier';
+	import Globe from '@lucide/svelte/icons/globe';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import ResourceEditModal from './ResourceEditModal.svelte';
@@ -190,6 +192,7 @@
 	{:else}
 		<div class="space-y-2">
 			{#each visibleResources as r (r.id)}
+				{@const isPlatform = isPlatformResource(r)}
 				{@const canEdit = roleAtLeast(r.my_effective_role, 'editor')}
 				{@const canShare = roleAtLeast(r.my_effective_role, 'admin')}
 				<div
@@ -207,6 +210,16 @@
 								<span class="font-mono text-sm font-medium text-foreground">{r.path}</span>
 								<Badge variant="secondary">{r.resource_type}</Badge>
 								<Badge variant="outline">v{r.latest_version}</Badge>
+								{#if isPlatform}
+									<Badge
+										class="gap-1 bg-sky-100 text-sky-800"
+										variant="secondary"
+										title="Platform tier — shared across all workspaces, managed by platform admins"
+										data-testid="resource-platform-badge-{r.id}"
+									>
+										<Globe class="size-3" /> Platform
+									</Badge>
+								{/if}
 								{#if r.restricted}
 									<Badge
 										class="gap-1 bg-amber-100 text-amber-800"

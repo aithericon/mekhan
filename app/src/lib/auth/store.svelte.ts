@@ -25,6 +25,7 @@ interface SessionUserDto {
 	workspace_id?: string | null;
 	workspace_role?: string | null;
 	avatar_url?: string | null;
+	is_platform_admin?: boolean;
 }
 
 function toUser(dto: SessionUserDto): AuthUser {
@@ -37,7 +38,8 @@ function toUser(dto: SessionUserDto): AuthUser {
 		orgId: dto.org_id ?? undefined,
 		workspaceId: dto.workspace_id ?? undefined,
 		workspaceRole: dto.workspace_role ?? undefined,
-		avatarUrl: dto.avatar_url ?? undefined
+		avatarUrl: dto.avatar_url ?? undefined,
+		isPlatformAdmin: dto.is_platform_admin ?? false
 	};
 }
 
@@ -73,6 +75,16 @@ class AuthStore {
 	 */
 	get isWorkspaceOwner(): boolean {
 		return this.#session?.user.workspaceRole === 'owner';
+	}
+
+	/**
+	 * Whether the caller is a platform-level administrator — a global tier
+	 * above any single workspace. Gates platform-scoped affordances (e.g.
+	 * creating/curating `scope_kind: 'platform'` resources). The server is
+	 * authoritative; this only hides the affordance.
+	 */
+	get isPlatformAdmin(): boolean {
+		return this.#session?.user.isPlatformAdmin === true;
 	}
 
 	/**

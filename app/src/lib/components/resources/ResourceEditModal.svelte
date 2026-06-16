@@ -28,6 +28,10 @@
 	import PlacementFields from '$lib/components/iam/PlacementFields.svelte';
 	import MoveLocationField from '$lib/components/iam/MoveLocationField.svelte';
 	import { scopeToParam, type ScopeContext } from '$lib/api/assets';
+	import { canMutateResource } from '$lib/api/resource-tier';
+	import { auth } from '$lib/auth/store.svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import Globe from '@lucide/svelte/icons/globe';
 
 	type Props = {
 		open: boolean;
@@ -77,10 +81,28 @@
 	// non-workspace-wide; `restricted` drops the workspace-role floor (private).
 	let scope = $state<ScopeContext>({ kind: 'workspace' });
 	let restricted = $state(false);
+	// Create-as-platform toggle — platform admins only. When on, the resource is
+	// created at the global platform tier (`scope_kind: 'platform'`), bypassing
+	// the workspace/folder placement entirely.
+	let createAsPlatform = $state(false);
 
 	// The resource's owner scope (edit mode), for the move control. Seeded from
 	// the loaded detail and updated optimistically on a successful move.
 	let editScope = $state<ScopeContext>({ kind: 'workspace' });
+	// Loaded detail's tier signals (edit mode): the precise `scope_kind` and the
+	// caller's effective role, for the platform badge + read-only gating.
+	let editScopeKind = $state<string>('workspace');
+	let editEffectiveRole = $state<string | null>(null);
+
+	const isPlatformAdmin = $derived(auth.isPlatformAdmin);
+	// Edit mode: is the loaded resource on the platform tier?
+	const editIsPlatform = $derived(mode === 'edit' && editScopeKind === 'platform');
+	// Read-only when the caller can't mutate the loaded resource (viewer role —
+	// which folds in a non-admin's view of a platform resource). View/run stay
+	// intact; edit/rotate/move/save affordances are hidden or disabled.
+	const readOnly = $derived(
+		mode === 'edit' && !canMutateResource({ my_effective_role: editEffectiveRole })
+	);
 
 	async function moveTo(next: ScopeContext) {
 		if (!resource_id) return;
@@ -143,8 +165,10 @@
 					selectedType = detail.resource_type;
 					path = detail.path;
 					displayName = detail.display_name;
+					editScopeKind = detail.scope_kind;
+					editEffectiveRole = detail.my_effective_role ?? null;
 					editScope =
-						detail.scope_kind === 'workspace'
+						detail.scope_kind === 'workspace' || detail.scope_kind === 'platform'
 							? { kind: 'workspace' }
 							: {
 									kind: detail.scope_kind as 'folder' | 'template',
@@ -186,6 +210,9 @@
 				kvPairs = [];
 				scope = defaultFolderId ? { kind: 'folder', id: defaultFolderId } : { kind: 'workspace' };
 				restricted = false;
+				createAsPlatform = false;
+				editScopeKind = 'workspace';
+				editEffectiveRole = null;
 			}
 		})();
 	});
@@ -328,15 +355,18 @@
 		error = null;
 		try {
 			if (mode === 'create') {
+				// Platform tier (admins only) is a global scope above any workspace:
+				// it carries no folder/template placement and is never `restricted`.
+				const platform = isPlatformAdmin && createAsPlatform;
 				await createResource({
 					path,
 					resource_type: selectedType,
 					display_name: displayName || null,
 					config: buildConfig(true),
 					workspace_id: workspace_id ?? null,
-					scope_kind: scope.kind,
-					scope_id: scope.kind === 'workspace' ? null : scope.id,
-					restricted
+					scope_kind: platform ? 'platform' : scope.kind,
+					scope_id: platform || scope.kind === 'workspace' ? null : scope.id,
+					restricted: platform ? false : restricted
 				});
 			} else if (resource_id) {
 				// Edit: name-only updates don't carry config; if any non-empty
@@ -388,11 +418,25 @@
 	<SheetContent class="w-[520px] sm:max-w-[520px]">
 		<div class="flex items-center justify-between border-b border-border px-5 py-4">
 			<div>
-				<SheetTitle class="text-lg font-semibold">{title}</SheetTitle>
+				<div class="flex items-center gap-2">
+					<SheetTitle class="text-lg font-semibold">{title}</SheetTitle>
+					{#if editIsPlatform}
+						<Badge
+							class="gap-1 bg-sky-100 text-sky-800"
+							variant="secondary"
+							title="Platform tier — shared across all workspaces, managed by platform admins"
+							data-testid="resource-modal-platform-badge"
+						>
+							<Globe class="size-3" /> Platform
+						</Badge>
+					{/if}
+				</div>
 				<SheetDescription class="text-sm text-muted-foreground">
 					{mode === 'create'
 						? 'Typed credential. Secret fields are written to Vault.'
-						: 'Public fields can be edited in place. Provide a secret value to rotate it; leave blank to keep the current value.'}
+						: readOnly
+							? 'Read-only — you can view this resource but not change it.'
+							: 'Public fields can be edited in place. Provide a secret value to rotate it; leave blank to keep the current value.'}
 				</SheetDescription>
 			</div>
 			<SheetClose>
@@ -456,16 +500,43 @@
 							value={displayName}
 							placeholder={path || 'Optional label'}
 							oninput={(e) => (displayName = (e.currentTarget as HTMLInputElement).value)}
+							disabled={readOnly}
 							class="text-sm"
 						/>
 					</FormField>
 
 					{#if mode === 'create'}
-						<PlacementFields bind:scope bind:restricted testidPrefix="resource-modal" />
-					{:else}
+						{#if isPlatformAdmin}
+							<label
+								class="flex items-start gap-2.5 rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm"
+								data-testid="resource-modal-platform-toggle"
+							>
+								<input
+									type="checkbox"
+									checked={createAsPlatform}
+									onchange={(e) =>
+										(createAsPlatform = (e.currentTarget as HTMLInputElement).checked)}
+									class="mt-0.5 size-4"
+								/>
+								<span>
+									<span class="flex items-center gap-1.5 font-medium text-foreground">
+										<Globe class="size-3.5" /> Platform (shared)
+									</span>
+									<span class="text-muted-foreground">
+										Create at the global platform tier — visible read-only to every
+										workspace, managed by platform admins. Overrides the location below.
+									</span>
+								</span>
+							</label>
+						{/if}
+						{#if !createAsPlatform}
+							<PlacementFields bind:scope bind:restricted testidPrefix="resource-modal" />
+						{/if}
+					{:else if !readOnly && !editIsPlatform}
 						<MoveLocationField scope={editScope} onMove={moveTo} testid="resource-move" />
 					{/if}
 
+					<fieldset disabled={readOnly} class="contents">
 					{#if descriptor && isDynamic}
 						<div class="space-y-3 rounded-md border border-border/60 p-3">
 							<div class="flex items-center justify-between">
@@ -535,12 +606,13 @@
 								: undefined}
 						/>
 					{/if}
+					</fieldset>
 				</div>
 			{/if}
 		</div>
 
 		<div class="flex items-center justify-between gap-2 border-t border-border bg-muted/30 px-5 py-3">
-			{#if mode === 'edit' && resource_id}
+			{#if mode === 'edit' && resource_id && !readOnly}
 				<Button variant="ghost" size="sm" onclick={rotateOnly} disabled={loading}>
 					Rotate secrets
 				</Button>
@@ -548,10 +620,14 @@
 				<span></span>
 			{/if}
 			<div class="flex items-center gap-2">
-				<Button variant="ghost" size="sm" onclick={() => (open = false)}>Cancel</Button>
-				<Button size="sm" onclick={submit} disabled={loading || !selectedType}>
-					{loading ? 'Saving…' : mode === 'create' ? 'Create resource' : 'Save changes'}
+				<Button variant="ghost" size="sm" onclick={() => (open = false)}>
+					{readOnly ? 'Close' : 'Cancel'}
 				</Button>
+				{#if !readOnly}
+					<Button size="sm" onclick={submit} disabled={loading || !selectedType}>
+						{loading ? 'Saving…' : mode === 'create' ? 'Create resource' : 'Save changes'}
+					</Button>
+				{/if}
 			</div>
 		</div>
 	</SheetContent>
