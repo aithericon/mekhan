@@ -717,14 +717,15 @@ async fn list_templates_in_demos_workspace_includes_seeded_demos_for_member() {
 }
 
 #[tokio::test]
-async fn resolver_auto_provisions_demos_membership() {
-    // Wire the real DbPrincipalResolver (not the mock auth) and prove it
-    // adds the caller to the demos workspace on first resolve.
+async fn resolver_auto_provisions_demos_membership_when_flag_set() {
+    // With `auto_join_system_workspaces = true`, the real DbPrincipalResolver
+    // (not the mock auth) adds the caller to the demos workspace on first
+    // resolve. The flag defaults OFF — see the companion negative test below.
     use mekhan_service::auth::resolver::DbPrincipalResolver;
     use mekhan_service::auth::{PrincipalResolver, VerifiedClaims};
 
     let db = common::create_test_db().await;
-    let resolver = DbPrincipalResolver::new(db.clone());
+    let resolver = DbPrincipalResolver::with_policy(db.clone(), false, true);
     let claims = VerifiedClaims {
         subject: "fresh-user".to_string(),
         issuer: "test".to_string(),
@@ -872,19 +873,21 @@ async fn get_template_tags_honors_read_gate() {
     assert_eq!(body, json!(["confidential"]));
 }
 
-/// Regression for the deployed-instance 403: a fresh principal must be
-/// auto-provisioned as an EDITOR of the `default` workspace on first resolve,
-/// not just a viewer of `demos`. Without this, real users can't edit the
-/// templates migration 20240124 moved into `default`.
+/// Isolation guarantee: a fresh principal (no org binding, no explicit grant)
+/// is NOT silently auto-joined to the shared `default` tenant — nor to `demos`
+/// when the system-workspace flag is off (the default). They hold zero
+/// memberships, so `workspace_id` resolves to `None` and handlers reject.
+/// This is the fix for "every Zitadel user shows up in every workspace".
 #[tokio::test]
-async fn resolver_auto_provisions_default_membership_as_editor() {
+async fn resolver_does_not_auto_join_default_or_demos_by_default() {
     use mekhan_service::auth::resolver::DbPrincipalResolver;
     use mekhan_service::auth::{PrincipalResolver, VerifiedClaims};
 
     let db = common::create_test_db().await;
+    // Both flags default-off (isolation-preserving).
     let resolver = DbPrincipalResolver::new(db.clone());
     let claims = VerifiedClaims {
-        subject: "fresh-editor".to_string(),
+        subject: "fresh-isolated".to_string(),
         issuer: "test".to_string(),
         audience: vec!["mekhan".into()],
         expires_at: i64::MAX,
@@ -892,20 +895,15 @@ async fn resolver_auto_provisions_default_membership_as_editor() {
     };
     let user = resolver.resolve(claims).await.expect("resolve");
 
-    let (default_id,): (Uuid,) = sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
-        .fetch_one(&db)
-        .await
-        .unwrap();
-    let role: Option<(String,)> = sqlx::query_as(
-        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
-    )
-    .bind(default_id)
-    .bind(user.subject_as_uuid())
-    .fetch_optional(&db)
-    .await
-    .unwrap();
-    assert_eq!(role.map(|(r,)| r), Some("editor".to_string()));
+    // No membership rows minted anywhere for this fresh principal.
+    let (member_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM workspace_members WHERE user_id = $1")
+            .bind(user.subject_as_uuid())
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(member_count, 0, "fresh principal must hold no auto-memberships");
 
-    // And the picked active workspace prefers `default` over `demos`.
-    assert_eq!(user.workspace_id, Some(default_id));
+    // With no membership, no ambient workspace is granted.
+    assert_eq!(user.workspace_id, None);
 }

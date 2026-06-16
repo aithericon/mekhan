@@ -307,23 +307,33 @@ pub struct AuthConfig {
     /// **Multi-org tenancy switch.** Default `false` (single-org behaviour,
     /// safe for dev / the current deployed single-tenant instance).
     ///
-    /// When `false` (the legacy default): the principal resolver auto-joins
-    /// every authenticated principal to the seeded `default` workspace as
-    /// `editor`, so migrated templates stay editable without an admin step.
-    /// This is the historical single-org fallback and is what `dev_noop` and
-    /// any single-org Zitadel deployment expect.
-    ///
     /// When `true`: real multi-org tenancy. Each Zitadel org claim maps to
     /// its org-bound workspace (`workspaces.zitadel_org_id`); a user may
-    /// belong to several org-workspaces at once. The auto-`default`-editor
-    /// fallback is **dropped** for any principal that carries a real org
-    /// binding (those users live in their org-workspace(s), not `default`),
-    /// and principals with **no** org binding are NOT auto-joined to
-    /// `default` either — they get only whatever explicit membership they
-    /// already hold. `dev_noop` is unaffected by this flag: the seeded
-    /// dev-user keeps its `default`-as-owner membership regardless.
+    /// belong to several org-workspaces at once. The per-session
+    /// `active_workspace` cookie picks among the full membership set.
+    ///
+    /// In **either** mode the resolver only ever auto-provisions the
+    /// logged-in principal into an **org-bound** workspace whose
+    /// `zitadel_org_id` matches one of their claims — it never auto-joins the
+    /// shared `default` tenant (see the removed `ensure_default_workspace_membership`)
+    /// and never bulk-imports an org's other members. A principal with no
+    /// resolvable org binding and no explicit grant holds no membership and
+    /// gets `workspace_id = None` (handlers reject rather than grant ambient
+    /// access). `dev_noop` is unaffected: the seeded dev-user keeps its
+    /// `default`-as-owner membership regardless.
     #[serde(default)]
     pub multi_org: bool,
+    /// **Auto-join every authenticated principal into system workspaces**
+    /// (today just the seeded `demos`) as a `viewer`, on every login. Default
+    /// `false`: users are NOT silently enrolled into `demos` — seeded demos
+    /// remain discoverable via their `visibility = 'public'` read path, so no
+    /// real membership row is needed. Set `true` to restore the legacy
+    /// behaviour where `demos` appears in every user's workspace picker as a
+    /// genuine membership. Gated because real membership rows defeat workspace
+    /// isolation (every Zitadel user shows up as a `viewer` everywhere `demos`
+    /// content surfaces).
+    #[serde(default)]
+    pub auto_join_system_workspaces: bool,
 }
 
 impl Default for AuthConfig {
@@ -344,6 +354,7 @@ impl Default for AuthConfig {
             introspection_client_secret: None,
             broker_pat: None,
             multi_org: false,
+            auto_join_system_workspaces: false,
         }
     }
 }

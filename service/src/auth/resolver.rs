@@ -9,27 +9,36 @@
 //! on the matching-org path so first login from a known Zitadel org grants
 //! workspace access without an explicit admin step.
 //!
-//! ## Multi-org tenancy (flag-gated, `auth.multi_org`)
+//! ## What the resolver auto-provisions
 //!
-//! With `multi_org = false` (the default — dev_noop and single-org Zitadel
-//! deployments) the resolver auto-joins the seeded `default` workspace as
-//! `editor` and, if the principal carries one resolvable org, returns that
-//! org-workspace directly (the legacy single-org path).
+//! On every resolve the principal is granted membership **only** in
+//! workspaces they demonstrably belong to:
+//!   - each Zitadel org claim is mapped to its bound workspace
+//!     (`workspaces.zitadel_org_id`) and the user is upserted there as
+//!     `editor` — a principal can hold several org-workspaces at once;
+//!   - optionally (flag-gated, see below) a `viewer` row in every system
+//!     workspace.
 //!
-//! With `multi_org = true` the resolver instead:
-//!   - maps **every** Zitadel org claim to its bound workspace and auto-
-//!     provisions membership in each (a principal can belong to several
-//!     org-workspaces at once);
-//!   - **drops** the auto-join-`default`-as-editor fallback entirely — org-
-//!     bound users live in their org-workspace(s); users with no org binding
-//!     are NOT silently granted the shared `default` tenant;
-//!   - picks the active workspace from the principal's full membership set
-//!     (the `active_workspace` cookie override, applied downstream, can swap
-//!     to any other membership).
+//! The resolver does **not** auto-join the shared `default` tenant and does
+//! **not** bulk-import an org's other members. A principal with no resolvable
+//! org binding and no pre-existing grant ends up with `workspace_id = None`
+//! and handlers reject — workspaces stay isolated by default.
 //!
-//! The flag never touches `dev_noop`: the dev-user's seeded `default`-as-owner
-//! `workspace_members` row pre-dates resolution, so it is honoured in either
-//! mode (the flag governs auto-JOIN, not pre-existing membership).
+//! `multi_org = true` only changes the *active-workspace pick* (choose among
+//! the full membership set, honouring the `active_workspace` cookie); the
+//! single-org default returns the one resolvable org-workspace directly.
+//! Neither mode touches `dev_noop`: the dev-user's seeded `default`-as-owner
+//! row pre-dates resolution and is honoured regardless.
+//!
+//! ## Flag-gated system-workspace auto-join (`auth.auto_join_system_workspaces`)
+//!
+//! Default `false`: principals are NOT enrolled into system workspaces
+//! (`demos`). Seeded demos stay reachable via their `visibility = 'public'`
+//! read path, so no membership row is required. Set the flag `true` to restore
+//! the legacy behaviour where every login mints a `viewer` row in `demos` (and
+//! it appears in the picker as a real membership). Off by default because
+//! those rows defeat isolation — every user surfaces as a `viewer` anywhere
+//! `demos` content appears (e.g. the cross-workspace ShareDialog floor).
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -124,27 +133,33 @@ fn string_claim(claims: &VerifiedClaims, key: &str) -> Option<String> {
 pub struct DbPrincipalResolver {
     inner: StaticPrincipalResolver,
     db: PgPool,
-    /// Mirrors `AuthConfig.multi_org`. `false` (default) keeps the legacy
-    /// single-org behaviour: auto-join `default` as `editor`. `true` enables
-    /// real multi-org tenancy — see the gated branches in [`Self::resolve`].
+    /// Mirrors `AuthConfig.multi_org`. `false` (default) returns the single
+    /// resolvable org-workspace directly; `true` picks among the full
+    /// membership set — see [`Self::resolve`].
     multi_org: bool,
+    /// Mirrors `AuthConfig.auto_join_system_workspaces`. `false` (default)
+    /// leaves system workspaces (`demos`) un-joined; `true` mints a `viewer`
+    /// row in each on every resolve.
+    auto_join_system_workspaces: bool,
 }
 
 impl DbPrincipalResolver {
-    /// Construct with the legacy single-org behaviour (multi-org OFF).
-    /// Kept as the zero-config constructor so existing call sites / tests
-    /// that don't care about tenancy are unaffected.
+    /// Construct with the isolation-preserving defaults (single-org, no
+    /// system-workspace auto-join). Zero-config constructor for call sites /
+    /// tests that don't exercise tenancy flags.
     pub fn new(db: PgPool) -> Self {
-        Self::with_multi_org(db, false)
+        Self::with_policy(db, false, false)
     }
 
-    /// Construct with the multi-org flag wired from `AuthConfig.multi_org`.
-    /// The composition root (`main.rs`) uses this; pass `config.auth.multi_org`.
-    pub fn with_multi_org(db: PgPool, multi_org: bool) -> Self {
+    /// Construct with both tenancy flags wired from `AuthConfig`. The
+    /// composition root (`main.rs`) uses this; pass `config.auth.multi_org`
+    /// and `config.auth.auto_join_system_workspaces`.
+    pub fn with_policy(db: PgPool, multi_org: bool, auto_join_system_workspaces: bool) -> Self {
         Self {
             inner: StaticPrincipalResolver,
             db,
             multi_org,
+            auto_join_system_workspaces,
         }
     }
 }
@@ -159,13 +174,16 @@ impl PrincipalResolver for DbPrincipalResolver {
         let mut user = self.inner.resolve(claims).await?;
         let user_id = user.subject_as_uuid();
 
-        // Auto-membership in every system workspace (currently just `demos`).
-        // The platform wants every authenticated principal to *be* a member
-        // of demos — not merely to see demo templates via `visibility='public'`
-        // — so the demos workspace appears in their workspace picker and
-        // project listings without an admin step. Viewer role: read-only.
-        // Orthogonal to multi-org: demos is a shared system namespace.
-        ensure_system_workspace_membership(&self.db, user_id).await?;
+        // Auto-membership in every system workspace (currently just `demos`),
+        // gated behind `auth.auto_join_system_workspaces` (default OFF). When
+        // ON, every authenticated principal gets a read-only `viewer` row so
+        // demos appears in their picker as a real membership. OFF by default:
+        // seeded demos stay reachable via `visibility = 'public'` without a
+        // membership row, keeping workspaces isolated (no user surfaces as a
+        // `viewer` everywhere demos content appears).
+        if self.auto_join_system_workspaces {
+            ensure_system_workspace_membership(&self.db, user_id).await?;
+        }
 
         // Resolve every org claim to its bound workspace and auto-provision
         // membership. A multi-org principal lands in several workspaces here;
@@ -186,25 +204,14 @@ impl PrincipalResolver for DbPrincipalResolver {
             }
         }
 
-        // `default` workspace auto-editor membership.
-        //
-        // multi_org OFF (legacy single-org, the dev default): auto-join the
-        // `default` workspace as editor. Migration 20240124 backfilled every
-        // pre-existing (non-demo) template into `default`, but 20240123 seeded
-        // only the dev-noop user as a member there. Without this step real
-        // (Zitadel) principals land in `demos` alone (viewer) and get a 403
-        // editing any migrated template. Editor — not owner/admin — so write
-        // access is granted while tenancy actions stay gated.
-        //
-        // multi_org ON (real tenancy): do NOT auto-join `default`. Org-bound
-        // users live in their org-workspace(s); users with no org binding get
-        // only their explicit memberships — they are not silently granted the
-        // shared `default` tenant. (`dev_noop`'s dev-user keeps its seeded
-        // `default`-as-owner row regardless — this only governs auto-JOIN, not
-        // pre-existing membership, so dev_noop is unaffected.)
-        if !self.multi_org {
-            ensure_default_workspace_membership(&self.db, user_id).await?;
-        }
+        // NOTE: the resolver deliberately does NOT auto-join the shared
+        // `default` workspace. Earlier builds enrolled every authenticated
+        // principal there as `editor`, which broke isolation — every Zitadel
+        // user became a member of the shared tenant on first login. A
+        // principal now holds membership only where they genuinely belong (an
+        // org-bound workspace above, an explicit grant, or a seeded row like
+        // dev_noop's `default`-as-owner). Users with neither get
+        // `workspace_id = None` and handlers reject.
 
         // Single-org fast path (multi_org OFF): if exactly the legacy behaviour
         // applies — one resolvable org — return that workspace directly,
@@ -241,7 +248,8 @@ impl PrincipalResolver for DbPrincipalResolver {
 
 /// Idempotently upsert the caller as a viewer in every `is_system = TRUE`
 /// workspace. Today that's just `demos`, but the loop is correct for any
-/// future system workspace (e.g. a `samples` or `tutorial` namespace).
+/// future system workspace (e.g. a `samples` or `tutorial` namespace). Only
+/// invoked when `auth.auto_join_system_workspaces` is set.
 async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
     let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE is_system = TRUE")
         .fetch_all(db)
@@ -249,21 +257,6 @@ async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Resul
         .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
     for (ws_id,) in rows {
         upsert_member(db, ws_id, user_id, "viewer").await?;
-    }
-    Ok(())
-}
-
-/// Idempotently upsert the caller as an editor of the `default` workspace.
-/// See the call site for the single-org rationale. No-ops if `default` is
-/// absent (it is seeded by migration 20240123, so that only happens in a
-/// half-migrated DB).
-async fn ensure_default_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
-    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
-        .fetch_optional(db)
-        .await
-        .map_err(|e| AuthError::Internal(format!("default workspace lookup: {e}")))?;
-    if let Some((ws_id,)) = row {
-        upsert_member(db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
     }
     Ok(())
 }

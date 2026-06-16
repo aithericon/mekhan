@@ -347,12 +347,14 @@ async fn main() -> anyhow::Result<()> {
     // None` which handlers tolerate by falling back to the default
     // workspace at the call site.
     // `auth.multi_org` (default false) gates real per-org tenancy: each
-    // Zitadel org claim maps to its bound workspace, and the legacy
-    // auto-join-`default`-as-editor fallback is dropped. OFF keeps the
-    // single-org / dev_noop behaviour.
-    let principal_resolver: Arc<dyn PrincipalResolver> = Arc::new(
-        DbPrincipalResolver::with_multi_org(db.clone(), config.auth.multi_org),
-    );
+    // Zitadel org claim maps to its bound workspace. `auth.auto_join_system_workspaces`
+    // (default false) gates the legacy `demos`-as-viewer auto-join. The
+    // resolver never auto-joins the shared `default` tenant in either mode.
+    let principal_resolver: Arc<dyn PrincipalResolver> = Arc::new(DbPrincipalResolver::with_policy(
+        db.clone(),
+        config.auth.multi_org,
+        config.auth.auto_join_system_workspaces,
+    ));
 
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
     let (authenticator, oidc) = build_authenticator(&config, session_store.clone()).await?;
