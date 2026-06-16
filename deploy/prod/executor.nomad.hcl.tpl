@@ -50,8 +50,7 @@ job "${job_id}" {
     task "executor" {
       driver = "docker"
 
-      # No registry auth block — node-level docker auth on the Nomad clients
-      # (HetznerCluster setup-docker-auth.sh) keeps pull creds out of the job.
+      # No registry auth — pulled from the internal zot mirror (anonymous).
       config {
         image = "${image}"
         # No port mapping — executor is NATS-driven, cancel HTTP is opt-in

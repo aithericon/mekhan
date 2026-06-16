@@ -136,10 +136,9 @@ job "${job_id}" {
     task "service" {
       driver = "docker"
 
-      # No registry `auth {}` block — the Nomad clients are docker-logged-in to
-      # forge.aithericon.eu at the node level (HetznerCluster
-      # layers/06b_postgres_db/setup-docker-auth.sh), so the pull credentials
-      # never appear in the rendered jobspec. Same convention as web-platform.
+      # No registry auth — images come from the internal zot mirror
+      # (zot.service.consul:5000), which the nodes trust anonymously and which
+      # pull-through-caches from forge. Same convention as web-platform.
       config {
         image = "${image}"
         ports = ["http"]
@@ -234,7 +233,7 @@ EOH
     task "engine" {
       driver = "docker"
 
-      # No registry auth block — node-level docker auth (see the service task).
+      # No registry auth — pulled from the internal zot mirror (see service task).
       config {
         image = "${engine_image}"
         ports = ["engine"]
