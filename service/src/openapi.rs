@@ -65,6 +65,7 @@ use utoipa::OpenApi;
             crate::handlers::governance::ForkLibraryRequest,
             // Fork-to-workspace (templates + folders) DTOs.
             crate::handlers::fork::ForkTemplateRequest,
+            crate::handlers::fork::ForkFolderRequest,
             crate::handlers::fork::ForkFolderResponse,
             // Phase 5 governance — lifecycle + upgrade-preview DTOs.
             crate::handlers::governance::LifecycleRequest,

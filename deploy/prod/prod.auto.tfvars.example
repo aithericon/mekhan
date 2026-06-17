@@ -46,6 +46,12 @@ s3_bucket   = "mekhan-artifacts"
 auth_mode = "bff"
 rust_log  = "info"
 
+# Platform admins (REQUIRED in bff mode). OIDC subjects/emails granted
+# is_platform_admin — needed to mint the shared worker pool's registration token
+# (the executor enrolls into the platform `default` pool). Without one, worker
+# enroll fails with "worker group 'default' does not resolve …".
+platform_admins = ["ops@aithericon.com"]
+
 # Dedicated Zitadel org for prod (the isolation boundary for users/apps).
 zitadel_org_name = "Mekhan"
 

@@ -2576,8 +2576,11 @@ export interface paths {
          *     override rides on an HttpOnly companion cookie and survives until the
          *     caller explicitly clears it (DELETE) or its membership is revoked.
          *
-         *     Refuses workspaces the caller isn't a member of — a 403, not a silent
-         *     "did nothing" — so the picker UI can surface the error directly.
+         *     Refuses workspaces the caller can't reach — a 403, not a silent "did
+         *     nothing" — so the picker UI can surface the error directly. Reachable means
+         *     a member, OR a browse-only system workspace (e.g. `demos`): the same rule
+         *     `active_workspace::apply_override` honours when interpreting the cookie, so
+         *     the two can't drift (a switch the GET path would silently drop must 403 here).
          */
         post: operations["set_active_workspace"];
         /**
@@ -8450,6 +8453,17 @@ export interface components {
             updated_by?: string | null;
             /** Format: uuid */
             workspace_id: string;
+        };
+        /**
+         * @description Optional target for a folder fork. Absent ⇒ resolved like a template fork
+         *     (active-if-writable, else the caller's first writable workspace).
+         */
+        ForkFolderRequest: {
+            /**
+             * Format: uuid
+             * @description Workspace to fork the subtree INTO (must be one the caller can write).
+             */
+            target_workspace_id?: string | null;
         };
         /** @description Result of a folder fork — the new root folder plus how much it brought in. */
         ForkFolderResponse: {
@@ -18564,7 +18578,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkFolderRequest"];
+            };
+        };
         responses: {
             /** @description Folder subtree forked into the workspace */
             201: {
@@ -20690,7 +20708,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not a member of the target workspace */
+            /** @description Cannot reach the target workspace */
             403: {
                 headers: {
                     [name: string]: unknown;

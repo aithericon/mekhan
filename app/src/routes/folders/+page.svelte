@@ -33,6 +33,7 @@
 	import AssetList from '$lib/components/assets/AssetList.svelte';
 	import FolderPagesPanel from '$lib/components/folders/FolderPagesPanel.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
+	import ForkToWorkspaceDialog from '$lib/components/ForkToWorkspaceDialog.svelte';
 	import AuthorshipChips from '$lib/components/iam/AuthorshipChips.svelte';
 	import { roleAtLeast } from '$lib/api/iam';
 	import { createListState } from '$lib/stores/remote.svelte';
@@ -81,11 +82,32 @@
 	const isReadOnly = $derived(!!selected && !canEdit);
 
 	let forking = $state(false);
-	async function handleFork() {
+	let forkDialogOpen = $state(false);
+
+	// Workspaces the caller can write — the fork destinations. When there's more
+	// than one we ask which; otherwise we fork straight in.
+	const writableWorkspaces = $derived(
+		workspaces.workspaces.filter((w) => !w.is_system && roleAtLeast(w.my_role, 'editor'))
+	);
+	const defaultForkWorkspaceId = $derived(
+		writableWorkspaces.find((w) => w.id === workspaces.active?.id)?.id ?? writableWorkspaces[0]?.id
+	);
+
+	function requestFork() {
+		if (!selected || forking) return;
+		if (writableWorkspaces.length > 1) {
+			forkDialogOpen = true;
+		} else {
+			void doFork(writableWorkspaces[0]?.id);
+		}
+	}
+
+	async function doFork(targetWorkspaceId?: string) {
 		if (!selected || forking) return;
 		forking = true;
+		forkDialogOpen = false;
 		try {
-			const res = await forkFolder(selected.id);
+			const res = await forkFolder(selected.id, targetWorkspaceId);
 			const dest =
 				workspaces.workspaces.find((w) => w.id === res.workspace_id)?.display_name ??
 				'your workspace';
@@ -433,7 +455,7 @@
 										<Button
 											variant="outline"
 											size="sm"
-											onclick={handleFork}
+											onclick={requestFork}
 											disabled={forking}
 											data-testid="btn-fork-folder"
 										>
@@ -596,5 +618,13 @@
 		objectName={selected.display_name}
 		myEffectiveRole={selected.my_effective_role}
 		onChanged={() => void folderList.refetch()}
+	/>
+	<ForkToWorkspaceDialog
+		bind:open={forkDialogOpen}
+		itemName={selected.display_name}
+		options={writableWorkspaces}
+		defaultId={defaultForkWorkspaceId}
+		submitting={forking}
+		onConfirm={(wsId) => doFork(wsId)}
 	/>
 {/if}

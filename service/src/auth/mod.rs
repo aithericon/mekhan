@@ -27,6 +27,7 @@ pub mod introspection;
 pub mod membership;
 pub mod mgmt;
 pub mod model;
+pub mod platform_root;
 pub mod port;
 pub mod provisioner;
 pub mod resolver;

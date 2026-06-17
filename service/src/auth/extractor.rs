@@ -195,6 +195,22 @@ pub async fn require_auth_middleware(
     mut req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<Response, AuthError> {
+    // Platform root token path: a `plat_`-prefixed bearer matching the configured
+    // `auth.platform_root_token` resolves to a synthetic platform-admin principal
+    // (headless provisioning — CI / Terraform). Checked FIRST so a `plat_` bearer
+    // never leaks to Zitadel introspection. Disabled when no root token is set; a
+    // non-matching `plat_` bearer falls through to the cookie 401.
+    if let Some(token) = bearer_token(req.headers()) {
+        if super::platform_root::matches_root_token(
+            state.config.auth.platform_root_token.as_deref(),
+            token,
+        ) {
+            req.extensions_mut()
+                .insert(super::platform_root::platform_root_user());
+            return Ok(next.run(req).await);
+        }
+    }
+
     // Machine-PAT path for non-interactive clients (CI `mekhan apply`):
     // RFC 7662 introspection against Zitadel, resolved to the *real* service
     // user via the shared `PrincipalResolver` (same mapping the BFF callback

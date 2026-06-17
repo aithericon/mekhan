@@ -4,6 +4,7 @@ pub mod analytics;
 pub mod auth;
 pub mod autoscaler;
 pub mod backends;
+pub mod bootstrap;
 pub mod catalogue;
 pub mod causality;
 pub mod compiler;

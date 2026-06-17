@@ -61,6 +61,13 @@ job "${job_id}" {
 EOH
       }
 
+      # Worker-pool enrollment secret (self-enroll on boot → routing_partition +
+      # worker bearer). Platform-tier: the `default` worker group lives in the
+      # shared PLATFORM scope. This is the PLATFORM bootstrap registration token
+      # generated in bootstrap.tf and written here by
+      # `vault_kv_secret_v2.executor_reg_token` — the SAME value mekhan's startup
+      # seeder upserts (MEKHAN__BOOTSTRAP__WORKER_REGISTRATION_TOKEN), so enroll
+      # resolves the platform `default` pool. No manual mint.
       template {
         destination = "secrets/reg-token.env"
         change_mode = "restart"

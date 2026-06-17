@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::auth::active_workspace::{clear_cookie, set_cookie};
 use crate::auth::extractor::CookieAuthUser;
-use crate::auth::{map_to_api_error, require_member};
+use crate::auth::{map_to_api_error, require_workspace_read};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
@@ -30,15 +30,18 @@ pub struct SetActiveWorkspaceRequest {
 /// override rides on an HttpOnly companion cookie and survives until the
 /// caller explicitly clears it (DELETE) or its membership is revoked.
 ///
-/// Refuses workspaces the caller isn't a member of — a 403, not a silent
-/// "did nothing" — so the picker UI can surface the error directly.
+/// Refuses workspaces the caller can't reach — a 403, not a silent "did
+/// nothing" — so the picker UI can surface the error directly. Reachable means
+/// a member, OR a browse-only system workspace (e.g. `demos`): the same rule
+/// `active_workspace::apply_override` honours when interpreting the cookie, so
+/// the two can't drift (a switch the GET path would silently drop must 403 here).
 #[utoipa::path(
     post,
     path = "/api/v1/me/active-workspace",
     request_body = SetActiveWorkspaceRequest,
     responses(
         (status = 204, description = "Active workspace set"),
-        (status = 403, description = "Not a member of the target workspace", body = ErrorResponse),
+        (status = 403, description = "Cannot reach the target workspace", body = ErrorResponse),
     ),
     tag = "me",
 )]
@@ -48,7 +51,7 @@ pub async fn set_active_workspace(
     jar: CookieJar,
     Json(req): Json<SetActiveWorkspaceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_member(&state.db, &user, req.workspace_id)
+    require_workspace_read(&state.db, &user, req.workspace_id)
         .await
         .map_err(map_to_api_error)?;
     let jar = jar.add(set_cookie(req.workspace_id.to_string(), &state));

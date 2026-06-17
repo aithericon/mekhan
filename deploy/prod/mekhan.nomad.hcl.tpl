@@ -170,6 +170,12 @@ MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET={{ .Data.data.introspection_client_sec
 MEKHAN__AUTH__BROKER_PAT={{ .Data.data.broker_pat }}
 MEKHAN__EMAIL__SMTP_USERNAME={{ .Data.data.smtp_username }}
 MEKHAN__EMAIL__SMTP_PASSWORD={{ .Data.data.smtp_password }}
+# Headless provisioning (see bootstrap.tf): a platform root token for automated
+# platform-admin ops, and platform-scoped bootstrap registration tokens the
+# startup seeder upserts so the executor/runners self-enroll with no mint.
+MEKHAN__AUTH__PLATFORM_ROOT_TOKEN={{ .Data.data.platform_root_token }}
+MEKHAN__BOOTSTRAP__WORKER_REGISTRATION_TOKEN={{ .Data.data.bootstrap_worker_reg_token }}
+MEKHAN__BOOTSTRAP__RUNNER_REGISTRATION_TOKEN={{ .Data.data.bootstrap_runner_reg_token }}
 {{- end }}
 EOH
       }
@@ -201,6 +207,14 @@ EOH
         MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
         MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
+        # Platform admins — comma-separated OIDC subjects/emails that get
+        # `is_platform_admin`. REQUIRED in BFF mode to curate the shared platform
+        # pool (mint the worker registration token, manage platform-tier infra);
+        # dev_noop seeds its own admin so this is empty there. Comma-split by the
+        # config loader (`auth.platform_admins` list key). Omitted when unset.
+%{ if platform_admins != "" ~}
+        MEKHAN__AUTH__PLATFORM_ADMINS     = "${platform_admins}"
+%{ endif ~}
         # Invite-email delivery (Phase 4). mode=smtp makes the in-app invite
         # feature actually send the accept link via the relay; mode=log just
         # writes the link to the service log. PUBLIC_BASE_URL must be the

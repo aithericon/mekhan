@@ -148,6 +148,38 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    The `mekhan_prod` Postgres DB + the `Mekhan` Zitadel org are created by
    `tofu apply` (no manual step).
 
+3b. **Platform provisioning credentials — fully declarative, no manual step.**
+   Post platform-tier, the shared `default` (worker) and `model_serving` (runner)
+   groups live in the global **platform** scope, and minting their registration
+   tokens is platform-admin-gated. Rather than an interactive mint, `bootstrap.tf`
+   generates three secrets on `tofu apply` and stores them in Vault:
+
+   - `platform_root_token` (`plat_…`) — a headless platform-admin bearer
+     (`MEKHAN__AUTH__PLATFORM_ROOT_TOKEN`). Present `Authorization: Bearer
+     <it>` to mekhan to curate platform infra from CI/scripts with no login.
+   - `bootstrap_worker_reg_token` / `bootstrap_runner_reg_token` — full PLATFORM
+     registration tokens. mekhan's startup seeder (`MEKHAN__BOOTSTRAP__*`) upserts
+     a reusable platform-scoped token matching each, so the executor / model-pool
+     runners self-enroll with the SAME value. The worker token is also written to
+     the executor's own Vault path, so the two always agree.
+
+   Net effect: `tofu apply` → mekhan boots and seeds the tokens → the executor
+   enrolls into the platform `default` pool on its own. No `vault kv put`, no
+   `curl` mint. A stale *workspace*-scoped token would fail enroll with
+   `HTTP 400 "worker group 'default' does not resolve to a worker capacity
+   resource in this workspace"` — that's the symptom this replaces.
+
+   **Rotate** by `tofu taint`-ing the `random_*` resources in `bootstrap.tf` +
+   `tofu apply` (re-seeding revokes the prior bootstrap token; mekhan + executor
+   restart on the changed Vault data). If an executor was already enrolled with a
+   stale identity, also clear `/var/lib/aithericon/executor/worker/identity.json`
+   so it re-enrolls.
+
+   The human counterpart — `platform_admins` (tfvar → `MEKHAN__AUTH__
+   PLATFORM_ADMINS`) — names Zitadel principals who get `is_platform_admin` for
+   interactive BFF curation. Set it for the people who manage the platform; the
+   root token is for automation.
+
 4. **Vault as Resource secret store** — no bootstrap step required. As of `service/src/main.rs:207`, mekhan-service auto-detects Vault via `VAULT_ADDR` + `VAULT_TOKEN` (both injected by Nomad — `VAULT_TOKEN` via the workload-identity exchange, `VAULT_ADDR` from `var.vault_addr` in the jobspec env). On every resource create or new-version, `VaultResourceStore::put_kv` writes the version payload to:
 
    ```
@@ -173,7 +205,7 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    cp deploy/prod/prod.auto.tfvars.example    deploy/prod/prod.auto.tfvars
    ```
 
-   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking. Also copy the `.envrc.example` in each layer to `.envrc` and `direnv allow`.
+   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking. For env vars, each layer ships a **tracked `.envrc`** (non-secret cluster config + automatic Vault lookups, mirroring `.woodpecker/*-deploy*.yml`); you only supply the cluster **Vault token** — either in `rbw` under `clusters/aithericon-{dev,prod}` → `vault-root-token`, or by copying `.secrets.example` → `.secrets` (gitignored) and pasting it. Then `direnv allow`. Everything else (Nomad token, Postgres password, S3 keys, SMTP, Zitadel JWT/org) is read straight from Vault by the `.envrc`. It also drops a `devpsql`/`prodpsql` wrapper on PATH for the cluster DB.
 
 6. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
 
@@ -186,7 +218,8 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 
    ```bash
    # On a machine that can reach Hetzner S3 (no VPN needed for this part).
-   # Env vars come from .envrc (direnv) — see each layer's .envrc.example.
+   # Env vars come from the tracked .envrc (direnv) — supply only VAULT_TOKEN
+   # via rbw or .secrets; the .envrc resolves the rest from Vault.
    cd deploy/dev && tofu init
    cd ../prod   && tofu init
    ```

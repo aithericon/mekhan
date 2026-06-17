@@ -545,22 +545,32 @@ export async function forkLibraryNode(coordinate: string): Promise<Template> {
 }
 
 /** Deep-copy a readable template (e.g. a public demo) into a fresh, runnable
- *  family in the caller's active workspace. Optionally home it in `folderId`. */
-export async function forkTemplate(id: string, folderId?: string): Promise<Template> {
+ *  family. `targetWorkspaceId` chooses the destination (must be one the caller
+ *  can write); omitted ⇒ the server resolves it (active-if-writable, else the
+ *  caller's first writable workspace). */
+export async function forkTemplate(id: string, targetWorkspaceId?: string): Promise<Template> {
 	return unwrap(
 		await client.POST('/api/v1/templates/{id}/fork', {
 			params: { path: { id } },
-			body: { folder_id: folderId ?? null }
+			body: { target_workspace_id: targetWorkspaceId ?? null }
 		})
 	);
 }
 
 export type ForkFolderResponse = components['schemas']['ForkFolderResponse'];
 
-/** Deep-copy a folder subtree (and every readable template in it) into the
- *  caller's active workspace. Returns the new root folder + counts. */
-export async function forkFolder(id: string): Promise<ForkFolderResponse> {
-	return unwrap(await client.POST('/api/v1/folders/{id}/fork', { params: { path: { id } } }));
+/** Deep-copy a folder subtree (and every readable template in it) into a
+ *  workspace the caller can write. `targetWorkspaceId` as in {@link forkTemplate}. */
+export async function forkFolder(
+	id: string,
+	targetWorkspaceId?: string
+): Promise<ForkFolderResponse> {
+	return unwrap(
+		await client.POST('/api/v1/folders/{id}/fork', {
+			params: { path: { id } },
+			body: { target_workspace_id: targetWorkspaceId ?? null }
+		})
+	);
 }
 
 /** The controlled category vocabulary for a library node's presentation. */

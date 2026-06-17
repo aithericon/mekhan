@@ -201,6 +201,8 @@ pub fn test_config() -> AppConfig {
         // Default to presigned-302 serving (tests don't exercise the proxy path).
         proxy_s3_reads: false,
         auth: AuthConfig::default(),
+        // No config-seeded platform bootstrap tokens in tests.
+        bootstrap: mekhan_service::config::BootstrapConfig::default(),
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.
         demos: mekhan_service::config::DemosConfig::default(),

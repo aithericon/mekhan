@@ -4852,6 +4852,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkFolderRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "201": {
             "description": "Folder subtree forked into the workspace",
@@ -7757,7 +7767,7 @@
           "me"
         ],
         "summary": "POST /api/v1/me/active-workspace",
-        "description": "Override the resolver's default workspace pick for this session. The\noverride rides on an HttpOnly companion cookie and survives until the\ncaller explicitly clears it (DELETE) or its membership is revoked.\n\nRefuses workspaces the caller isn't a member of — a 403, not a silent\n\"did nothing\" — so the picker UI can surface the error directly.",
+        "description": "Override the resolver's default workspace pick for this session. The\noverride rides on an HttpOnly companion cookie and survives until the\ncaller explicitly clears it (DELETE) or its membership is revoked.\n\nRefuses workspaces the caller can't reach — a 403, not a silent \"did\nnothing\" — so the picker UI can surface the error directly. Reachable means\na member, OR a browse-only system workspace (e.g. `demos`): the same rule\n`active_workspace::apply_override` honours when interpreting the cookie, so\nthe two can't drift (a switch the GET path would silently drop must 403 here).",
         "operationId": "set_active_workspace",
         "requestBody": {
           "content": {
@@ -7774,7 +7784,7 @@
             "description": "Active workspace set"
           },
           "403": {
-            "description": "Not a member of the target workspace",
+            "description": "Cannot reach the target workspace",
             "content": {
               "application/json": {
                 "schema": {
@@ -22920,6 +22930,20 @@
           "workspace_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "ForkFolderRequest": {
+        "type": "object",
+        "description": "Optional target for a folder fork. Absent ⇒ resolved like a template fork\n(active-if-writable, else the caller's first writable workspace).",
+        "properties": {
+          "target_workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace to fork the subtree INTO (must be one the caller can write)."
           }
         }
       },

@@ -4,8 +4,16 @@
 terraform.tfstate
 terraform.tfstate.backup
 
-# Per-operator config — secrets MUST NOT be committed
-.envrc
+# Per-operator secrets — NEVER commit. `.envrc` itself is TRACKED (non-secret
+# cluster config + Vault lookups); real secrets live in Vault or the gitignored
+# `.secrets` plaintext override.
+.secrets
+.envrc.local
+
+# direnv layout: generated devpsql wrapper + the fetched Zitadel IaC JWT.
+.direnv/
+
+# tfvars carry secrets when filled — only the *.example is tracked.
 dev.auto.tfvars
 *.tfvars
 !*.tfvars.example

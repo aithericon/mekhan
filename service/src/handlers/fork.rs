@@ -122,6 +122,15 @@ pub async fn fork_template(
     Ok((StatusCode::CREATED, Json(forked)))
 }
 
+/// Optional target for a folder fork. Absent ⇒ resolved like a template fork
+/// (active-if-writable, else the caller's first writable workspace).
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct ForkFolderRequest {
+    /// Workspace to fork the subtree INTO (must be one the caller can write).
+    #[serde(default)]
+    pub target_workspace_id: Option<Uuid>,
+}
+
 /// POST /api/v1/folders/{id}/fork
 ///
 /// Deep-copy a folder *subtree* into the caller's active workspace: recreate the
@@ -133,6 +142,7 @@ pub async fn fork_template(
     post,
     path = "/api/v1/folders/{id}/fork",
     params(("id" = Uuid, Path, description = "Folder id to fork (any readable workspace)")),
+    request_body = ForkFolderRequest,
     responses(
         (status = 201, description = "Folder subtree forked into the workspace", body = ForkFolderResponse),
         (status = 403, description = "Caller cannot create in their workspace", body = ErrorResponse),
@@ -145,14 +155,22 @@ pub async fn fork_folder(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
+    body: Option<Json<ForkFolderRequest>>,
 ) -> Result<(StatusCode, Json<ForkFolderResponse>), ApiError> {
+    let req = body.map(|Json(r)| r).unwrap_or_default();
     let principal = user.subject_as_uuid();
-    // Fork into a workspace the caller can write (the active one may be the
-    // read-only demos workspace they're browsing).
-    let target_ws = resolve_fork_target(&state.db, &user, None, user.workspace_id)
-        .await
-        .map_err(map_to_api_error)?
-        .ok_or_else(|| ApiError::bad_request("no writable workspace to fork into"))?;
+    // Fork into a workspace the caller can write — an explicit target when the
+    // picker supplied one, else the active workspace (which may be the read-only
+    // demos workspace they're browsing) falls through to their first writable.
+    let target_ws = resolve_fork_target(
+        &state.db,
+        &user,
+        req.target_workspace_id,
+        user.workspace_id,
+    )
+    .await
+    .map_err(map_to_api_error)?
+    .ok_or_else(|| ApiError::bad_request("no writable workspace to fork into"))?;
 
     // Load the source folder (no membership gate on its workspace — a public
     // demos folder lives in a workspace the caller isn't a member of). Read

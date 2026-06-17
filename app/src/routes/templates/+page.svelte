@@ -38,6 +38,7 @@
 	import Settings from '@lucide/svelte/icons/settings';
 	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import ForkToWorkspaceDialog from '$lib/components/ForkToWorkspaceDialog.svelte';
 	import { PageShell, PageHeader } from '$lib/components/shell';
 	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
 	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
@@ -291,19 +292,49 @@
 	}
 
 	// Deep-copy a (typically public / cross-workspace) template — e.g. a built-in
-	// demo — into the active workspace, where it becomes runnable as the caller's
-	// own. Navigate to the new copy so the user can run/edit it immediately.
+	// demo — into a workspace the caller owns, where it becomes runnable as their
+	// own. When the caller can write to more than one workspace we ask which;
+	// otherwise we fork straight in.
 	let forkingId = $state<string | null>(null);
-	async function handleFork(template: TemplateSummary) {
+	let forkDialogOpen = $state(false);
+	let forkTarget = $state<TemplateSummary | null>(null);
+
+	const writableWorkspaces = $derived(
+		workspaces.workspaces.filter((w) => !w.is_system && roleAtLeast(w.my_role, 'editor'))
+	);
+	// Default the picker to the active workspace when it's writable, else the first.
+	const defaultForkWorkspaceId = $derived(
+		writableWorkspaces.find((w) => w.id === workspaces.active?.id)?.id ??
+			writableWorkspaces[0]?.id
+	);
+
+	function requestFork(template: TemplateSummary) {
+		if (forkingId) return;
+		if (writableWorkspaces.length > 1) {
+			forkTarget = template;
+			forkDialogOpen = true;
+		} else {
+			void doFork(template, writableWorkspaces[0]?.id);
+		}
+	}
+
+	async function doFork(template: TemplateSummary, targetWorkspaceId?: string) {
 		if (forkingId) return;
 		forkingId = template.id;
+		forkDialogOpen = false;
 		try {
-			const forked = await forkTemplate(template.id);
+			const forked = await forkTemplate(template.id, targetWorkspaceId);
 			const dest =
 				workspaces.workspaces.find((w) => w.id === forked.workspace_id)?.display_name ??
 				'your workspace';
 			toast.success(`Forked "${template.name}" into ${dest}`);
-			await goto(`/templates/${forked.id}`);
+			// Only open the new copy when it lives in the workspace you're in;
+			// forking from demos lands it elsewhere, so stay on the browse view.
+			if (forked.workspace_id === workspaces.active?.id) {
+				await goto(`/templates/${forked.id}`);
+			} else {
+				forkingId = null;
+			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to fork template');
 			forkingId = null;
@@ -478,7 +509,7 @@
 										onclick={(e: MouseEvent) => {
 											e.preventDefault();
 											e.stopPropagation();
-											handleFork(template);
+											requestFork(template);
 										}}
 									>
 										<GitFork class="size-4" />
@@ -653,6 +684,17 @@
 	templateId={dialogTemplateId}
 	oncreated={onInstanceCreated}
 />
+
+{#if forkTarget}
+	<ForkToWorkspaceDialog
+		bind:open={forkDialogOpen}
+		itemName={forkTarget.name}
+		options={writableWorkspaces}
+		defaultId={defaultForkWorkspaceId}
+		submitting={forkingId === forkTarget.id}
+		onConfirm={(wsId) => forkTarget && doFork(forkTarget, wsId)}
+	/>
+{/if}
 
 <Sheet.Root open={settingsOpen} onOpenChange={(o: boolean) => (settingsOpen = o)}>
 	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">

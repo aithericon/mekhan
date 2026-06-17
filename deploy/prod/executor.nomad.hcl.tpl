@@ -73,6 +73,14 @@ EOH
       # token) to get its routing_partition + worker bearer. Reusable token,
       # minted in mekhan + stored in Vault (read via the mekhan-nats-read
       # policy, see vault.tf). env=true injects it as EXECUTOR_WORKER_REG_TOKEN.
+      #
+      # Platform-tier: the `default` worker group lives in the shared PLATFORM
+      # scope. This token is the PLATFORM bootstrap registration token generated
+      # in bootstrap.tf and written here by `vault_kv_secret_v2.executor_reg_token`
+      # — the SAME value mekhan's startup seeder upserts (MEKHAN__BOOTSTRAP__
+      # WORKER_REGISTRATION_TOKEN), so enroll resolves the platform `default`
+      # pool. No manual mint. (A stale workspace-scoped token would 400 with
+      # "worker group 'default' does not resolve …".)
       template {
         destination = "secrets/reg-token.env"
         change_mode = "restart"
