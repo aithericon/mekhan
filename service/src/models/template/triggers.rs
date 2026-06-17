@@ -69,11 +69,14 @@ pub enum CronCatchup {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogTrigger {
-    /// Same filter shape as `CatalogueSubscription.filters`.
+    /// Catalogue query DSL (the SAME text the data browser submits, e.g.
+    /// `category:model filename~report meta.format:fasta created_at>-7d`). The
+    /// trigger fires when a newly ingested artifact would appear in this query.
+    /// Compiled server-side at eval time so relative dates re-resolve per fire.
     #[serde(default)]
-    pub filters: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    pub query: String,
     /// If true, the dispatcher walks existing catalogue entries matching the
-    /// filters when the trigger is first registered.
+    /// query when the trigger is first registered.
     #[serde(default)]
     pub backfill: bool,
 }

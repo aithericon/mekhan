@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn catalog_scope_flattens_entry_fields_plus_escape_hatch() {
         let s = source_scope(&TriggerSource::Catalog(CatalogTrigger {
-            filters: Default::default(),
+            query: String::new(),
             backfill: false,
         }));
         let n = names(&s);

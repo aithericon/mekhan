@@ -118,7 +118,7 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     let c_nats = nats.clone();
     let c_db = db.clone();

@@ -1,7 +1,7 @@
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use crate::query::builder::{self, FieldSpec, QueryError};
+use crate::query::builder::{self, DynJsonbField, FieldSpec, QueryError};
 use crate::query::extractor::QueryParams;
 use crate::query::filter::camel_to_snake_case;
 use crate::query::pagination::Paginated;
@@ -132,6 +132,17 @@ const COMPRESSION_FORMATS: &[&str] = &[
 ];
 const VTK_FORMATS: &[&str] = &["vtk_legacy", "vtu", "vtp", "vts", "vtr", "vti"];
 const ZARR_FORMATS: &[&str] = &["zarr_v2", "zarr_v3"];
+
+/// Open-ended JSONB-key field families: `umeta.<key>` projects any
+/// `user_metadata` key (`user_metadata ->> '<key>'`, text) — the keys are
+/// user-defined so they can't be a static [`FieldSpec`]; the key is bound, not
+/// inlined (see [`DynJsonbField`]). This is how a catalog trigger / subscription
+/// (and the data browser) filters on user-supplied metadata, e.g.
+/// `umeta.kind:bo_observation`.
+pub const CATALOGUE_DYN_FIELDS: &[DynJsonbField] = &[DynJsonbField {
+    prefix: "umeta.",
+    column: "user_metadata",
+}];
 
 /// The catalogue query-field registry: every native filter column PLUS the
 /// virtual `meta.*` fields projected out of the `file_metadata` JSONB (the
@@ -413,7 +424,12 @@ pub(crate) fn append_where(
             if need_and {
                 qb.push(" AND ");
             }
-            builder::build_where_conditions_specs(qb, filter, CATALOGUE_FIELD_SPECS)?;
+            builder::build_where_conditions_specs(
+                qb,
+                filter,
+                CATALOGUE_FIELD_SPECS,
+                CATALOGUE_DYN_FIELDS,
+            )?;
             need_and = true;
         }
     }
@@ -1034,7 +1050,7 @@ pub async fn distinct_jsonb_values(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::filter::{Filter, FilterOperator};
+    use crate::query::filter::{Filter, FilterCondition, FilterOperator, FilterValue};
     use crate::query::pagination::Sort;
     use aithericon_file_metadata::format::{
         ArchiveMetadata, AudioMetadata, CsvMetadata, FileFormat, FitsMetadata, FormatMetadata,
@@ -1310,14 +1326,70 @@ mod tests {
     fn unknown_field_rejected_and_sort_gate_holds() {
         let filter = Filter::single("meta.bogus", FilterOperator::Eq, "x");
         let mut qb = QueryBuilder::<Postgres>::new("SELECT 1");
-        let err = builder::build_where_conditions_specs(&mut qb, &filter, CATALOGUE_FIELD_SPECS)
-            .unwrap_err();
+        let err = builder::build_where_conditions_specs(
+            &mut qb,
+            &filter,
+            CATALOGUE_FIELD_SPECS,
+            CATALOGUE_DYN_FIELDS,
+        )
+        .unwrap_err();
         assert!(matches!(err, QueryError::InvalidField(..)));
 
         // meta.width IS a filter spec but NOT in ALLOWED_SORT_FIELDS.
         let sort = Sort::asc("meta.width");
         let normalized = camel_to_snake_case(&sort.field);
         assert!(!ALLOWED_SORT_FIELDS.contains(&normalized.as_str()));
+    }
+
+    /// `umeta.<key>` is an open-ended user_metadata projection: the column is a
+    /// constant, the key is BOUND, and the comparison value binds as text (so a
+    /// numeric DSL value can't force a `text = bigint` mismatch). An empty key
+    /// (`umeta.`) is not a dyn match and falls through to the unknown-field gate.
+    #[test]
+    fn umeta_dynamic_jsonb_key_projection() {
+        let filter = Filter::new(vec![
+            FilterCondition {
+                field: "umeta.kind".to_string(),
+                operator: FilterOperator::Eq,
+                value: FilterValue::String("bo_observation".to_string()),
+            },
+            FilterCondition {
+                field: "umeta.run".to_string(),
+                operator: FilterOperator::Gt,
+                // Typed as Int by the DSL ladder — must still bind as text.
+                value: FilterValue::Int(5),
+            },
+        ]);
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+        builder::build_where_conditions_specs(
+            &mut qb,
+            &filter,
+            CATALOGUE_FIELD_SPECS,
+            CATALOGUE_DYN_FIELDS,
+        )
+        .expect("umeta compiles");
+        let sql = qb.sql().to_string();
+        assert!(
+            sql.contains("(user_metadata ->> ") && sql.contains(") = "),
+            "projects a bound-key user_metadata read: {sql}"
+        );
+        assert!(sql.contains(") > "), "ordering op on the projection: {sql}");
+        assert!(
+            !sql.contains("kind") && !sql.contains("'5'"),
+            "key + value are bound, never inlined: {sql}"
+        );
+
+        // Empty key is not a dyn match -> unknown field.
+        let bad = Filter::single("umeta.", FilterOperator::Eq, "x");
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+        let err = builder::build_where_conditions_specs(
+            &mut qb,
+            &bad,
+            CATALOGUE_FIELD_SPECS,
+            CATALOGUE_DYN_FIELDS,
+        )
+        .unwrap_err();
+        assert!(matches!(err, QueryError::InvalidField(..)));
     }
 
     /// The query-fields endpoint serves every spec exactly once, with the

@@ -360,6 +360,7 @@ async fn one_instance_leases_two_clusters_of_different_kinds() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {

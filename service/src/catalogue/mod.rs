@@ -5,6 +5,8 @@ pub mod metadata_view;
 pub mod model;
 pub mod protocol;
 pub mod queries;
+pub mod query_dsl;
+pub mod query_match;
 pub mod repository;
 pub mod responder;
 pub mod saved_queries;

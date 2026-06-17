@@ -11,10 +11,66 @@ use crate::auth::AuthUser;
 use crate::catalogue::facets::{self, CatalogueDimension, FacetsResponse};
 use crate::catalogue::model::{CatalogueEntry, CatalogueStats, LineageResponse, NetStats};
 use crate::catalogue::queries::QueryFieldsResponse;
+use crate::catalogue::query_dsl::{self, DatatypeRegistry};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
 use crate::AppState;
+
+/// The optional `?q=<DSL>` catalogue-query param, rendered as a typed query
+/// extractor so it appears in the OpenAPI surface alongside the bracket-notation
+/// filter params. When present it is the CANONICAL filter source: the handler
+/// compiles it server-side (the same DSL the data browser, catalog triggers,
+/// and catalogue subscriptions submit) into the filter / search / file_metadata
+/// scope, SUPERSEDING any structured `filter[..]` / `search` / `file_metadata`
+/// params. Pagination (`page`, `page_size`) and `sort` continue to ride through
+/// the bracket-notation extractor.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct CatalogueQ {
+    /// Catalogue query DSL, e.g. `category:model filename~report meta.format:fasta created_at>-7d`.
+    /// Compiled server-side; relative dates re-resolve per request.
+    pub q: Option<String>,
+}
+
+/// Apply the optional `?q=<DSL>` to `QueryParams`, reusable from other catalogue
+/// read surfaces (e.g. the unified `/api/v1/data/entries` browser endpoint) that
+/// want the same canonical-DSL filter scope. See [`apply_q`].
+pub(crate) async fn apply_query_dsl(
+    db: &sqlx::PgPool,
+    q: Option<String>,
+    params: QueryParams,
+) -> Result<QueryParams, ApiError> {
+    apply_q(db, q, params).await
+}
+
+/// Apply the optional `?q=<DSL>` to the bracket-notation `QueryParams`.
+///
+/// When `q` is present it is compiled server-side (resolving any `datatype:`
+/// sugar against the data-types registry) and its filter / search /
+/// file_metadata scope REPLACES whatever the structured params carried;
+/// pagination and sort are preserved from `params`. When `q` is absent the
+/// structured params pass through unchanged (full backwards-compatibility for
+/// the existing bracket-notation surface).
+async fn apply_q(
+    db: &sqlx::PgPool,
+    q: Option<String>,
+    mut params: QueryParams,
+) -> Result<QueryParams, ApiError> {
+    let Some(dsl) = q.filter(|s| !s.trim().is_empty()) else {
+        return Ok(params);
+    };
+    let registry = DatatypeRegistry::resolve(db, &dsl).await.map_err(|e| {
+        tracing::warn!("catalogue ?q= datatype resolve: {e}");
+        ApiError::bad_request(format!("query datatype resolution failed: {e}"))
+    })?;
+    let compiled = query_dsl::compile_query(&dsl, chrono::Utc::now(), &registry.as_resolver());
+    // Canonical scope from the DSL; keep client pagination + sort.
+    params.filter = compiled.filter;
+    params.search = compiled.search;
+    params.metadata = compiled.metadata;
+    params.file_metadata = compiled.file_metadata;
+    Ok(params)
+}
 
 /// GET /api/v1/catalogue
 ///
@@ -34,6 +90,7 @@ use crate::AppState;
 #[utoipa::path(
     get,
     path = "/api/v1/catalogue",
+    params(CatalogueQ),
     responses(
         (status = 200, description = "Paginated catalogue entries", body = Paginated<CatalogueEntry>),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -43,9 +100,11 @@ use crate::AppState;
 pub async fn list_entries(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(q): Query<CatalogueQ>,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let ws = user.require_workspace()?;
+    let params = apply_q(&state.db, q.q, params).await?;
     let response = state
         .catalogue_repo
         .list_entries(ws, &params)
@@ -66,6 +125,7 @@ pub async fn list_entries(
 #[utoipa::path(
     get,
     path = "/api/v1/catalogue/stats",
+    params(CatalogueQ),
     responses(
         (status = 200, description = "Aggregate stats", body = CatalogueStats),
         (status = 400, description = "Invalid query DSL", body = ErrorResponse),
@@ -75,9 +135,11 @@ pub async fn list_entries(
 pub async fn stats(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(q): Query<CatalogueQ>,
     params: QueryParams,
 ) -> Result<Json<CatalogueStats>, ApiError> {
     let ws = user.require_workspace()?;
+    let params = apply_q(&state.db, q.q, params).await?;
     let stats = state.catalogue_repo.stats(ws, &params).await.map_err(|e| {
         tracing::warn!("catalogue stats: {e}");
         ApiError::bad_request(e.to_string())
@@ -214,6 +276,9 @@ pub struct FacetsQuery {
     /// Max buckets returned (default 30, clamped 1..=200). Totals always
     /// cover the whole scope.
     pub limit: Option<i64>,
+    /// Optional catalogue query DSL scope (canonical; supersedes the
+    /// bracket-notation `filter[..]` / `search` / `file_metadata` params).
+    pub q: Option<String>,
 }
 
 /// GET /api/v1/catalogue/facets
@@ -243,6 +308,7 @@ pub async fn facets(
         ApiError::bad_request(e.to_string())
     })?;
     let limit = facets::clamp_limit(q.limit);
+    let params = apply_q(&state.db, q.q, params).await?;
 
     let response = facets::facets(&state.db, ws, &params, dimension, limit)
         .await

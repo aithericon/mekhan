@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let subscription_manager = Arc::new(SubscriptionManager::new(
         sub_kv,
         mekhan_nats.jetstream().clone(),
+        db.clone(),
     ));
     subscription_manager
         .hydrate()

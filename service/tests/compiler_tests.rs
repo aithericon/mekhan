@@ -3374,7 +3374,7 @@ fn cron_source() -> mekhan_service::models::template::TriggerSource {
 fn catalog_source() -> mekhan_service::models::template::TriggerSource {
     use mekhan_service::models::template::{CatalogTrigger, TriggerSource};
     TriggerSource::Catalog(CatalogTrigger {
-        filters: Default::default(),
+        query: Default::default(),
         backfill: false,
     })
 }

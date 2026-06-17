@@ -8,17 +8,17 @@
 //! Subscriptions are persisted in a NATS KV bucket (`CATALOGUE_SUBSCRIPTIONS`)
 //! and cached in-memory via `DashMap` for fast evaluation on the hot path.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_nats::jetstream;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 
 use super::model::{CatalogueEntry, CatalogueRegisterCommand};
 use super::protocol::SubscribeRequest;
-use super::repository::CatalogueRepository;
+use super::query_match;
 use crate::observability::record_silent_drop_with;
 
 /// A persisted catalogue subscription.
@@ -31,9 +31,12 @@ pub struct CatalogueSubscription {
     #[serde(default)]
     pub workspace_id: uuid::Uuid,
     pub signal_place: String,
-    /// Outer key = field name, inner = `{ operator: value }`.
-    /// Currently only `eq` is supported.
-    pub filters: HashMap<String, HashMap<String, String>>,
+    /// Catalogue query DSL string (the same grammar the data browser and catalog
+    /// triggers submit, e.g. `category:model filename~report created_at>-7d`).
+    /// Compiled server-side at evaluation time so relative dates re-resolve per
+    /// fire. An empty string matches every entry.
+    #[serde(default)]
+    pub query: String,
     pub backfill: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -55,14 +58,19 @@ pub struct SubscriptionManager {
     cache: DashMap<String, CatalogueSubscription>,
     kv: jetstream::kv::Store,
     jetstream: jetstream::Context,
+    /// Postgres pool — the live membership test and backfill run the same SQL
+    /// list query the data browser uses (via [`query_match`]), pinned to the
+    /// just-ingested entry.
+    db: PgPool,
 }
 
 impl SubscriptionManager {
-    pub fn new(kv: jetstream::kv::Store, jetstream: jetstream::Context) -> Self {
+    pub fn new(kv: jetstream::kv::Store, jetstream: jetstream::Context, db: PgPool) -> Self {
         Self {
             cache: DashMap::new(),
             kv,
             jetstream,
+            db,
         }
     }
 
@@ -176,11 +184,10 @@ impl SubscriptionManager {
     }
 
     /// Create a new subscription. If `backfill` is true, query existing
-    /// catalogue entries that match the filters and publish a signal for each.
+    /// catalogue entries that match the query and publish a signal for each.
     pub async fn subscribe(
         &self,
         request: SubscribeRequest,
-        repo: &dyn CatalogueRepository,
     ) -> Result<String, SubscriptionError> {
         let subscription_id = uuid::Uuid::new_v4().to_string();
 
@@ -195,7 +202,7 @@ impl SubscriptionManager {
             net_id: request.net_id.clone(),
             workspace_id,
             signal_place: request.signal_place.clone(),
-            filters: request.filters.clone(),
+            query: request.query.clone(),
             backfill: request.backfill,
             created_at: Utc::now(),
         };
@@ -217,9 +224,9 @@ impl SubscriptionManager {
             "catalogue subscription created"
         );
 
-        // Backfill: query existing entries matching filters and publish signals
+        // Backfill: query existing entries matching the query and publish signals
         if request.backfill {
-            self.run_backfill(&sub, repo).await;
+            self.run_backfill(&sub).await;
         }
 
         Ok(subscription_id)
@@ -259,21 +266,48 @@ impl SubscriptionManager {
     /// inserting the cross-link row so that the ingress-side UPDATE (in the
     /// TokenCreated handler) can find it.
     pub async fn evaluate_new_artifact(&self, entry: &CatalogueEntry) -> Vec<MatchedSubscription> {
+        // Snapshot the cache so we don't hold a DashMap read guard across the
+        // `.await` membership probes (each is a pinned SQL list query).
+        let subs: Vec<CatalogueSubscription> =
+            self.cache.iter().map(|r| r.value().clone()).collect();
+
+        let now = Utc::now();
         let mut matched = Vec::new();
-        for sub_ref in self.cache.iter() {
-            let sub = sub_ref.value();
-            if matches_filters(sub, entry) {
-                let signal_key = build_subscription_signal_key(
-                    &sub.subscription_id,
-                    &entry.execution_id,
-                    &entry.id,
-                );
-                self.publish_signal(sub, entry, &signal_key).await;
-                matched.push(MatchedSubscription {
-                    subscription_id: sub.subscription_id.clone(),
-                    target_net_id: sub.net_id.clone(),
-                    signal_key,
-                });
+        for sub in &subs {
+            match query_match::entry_satisfies(
+                &self.db,
+                sub.workspace_id,
+                &sub.query,
+                now,
+                &entry.execution_id,
+                &entry.id,
+            )
+            .await
+            {
+                Ok(true) => {
+                    let signal_key = build_subscription_signal_key(
+                        &sub.subscription_id,
+                        &entry.execution_id,
+                        &entry.id,
+                    );
+                    self.publish_signal(sub, entry, &signal_key).await;
+                    matched.push(MatchedSubscription {
+                        subscription_id: sub.subscription_id.clone(),
+                        target_net_id: sub.net_id.clone(),
+                        signal_key,
+                    });
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    // Fail closed: a malformed query / DB hiccup must not fire a
+                    // spurious signal, but it should be loud so the subscription
+                    // owner can see their filter is broken.
+                    tracing::warn!(
+                        subscription_id = %sub.subscription_id,
+                        query = %sub.query,
+                        "subscription membership query failed; not firing: {e}"
+                    );
+                }
             }
         }
         matched
@@ -410,12 +444,11 @@ impl SubscriptionManager {
     }
 
     /// Run backfill for a newly created subscription: query the catalogue for
-    /// matching entries and publish a signal for each.
-    async fn run_backfill(&self, sub: &CatalogueSubscription, repo: &dyn CatalogueRepository) {
-        // Build query params from subscription filters
-        let query_params = filters_to_query_params(&sub.filters);
-
-        match repo.list_entries(sub.workspace_id, &query_params).await {
+    /// matching entries (via the SAME DSL list query the data browser uses) and
+    /// publish a signal for each.
+    async fn run_backfill(&self, sub: &CatalogueSubscription) {
+        let now = Utc::now();
+        match query_match::backfill_matches(&self.db, sub.workspace_id, &sub.query, now).await {
             Ok(paginated) => {
                 tracing::info!(
                     subscription_id = %sub.subscription_id,
@@ -425,19 +458,17 @@ impl SubscriptionManager {
                 );
 
                 for entry in &paginated.items {
-                    if matches_filters(sub, entry) {
-                        let signal_key = build_subscription_signal_key(
-                            &sub.subscription_id,
-                            &entry.execution_id,
-                            &entry.id,
-                        );
-                        self.publish_signal(sub, entry, &signal_key).await;
-                    }
+                    let signal_key = build_subscription_signal_key(
+                        &sub.subscription_id,
+                        &entry.execution_id,
+                        &entry.id,
+                    );
+                    self.publish_signal(sub, entry, &signal_key).await;
                 }
 
-                // If there are more pages, we could iterate, but for the
-                // initial implementation we limit backfill to the first page.
-                // Production improvement: paginate through all results.
+                // backfill_matches is bounded by one page; if the total exceeds
+                // what was delivered, log it (paginating through all results is
+                // a deliberate follow-up, not a silent partial backfill).
                 if paginated.total > paginated.items.len() as i64 {
                     tracing::warn!(
                         subscription_id = %sub.subscription_id,
@@ -450,6 +481,7 @@ impl SubscriptionManager {
             Err(e) => {
                 tracing::error!(
                     subscription_id = %sub.subscription_id,
+                    query = %sub.query,
                     "backfill query failed: {e}"
                 );
             }
@@ -470,99 +502,6 @@ pub fn build_subscription_signal_key(
     artifact_id: &str,
 ) -> String {
     format!("cat-sub:{subscription_id}:{execution_id}:{artifact_id}")
-}
-
-/// Evaluate whether a catalogue entry matches a subscription's filters.
-///
-/// All filters must match (AND semantics). Each filter specifies a field name
-/// and a map of `{ operator: value }`. Currently only `eq` is supported.
-/// If a filter references a field that is `None` on the entry, the filter
-/// does not match.
-fn matches_filters(sub: &CatalogueSubscription, entry: &CatalogueEntry) -> bool {
-    for (field, ops) in &sub.filters {
-        for (operator, expected) in ops {
-            if operator != "eq" {
-                // Unsupported operator — treat as non-matching to be safe
-                tracing::debug!(
-                    subscription_id = %sub.subscription_id,
-                    field = %field,
-                    operator = %operator,
-                    "unsupported filter operator, skipping"
-                );
-                return false;
-            }
-
-            let actual: Option<&str> = match field.as_str() {
-                "category" => Some(&entry.category),
-                "source_net" => entry.source_net.as_deref(),
-                "source_place" => entry.source_place.as_deref(),
-                "process_id" => entry.process_id.as_deref(),
-                "process_step" => entry.process_step.as_deref(),
-                unknown => {
-                    tracing::debug!(
-                        subscription_id = %sub.subscription_id,
-                        field = %unknown,
-                        "unknown filter field"
-                    );
-                    return false;
-                }
-            };
-
-            match actual {
-                Some(val) if val == expected.as_str() => {}
-                _ => return false,
-            }
-        }
-    }
-
-    true
-}
-
-/// Convert subscription filters to `QueryParams` for backfill queries.
-///
-/// Reused by `triggers::sources::catalog::backfill_one` so subscription and
-/// Catalog-trigger backfill share one filter→query translation; if the
-/// filter grammar grows new operators, both paths pick them up.
-pub(crate) fn filters_to_query_params(
-    filters: &HashMap<String, HashMap<String, String>>,
-) -> crate::query::extractor::QueryParams {
-    use crate::query::filter::{Filter, FilterCondition, FilterOperator, FilterValue};
-    use crate::query::pagination::PageQuery;
-
-    let conditions: Vec<FilterCondition> = filters
-        .iter()
-        .flat_map(|(field, ops)| {
-            ops.iter().filter_map(move |(op, value)| {
-                let operator = match op.as_str() {
-                    "eq" => FilterOperator::Eq,
-                    _ => return None,
-                };
-                Some(FilterCondition {
-                    field: field.clone(),
-                    operator,
-                    value: FilterValue::String(value.clone()),
-                })
-            })
-        })
-        .collect();
-
-    let filter = if conditions.is_empty() {
-        None
-    } else {
-        Some(Filter::new(conditions))
-    };
-
-    crate::query::extractor::QueryParams {
-        page: PageQuery {
-            page: 0,
-            page_size: 1000, // Reasonable backfill batch size
-        },
-        filter,
-        sort: None,
-        metadata: None,
-        file_metadata: None,
-        search: None,
-    }
 }
 
 /// Convert a `CatalogueRegisterCommand` to a `CatalogueEntry` for filter

@@ -223,7 +223,7 @@ async fn subworkflow_child_is_registered_and_drillable() {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, base_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, base_nats.jetstream().clone(), db.clone()));
 
     // Lifecycle listener — drives the parent (and child) instance status in the DB.
     {

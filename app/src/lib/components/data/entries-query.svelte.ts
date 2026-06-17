@@ -16,9 +16,16 @@ export class EntriesQueryState {
 	/** Result page; reset by every apply. */
 	page = $state(0);
 
-	constructor(initialQ = '') {
+	/** When false, `apply` does NOT push the query into `?q=` on the page URL.
+	 *  The /data browser wants the sync (deep-linkable queries); embedded uses
+	 *  like the trigger-node filter editor own their own persistence and must
+	 *  not clobber the editor page URL. */
+	private syncUrlEnabled: boolean;
+
+	constructor(initialQ = '', syncUrl = true) {
 		this.applied = initialQ;
 		this.draft = initialQ;
+		this.syncUrlEnabled = syncUrl;
 	}
 
 	/** Apply new query text: reset paging + sync ?q= (same pattern as ?inspect). */
@@ -43,7 +50,7 @@ export class EntriesQueryState {
 	// URL sync is event-driven (inside apply), NOT an $effect — an effect
 	// would also fire replaceState once on deep-link hydration.
 	private syncUrl(text: string) {
-		if (!browser) return;
+		if (!browser || !this.syncUrlEnabled) return;
 		const url = new URL(window.location.href);
 		if (text.trim()) url.searchParams.set('q', text);
 		else url.searchParams.delete('q');

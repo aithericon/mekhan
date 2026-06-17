@@ -3727,29 +3727,18 @@ mod tests {
                 match source {
                     TriggerSource::Catalog(cat) => {
                         assert!(!cat.backfill, "backfill must be false");
-                        let cat_filter = cat
-                            .filters
-                            .get("category")
-                            .expect("filters.category must be present");
-                        assert_eq!(
-                            cat_filter.get("eq").map(String::as_str),
-                            Some("metric"),
-                            "category eq filter"
-                        );
-                        // The semantic `bo_observation` lives in a
-                        // user_metadata sentinel — `category` is a closed enum
-                        // (one of the 8 ArtifactCategory values), so a real
-                        // producer tags `category=metric` plus
-                        // `metadata.kind=bo_observation`.
-                        let kind_filter = cat
-                            .filters
-                            .get("user_metadata.kind")
-                            .expect("filters.user_metadata.kind must be present");
-                        assert_eq!(
-                            kind_filter.get("eq").map(String::as_str),
-                            Some("bo_observation"),
-                            "user_metadata.kind sentinel"
-                        );
+                        // The catalog trigger now carries a catalogue query DSL
+                        // string (the same DSL the data browser submits),
+                        // compiled + evaluated server-side at ingest. The
+                        // `category:metric` term scopes to BO metric artifacts.
+                        //
+                        // NOTE: the prior HashMap filter also pinned a
+                        // `user_metadata.kind = bo_observation` sentinel; the
+                        // current DSL has no user_metadata containment sugar, so
+                        // that discriminator is intentionally dropped here (see
+                        // the convergence blast-radius note). A follow-up may add
+                        // a `umeta:` sugar / `meta.kind` field spec to restore it.
+                        assert_eq!(cat.query, "category:metric", "catalogue query DSL");
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
                 }

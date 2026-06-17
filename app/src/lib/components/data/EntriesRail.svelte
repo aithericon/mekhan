@@ -13,7 +13,7 @@
 		type SavedQuery
 	} from '$lib/api/data';
 	import { ApiError } from '$lib/api/client';
-	import { parseQuery, compileQuery, activeFormats } from './query-language';
+	import { parseQuery, activeFormats } from './query-language';
 	import type { EntriesQueryState } from './entries-query.svelte';
 	import type { DataTypesState } from './data-types.svelte';
 	import FacetGroup from './FacetGroup.svelte';
@@ -70,11 +70,10 @@
 		saving = true;
 		try {
 			const q = entries.applied;
-			// Snapshot caveat: a `datatype:` term saved before the registry loads
-			// stores fail-closed params; the stored `q` text recompiles correctly
-			// on replay.
-			const compiled = compileQuery(parseQuery(q).terms, undefined, datatypes.resolveDigests);
-			await createSavedQuery({ name, q, params: compiled });
+			// Persist only the raw DSL text — replay goes through `entries.apply(sq.q)`,
+			// which now compiles server-side (single compiler). The legacy `params`
+			// snapshot is no longer request-driving, so it stays empty.
+			await createSavedQuery({ name, q, params: {} });
 			toast.success(`Saved query “${name}”`);
 			saveName = '';
 			await loadSaved();
@@ -135,6 +134,7 @@
 		['col:email · dim:time', 'has column · has dimension'],
 		['pii:EMAIL', 'has a column classified as…'],
 		['attr:KEY=VALUE', 'custom attribute'],
+		['umeta.kind:value', 'match a user_metadata key (any key)'],
 		['owner:"null"', 'quoting opts out of special forms']
 	];
 </script>
@@ -156,7 +156,6 @@
 						defaultExpanded={d.defaultExpanded}
 						query={entries.applied}
 						onAdd={(term) => entries.addTerm(term)}
-						resolveDatatype={datatypes.resolveDigests}
 					/>
 				{/each}
 				<SchemaFacetGroup

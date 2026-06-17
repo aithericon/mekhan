@@ -648,6 +648,7 @@ async fn subworkflow_spawns_child_and_completes() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {
@@ -792,6 +793,7 @@ async fn subworkflow_borrows_child_output_field() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {

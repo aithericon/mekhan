@@ -87,7 +87,7 @@ async fn spawn_consumers(
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     let c_nats = nats.clone();
     let c_db = db.clone();
@@ -228,7 +228,7 @@ fn template_graph(category: &str) -> Value {
                         "enabled": true,
                         "source": {
                             "kind": "catalog",
-                            "filters": { "category": { "eq": category } },
+                            "query": format!("category:{category}"),
                             "backfill": false
                         },
                         "payloadMapping": [] } },
@@ -262,10 +262,7 @@ fn template_graph_with_metadata(kind_sentinel: &str) -> Value {
                         "enabled": true,
                         "source": {
                             "kind": "catalog",
-                            "filters": {
-                                "category": { "eq": "metric" },
-                                "user_metadata.kind": { "eq": kind_sentinel }
-                            },
+                            "query": format!("category:metric umeta.kind:{kind_sentinel}"),
                             "backfill": false
                         },
                         "payloadMapping": [
@@ -336,6 +333,56 @@ async fn publish(app: &axum::Router, id: Uuid) {
     }
 }
 
+/// Seed a "producer" net so the synthetic catalogue entry resolves into the
+/// SAME workspace as the trigger template. The catalogue projector derives an
+/// entry's `workspace_id` from `net_id -> workflow_instances -> template`
+/// (`resolve_net_workspace`); a bare `mekhan-fake-…` net has no instance row, so
+/// the entry would default to the NIL workspace while the dev_noop template
+/// lives in `…0001`. The converged trigger eval runs the real, workspace-scoped
+/// catalogue query (unlike the old in-memory matcher, which ignored workspace —
+/// a latent cross-tenant leak), so the entry must share the trigger's workspace
+/// to match. In production this is automatic: a real producer net's
+/// instance→template is in the same workspace. Here we reproduce that by
+/// inserting a producer template (in the trigger's workspace) + a completed
+/// instance bound to `net_id`. The producer template is distinct, so it does not
+/// perturb `wait_for_instance_count(trigger_template, …)`.
+async fn seed_producer_in_template_workspace(
+    db: &sqlx::PgPool,
+    trigger_template: Uuid,
+    net_id: &str,
+) {
+    let ws: Uuid =
+        sqlx::query_scalar("SELECT workspace_id FROM workflow_templates WHERE id = $1")
+            .bind(trigger_template)
+            .fetch_one(db)
+            .await
+            .expect("trigger template workspace");
+    let producer_tid = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workflow_templates \
+           (id, name, graph, is_latest, published, author_id, workspace_id) \
+         VALUES ($1, 'producer', '{}'::jsonb, true, true, $2, $3)",
+    )
+    .bind(producer_tid)
+    .bind(Uuid::new_v4())
+    .bind(ws)
+    .execute(db)
+    .await
+    .expect("insert producer template");
+    sqlx::query(
+        "INSERT INTO workflow_instances \
+           (id, template_id, template_version, net_id, status, created_by, started_at, metadata) \
+         VALUES ($1, $2, 1, $3, 'completed', $4, NOW(), '{}')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(producer_tid)
+    .bind(net_id)
+    .bind(Uuid::new_v4())
+    .execute(db)
+    .await
+    .expect("insert producer instance");
+}
+
 // ── Test ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -365,6 +412,9 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     let execution_id = format!("test-exec-{}", Uuid::new_v4());
     let artifact_id = format!("test-art-{}", Uuid::new_v4());
     let net_id = format!("mekhan-fake-{}", Uuid::new_v4());
+    // Land the synthetic entry in the trigger template's workspace (the
+    // workspace-scoped trigger query won't match a nil-workspace entry).
+    seed_producer_in_template_workspace(&db, template, &net_id).await;
     // The projector now content-addresses the artifact and refuses to write a
     // half catalogue/inventory row, so the synthetic command must carry a
     // content_hash (unique per run to avoid ON CONFLICT (content_hash) clashing
@@ -464,6 +514,9 @@ async fn metric_with_kind_sentinel_fires_payload_mapping_trigger() {
     let execution_id = format!("test-exec-{}", Uuid::new_v4());
     let artifact_id = format!("test-art-{}", Uuid::new_v4());
     let net_id = format!("mekhan-fake-{}", Uuid::new_v4());
+    // Land the synthetic entry in the trigger template's workspace (the
+    // workspace-scoped trigger query won't match a nil-workspace entry).
+    seed_producer_in_template_workspace(&db, template, &net_id).await;
     // Content-address the synthetic artifact (see sibling test) so the projector
     // couples it into both catalogue + inventory rather than failing closed.
     let content_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());

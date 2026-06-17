@@ -185,6 +185,7 @@ async fn step_executions_materialize_for_completed_instance() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     {
         let listener_db = db.clone();

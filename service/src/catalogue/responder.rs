@@ -74,7 +74,7 @@ pub async fn start_catalogue_responder(
                     }
                 }
             } else if subject == "catalogue.subscribe" {
-                handle_subscribe(&sm, &repo, &msg.payload).await
+                handle_subscribe(&sm, &msg.payload).await
             } else if subject == "catalogue.unsubscribe" {
                 handle_unsubscribe(&sm, &msg.payload).await
             } else {
@@ -211,17 +211,13 @@ async fn handle_distinct_jsonb(repo: &Arc<dyn CatalogueRepository>, payload: &[u
     }
 }
 
-async fn handle_subscribe(
-    sm: &Arc<SubscriptionManager>,
-    repo: &Arc<dyn CatalogueRepository>,
-    payload: &[u8],
-) -> Vec<u8> {
+async fn handle_subscribe(sm: &Arc<SubscriptionManager>, payload: &[u8]) -> Vec<u8> {
     let req: SubscribeRequest = match serde_json::from_slice(payload) {
         Ok(r) => r,
         Err(e) => return serialize_err(format!("invalid request: {e}")),
     };
 
-    match sm.subscribe(req, repo.as_ref()).await {
+    match sm.subscribe(req).await {
         Ok(subscription_id) => serde_json::to_vec(&CatalogueResponse::ok(SubscribeResponse {
             subscription_id,
         }))

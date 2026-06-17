@@ -468,12 +468,13 @@ fn build_lookup_request(token: &JsonValue) -> Result<CatalogueLookupRequest, Eff
 /// ```json
 /// {
 ///   "signal_place": "inbox",
-///   "query": { "category": { "eq": "model" } },
+///   "query": "category:model",
 ///   "backfill": true
 /// }
 /// ```
 ///
-/// Output token: input clone + `subscription_id` field.
+/// The `query` field is a catalogue query DSL string (compiled server-side by
+/// Mekhan). Output token: input clone + `subscription_id` field.
 pub struct CatalogueSubscribeHandler {
     client: Arc<dyn CatalogueClient>,
     net_id: String,
@@ -515,12 +516,14 @@ impl EffectHandler for CatalogueSubscribeHandler {
             })?
             .to_string();
 
-        // Extract filters from either "query" or "filters" key
-        let filters: HashMap<String, HashMap<String, String>> = token_data
+        // The subscription filter is a catalogue query DSL string (compiled
+        // server-side by Mekhan at eval time). Accept it from `query`; an
+        // absent value subscribes to every entry.
+        let query = token_data
             .get("query")
-            .or_else(|| token_data.get("filters"))
-            .and_then(|f| serde_json::from_value(f.clone()).ok())
-            .unwrap_or_default();
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
 
         let backfill = token_data
             .get("backfill")
@@ -530,7 +533,7 @@ impl EffectHandler for CatalogueSubscribeHandler {
         let request = CatalogueSubscribeRequest {
             net_id: self.net_id.clone(),
             signal_place: signal_place.clone(),
-            filters,
+            query,
             backfill,
         };
 
@@ -957,7 +960,7 @@ mod tests {
             "subscription".to_string(),
             serde_json::json!({
                 "signal_place": "inbox",
-                "query": { "category": { "eq": "model" } },
+                "query": "category:model",
             }),
         );
 

@@ -233,6 +233,7 @@ async fn http_step_resolves_slug_field_borrow_in_url() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {
