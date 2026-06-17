@@ -293,6 +293,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
 
     // Deploy the datacenter lease adapter net for our seeded Slurm resource.

@@ -184,6 +184,7 @@ async fn automated_step_python_runs_through_executor() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {
@@ -332,6 +333,7 @@ async fn automated_step_python_native_assignment_reaches_step_executions() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {

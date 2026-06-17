@@ -259,7 +259,7 @@ async fn lifecycle_listener_retries_then_succeeds() {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {

@@ -538,6 +538,7 @@ async fn leased_loop_runs_executor_inside_container() {
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
         kv,
         listener_nats.jetstream().clone(),
+        db.clone(),
     ));
     let listener_db = db.clone();
     tokio::spawn(async move {

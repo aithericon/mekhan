@@ -351,7 +351,7 @@ async fn causality_full_pipeline() {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     // Single consumer projects catalogue, human tasks, and step/metric/log
     // breadcrumbs off the petri.events.> stream.
@@ -641,7 +641,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     let c_nats = nats.clone();
     let c_db = db.clone();
@@ -877,7 +877,7 @@ async fn rrv_publish_and_create(
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     let c_nats = nats.clone();
     let c_db = db.clone();

@@ -87,7 +87,7 @@ async fn spawn_consumers(
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
 
     let c_nats = nats.clone();
     let c_db = db.clone();
@@ -228,7 +228,7 @@ fn template_graph(category: &str) -> Value {
                         "enabled": true,
                         "source": {
                             "kind": "catalog",
-                            "filters": { "category": { "eq": category } },
+                            "query": format!("category:{category}"),
                             "backfill": false
                         },
                         "payloadMapping": [] } },
@@ -262,10 +262,7 @@ fn template_graph_with_metadata(kind_sentinel: &str) -> Value {
                         "enabled": true,
                         "source": {
                             "kind": "catalog",
-                            "filters": {
-                                "category": { "eq": "metric" },
-                                "user_metadata.kind": { "eq": kind_sentinel }
-                            },
+                            "query": format!("category:metric umeta.kind:{kind_sentinel}"),
                             "backfill": false
                         },
                         "payloadMapping": [

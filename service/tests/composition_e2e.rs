@@ -111,7 +111,7 @@ async fn spawn_lifecycle(nats: MekhanNats, db: sqlx::PgPool) -> TaskHandle {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone(), db.clone()));
     let handle = tokio::spawn(async move {
         start_lifecycle_listener(
             nats,
