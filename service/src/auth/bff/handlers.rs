@@ -46,6 +46,39 @@ fn sanitize_return_to(raw: Option<&str>, fallback: &str) -> String {
     }
 }
 
+/// Merge OIDC `userinfo` claims into the verified token claims, in place.
+///
+/// Drops the whole userinfo response if its `sub` doesn't match the token
+/// subject (OIDC token-substitution guard — RFC: the client MUST verify the
+/// userinfo `sub` equals the authenticated subject). The registered claims the
+/// verifier already lifted into typed fields (`iss`/`aud`/`exp`) are skipped;
+/// everything else (`name`, `email`, `preferred_username`, `picture`, the
+/// Zitadel `urn:zitadel:iam:org:project:roles` claim, …) overwrites the
+/// matching `extra` entry — userinfo is the fresher, authoritative source for
+/// profile data, while claims only present on the token (none in practice for
+/// Zitadel) are left untouched.
+fn merge_userinfo_claims(
+    claims: &mut crate::auth::model::VerifiedClaims,
+    info: serde_json::Map<String, serde_json::Value>,
+) {
+    if let Some(sub) = info.get("sub").and_then(|v| v.as_str()) {
+        if sub != claims.subject {
+            tracing::warn!(
+                token_sub = %claims.subject,
+                userinfo_sub = %sub,
+                "userinfo sub mismatch; ignoring userinfo response"
+            );
+            return;
+        }
+    }
+    for (k, v) in info {
+        if matches!(k.as_str(), "sub" | "iss" | "aud" | "exp") {
+            continue;
+        }
+        claims.extra.insert(k, v);
+    }
+}
+
 /// Build the session cookie. `HttpOnly` (no JS access), `SameSite=Lax`
 /// (survives the top-level IdP redirect back), `Path=/` (sent on API + WS),
 /// `Secure` gated by config (off for local http, on in prod).
@@ -160,10 +193,25 @@ pub async fn callback(
 
     // Verify the returned access token with the EXISTING Zitadel verifier and
     // map it with the EXISTING resolver — the domain contract is unchanged.
-    let claims = match state.token_verifier.verify(&tokens.access_token).await {
+    let mut claims = match state.token_verifier.verify(&tokens.access_token).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+
+    // Enrich with the OIDC userinfo endpoint. Zitadel's access-token JWT carries
+    // only sub/aud/exp (+ roles when configured) — the `profile`/`email` scope
+    // claims (name, email, preferred_username, picture) live ONLY on userinfo.
+    // Without this the resolver sees no name/email/org and the SPA renders the
+    // raw subject everywhere (and a personal workspace named after the sub).
+    // Best-effort: a userinfo hiccup degrades to token-only claims rather than
+    // failing the login outright.
+    match oidc.fetch_userinfo(&tokens.access_token).await {
+        Ok(info) => merge_userinfo_claims(&mut claims, info),
+        Err(e) => {
+            tracing::warn!(error = %e, "userinfo enrichment failed; using access-token claims only");
+        }
+    }
+
     let user = match state.principal_resolver.resolve(claims).await {
         Ok(u) => u,
         Err(e) => return e.into_response(),
@@ -234,4 +282,84 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
         Json(json!({ "end_session_url": end_session_url })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::model::VerifiedClaims;
+    use std::collections::BTreeMap;
+
+    fn claims(subject: &str) -> VerifiedClaims {
+        VerifiedClaims {
+            subject: subject.into(),
+            issuer: "https://idp".into(),
+            audience: vec!["mekhan".into()],
+            expires_at: 0,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn merge_userinfo_enriches_profile_claims() {
+        let mut c = claims("user-123");
+        let info = serde_json::json!({
+            "sub": "user-123",
+            "name": "Alice Example",
+            "email": "alice@corp.example",
+            "picture": "https://idp/a.png",
+        });
+        let serde_json::Value::Object(map) = info else {
+            unreachable!()
+        };
+        merge_userinfo_claims(&mut c, map);
+        assert_eq!(c.extra.get("name").unwrap().as_str(), Some("Alice Example"));
+        assert_eq!(
+            c.extra.get("email").unwrap().as_str(),
+            Some("alice@corp.example")
+        );
+        assert_eq!(
+            c.extra.get("picture").unwrap().as_str(),
+            Some("https://idp/a.png")
+        );
+    }
+
+    #[test]
+    fn merge_userinfo_skips_registered_claims() {
+        // iss/aud/exp/sub are owned by the verifier's typed fields and must not
+        // leak back into `extra`.
+        let mut c = claims("user-123");
+        let info = serde_json::json!({
+            "sub": "user-123",
+            "iss": "https://evil",
+            "aud": "someone-else",
+            "exp": 1,
+            "email": "alice@corp.example",
+        });
+        let serde_json::Value::Object(map) = info else {
+            unreachable!()
+        };
+        merge_userinfo_claims(&mut c, map);
+        assert!(!c.extra.contains_key("iss"));
+        assert!(!c.extra.contains_key("aud"));
+        assert!(!c.extra.contains_key("exp"));
+        assert!(!c.extra.contains_key("sub"));
+        assert!(c.extra.contains_key("email"));
+    }
+
+    #[test]
+    fn merge_userinfo_drops_response_on_sub_mismatch() {
+        // Token-substitution guard: a userinfo `sub` that disagrees with the
+        // token subject discards the WHOLE response, leaving claims untouched.
+        let mut c = claims("user-123");
+        let info = serde_json::json!({
+            "sub": "attacker-999",
+            "email": "attacker@evil.example",
+        });
+        let serde_json::Value::Object(map) = info else {
+            unreachable!()
+        };
+        merge_userinfo_claims(&mut c, map);
+        assert!(c.extra.is_empty());
+    }
 }

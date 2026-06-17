@@ -27,11 +27,17 @@ use crate::auth::model::AuthError;
 
 /// Subset of the OIDC discovery document we consume. `jwks_uri` is reused by
 /// the existing [`crate::auth::zitadel::ZitadelTokenVerifier`]; we only need
-/// the authorize/token/end_session endpoints here.
+/// the authorize/token/userinfo/end_session endpoints here.
 #[derive(Debug, Clone, Deserialize)]
 struct DiscoveryDocument {
     authorization_endpoint: String,
     token_endpoint: String,
+    /// OIDC `userinfo` endpoint. The BFF calls it after the code exchange to
+    /// recover the `profile`/`email` scope claims (name, email, picture) and
+    /// the Zitadel roles claim — none of which Zitadel puts on the *access
+    /// token* JWT. Optional in discovery, but Zitadel always advertises it.
+    #[serde(default)]
+    userinfo_endpoint: Option<String>,
     #[serde(default)]
     end_session_endpoint: Option<String>,
 }
@@ -166,6 +172,50 @@ impl OidcClient {
             form.push(("client_secret", secret));
         }
         self.post_token(&form).await
+    }
+
+    /// Fetch the OIDC `userinfo` claims for the holder of `access_token`.
+    ///
+    /// Why this exists: a Zitadel **access token** JWT carries only
+    /// `sub`/`aud`/`exp` (+ the roles claim when the project is configured to
+    /// assert it) — it does NOT carry the `profile`/`email` scope claims
+    /// (`name`, `email`, `preferred_username`, `picture`). Those, plus the
+    /// `urn:zitadel:iam:org:project:roles` claim, are asserted by the userinfo
+    /// endpoint. The BFF calls this right after the code exchange to enrich the
+    /// verified claims before the resolver maps them onto an `AuthUser`.
+    ///
+    /// Returns the raw claim map. Per the OIDC spec the caller MUST verify the
+    /// returned `sub` matches the token subject before trusting the response
+    /// (token-substitution guard — see `merge_userinfo_claims` in the handler).
+    pub async fn fetch_userinfo(
+        &self,
+        access_token: &str,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, AuthError> {
+        let endpoint = self
+            .discovery
+            .userinfo_endpoint
+            .as_deref()
+            .ok_or_else(|| AuthError::Internal("idp advertises no userinfo_endpoint".into()))?;
+        let resp = self
+            .http
+            .get(endpoint)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::JwksUnavailable(format!("userinfo endpoint: {e}")))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AuthError::Internal(format!("userinfo body: {e}")))?;
+        if !status.is_success() {
+            return Err(AuthError::InvalidToken(format!("userinfo {status}: {body}")));
+        }
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(serde_json::Value::Object(map)) => Ok(map),
+            Ok(_) => Err(AuthError::Internal("userinfo not a JSON object".into())),
+            Err(e) => Err(AuthError::Internal(format!("userinfo parse: {e}"))),
+        }
     }
 
     /// Exchange a refresh token for a fresh token set (transparent renewal).
