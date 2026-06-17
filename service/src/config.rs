@@ -37,6 +37,10 @@ pub struct AppConfig {
     pub frontend_dir: Option<String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Config-seeded PLATFORM registration tokens for declarative, headless
+    /// machine enrollment (no interactive mint). Parsed from `MEKHAN__BOOTSTRAP__*`.
+    #[serde(default)]
+    pub bootstrap: BootstrapConfig,
     #[serde(default)]
     pub demos: DemosConfig,
     /// LiveKit server credentials. When set, mekhan mints subscribe-only viewer
@@ -229,6 +233,25 @@ fn default_demos_dir() -> String {
     "demos".to_string()
 }
 
+/// Config-seeded PLATFORM registration tokens. Each value is a FULL registration
+/// token string (`<prefix><uuid>.<secret>`, the same shape the mint API returns).
+/// On startup the seeder upserts a reusable, platform-scoped registration token
+/// whose hash matches the supplied secret — so the executor / runners enroll into
+/// the shared `default` / `model_serving` pools using the same value, with no
+/// interactive mint. Rotating a value (re-seeding) revokes the prior bootstrap
+/// token of that class. Empty ⇒ that class isn't seeded. Parsed from
+/// `MEKHAN__BOOTSTRAP__WORKER_REGISTRATION_TOKEN` /
+/// `MEKHAN__BOOTSTRAP__RUNNER_REGISTRATION_TOKEN`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct BootstrapConfig {
+    /// Platform `default` WORKER-group registration token (the executor pool).
+    #[serde(default)]
+    pub worker_registration_token: Option<String>,
+    /// Platform `model_serving` RUNNER-group registration token (the model pool).
+    #[serde(default)]
+    pub runner_registration_token: Option<String>,
+}
+
 /// Identity-provider configuration. The hexagonal seam lets `mode` pick
 /// between adapters at boot without rewiring callers.
 ///
@@ -329,6 +352,17 @@ pub struct AuthConfig {
     /// default) ⇒ no platform admins via config (dev-noop seeds its own).
     #[serde(default)]
     pub platform_admins: Vec<String>,
+    /// **Platform root token** — a headless super-admin credential for automated
+    /// provisioning. A request presenting `Authorization: Bearer <this>` resolves
+    /// to a synthetic principal with `is_platform_admin = true` (no workspace), so
+    /// CI / Terraform can curate platform-tier infra (create platform pools, mint
+    /// registration tokens, …) without an interactive login. Orthogonal to
+    /// `mode`: works in both `dev_noop` and `bff`. Keep it in Vault, rotate it,
+    /// and prefer the narrower bootstrap registration tokens for plain machine
+    /// enrollment. Empty/None ⇒ the root-token path is disabled. Must carry the
+    /// `plat_` prefix (so the constant-time compare only runs for that shape).
+    #[serde(default)]
+    pub platform_root_token: Option<String>,
     /// **Auto-join every authenticated principal into system workspaces**
     /// (today just the seeded `demos`) as a `viewer`, on every login. Default
     /// `false`: users are NOT silently enrolled into `demos` — seeded demos
@@ -361,6 +395,7 @@ impl Default for AuthConfig {
             broker_pat: None,
             multi_org: false,
             platform_admins: Vec::new(),
+            platform_root_token: None,
             auto_join_system_workspaces: false,
         }
     }

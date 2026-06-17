@@ -520,6 +520,18 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = ?e, "platform model-serving-group seed failed");
     }
 
+    // Config-seeded platform bootstrap registration tokens (MEKHAN__BOOTSTRAP__*):
+    // upsert reusable, platform-scoped worker/runner registration tokens so the
+    // executor + model-pool runners self-enroll declaratively (no interactive
+    // mint). Runs AFTER the group seeders (the tokens reference those groups).
+    // No-op when unset; best-effort (a malformed token logs a warning).
+    if let Err(e) = mekhan_service::bootstrap::ensure_bootstrap_worker_token(&state).await {
+        tracing::warn!(error = %e, "bootstrap worker registration-token seed failed");
+    }
+    if let Err(e) = mekhan_service::bootstrap::ensure_bootstrap_runner_token(&state).await {
+        tracing::warn!(error = %e, "bootstrap runner registration-token seed failed");
+    }
+
     // Seed built-in demos before the listener accepts requests. Idempotent
     // by stable template id (see `mekhan_service::demos`); best-effort —
     // a failure to seed logs a warning and is otherwise transparent. Gated
