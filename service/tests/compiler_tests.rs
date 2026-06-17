@@ -2488,6 +2488,77 @@ fn guard_input_unknown_field_is_rejected() {
 }
 
 #[test]
+fn guard_borrowing_file_output_subfield_is_rejected() {
+    use mekhan_service::models::template::FieldKind;
+    // A guard reaching INTO a file output's contents (`s.doc.url`) is a hard
+    // error: a file output is a runtime handle (`{key,…}`), not a borrowable
+    // record, so `s.doc.url` would silently resolve to `undefined` at runtime.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], None),
+            decision_with_guard("d", "s.doc.url == \"x\""),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "default"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let err = compile_to_air(&graph, "file-subfield", "", &std::collections::HashMap::new())
+        .expect_err("borrowing a file output's subfield must be rejected");
+    match err {
+        mekhan_service::compiler::CompileError::FileOutputContentBorrow {
+            node_id,
+            file_field,
+            ref_value,
+        } => {
+            assert_eq!(node_id, "d");
+            assert_eq!(file_field, "doc");
+            assert_eq!(ref_value, "s.doc.url");
+        }
+        e => panic!("unexpected: {e:?}"),
+    }
+}
+
+#[test]
+fn guard_borrowing_file_handle_itself_is_allowed() {
+    use mekhan_service::models::template::FieldKind;
+    // Borrowing the handle scalar itself (`s.doc`, no subfield) is fine — only
+    // reaching into its contents trips the guard.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_fields("s", &[("doc", FieldKind::File)], None),
+            decision_with_guard("d", "s.doc != \"\""),
+            end_node("ea"),
+            end_node("eb"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "d"),
+            edge_with_handle("e_yes", "d", "ea", "cond_yes"),
+            edge_with_handle("e_no", "d", "eb", "default"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let res = compile_to_air(&graph, "file-handle", "", &std::collections::HashMap::new());
+    assert!(
+        !matches!(
+            res,
+            Err(mekhan_service::compiler::CompileError::FileOutputContentBorrow { .. })
+        ),
+        "borrowing the bare file handle must not trip FileOutputContentBorrow"
+    );
+}
+
+#[test]
 fn guard_multi_hop_scope_walk() {
     // s -> a -> d. `a` (a token-replacing automated step) is a parked
     // producer; the Decision two hops downstream resolves `a.processed`

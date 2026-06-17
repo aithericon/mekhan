@@ -341,3 +341,94 @@ async fn test_file_output_ipc_takes_precedence() {
     worker.abort();
     ctx.cleanup().await;
 }
+
+/// Phase 1 byte-safe `set_output`: an oversized **inline** (non-`file`) output
+/// fails the step before publish, with an actionable message. Drives the full
+/// collect -> promote -> guard pipeline against the real process backend and
+/// asserts the terminal status *and* the published `BackendError` detail.
+#[tokio::test]
+async fn test_oversized_inline_output_fails_step() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("oversize-{}", Uuid::new_v4().simple());
+    let consumer = ctx.status_consumer("oversize", &eid).await;
+    let worker = ctx.spawn_worker();
+
+    // ~2 MiB of 'x' captured as the output *value* -> serializes over the
+    // 1 MiB inline limit. Declared `kind: None`, so it is NOT promoted to a
+    // file handle and the guard must trip.
+    let outputs = vec![OutputDeclaration {
+        name: "blob".into(),
+        path: Some("blob.txt".into()),
+        required: true,
+        kind: None,
+        upload_to: None,
+    }];
+    ctx.push_job(job_with_outputs(
+        &eid,
+        "head -c 2097152 /dev/zero | tr '\\0' x > $AITHERICON_OUTPUTS_DIR/blob.txt",
+        outputs,
+    ))
+    .await;
+
+    let statuses = ctx
+        .collect_statuses(&consumer, Duration::from_secs(10))
+        .await;
+
+    assert_status_sequence(
+        &statuses,
+        &[
+            ExecutionStatus::Accepted,
+            ExecutionStatus::Running,
+            ExecutionStatus::Failed,
+        ],
+    );
+
+    let failed = statuses.last().unwrap();
+    let outcome = &failed.detail["outcome"];
+    assert_eq!(
+        outcome["type"], "backend_error",
+        "oversized inline output must surface as a backend_error, got: {outcome}"
+    );
+    let message = outcome["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("inline limit") && message.contains("log_artifact()"),
+        "failure message must point at the remedies, got: {message}"
+    );
+
+    worker.abort();
+    ctx.cleanup().await;
+}
+
+/// Control for `test_oversized_inline_output_fails_step`: a small inline output
+/// of the same shape passes (regression guard against a too-eager limit).
+#[tokio::test]
+async fn test_small_inline_output_passes() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("smallinline-{}", Uuid::new_v4().simple());
+
+    let outputs = vec![OutputDeclaration {
+        name: "blob".into(),
+        path: Some("blob.txt".into()),
+        required: true,
+        kind: None,
+        upload_to: None,
+    }];
+    let job = job_with_outputs(
+        &eid,
+        "printf ok > $AITHERICON_OUTPUTS_DIR/blob.txt",
+        outputs,
+    );
+
+    let status = ctx.build_executor().execute(&job).await;
+    assert_eq!(
+        status,
+        ExecutionStatus::Completed,
+        "a small inline output must pass unchanged"
+    );
+
+    ctx.cleanup().await;
+}

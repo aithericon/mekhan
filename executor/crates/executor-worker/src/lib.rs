@@ -37,7 +37,7 @@ pub use fileserve::{
     ack_subject, fileserve_subject, serve_file, spawn_fileserve_handler, FrameSink, ReplyFrame,
     ServeAck, ServeErrorKind, ServeRequest,
 };
-pub use executor::JobExecutor;
+pub use executor::{JobExecutor, DEFAULT_MAX_OUTPUT_INLINE_BYTES};
 pub use fold_sink::NatsBatchSink;
 pub use handler::handle_execution;
 pub use host_probe::{probe_host, HostInfo};

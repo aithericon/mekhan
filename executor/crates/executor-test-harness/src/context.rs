@@ -157,7 +157,10 @@ impl ExecutorTestContext {
         stream
             .create_consumer(ConsumerConfig {
                 durable_name: Some(format!("{}_{}", self.prefix, name)),
-                filter_subject: format!("{}.executor.status.{}.>", self.prefix, execution_id),
+                // Subject is `{prefix}.executor.status.{ws}.{execution_id}.{status}`
+                // (ADR-09 inserted the `{ws}` segment). `*` matches the single
+                // workspace token, then the execution_id, then the status tail.
+                filter_subject: format!("{}.executor.status.*.{}.>", self.prefix, execution_id),
                 ..Default::default()
             })
             .await
@@ -175,7 +178,9 @@ impl ExecutorTestContext {
         stream
             .create_consumer(ConsumerConfig {
                 durable_name: Some(format!("{}_{}", self.prefix, name)),
-                filter_subject: format!("{}.executor.events.{}.>", self.prefix, execution_id),
+                // Subject is `{prefix}.executor.events.{ws}.{execution_id}.{category}`
+                // (ADR-09 inserted the `{ws}` segment); `*` matches the workspace token.
+                filter_subject: format!("{}.executor.events.*.{}.>", self.prefix, execution_id),
                 ..Default::default()
             })
             .await
@@ -268,6 +273,7 @@ impl ExecutorTestContext {
             completion_tracker: None,
             transports: self.transports.clone(),
             serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
         });
         let storage = self.storage.clone();
 
@@ -305,6 +311,7 @@ impl ExecutorTestContext {
             completion_tracker: None,
             transports: self.transports.clone(),
             serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
         });
         let storage = self.storage.clone();
 
@@ -342,6 +349,7 @@ impl ExecutorTestContext {
             completion_tracker: None,
             transports: self.transports.clone(),
             serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
         });
         let storage = self.storage.clone();
 
@@ -381,6 +389,7 @@ impl ExecutorTestContext {
             completion_tracker: Some(tracker.clone()),
             transports: self.transports.clone(),
             serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
         });
         let storage = self.storage.clone();
 
@@ -413,6 +422,7 @@ impl ExecutorTestContext {
             completion_tracker: None,
             transports: self.transports.clone(),
             serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
         })
     }
 

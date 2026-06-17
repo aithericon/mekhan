@@ -24,6 +24,18 @@ use crate::registry::BackendRegistry;
 use crate::reporter::StatusReporter;
 use crate::staging::StagingPipeline;
 
+/// Default cap on the serialized byte size of a single **inline** output value
+/// (`set_output`/`path`-output) before the producer hard-errors.
+///
+/// Inlined outputs ride the executor status update over NATS (`max_payload`
+/// 8 MiB) and are parked by-value in the net token, so an oversized value would
+/// silently dead-letter the status message. ~1 MiB leaves ample headroom under
+/// the NATS ceiling for the rest of the status detail (stdout/stderr tails,
+/// `artifact_manifest`, `metrics`, `logs`). Files belong on the handle path
+/// (declare the output `file`-kind → promoted to a `{key:…}` reference) or in
+/// the catalogue via `log_artifact`, neither of which trips this guard.
+pub const DEFAULT_MAX_OUTPUT_INLINE_BYTES: usize = 1024 * 1024;
+
 /// Core execution orchestrator that drives a single job through the full pipeline.
 ///
 /// Consolidates all dependencies needed to execute a job into a single struct,
@@ -59,6 +71,9 @@ pub struct JobExecutor {
     /// dispatches to the runner that can actually read the bytes. `None` for
     /// drain/manifest daemons with no serve identity.
     pub serve_group: Option<String>,
+    /// Max serialized byte size of a single inline output value before the
+    /// producer hard-errors the step. See [`DEFAULT_MAX_OUTPUT_INLINE_BYTES`].
+    pub max_output_inline_bytes: usize,
 }
 
 impl JobExecutor {
@@ -510,6 +525,40 @@ impl JobExecutor {
                                 }
                             }
                         }
+                    }
+                }
+
+                // Guard against oversized INLINE outputs smuggled into the
+                // token. Runs AFTER file-promotion, so declared `file` outputs
+                // are already small `{key:…}` handles and pass; only genuinely
+                // inline values (a `set_output` of a large blob, a non-file
+                // `path` output) can trip this. Such a value would be parked
+                // by-value in the net token and ride the status update over
+                // NATS (`max_payload` 8 MiB) — past the ceiling it silently
+                // dead-letters and the step appears to hang. Fail loud here,
+                // before publish, with an actionable message.
+                if matches!(exec_result.outcome, ExecutionOutcome::Success) {
+                    if let Some((name, size)) = redact_oversized_inline_outputs(
+                        &mut exec_result.outputs,
+                        self.max_output_inline_bytes,
+                    ) {
+                        warn!(
+                            %execution_id,
+                            output = %name,
+                            size,
+                            limit = self.max_output_inline_bytes,
+                            "inline output exceeds size limit, marking as failed"
+                        );
+                        exec_result.outcome = ExecutionOutcome::BackendError {
+                            message: format!(
+                                "output '{name}' serialized to {}, over the inline limit ({}). \
+                                 Inline outputs are for values, not files: declare this output \
+                                 as a file (write the file and return its path) so it is uploaded \
+                                 as a reference, or use log_artifact() for large/binary data.",
+                                fmt_bytes(size),
+                                fmt_bytes(self.max_output_inline_bytes),
+                            ),
+                        };
                     }
                 }
 
@@ -980,6 +1029,66 @@ async fn promote_file_output_to_store(
     Ok(Some(promoted))
 }
 
+/// Find the largest output value whose serialized size exceeds `limit`, if any.
+///
+/// Returns the `(name, byte_size)` of the **largest** offender so the failure
+/// is deterministic regardless of `HashMap` iteration order. Declared `file`
+/// outputs have already been promoted to small `{key:…}` handles by the time
+/// this runs, so they never trip here — only genuinely inline values do.
+fn oversized_inline_output(
+    outputs: &std::collections::HashMap<String, serde_json::Value>,
+    limit: usize,
+) -> Option<(String, usize)> {
+    outputs
+        .iter()
+        .filter_map(|(name, value)| {
+            let size = serde_json::to_vec(value).map(|b| b.len()).unwrap_or(0);
+            (size > limit).then(|| (name.clone(), size))
+        })
+        .max_by_key(|(_, size)| *size)
+}
+
+/// Redact every inline output whose serialized size exceeds `limit`, replacing
+/// the value with a small placeholder, and return the largest offender
+/// `(name, size)` for the failure message — or `None` when everything is within
+/// the limit (nothing redacted).
+///
+/// This is what keeps the *failure status itself* publishable: the terminal
+/// status detail re-embeds `outputs`, so leaving an oversized value in place
+/// would make the `BackendError` status overflow the NATS payload ceiling and
+/// dead-letter — the exact silent-hang failure mode this guard exists to
+/// eliminate. Dropping the value lets the actionable error always reach the
+/// caller.
+fn redact_oversized_inline_outputs(
+    outputs: &mut std::collections::HashMap<String, serde_json::Value>,
+    limit: usize,
+) -> Option<(String, usize)> {
+    let largest = oversized_inline_output(outputs, limit)?;
+    for value in outputs.values_mut() {
+        let size = serde_json::to_vec(value).map(|b| b.len()).unwrap_or(0);
+        if size > limit {
+            *value = serde_json::json!({
+                "__omitted__": "output value exceeded the inline limit and was not transmitted"
+            });
+        }
+    }
+    Some(largest)
+}
+
+/// Human-readable byte size for operator-facing error messages.
+fn fmt_bytes(n: usize) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let f = n as f64;
+    if f >= MIB {
+        format!("{:.1} MiB", f / MIB)
+    } else if f >= KIB {
+        format!("{:.1} KiB", f / KIB)
+    } else {
+        format!("{n} B")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1114,5 +1223,94 @@ mod tests {
             promoted.get("key").and_then(|v| v.as_str()),
             Some("artifacts/e3/outputs/page_1/page_0002.png")
         );
+    }
+
+    fn outputs(pairs: &[(&str, serde_json::Value)]) -> std::collections::HashMap<String, serde_json::Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    /// A small inline value is under any reasonable limit — no offender.
+    #[test]
+    fn small_inline_output_passes() {
+        let o = outputs(&[
+            ("accuracy", serde_json::json!(0.95)),
+            ("label", serde_json::json!("cat")),
+        ]);
+        assert!(oversized_inline_output(&o, DEFAULT_MAX_OUTPUT_INLINE_BYTES).is_none());
+    }
+
+    /// A value over the limit is flagged by name with its serialized size.
+    #[test]
+    fn oversized_inline_output_is_flagged() {
+        let big = serde_json::json!("x".repeat(2048));
+        let o = outputs(&[("blob", big)]);
+        let (name, size) = oversized_inline_output(&o, 1024).expect("over the 1 KiB limit");
+        assert_eq!(name, "blob");
+        assert!(size > 1024, "reported size {size} should exceed the limit");
+    }
+
+    /// A promoted `file` output is a tiny `{key:…}` handle and never trips the
+    /// guard, even alongside an oversized inline sibling (which does).
+    #[test]
+    fn file_handle_passes_but_inline_sibling_trips() {
+        let o = outputs(&[
+            (
+                "rendered",
+                serde_json::json!({ "key": "artifacts/e/outputs/rendered/p.png", "filename": "p.png" }),
+            ),
+            ("notes", serde_json::json!("y".repeat(4096))),
+        ]);
+        let (name, _) = oversized_inline_output(&o, 1024).expect("the inline sibling trips");
+        assert_eq!(name, "notes", "the handle must not be the offender");
+    }
+
+    /// With multiple offenders, the LARGEST is reported (deterministic, not
+    /// HashMap-iteration-order dependent).
+    #[test]
+    fn reports_largest_offender() {
+        let o = outputs(&[
+            ("medium", serde_json::json!("a".repeat(2000))),
+            ("largest", serde_json::json!("b".repeat(8000))),
+            ("small", serde_json::json!("c".repeat(2500))),
+        ]);
+        let (name, _) = oversized_inline_output(&o, 1024).unwrap();
+        assert_eq!(name, "largest");
+    }
+
+    /// The redactor drops over-limit values (so the failure status stays
+    /// publishable) while preserving small siblings, and still reports the
+    /// largest offender for the message.
+    #[test]
+    fn redaction_drops_oversized_keeps_small() {
+        let mut o = outputs(&[
+            ("blob", serde_json::json!("x".repeat(4096))),
+            ("ok", serde_json::json!(7)),
+        ]);
+        let (name, size) =
+            redact_oversized_inline_outputs(&mut o, 1024).expect("the blob is over the limit");
+        assert_eq!(name, "blob");
+        assert!(size > 1024);
+        assert!(
+            o["blob"].get("__omitted__").is_some(),
+            "oversized value must be replaced by a placeholder"
+        );
+        assert_eq!(o["ok"], serde_json::json!(7), "small sibling is preserved");
+        // The redacted map is now comfortably small.
+        assert!(serde_json::to_vec(&o).unwrap().len() < 1024);
+    }
+
+    /// Nothing to redact when all outputs fit: the map is untouched.
+    #[test]
+    fn redaction_noop_when_within_limit() {
+        let mut o = outputs(&[("accuracy", serde_json::json!(0.95))]);
+        assert!(redact_oversized_inline_outputs(&mut o, DEFAULT_MAX_OUTPUT_INLINE_BYTES).is_none());
+        assert_eq!(o["accuracy"], serde_json::json!(0.95));
+    }
+
+    #[test]
+    fn fmt_bytes_units() {
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(2048), "2.0 KiB");
+        assert_eq!(fmt_bytes(3 * 1024 * 1024), "3.0 MiB");
     }
 }
