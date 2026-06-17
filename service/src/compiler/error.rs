@@ -239,6 +239,25 @@ pub enum CompileError {
         ref_value: String,
     },
 
+    /// A guard / loop condition / End mapping borrows a SUBFIELD of a
+    /// `file`-typed output (`<slug>.<file>.<sub>`). A file output is a runtime
+    /// **handle** (`{key, filename, media_type}`), not a borrowable record: the
+    /// compile-time File shape expands to `{url, filename, content_type}` and
+    /// `FieldKind::File` lowers to a permissive `{}` schema, so reaching into a
+    /// file's contents silently resolves to `undefined` at runtime instead of
+    /// being rejected. Borrowing the handle itself (`<slug>.<file>`) is fine.
+    #[error(
+        "node '{node_id}': reference '{ref_value}' reaches into the contents of file output \
+         '{file_field}'. A file output is a handle, not a borrowable record — borrow the handle \
+         itself (`{file_field}`) and read the file in a step, don't read `{file_field}.<field>` \
+         in a guard or mapping"
+    )]
+    FileOutputContentBorrow {
+        node_id: String,
+        file_field: String,
+        ref_value: String,
+    },
+
     /// A Map's `resultVar` is not a valid Rhai identifier
     /// (`[A-Za-z_][A-Za-z0-9_]*`). Required because the gather transition
     /// projects each body token's `<resultVar>` field into the result
@@ -898,6 +917,7 @@ impl CompileError {
             Self::LeaseFieldUnknown { .. } => "lease_field_unknown",
             Self::MapEmpty { .. } => "map_empty",
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
+            Self::FileOutputContentBorrow { .. } => "file_output_content_borrow",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
             Self::MapNested { .. } => "map_nested",
             Self::MapBodyUnsupported { .. } => "map_body_unsupported",
@@ -983,6 +1003,7 @@ impl CompileError {
             | Self::LeaseFieldUnknown { node_id, .. }
             | Self::MapEmpty { node_id }
             | Self::MapRefMissingStar { node_id, .. }
+            | Self::FileOutputContentBorrow { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }
             | Self::MapNested { node_id, .. }
             | Self::MapBodyUnsupported { node_id, .. }

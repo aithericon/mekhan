@@ -94,6 +94,13 @@ pub struct ExecutorConfig {
     #[serde(default = "default_max_output_bytes")]
     pub max_output_bytes: usize,
 
+    /// Maximum serialized byte size of a single **inline** output value
+    /// (`set_output`/`path`-output) before the producer hard-errors the step.
+    /// Distinct from `max_output_bytes` (the stdout/stderr tail cap). See
+    /// [`crate::executor::DEFAULT_MAX_OUTPUT_INLINE_BYTES`].
+    #[serde(default = "default_max_output_inline_bytes")]
+    pub max_output_inline_bytes: usize,
+
     /// NATS client ping interval in seconds.
     ///
     /// Default 15s — short enough to keep WAN connections alive through idle-terminating
@@ -926,6 +933,10 @@ fn default_max_output_bytes() -> usize {
     aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES
 }
 
+fn default_max_output_inline_bytes() -> usize {
+    crate::executor::DEFAULT_MAX_OUTPUT_INLINE_BYTES
+}
+
 fn default_ack_wait_secs() -> u64 {
     120
 }
@@ -987,6 +998,7 @@ mod tests {
             concurrency: default_concurrency(),
             default_timeout_secs: default_timeout_secs(),
             max_output_bytes: default_max_output_bytes(),
+            max_output_inline_bytes: default_max_output_inline_bytes(),
             ack_wait_secs: default_ack_wait_secs(),
             heartbeat_interval_secs: default_heartbeat_interval_secs(),
             max_deliver: default_max_deliver(),

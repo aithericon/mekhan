@@ -740,6 +740,22 @@ pub(crate) fn check_guard(
     }
 }
 
+/// True iff `producer_id` declares an output port field named `field` of kind
+/// [`FieldKind::File`]. A file output is a runtime handle, not a borrowable
+/// record — a guard / mapping must not reach into its contents.
+fn producer_output_field_is_file(graph: &WorkflowGraph, producer_id: &str, field: &str) -> bool {
+    use crate::models::template::FieldKind;
+    graph
+        .nodes
+        .iter()
+        .find(|n| n.id == producer_id)
+        .map(|n| n.data.output_ports())
+        .into_iter()
+        .flatten()
+        .flat_map(|p| p.fields)
+        .any(|f| f.name == field && f.kind == FieldKind::File)
+}
+
 // ─── Guard read-arc planner ─────────────────────────────────────────────────
 
 /// One guard reference that must be lowered to a physical read-arc into a
@@ -966,12 +982,37 @@ pub(crate) fn guard_readarc_plan(
                         producer_id,
                         producer_path,
                         ..
-                    } => binds.push(ReadArcBind {
-                        consumer_node_id: node.id.clone(),
-                        referenced: gref.referenced.clone(),
-                        producer_node: producer_id,
-                        producer_path,
-                    }),
+                    } => {
+                        // File outputs are runtime HANDLES, not borrowable
+                        // records: the compile-time File shape expands to
+                        // `{url, filename, content_type}` but the runtime
+                        // handle is `{key, filename, media_type}`, and
+                        // `FieldKind::File` lowers to a permissive `{}` schema —
+                        // so reaching INTO a file output's contents
+                        // (`<slug>.<file>.<sub>`) silently resolves to
+                        // `undefined` at runtime instead of being rejected.
+                        // Borrowing the handle scalar (`<slug>.<file>`,
+                        // `segs == [file]`) is fine; reaching past it is the
+                        // error. (Loop/Map/LeaseScope producers resolve in
+                        // earlier `resolve_ref` branches and have no `File`
+                        // output field named `segs[0]`, so they never trip
+                        // this.)
+                        if gref.segs.len() > 1
+                            && producer_output_field_is_file(graph, &producer_id, &gref.segs[0])
+                        {
+                            return Err(CompileError::FileOutputContentBorrow {
+                                node_id: node.id.clone(),
+                                file_field: gref.segs[0].clone(),
+                                ref_value: gref.referenced.clone(),
+                            });
+                        }
+                        binds.push(ReadArcBind {
+                            consumer_node_id: node.id.clone(),
+                            referenced: gref.referenced.clone(),
+                            producer_node: producer_id,
+                            producer_path,
+                        });
+                    }
                     // A Map borrow without the `[*]` collection boundary — hard
                     // error with the precise guidance (`use <slug>[*].<field>`).
                     RefResolution::MapMissingStar { map_slug } => {

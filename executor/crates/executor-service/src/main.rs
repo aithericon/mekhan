@@ -1168,6 +1168,7 @@ fn build_executor(
                 .runner_id
                 .clone()
                 .or_else(|| config.worker_routing_partition.clone()),
+            max_output_inline_bytes: config.max_output_inline_bytes,
         },
         registered_wires,
     ))
