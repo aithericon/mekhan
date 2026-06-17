@@ -61,6 +61,14 @@ job "${job_id}" {
 EOH
       }
 
+      # Worker-pool enrollment secret (self-enroll on boot → routing_partition +
+      # worker bearer). IMPORTANT (platform-tier): the `default` worker group
+      # lives in the shared PLATFORM scope, not a workspace — so this MUST be a
+      # PLATFORM-scoped token, minted with {"group":"default","platform":true} by
+      # a platform admin (see platform_admins). A workspace-scoped token enrolls
+      # with HTTP 400 "worker group 'default' does not resolve to a worker
+      # `capacity` resource in this workspace". Re-mint + `vault kv put` (see
+      # deploy/README.md) and restart this job after the platform-tier migration.
       template {
         destination = "secrets/reg-token.env"
         change_mode = "restart"

@@ -63,6 +63,11 @@ resource "nomad_job" "mekhan_service" {
 
     auth_introspection_client_id = zitadel_application_api.introspect.client_id
 
+    # Comma-joined for the single MEKHAN__AUTH__PLATFORM_ADMINS env var (the
+    # config loader splits it back into a list). Empty string ⇒ the jobspec omits
+    # the var entirely.
+    platform_admins = join(",", var.platform_admins)
+
     email_mode            = var.email_mode
     email_from_address    = var.email_from_address
     email_public_base_url = "https://${var.hostname}"

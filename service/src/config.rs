@@ -538,11 +538,75 @@ impl AppConfig {
             .add_source(
                 Environment::with_prefix("MEKHAN")
                     .separator("__")
-                    .try_parsing(true),
+                    .try_parsing(true)
+                    // List-typed config fields can't be expressed as a single env
+                    // var without a list separator. `auth.platform_admins` is the
+                    // one deployments set (BFF has no platform admin otherwise, so
+                    // the shared platform pool can't be curated / its worker
+                    // registration token can't be minted). Comma-split ONLY that
+                    // key so other Vec fields keep their scalar/indexed behaviour.
+                    .list_separator(",")
+                    .with_list_parse_key("auth.platform_admins"),
             )
             .build()?;
 
         config.try_deserialize()
+    }
+}
+
+#[cfg(test)]
+mod platform_admins_env_tests {
+    use config::{Config, Environment};
+
+    // Mirrors the `auth` shape the loader deserializes, so we can assert the
+    // env→Vec parsing for `platform_admins` without touching process-global env
+    // (config's `Environment::source` takes an explicit map).
+    #[derive(serde::Deserialize, Default)]
+    struct Wrap {
+        #[serde(default)]
+        auth: AuthOnly,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct AuthOnly {
+        #[serde(default)]
+        platform_admins: Vec<String>,
+    }
+
+    fn parse(env: &[(&str, &str)]) -> Vec<String> {
+        let map: std::collections::HashMap<String, String> =
+            env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let cfg = Config::builder()
+            .add_source(
+                Environment::with_prefix("MEKHAN")
+                    .separator("__")
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("auth.platform_admins")
+                    .source(Some(map)),
+            )
+            .build()
+            .unwrap();
+        cfg.try_deserialize::<Wrap>().unwrap().auth.platform_admins
+    }
+
+    #[test]
+    fn comma_separated_env_parses_into_list() {
+        let admins = parse(&[(
+            "MEKHAN__AUTH__PLATFORM_ADMINS",
+            "ops@aithericon.com,admin@aithericon.com",
+        )]);
+        assert_eq!(admins, vec!["ops@aithericon.com", "admin@aithericon.com"]);
+    }
+
+    #[test]
+    fn single_value_env_parses_into_one_element_list() {
+        let admins = parse(&[("MEKHAN__AUTH__PLATFORM_ADMINS", "ops@aithericon.com")]);
+        assert_eq!(admins, vec!["ops@aithericon.com"]);
+    }
+
+    #[test]
+    fn absent_env_yields_empty_list() {
+        assert!(parse(&[]).is_empty());
     }
 }
 

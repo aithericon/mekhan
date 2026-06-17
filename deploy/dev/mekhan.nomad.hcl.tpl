@@ -195,7 +195,15 @@ EOH
         MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
         MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
-        
+        # Platform admins — comma-separated OIDC subjects/emails that get
+        # `is_platform_admin`. REQUIRED in BFF mode to curate the shared platform
+        # pool (mint the worker registration token, manage platform-tier infra);
+        # dev_noop seeds its own admin so this is empty there. Comma-split by the
+        # config loader (`auth.platform_admins` list key). Omitted when unset.
+%{ if platform_admins != "" ~}
+        MEKHAN__AUTH__PLATFORM_ADMINS     = "${platform_admins}"
+%{ endif ~}
+
         MEKHAN__EMAIL__MODE            = "${email_mode}"
         MEKHAN__EMAIL__FROM_ADDRESS    = "${email_from_address}"
         MEKHAN__EMAIL__PUBLIC_BASE_URL = "${email_public_base_url}"

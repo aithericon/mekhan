@@ -174,6 +174,18 @@ variable "auth_mode" {
   }
 }
 
+variable "platform_admins" {
+  description = <<-EOT
+    OIDC subjects or emails granted is_platform_admin (platform-tier curation:
+    minting the shared worker pool's registration token, managing platform infra).
+    REQUIRED in bff mode — without at least one, nobody can mint the platform
+    worker registration token and the executor cannot enroll into the shared
+    `default` pool. Rendered as comma-separated MEKHAN__AUTH__PLATFORM_ADMINS.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 # ── Zitadel ─────────────────────────────────────────────────────────────────
 
 variable "zitadel_jwt_file" {
