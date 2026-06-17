@@ -1559,6 +1559,30 @@ export interface paths {
         patch: operations["update_folder"];
         trace?: never;
     };
+    "/api/v1/folders/{id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/folders/{id}/fork
+         * @description Deep-copy a folder *subtree* into the caller's active workspace: recreate the
+         *     folder and its descendants, and fork every readable template homed anywhere
+         *     in the subtree into the matching new folder. The recreated subtree is nested
+         *     under a fresh root folder in the target workspace (collision-suffixed) so it
+         *     never disturbs the caller's existing tree. Returns the new root folder (201).
+         */
+        post: operations["fork_folder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/folders/{id}/grants": {
         parameters: {
             query?: never;
@@ -4366,6 +4390,28 @@ export interface paths {
          */
         put: operations["set_template_folder"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/fork
+         * @description Deep-copy a readable template (the caller's own workspace OR any `public`
+         *     template, e.g. a built-in demo) into a fresh, runnable family in the caller's
+         *     active workspace. Returns the new template (201).
+         */
+        post: operations["fork_template"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8404,10 +8450,54 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /** @description Result of a folder fork — the new root folder plus how much it brought in. */
+        ForkFolderResponse: {
+            /**
+             * Format: uuid
+             * @description Id of the new root folder created in the target workspace.
+             */
+            folder_id: string;
+            /**
+             * Format: int32
+             * @description Folders created (the source subtree size).
+             */
+            folders: number;
+            /**
+             * Format: int32
+             * @description Templates deep-copied into the new subtree.
+             */
+            templates: number;
+            /**
+             * Format: uuid
+             * @description Workspace the subtree was forked INTO (may differ from the active one
+             *     when forking while browsing the read-only demos workspace).
+             */
+            workspace_id: string;
+        };
         /** @description Body for `POST /api/v1/library/fork`. */
         ForkLibraryRequest: {
             /** @description Coordinate of the library node to fork (`vendor/slug`). */
             coordinate: string;
+        };
+        /**
+         * @description Optional placement for a single-template fork. Absent ⇒ the fork lands at the
+         *     caller's workspace root.
+         */
+        ForkTemplateRequest: {
+            /**
+             * Format: uuid
+             * @description Home the fork in this folder of the target workspace. Must be a folder in
+             *     that workspace. Absent ⇒ workspace root.
+             */
+            folder_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Workspace to fork INTO (must be one the caller can write). Absent ⇒ the
+             *     active workspace when writable, else the caller's first writable
+             *     workspace — so forking while *browsing* the read-only demos workspace
+             *     still lands the copy somewhere the caller owns.
+             */
+            target_workspace_id?: string | null;
         };
         /**
          * @description Normalized format-specific block: a discriminant plus the uniform
@@ -14793,6 +14883,14 @@ export interface components {
             /** Format: uuid */
             id: string;
             is_system: boolean;
+            /**
+             * @description The caller's membership role here (`owner|admin|editor|viewer`), or `None`
+             *     when they're not a member — which happens for a **browse-only** system
+             *     workspace (e.g. `demos`) surfaced in the switcher. `None` ⇒ read-only:
+             *     the SPA marks it accordingly and routes new content / forks elsewhere.
+             *     `#[sqlx(default)]` so the explicit-column row maps still satisfy `FromRow`.
+             */
+            my_role?: string | null;
             slug: string;
         };
     };
@@ -18423,6 +18521,56 @@ export interface operations {
             };
             /** @description Sibling slug already exists */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    fork_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id to fork (any readable workspace) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Folder subtree forked into the workspace */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForkFolderResponse"];
+                };
+            };
+            /** @description Caller cannot create in their workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Folder not found / contains nothing readable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24445,6 +24593,60 @@ export interface operations {
             };
             /** @description Template not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    fork_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id to fork (any readable version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Forked into a runnable workspace template */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Caller cannot read the source / cannot create in their workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found / not readable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

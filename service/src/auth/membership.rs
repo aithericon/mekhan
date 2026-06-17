@@ -110,6 +110,77 @@ pub async fn require_member(
     require_role(db, user, workspace_id, Role::Viewer).await
 }
 
+/// Read-gate a workspace that may be **world-readable**: pass with the caller's
+/// real role when they're a member, OR with `Viewer` when the workspace is a
+/// `is_system` one (e.g. the curated `demos` workspace). System workspaces are
+/// browse-only destinations — any authenticated user may read them without a
+/// membership row, which is what lets a user "visit" demos and fork from it
+/// without the old cross-workspace public overlay polluting their own lists.
+/// Mutating paths keep using `require_role(..., Editor)`, so this grants reads
+/// only.
+pub async fn require_workspace_read(
+    db: &PgPool,
+    user: &AuthUser,
+    workspace_id: Uuid,
+) -> Result<Role, MembershipError> {
+    match member_role(db, user, workspace_id).await {
+        Ok(r) => Ok(r),
+        Err(MembershipError::NotMember(_)) => {
+            let row: Option<(bool,)> = sqlx::query_as(
+                "SELECT is_system FROM workspaces WHERE id = $1 AND archived_at IS NULL",
+            )
+            .bind(workspace_id)
+            .fetch_optional(db)
+            .await?;
+            match row {
+                Some((true,)) => Ok(Role::Viewer),
+                _ => Err(MembershipError::NotMember(workspace_id)),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The workspace a fork should land in. A fork must go somewhere the caller can
+/// write — but the caller may be *browsing* a read-only system workspace (demos)
+/// when they fork, so the active workspace isn't always a valid target. Resolves
+/// in order: an explicit `requested` target (must be Editor+), else the active
+/// workspace when the caller is Editor+ there, else their first non-system
+/// workspace where they're Editor+. `None` ⇒ the caller has nowhere to fork into
+/// (callers map that to 400).
+pub async fn resolve_fork_target(
+    db: &PgPool,
+    user: &AuthUser,
+    requested: Option<Uuid>,
+    active: Option<Uuid>,
+) -> Result<Option<Uuid>, MembershipError> {
+    if let Some(ws) = requested {
+        return match require_role(db, user, ws, Role::Editor).await {
+            Ok(_) => Ok(Some(ws)),
+            Err(MembershipError::InsufficientRole { .. } | MembershipError::NotMember(_)) => {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        };
+    }
+    if let Some(ws) = active {
+        if matches!(member_role(db, user, ws).await, Ok(r) if r >= Role::Editor) {
+            return Ok(Some(ws));
+        }
+    }
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT w.id FROM workspaces w \
+           JOIN workspace_members m ON m.workspace_id = w.id \
+          WHERE m.user_id = $1 AND w.archived_at IS NULL AND w.is_system = FALSE \
+            AND m.role IN ('editor', 'admin', 'owner') \
+          ORDER BY w.created_at ASC LIMIT 1",
+    )
+    .bind(user.subject_as_uuid())
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Visibility values stored in `workflow_templates.visibility`. Kept here
 /// (next to the permission rule) rather than in the template model so the
 /// single source of truth for what `public` means lives with the gate.

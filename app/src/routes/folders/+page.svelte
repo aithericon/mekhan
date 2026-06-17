@@ -20,8 +20,11 @@
 		createFolder,
 		updateFolder,
 		deleteFolder,
+		forkFolder,
 		type Folder
 	} from '$lib/api/client';
+	import { toast } from 'svelte-sonner';
+	import GitFork from '@lucide/svelte/icons/git-fork';
 	import FolderTreeRailSection from '$lib/components/folders/FolderTreeRailSection.svelte';
 	import FolderApiContract from '$lib/components/folders/FolderApiContract.svelte';
 	import FolderTemplatesPanel from '$lib/components/folders/FolderTemplatesPanel.svelte';
@@ -72,6 +75,34 @@
 	let shareOpen = $state(false);
 	const canEdit = $derived(roleAtLeast(selected?.my_effective_role, 'editor'));
 	const canShare = $derived(roleAtLeast(selected?.my_effective_role, 'admin'));
+	// Read-only here = you can't edit this folder (typically because you're
+	// browsing the demos workspace as a non-member). The way to make its contents
+	// your own — runnable in your tenant — is to fork the folder in.
+	const isReadOnly = $derived(!!selected && !canEdit);
+
+	let forking = $state(false);
+	async function handleFork() {
+		if (!selected || forking) return;
+		forking = true;
+		try {
+			const res = await forkFolder(selected.id);
+			const dest =
+				workspaces.workspaces.find((w) => w.id === res.workspace_id)?.display_name ??
+				'your workspace';
+			const n = res.templates;
+			toast.success(`Forked into ${dest} (${n} template${n === 1 ? '' : 's'})`);
+			// The copy lands in a workspace you own (which may differ from the
+			// demos workspace you're browsing), so don't move the demos selection.
+			if (res.workspace_id === workspaceId) {
+				await folderList.refetch();
+				selectedId = res.folder_id;
+			}
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to fork folder');
+		} finally {
+			forking = false;
+		}
+	}
 
 	// Root uses a sentinel (bits-ui Select reserves the empty string).
 	const ROOT = '__root__';
@@ -398,6 +429,17 @@
 									/>
 								</div>
 								<div class="flex shrink-0 gap-1">
+									{#if isReadOnly}
+										<Button
+											variant="outline"
+											size="sm"
+											onclick={handleFork}
+											disabled={forking}
+											data-testid="btn-fork-folder"
+										>
+											<GitFork class="size-3.5" /> {forking ? 'Forking…' : 'Fork to workspace'}
+										</Button>
+									{/if}
 									{#if canShare}
 										<Button
 											variant="outline"

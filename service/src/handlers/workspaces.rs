@@ -149,13 +149,25 @@ pub async fn list_workspaces(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<WorkspaceSummary>>, ApiError> {
+    // The caller's own workspaces (any membership role) PLUS browse-only system
+    // workspaces that hold public content — today just `demos`. The latter are
+    // surfaced via `is_system AND has-a-public-template` rather than a hardcoded
+    // slug, so any future curated catalogue workspace appears automatically while
+    // internal system tenants (`default`, `platform`) — which carry no public
+    // templates — stay hidden. `m.role` is NULL for the browse-only rows, which
+    // the SPA reads as read-only.
     let user_id = user.subject_as_uuid();
     let rows: Vec<WorkspaceSummary> = sqlx::query_as(
-        "SELECT w.id, w.slug, w.display_name, w.is_system, w.created_at \
+        "SELECT w.id, w.slug, w.display_name, w.is_system, w.created_at, m.role AS my_role \
            FROM workspaces w \
-           JOIN workspace_members m ON m.workspace_id = w.id \
-          WHERE m.user_id = $1 AND w.archived_at IS NULL \
-          ORDER BY w.created_at",
+           LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = $1 \
+          WHERE w.archived_at IS NULL \
+            AND ( m.user_id IS NOT NULL \
+                  OR ( w.is_system AND EXISTS ( \
+                         SELECT 1 FROM workflow_templates t \
+                          WHERE t.workspace_id = w.id AND t.is_latest \
+                            AND t.visibility = 'public' ) ) ) \
+          ORDER BY (m.user_id IS NULL), w.created_at",
     )
     .bind(user_id)
     .fetch_all(&state.db)

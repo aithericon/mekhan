@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import Building from '@lucide/svelte/icons/building';
 	import Check from '@lucide/svelte/icons/check';
+	import Eye from '@lucide/svelte/icons/eye';
 	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 	import Cog from '@lucide/svelte/icons/cog';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -64,7 +65,19 @@
 			>
 				<div class="flex w-full items-center gap-2">
 					<div class="min-w-0 flex-1">
-						<div class="truncate text-sm">{ws.display_name}</div>
+						<div class="flex items-center gap-1.5">
+							<span class="truncate text-sm">{ws.display_name}</span>
+							{#if !ws.my_role}
+								<!-- Browse-only (e.g. the demos catalogue): you're not a member,
+								     so it's read-only — fork content out to edit/run it. -->
+								<span
+									class="inline-flex items-center gap-0.5 rounded bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground"
+									title="Read-only — fork content into a workspace you own"
+								>
+									<Eye class="size-2.5" /> read-only
+								</span>
+							{/if}
+						</div>
 						<div class="truncate text-xs text-muted-foreground">{ws.slug}</div>
 					</div>
 					{#if active?.id === ws.id}

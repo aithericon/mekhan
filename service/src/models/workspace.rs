@@ -19,6 +19,14 @@ pub struct WorkspaceSummary {
     pub display_name: String,
     pub is_system: bool,
     pub created_at: DateTime<Utc>,
+    /// The caller's membership role here (`owner|admin|editor|viewer`), or `None`
+    /// when they're not a member — which happens for a **browse-only** system
+    /// workspace (e.g. `demos`) surfaced in the switcher. `None` ⇒ read-only:
+    /// the SPA marks it accordingly and routes new content / forks elsewhere.
+    /// `#[sqlx(default)]` so the explicit-column row maps still satisfy `FromRow`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub my_role: Option<String>,
 }
 
 /// A single `workspace_members` row. `user_id` is derived from the OIDC

@@ -544,6 +544,25 @@ export async function forkLibraryNode(coordinate: string): Promise<Template> {
 	);
 }
 
+/** Deep-copy a readable template (e.g. a public demo) into a fresh, runnable
+ *  family in the caller's active workspace. Optionally home it in `folderId`. */
+export async function forkTemplate(id: string, folderId?: string): Promise<Template> {
+	return unwrap(
+		await client.POST('/api/v1/templates/{id}/fork', {
+			params: { path: { id } },
+			body: { folder_id: folderId ?? null }
+		})
+	);
+}
+
+export type ForkFolderResponse = components['schemas']['ForkFolderResponse'];
+
+/** Deep-copy a folder subtree (and every readable template in it) into the
+ *  caller's active workspace. Returns the new root folder + counts. */
+export async function forkFolder(id: string): Promise<ForkFolderResponse> {
+	return unwrap(await client.POST('/api/v1/folders/{id}/fork', { params: { path: { id } } }));
+}
+
 /** The controlled category vocabulary for a library node's presentation. */
 export async function listLibraryCategories(): Promise<string[]> {
 	return unwrap(await client.GET('/api/v1/node-library/categories', {})) as unknown as string[];

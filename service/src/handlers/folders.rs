@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::auth::{
     annotate_roles_keep_all, can_read_template, map_to_api_error, require_object_role,
-    require_role, template_workspace, AuthUser, ObjectKind, ObjectRef, Role,
+    require_role, require_workspace_read, template_workspace, AuthUser, ObjectKind, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -123,60 +123,31 @@ pub async fn list_folders(
     user: AuthUser,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Vec<Folder>>, ApiError> {
-    require_role(&state.db, &user, workspace_id, Role::Viewer)
+    // Read gate: members of `workspace_id`, OR anyone for a browse-only system
+    // workspace (e.g. `demos`). Folders are now scoped strictly to the requested
+    // workspace — the old cross-workspace public overlay (which grafted every
+    // public-bearing demos folder into every tenant's tree) is gone; demos are
+    // reached by switching INTO the demos workspace instead.
+    require_workspace_read(&state.db, &user, workspace_id)
         .await
         .map_err(map_to_api_error)?;
-    // Owned folders (this workspace) UNION the shared public-bearing tree from
-    // other workspaces. The EXISTS picks a folder `f` iff some folder `g` that
-    // is `f`-or-a-descendant holds a latest `public` template — which yields the
-    // public-holding folders AND every ancestor up to the root, so the tree
-    // stays connected. Path matching is segment-safe (`= path OR LIKE path||'/%'`).
-    let rows: Vec<Folder> = sqlx::query_as(&format!(
-        "SELECT {FOLDER_COLS} FROM folders f \
-         WHERE f.workspace_id = $1 \
-            OR EXISTS ( \
-                 SELECT 1 FROM folders g \
-                 JOIN template_folders tf ON tf.folder_id = g.id \
-                 JOIN workflow_templates t \
-                      ON COALESCE(t.base_template_id, t.id) = tf.base_template_id \
-                 WHERE t.is_latest = TRUE AND t.visibility = 'public' \
-                   AND (g.path = f.path OR g.path LIKE f.path || '/%') \
-               ) \
-         ORDER BY path"
+    let mut rows: Vec<Folder> = sqlx::query_as(&format!(
+        "SELECT {FOLDER_COLS} FROM folders f WHERE f.workspace_id = $1 ORDER BY path"
     ))
     .bind(workspace_id)
     .fetch_all(&state.db)
     .await?;
 
-    // Split owned vs. shared: only owned folders get the real ACL resolve
-    // (the resolver keys roles off the passed workspace, so running it over a
-    // foreign folder would falsely report the caller's active-workspace role).
-    let (mut owned, mut shared): (Vec<Folder>, Vec<Folder>) = rows
-        .into_iter()
-        .partition(|f| f.workspace_id == workspace_id);
-
-    // Annotate owned rows with the caller's effective object role (one query for
-    // the whole page) so the SPA can gate edit/Share affordances; the backend
-    // still enforces on every folder mutate path.
+    // Annotate with the caller's effective object role (one query for the whole
+    // page) so the SPA can gate edit/Share affordances; the backend still
+    // enforces on every folder mutate path. For a browse-only system workspace
+    // the caller is a non-member, so every role resolves to `None` (read-only) —
+    // which the SPA reads as "offer Fork, hide edit".
     // Keep-all on purpose: tree navigation must see the full path structure.
-    annotate_roles_keep_all(
-        &state.db,
-        &user,
-        ObjectKind::Folder,
-        workspace_id,
-        &mut owned,
-    )
-    .await
-    .map_err(map_to_api_error)?;
-
-    // Shared rows are read-only browse targets — never editable from here.
-    for f in &mut shared {
-        f.my_effective_role = Some(Role::Viewer.as_label().to_string());
-    }
-
-    owned.append(&mut shared);
-    owned.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(Json(owned))
+    annotate_roles_keep_all(&state.db, &user, ObjectKind::Folder, workspace_id, &mut rows)
+        .await
+        .map_err(map_to_api_error)?;
+    Ok(Json(rows))
 }
 
 /// POST /api/v1/workspaces/{id}/folders
