@@ -53,7 +53,7 @@ pub async fn ws_handler(
     // WS upgrade, but the same-origin cookie rides it automatically — no
     // `?token=` query param needed. Goes through the same `Authenticator` so
     // dev_noop accepts unauthenticated and bff requires a valid session.
-    let user = match state.authenticator.authenticate(&headers, &jar).await {
+    let mut user = match state.authenticator.authenticate(&headers, &jar).await {
         Ok(u) => u,
         Err(e) => {
             tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
@@ -61,6 +61,14 @@ pub async fn ws_handler(
                 .into_response();
         }
     };
+    // Apply the active-workspace override, exactly as every HTTP auth entry
+    // point does (`require_auth_middleware` / the `AuthUser` extractors). This
+    // route is mounted OUTSIDE the auth middleware and authenticates inline, so
+    // without this the principal carries the resolver's *default* workspace pick
+    // instead of the one selected via the `mekhan_active_workspace` cookie. That
+    // mismatch made the workspace-isolation check below 403 every template that
+    // lives in a self-created (non-default) workspace.
+    crate::auth::active_workspace::apply_override(&state.db, &mut user, &headers).await;
 
     // Verify the template exists. Published templates connect read-only so the
     // editor can render the frozen graph; writes are dropped in `handle_socket`.
@@ -179,7 +187,7 @@ pub async fn page_ws_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     // Auth identical to the graph handler.
-    let user = match state.authenticator.authenticate(&headers, &jar).await {
+    let mut user = match state.authenticator.authenticate(&headers, &jar).await {
         Ok(u) => u,
         Err(e) => {
             tracing::debug!(page_id = %page_id, "yjs page ws auth rejected: {e}");
@@ -187,6 +195,9 @@ pub async fn page_ws_handler(
                 .into_response();
         }
     };
+    // Same active-workspace override as the graph handler (and every HTTP auth
+    // entry point) — this route is mounted outside `require_auth_middleware`.
+    crate::auth::active_workspace::apply_override(&state.db, &mut user, &headers).await;
 
     // Verify the page exists.
     let existing = sqlx::query_as::<_, Page>("SELECT * FROM pages WHERE id = $1")
