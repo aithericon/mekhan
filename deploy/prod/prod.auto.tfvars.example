@@ -46,11 +46,13 @@ s3_bucket   = "mekhan-artifacts"
 auth_mode = "bff"
 rust_log  = "info"
 
-# Platform admins (REQUIRED in bff mode). OIDC subjects/emails granted
-# is_platform_admin — needed to mint the shared worker pool's registration token
-# (the executor enrolls into the platform `default` pool). Without one, worker
-# enroll fails with "worker group 'default' does not resolve …".
-platform_admins = ["ops@aithericon.com"]
+# Platform admins (REQUIRED in bff mode). OIDC emails/subjects granted
+# is_platform_admin — platform-tier governance (worker/model pools) AND minting
+# the shared worker pool's registration token (without one, executor enroll
+# fails with "worker group 'default' does not resolve …").
+# Same identity as the bootstrap admin below, so ONE account is both platform
+# admin AND owner of the shared workspace (the super-admin).
+platform_admins = ["admin@aithericon.eu"]
 
 # Dedicated Zitadel org for prod (the isolation boundary for users/apps).
 zitadel_org_name = "Mekhan"
@@ -63,21 +65,29 @@ email_from_address = "id@aithericon.eu"
 email_smtp_host    = "mail.your-server.de"
 email_smtp_port    = 587
 
-# Bootstrap admin for prod's "Testers" workspace (one-time). Random initial
-# password published to Vault at secret/services/mekhan/prod/testers/mekhan_admin.
-# All other onboarding is in-app via invites.
-# NOTE: username + email must be globally UNIQUE across envs — Zitadel enforces
-# instance-wide uniqueness, and dev already owns mekhan-admin@aithericon.eu.
+# Single super-admin account — the ONLY TF-created user. This one identity is:
+#   • platform admin  — via platform_admins above (matched by the same email)
+#   • workspace owner  — via workspace_owner_user_key below
+#   • the inviter      — owns the shared workspace; everyone else is onboarded
+#                        in-app through invites (no further TF entries needed).
+# Random initial password published to Vault (change on first login); read it:
+#   vault kv get -field=initial_password secret/services/mekhan/prod/testers/admin
+# NOTE: Zitadel enforces INSTANCE-WIDE unique username+email — prod owns the
+# canonical admin@aithericon.eu; dev uses admin@dev.aithericon.eu.
 tester_users = {
-  mekhan_admin = {
-    username   = "mekhan-admin-prod"
-    first_name = "Mekhan"
+  admin = {
+    username   = "admin"
+    first_name = "Platform"
     last_name  = "Admin"
-    email      = "mekhan-admin-prod@aithericon.eu"
+    email      = "admin@aithericon.eu"
     role       = "mekhan_admin"
   }
 }
-workspace_owner_user_key = "mekhan_admin"
+
+# Seed `admin` as OWNER of the shared Mekhan workspace (one-time bootstrap).
+# After the first deploy, run `tofu output -raw testers_workspace_bootstrap_sql`
+# and execute it once against the mekhan_prod DB. Then all onboarding is in-app.
+workspace_owner_user_key = "admin"
 
 # ── Resources ───────────────────────────────────────────────────────────────
 cpu_mhz   = 1000
