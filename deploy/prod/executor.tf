@@ -8,6 +8,7 @@ resource "nomad_job" "executor" {
   # read grant) first. The vault {} policy is a string arg, so TF can't infer it.
   depends_on = [
     vault_kv_secret_v2.mekhan_storage,
+    vault_kv_secret_v2.executor_reg_token,
     vault_policy.mekhan_nats_read,
   ]
 

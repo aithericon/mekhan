@@ -200,6 +200,10 @@ resource "vault_kv_secret_v2" "mekhan_runtime" {
     broker_pat                  = zitadel_personal_access_token.token_broker.token
     smtp_username               = var.email_smtp_username
     smtp_password               = var.email_smtp_password
+    # Headless provisioning credentials (see bootstrap.tf).
+    platform_root_token        = local.platform_root_token
+    bootstrap_worker_reg_token = local.bootstrap_worker_reg_token
+    bootstrap_runner_reg_token = local.bootstrap_runner_reg_token
   })
 }
 

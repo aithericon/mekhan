@@ -74,13 +74,13 @@ EOH
       # minted in mekhan + stored in Vault (read via the mekhan-nats-read
       # policy, see vault.tf). env=true injects it as EXECUTOR_WORKER_REG_TOKEN.
       #
-      # IMPORTANT (platform-tier): the `default` worker group lives in the shared
-      # PLATFORM scope, not a workspace — so this MUST be a PLATFORM-scoped token,
-      # minted with {"group":"default","platform":true} by a platform admin (see
-      # platform_admins). A workspace-scoped token enrolls with HTTP 400
-      # "worker group 'default' does not resolve to a worker `capacity` resource
-      # in this workspace". Re-mint + `vault kv put` (see deploy/README.md) and
-      # restart this job after the platform-tier migration.
+      # Platform-tier: the `default` worker group lives in the shared PLATFORM
+      # scope. This token is the PLATFORM bootstrap registration token generated
+      # in bootstrap.tf and written here by `vault_kv_secret_v2.executor_reg_token`
+      # — the SAME value mekhan's startup seeder upserts (MEKHAN__BOOTSTRAP__
+      # WORKER_REGISTRATION_TOKEN), so enroll resolves the platform `default`
+      # pool. No manual mint. (A stale workspace-scoped token would 400 with
+      # "worker group 'default' does not resolve …".)
       template {
         destination = "secrets/reg-token.env"
         change_mode = "restart"

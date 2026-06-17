@@ -164,6 +164,12 @@ MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET={{ .Data.data.introspection_client_sec
 MEKHAN__AUTH__BROKER_PAT={{ .Data.data.broker_pat }}
 MEKHAN__EMAIL__SMTP_USERNAME={{ .Data.data.smtp_username }}
 MEKHAN__EMAIL__SMTP_PASSWORD={{ .Data.data.smtp_password }}
+# Headless provisioning (see bootstrap.tf): a platform root token for automated
+# platform-admin ops, and platform-scoped bootstrap registration tokens the
+# startup seeder upserts so the executor/runners self-enroll with no mint.
+MEKHAN__AUTH__PLATFORM_ROOT_TOKEN={{ .Data.data.platform_root_token }}
+MEKHAN__BOOTSTRAP__WORKER_REGISTRATION_TOKEN={{ .Data.data.bootstrap_worker_reg_token }}
+MEKHAN__BOOTSTRAP__RUNNER_REGISTRATION_TOKEN={{ .Data.data.bootstrap_runner_reg_token }}
 {{- end }}
 EOH
       }
