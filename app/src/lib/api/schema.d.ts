@@ -2576,8 +2576,11 @@ export interface paths {
          *     override rides on an HttpOnly companion cookie and survives until the
          *     caller explicitly clears it (DELETE) or its membership is revoked.
          *
-         *     Refuses workspaces the caller isn't a member of — a 403, not a silent
-         *     "did nothing" — so the picker UI can surface the error directly.
+         *     Refuses workspaces the caller can't reach — a 403, not a silent "did
+         *     nothing" — so the picker UI can surface the error directly. Reachable means
+         *     a member, OR a browse-only system workspace (e.g. `demos`): the same rule
+         *     `active_workspace::apply_override` honours when interpreting the cookie, so
+         *     the two can't drift (a switch the GET path would silently drop must 403 here).
          */
         post: operations["set_active_workspace"];
         /**
@@ -20690,7 +20693,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not a member of the target workspace */
+            /** @description Cannot reach the target workspace */
             403: {
                 headers: {
                     [name: string]: unknown;
