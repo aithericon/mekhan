@@ -205,7 +205,7 @@ These have to happen **once, by hand**, before CI can deploy. They split between
    cp deploy/prod/prod.auto.tfvars.example    deploy/prod/prod.auto.tfvars
    ```
 
-   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking. Also copy the `.envrc.example` in each layer to `.envrc` and `direnv allow`.
+   The `.example` files are pre-filled with the right Hetzner endpoints — usually only `image_repository` and the resource sizes need tweaking. For env vars, each layer ships a **tracked `.envrc`** (non-secret cluster config + automatic Vault lookups, mirroring `.woodpecker/*-deploy*.yml`); you only supply the cluster **Vault token** — either in `rbw` under `clusters/aithericon-{dev,prod}` → `vault-root-token`, or by copying `.secrets.example` → `.secrets` (gitignored) and pasting it. Then `direnv allow`. Everything else (Nomad token, Postgres password, S3 keys, SMTP, Zitadel JWT/org) is read straight from Vault by the `.envrc`. It also drops a `devpsql`/`prodpsql` wrapper on PATH for the cluster DB.
 
 6. **CI builder image** — must exist in the registry before `10-lint.yml` / `30-build.yml` / `40-deploy.yml` can pull it:
 
@@ -218,7 +218,8 @@ These have to happen **once, by hand**, before CI can deploy. They split between
 
    ```bash
    # On a machine that can reach Hetzner S3 (no VPN needed for this part).
-   # Env vars come from .envrc (direnv) — see each layer's .envrc.example.
+   # Env vars come from the tracked .envrc (direnv) — supply only VAULT_TOKEN
+   # via rbw or .secrets; the .envrc resolves the rest from Vault.
    cd deploy/dev && tofu init
    cd ../prod   && tofu init
    ```
