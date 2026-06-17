@@ -8,6 +8,7 @@
 //! clamped/derived integers.
 
 use sqlx::{PgPool, Postgres, QueryBuilder};
+use uuid::Uuid;
 
 use crate::inventory::queries::ALLOWED_FILTER_FIELDS;
 use crate::query::builder::{self, QueryError};
@@ -178,48 +179,37 @@ fn directory_key_expr(rest: &str, depth: i64) -> String {
 
 // ── Scope (shared WHERE) ─────────────────────────────────────────────────────
 
-/// Append the shared WHERE: filter DSL + free-text search (same fields as the
-/// inventory list) + the optional LIKE-escaped `under` directory prefix.
+/// Append the shared WHERE: the (always-on) workspace tenant scope + the
+/// optional filter DSL + free-text search (same fields as the inventory list) +
+/// the optional LIKE-escaped `under` directory prefix.
+///
+/// The `workspace_id` predicate is UNCONDITIONAL — analytics must never
+/// aggregate `file_inventory` across tenants (the handler derives it from the
+/// authenticated session, never from request input), so every breakdown/totals
+/// query is anchored to one workspace before any optional clause ANDs onto it.
 fn append_scope(
     qb: &mut QueryBuilder<'_, Postgres>,
+    workspace_id: Uuid,
     params: &QueryParams,
     under: Option<&str>,
 ) -> Result<(), QueryError> {
-    let has_filter = params
-        .filter
-        .as_ref()
-        .map(|f| !f.is_empty())
-        .unwrap_or(false);
-    let has_search = params.search.is_some();
-
-    if !has_filter && !has_search && under.is_none() {
-        return Ok(());
-    }
-
-    qb.push(" WHERE ");
-    let mut need_and = false;
+    qb.push(" WHERE workspace_id = ");
+    qb.push_bind(workspace_id);
 
     if let Some(ref filter) = params.filter {
         if !filter.is_empty() {
+            qb.push(" AND ");
             builder::build_where_conditions(qb, filter, ALLOWED_FILTER_FIELDS)?;
-            need_and = true;
         }
     }
 
     if let Some(ref search) = params.search {
-        if need_and {
-            qb.push(" AND ");
-        }
-        qb.push("path ILIKE ");
+        qb.push(" AND path ILIKE ");
         qb.push_bind(format!("%{search}%"));
-        need_and = true;
     }
 
     if let Some(under) = under {
-        if need_and {
-            qb.push(" AND ");
-        }
-        qb.push("ltrim(path, '/') LIKE ");
+        qb.push(" AND ltrim(path, '/') LIKE ");
         qb.push_bind(format!("{}/%", escape_like(under)));
         qb.push(" ESCAPE '\\'");
     }
@@ -235,6 +225,7 @@ fn append_scope(
 /// clamped ([`clamp_depth`] / [`clamp_limit`]).
 pub async fn breakdown(
     pool: &PgPool,
+    workspace_id: Uuid,
     params: &QueryParams,
     dimension: Dimension,
     under: Option<&str>,
@@ -270,7 +261,7 @@ pub async fn breakdown(
             ));
         }
         qb.push(" FROM file_inventory");
-        append_scope(&mut qb, params, under)?;
+        append_scope(&mut qb, workspace_id, params, under)?;
         qb.push(format!(
             " GROUP BY 1 ORDER BY bytes DESC, key ASC LIMIT {limit}"
         ));
@@ -284,7 +275,7 @@ pub async fn breakdown(
         let mut qb = QueryBuilder::<Postgres>::new(
             "SELECT count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint FROM file_inventory",
         );
-        append_scope(&mut qb, params, under)?;
+        append_scope(&mut qb, workspace_id, params, under)?;
         let row: (i64, i64) = qb.build_query_as().fetch_one(pool).await?;
         row
     };
@@ -305,6 +296,7 @@ pub async fn breakdown(
 /// `time_bucket` is TimescaleDB (same posture as `inference_timeseries`).
 pub async fn timeseries(
     pool: &PgPool,
+    workspace_id: Uuid,
     dim: &str,
     key: Option<&str>,
     file_server_id: Option<&str>,
@@ -322,6 +314,7 @@ pub async fn timeseries(
                   ) AS rn \
            FROM inventory_snapshots \
            WHERE snapped_at >= now() - make_interval(secs => $2) \
+             AND workspace_id = $6 \
              AND dim = $3 \
              AND ($4::text IS NULL OR key = $4) \
              AND ($5::text IS NULL OR file_server_id = $5) \
@@ -333,6 +326,7 @@ pub async fn timeseries(
     .bind(dim)
     .bind(key)
     .bind(file_server_id)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
 }

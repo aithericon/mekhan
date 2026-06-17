@@ -177,6 +177,74 @@ async fn create_get_exposes_rollups_and_endpoint() {
     cleanup(&pool, ws, &prefix, &[h1, h2]).await;
 }
 
+/// The crawl/register race self-heals: inventory folded BEFORE the server was
+/// registered lands in the nil workspace; registering the server in a real
+/// workspace must claim those stranded rows (inventory + catalogue) into it, so
+/// they show up in that tenant's Data catalogue.
+#[tokio::test]
+async fn create_restamps_stranded_nil_inventory_into_workspace() {
+    let Some(_) = db_url() else {
+        eprintln!("skip: MEKHAN__DATABASE_URL unset");
+        return;
+    };
+    let pool = connect().await;
+    let ws = Uuid::new_v4(); // a real (non-nil) workspace
+    let prefix = format!("fs-test-{}-", Uuid::new_v4());
+    let key = format!("{prefix}srv");
+    let h1 = fake_hash();
+    let h2 = fake_hash();
+
+    // Race: two copies crawled+catalogued under nil BEFORE the server exists
+    // (`register_copy` seeds under Uuid::nil(), mirroring the fold fallback).
+    register_copy(&pool, &key, "a.bin", &h1, 10).await;
+    register_copy(&pool, &key, "b.bin", &h2, 20).await;
+
+    // Sanity: they really are stranded in nil right now.
+    let nil_inv: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM file_inventory WHERE file_server_id = $1 AND workspace_id = $2")
+            .bind(&key)
+            .bind(Uuid::nil())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(nil_inv, 2, "precondition: inventory stranded in nil");
+
+    // Register the server in the real workspace → re-stamp fires in the tx.
+    queries::create(&pool, ws, &create_req(&key, "local_mount"))
+        .await
+        .expect("create");
+
+    // Inventory + catalogue rows now belong to the real workspace, none left in nil.
+    let moved_inv: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM file_inventory WHERE file_server_id = $1 AND workspace_id = $2")
+            .bind(&key)
+            .bind(ws)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(moved_inv, 2, "inventory re-homed to the workspace");
+    let left_in_nil: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM file_inventory WHERE file_server_id = $1 AND workspace_id = $2")
+            .bind(&key)
+            .bind(Uuid::nil())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(left_in_nil, 0, "nothing left stranded in nil");
+
+    let moved_cat: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM catalogue_entries WHERE content_hash = ANY($1) AND workspace_id = $2",
+    )
+    .bind(vec![h1.clone(), h2.clone()])
+    .bind(ws)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(moved_cat, 2, "catalogue entries re-homed to the workspace");
+
+    cleanup(&pool, ws, &prefix, &[h1, h2]).await;
+}
+
 #[tokio::test]
 async fn list_splits_registered_and_unregistered() {
     let Some(_) = db_url() else {

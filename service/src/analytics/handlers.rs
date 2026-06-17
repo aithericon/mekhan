@@ -3,6 +3,7 @@ use axum::Json;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
+use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::query::extractor::QueryParams;
 use crate::AppState;
@@ -51,9 +52,11 @@ pub struct BreakdownQuery {
 )]
 pub async fn breakdown(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(q): Query<BreakdownQuery>,
     params: QueryParams,
 ) -> Result<Json<BreakdownResponse>, ApiError> {
+    let ws = user.require_workspace()?;
     let dimension = Dimension::parse(&q.group_by).map_err(|e| {
         tracing::warn!("analytics breakdown: {e}");
         ApiError::bad_request(e.to_string())
@@ -63,6 +66,7 @@ pub async fn breakdown(
 
     let response = queries::breakdown(
         &state.db,
+        ws,
         &params,
         dimension,
         q.under.as_deref(),
@@ -117,8 +121,10 @@ pub struct AnalyticsTimeseriesQuery {
 )]
 pub async fn timeseries(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(q): Query<AnalyticsTimeseriesQuery>,
 ) -> Result<Json<Vec<SnapshotPoint>>, ApiError> {
+    let ws = user.require_workspace()?;
     let bucket_secs = q
         .bucket_secs
         .unwrap_or(DEFAULT_BUCKET_SECS)
@@ -130,6 +136,7 @@ pub async fn timeseries(
 
     let rows = queries::timeseries(
         &state.db,
+        ws,
         &q.dim,
         q.key.as_deref(),
         q.file_server_id.as_deref(),
