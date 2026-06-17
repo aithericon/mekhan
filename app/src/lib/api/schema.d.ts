@@ -8454,6 +8454,17 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /**
+         * @description Optional target for a folder fork. Absent ⇒ resolved like a template fork
+         *     (active-if-writable, else the caller's first writable workspace).
+         */
+        ForkFolderRequest: {
+            /**
+             * Format: uuid
+             * @description Workspace to fork the subtree INTO (must be one the caller can write).
+             */
+            target_workspace_id?: string | null;
+        };
         /** @description Result of a folder fork — the new root folder plus how much it brought in. */
         ForkFolderResponse: {
             /**
@@ -18567,7 +18578,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkFolderRequest"];
+            };
+        };
         responses: {
             /** @description Folder subtree forked into the workspace */
             201: {
